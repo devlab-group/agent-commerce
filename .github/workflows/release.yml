@@ -1,0 +1,114 @@
+name: Release checks
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # Same pin as ci.yml and docker/chain.Dockerfile.
+  FOUNDRY_VERSION: 'v1.7.1'
+
+jobs:
+  audit:
+    name: Dependency audit review
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      # Reported for human review. High/critical findings must be assessed and
+      # documented before release; irrelevant transitive advisories do not
+      # automatically block.
+      - run: npm audit --audit-level high || true
+      - run: npm audit --json > audit.json || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dependency-audit
+          path: audit.json
+
+  fresh-clone:
+    name: Fresh-clone quickstart smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          # Pinned: the default is `nightly`, a mutable input to a suite this
+          # project calls deterministic.
+          version: ${{ env.FOUNDRY_VERSION }}
+      - name: Quickstart exactly as documented in the README
+        run: |
+          npm ci
+          docker compose up -d --build
+          npm run agent-commerce -- doctor --config config-demo.yaml
+          npm run demo:agent
+      - name: Compose logs on failure
+        if: failure()
+        run: docker compose logs
+      - name: Tear down
+        if: always()
+        run: docker compose down -v
+
+  publish:
+    name: Publish to npm
+    # Only a tag ships. A manual dispatch on a branch runs the checks above and
+    # stops here.
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [audit, fresh-clone]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Trusted publishing: npm exchanges this short-lived OIDC token for
+      # publish rights. There is no NPM_TOKEN in this repository, and nothing
+      # here should ever add one — a long-lived token is the thing trusted
+      # publishing exists to remove. Configure the publisher on npmjs.com
+      # against this repository AND this workflow filename (release.yml); the
+      # claim is checked against both, so renaming this file breaks publishing
+      # until the setting is updated.
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          registry-url: 'https://registry.npmjs.org'
+      # setup-node pairs Node 22 with npm 10, which predates trusted
+      # publishing (needs >= 11.5.1). Without this the publish fails asking for
+      # credentials that deliberately do not exist.
+      - run: npm install -g npm@latest
+      - run: npm ci
+      - name: Tag must match the version being published
+        # A tag that disagrees with package.json publishes a version nobody
+        # can find from the release, and npm versions are immutable.
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(node -p "require('./package.json').version")"
+          if [ "$tag" != "$pkg" ]; then
+            echo "tag ${GITHUB_REF_NAME} does not match package.json version ${pkg}" >&2
+            exit 1
+          fi
+          echo "publishing ${pkg}"
+      # `prepublishOnly` runs build + verify + the built-CLI smoke test, so the
+      # artifact is rebuilt from this checkout rather than trusted from cache.
+      # `--access public` is not passed here: publishConfig.access carries it,
+      # and a packaging test asserts that, so the two cannot disagree.
+      # Provenance is attached automatically when publishing via OIDC.
+      - run: npm publish

@@ -1,0 +1,20 @@
+[profile.default]
+src = "src"
+out = "out"
+# lib/forge-std is committed as a plain vendored copy, not a git submodule, so
+# `git clone` (without `--recursive`) and a plain tarball checkout both build
+# without a second fetch step. There is deliberately no `foundry.lock` here:
+# forge derives it from `.gitmodules`, which vendoring has none of, so the
+# lock can only ever record this repo's own HEAD as a spurious "revision
+# mismatch" for lib/forge-std on every run. A permanently-failing lock check
+# trains everyone to ignore lock warnings — don't add one back without also
+# switching lib/forge-std to a real submodule.
+libs = ["lib"]
+test = "test"
+script = "script"
+solc = "0.8.24"
+optimizer = true
+optimizer_runs = 200
+via_ir = true
+# Deterministic local demo only — no network access needed once solc 0.8.24 is cached.
+offline = false

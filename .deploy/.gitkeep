@@ -1,0 +1,10 @@
+Tracked so a fresh clone has this directory already, owned by the user who
+cloned it.
+
+docker-compose bind-mounts ./.deploy so that the chain deployment manifest the
+containers write is the same file the host-side `agent-commerce doctor` and
+`npm run demo:agent` read. If the directory is missing, Docker creates it as
+root:root, and the chain-deploy service — which runs as the invoking user so
+the manifest stays host-writable — cannot write into it.
+
+Contents (local.json) are generated and git-ignored.

@@ -1,0 +1,136 @@
+{
+  "name": "@devlab.group/agent-commerce",
+  "version": "0.1.0-alpha.0",
+  "description": "Open-source, self-hosted, non-custodial commerce and payment orchestration gateway for AI agents.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22",
+    "npm": ">=10"
+  },
+  "bin": {
+    "agent-commerce": "./dist/cli/index.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./mcp": {
+      "types": "./dist/mcp.d.ts",
+      "import": "./dist/mcp.js"
+    },
+    "./x402": {
+      "types": "./dist/x402.d.ts",
+      "import": "./dist/x402.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/devlab-group/agent-commerce.git"
+  },
+  "bugs": {
+    "url": "https://github.com/devlab-group/agent-commerce/issues"
+  },
+  "homepage": "https://github.com/devlab-group/agent-commerce#readme",
+  "keywords": [
+    "ai-agents",
+    "agentic-commerce",
+    "mcp",
+    "x402",
+    "payments",
+    "web3",
+    "commerce",
+    "ai",
+    "cli"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "prepack": "npm run build",
+    "prepublishOnly": "npm run build && npm run verify && npm run test:cli:dist",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p demo/dashboard/tsconfig.json",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "format": "biome format --write .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "test:e2e": "vitest run --config vitest.e2e.config.ts",
+    "check:contract": "node scripts/contract-surface.mjs",
+    "check:metadata": "node scripts/check-package-metadata.mjs",
+    "verify": "npm run check:contract && npm run lint && npm run typecheck && npm test",
+    "agent-commerce": "tsx src/cli/index.ts",
+    "doctor": "tsx src/cli/index.ts doctor",
+    "chain:start": "tsx scripts/chain/start-anvil.ts",
+    "chain:deploy": "tsx scripts/chain/deploy.ts",
+    "demo:merchant": "tsx demo/merchant/src/main.ts",
+    "dev:merchant": "tsx watch demo/merchant/src/main.ts",
+    "demo:gateway": "AGENT_COMMERCE_CONFIG=config-demo.yaml tsx src/gateway/main.ts",
+    "dev:gateway": "AGENT_COMMERCE_CONFIG=config-demo.yaml tsx watch src/gateway/main.ts",
+    "demo:dashboard": "vite --config demo/dashboard/vite.config.ts",
+    "dev:dashboard": "vite --config demo/dashboard/vite.config.ts",
+    "demo:agent": "tsx demo/agent/src/main.ts",
+    "demo:up": "docker compose up --build",
+    "demo:down": "docker compose down -v",
+    "test:cli:dist": "node dist/cli/index.js --help && node dist/cli/index.js --version",
+    "pack:dry": "npm pack --dry-run"
+  },
+  "dependencies": {
+    "@clack/prompts": "1.7.0",
+    "better-sqlite3": "13.0.3",
+    "commander": "15.0.0",
+    "fastify": "5.12.0",
+    "picocolors": "1.1.1",
+    "pino": "10.3.1",
+    "yaml": "2.9.0",
+    "zod": "3.25.76"
+  },
+  "peerDependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "x402": "1.2.0",
+    "viem": "2.55.18"
+  },
+  "peerDependenciesMeta": {
+    "@modelcontextprotocol/sdk": {
+      "optional": true
+    },
+    "x402": {
+      "optional": true
+    },
+    "viem": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.9",
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "@types/better-sqlite3": "9.6.0",
+    "@types/node": "24.13.3",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.4",
+    "@vitejs/plugin-react": "6.0.5",
+    "@vitest/coverage-v8": "4.1.10",
+    "pino-pretty": "13.1.2",
+    "react": "19.0.8",
+    "react-dom": "19.0.8",
+    "tsup": "8.5.1",
+    "tsx": "4.23.12",
+    "typescript": "5.9.3",
+    "viem": "2.55.18",
+    "vite": "8.2.1",
+    "vitest": "4.1.10",
+    "x402": "1.2.0"
+  },
+  "overrides": {
+    "zod": "3.25.76"
+  }
+}

@@ -1,0 +1,37 @@
+node_modules/
+dist/
+build/
+coverage/
+*.tsbuildinfo
+.DS_Store
+*.log
+.env
+.env.local
+data/
+*.sqlite
+*.sqlite-journal
+*.db
+contracts/out/
+contracts/cache/
+contracts/broadcast/
+# Local chain deployment output. The directory itself is tracked (via
+# .gitkeep) but its contents are not: docker-compose bind-mounts it, and Docker
+# creates a missing bind-mount source as root:root — which the deliberately
+# non-root chain-deploy service then cannot write into. Shipping the directory
+# means a fresh clone already has it, owned by the user who cloned.
+.deploy/*
+!.deploy/.gitkeep
+# The operator's own gateway configuration. `config-demo.yaml` is the one this
+# repository ships and docker compose runs; `config.yaml` is whatever the
+# person working here points at their own backend, and it is not ours to
+# commit. `agent-commerce init` writes this name by default.
+config.yaml
+
+.vite/
+.turbo/
+graphify-out/
+playwright-report/
+test-results/
+
+# npm package build output and local tarballs from `npm pack`.
+*.tgz

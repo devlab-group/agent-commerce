@@ -1,0 +1,114 @@
+# ---------------------------------------------------------------------------
+# Agent Commerce Gateway — working configuration
+#
+# This file is COMMITTED deliberately: it is the config `docker compose up`
+# uses, so the documented quickstart runs with no copy-and-edit step.
+#
+# Every placeholder has a `${VAR:-default}` fallback that points at the local
+# demo stack, so the same file works three ways:
+# - inside docker compose, where the service env overrides each value;
+# - on the host after `npm run chain:start && npm run chain:deploy`;
+# - for `npm run agent-commerce -- validate` with no environment at all.
+#
+# For your own deployment, edit it or regenerate with:
+# npm run agent-commerce -- init
+#
+# `${VAR}` placeholders resolve from the environment at load time. Unresolved
+# placeholders fail startup and are never printed.
+# ---------------------------------------------------------------------------
+
+version: 1
+
+merchant:
+  id: demo-store
+  name: Demo Data Store
+  publicBaseUrl: ${GATEWAY_PUBLIC_BASE_URL:-http://localhost:8080}
+
+server:
+  port: ${GATEWAY_PORT:-8080}
+  # 0.0.0.0 inside the container; docker-compose publishes to 127.0.0.1 only.
+  host: 0.0.0.0
+
+  # Operator routes (/api/receipts, /api/events, /api/events/stream) expose the
+  # merchant's commerce ledger. They require this token and return 404 when it
+  # is unset — a missing control must not read as an absent restriction.
+  adminToken: ${ADMIN_TOKEN:-local-demo-admin-token}
+
+  # Explicit allowlist; empty means no browser may read any route. Agent
+  # traffic is not browser traffic and gets no CORS headers regardless.
+  allowedOrigins:
+    - ${DASHBOARD_ORIGIN:-http://localhost:5173}
+
+storage:
+  receipts:
+    driver: sqlite
+    path: ${RECEIPT_STORE_PATH:-./data/receipts.sqlite}
+
+protocols:
+  http:
+    enabled: true
+  mcp:
+    enabled: true
+    mountPath: /mcp
+
+resources:
+  # --- free resource: proves the gateway fronts an existing API -------------
+  weather_basic:
+    name: Basic Weather
+    description: Current basic weather for a city. Free.
+    input:
+      type: object
+      properties:
+        city:
+          type: string
+          description: City name, e.g. "Berlin"
+      required: [city]
+      additionalProperties: false
+    backend:
+      type: http
+      method: GET
+      url: ${MERCHANT_API_BASE_URL:-http://localhost:3000}/api/weather/{city}
+      timeoutMs: 5000
+    pricing:
+      type: free
+    expose: [http, mcp]
+
+  # --- paid resource: proves x402 enforcement -------------------------------
+  market_report:
+    name: Premium Market Report
+    description: Latest premium market analysis. Paid resource.
+    input:
+      type: object
+      properties: {}
+      additionalProperties: false
+    backend:
+      type: http
+      method: GET
+      url: ${MERCHANT_API_BASE_URL:-http://localhost:3000}/api/report
+      timeoutMs: 10000
+    pricing:
+      type: fixed
+      amount: "0.01"
+      currency: USDC
+    expose: [http, mcp]
+    payments: [x402]
+
+payments:
+  x402:
+    enabled: true
+    network: ${X402_NETWORK:-base-sepolia}
+    rpcUrl: ${X402_RPC_URL:-http://127.0.0.1:8545}
+    asset: ${X402_ASSET}
+    assetName: ${X402_ASSET_NAME:-MockUSDC}
+    assetVersion: ${X402_ASSET_VERSION:-2}
+    assetDecimals: ${X402_ASSET_DECIMALS:-6}
+    # Merchant-controlled settlement destination.
+    # This is NEVER a gateway-owned wallet — see docs/security.md.
+    payTo: ${MERCHANT_WALLET:-0x70997970C51812dc3A010C7d01b50e0d17dc79C8}
+    # Seconds a payment challenge stays valid.
+    maxTimeoutSeconds: 120
+    # Local facilitator used only on the deterministic dev chain. In production
+    # point `facilitator.url` at an external facilitator instead.
+    facilitator:
+      mode: local
+      signerPrivateKey: ${X402_FACILITATOR_PRIVATE_KEY}

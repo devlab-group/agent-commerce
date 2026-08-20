@@ -1,0 +1,108 @@
+# ---------------------------------------------------------------------------
+# Agent Commerce Gateway — example configuration
+#
+# Copy to `config.yaml` and edit, or generate one with:
+# npm run agent-commerce -- init
+#
+# Validate it with:
+# npm run agent-commerce -- validate
+#
+# `${VAR}` placeholders are resolved from the environment at load time.
+# Unresolved placeholders fail startup and are never printed.
+# ---------------------------------------------------------------------------
+
+version: 1
+
+merchant:
+  id: demo-store
+  name: Demo Data Store
+  publicBaseUrl: ${GATEWAY_PUBLIC_BASE_URL}
+
+server:
+  port: ${GATEWAY_PORT}
+  host: 0.0.0.0
+
+  # Required to serve the operator routes (/api/receipts, /api/events,
+  # /api/events/stream). If unset they return 404 rather than serving the
+  # merchant's commerce ledger openly. Use a real secret in any deployment
+  # reachable by anyone else.
+  adminToken: ${ADMIN_TOKEN}
+
+  # Browser origins permitted to read the gateway. Empty (the default) means
+  # none. Agent traffic needs no entry here.
+  allowedOrigins:
+    - ${DASHBOARD_ORIGIN}
+
+storage:
+  receipts:
+    driver: sqlite
+    path: ${RECEIPT_STORE_PATH}
+
+protocols:
+  http:
+    enabled: true
+  mcp:
+    enabled: true
+    mountPath: /mcp
+
+resources:
+  # --- free resource: proves the gateway fronts an existing API -------------
+  weather_basic:
+    name: Basic Weather
+    description: Current basic weather for a city. Free.
+    input:
+      type: object
+      properties:
+        city:
+          type: string
+          description: City name, e.g. "Berlin"
+      required: [city]
+      additionalProperties: false
+    backend:
+      type: http
+      method: GET
+      url: ${MERCHANT_API_BASE_URL}/api/weather/{city}
+      timeoutMs: 5000
+    pricing:
+      type: free
+    expose: [http, mcp]
+
+  # --- paid resource: proves x402 enforcement -------------------------------
+  market_report:
+    name: Premium Market Report
+    description: Latest premium market analysis. Paid resource.
+    input:
+      type: object
+      properties: {}
+      additionalProperties: false
+    backend:
+      type: http
+      method: GET
+      url: ${MERCHANT_API_BASE_URL}/api/report
+      timeoutMs: 10000
+    pricing:
+      type: fixed
+      amount: "0.01"
+      currency: USDC
+    expose: [http, mcp]
+    payments: [x402]
+
+payments:
+  x402:
+    enabled: true
+    network: ${X402_NETWORK}
+    rpcUrl: ${X402_RPC_URL}
+    asset: ${X402_ASSET}
+    assetName: ${X402_ASSET_NAME}
+    assetVersion: ${X402_ASSET_VERSION}
+    assetDecimals: ${X402_ASSET_DECIMALS}
+    # Merchant-controlled settlement destination.
+    # This is NEVER a gateway-owned wallet — see docs/security.md.
+    payTo: ${MERCHANT_WALLET}
+    # Seconds a payment challenge stays valid.
+    maxTimeoutSeconds: 120
+    # Local facilitator used only on the deterministic dev chain. In production
+    # point `facilitator.url` at an external facilitator instead.
+    facilitator:
+      mode: local
+      signerPrivateKey: ${X402_FACILITATOR_PRIVATE_KEY}

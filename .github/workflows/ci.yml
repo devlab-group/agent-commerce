@@ -1,0 +1,222 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+# Least privilege. Without this the workflow token takes the repository
+# default (often write-all), and `actions/checkout` writes it into
+# `.git/config`, where every subsequent step — including third-party install
+# scripts run by `npm ci` — can read it. Nothing here needs write access.
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '22'
+  # pinned rather than tracking `nightly`. This is the same
+  # release as the digest pinned in docker/chain.Dockerfile, so CI and the demo
+  # stack compile the contracts with one toolchain.
+  FOUNDRY_VERSION: 'v1.7.1'
+
+jobs:
+  quality:
+    name: Lint & typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      # The frozen-contract guard the project guide relies on. Without this step the
+      # public contract could drift on any PR with nothing to catch it.
+      - run: npm run check:contract
+      - run: npm run lint
+      - run: npm run typecheck
+
+  test:
+    name: Unit & integration tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - run: npm run test:coverage
+      - uses: actions/upload-artifact@v4
+        if: always
+        with:
+          name: coverage
+          path: coverage/
+          retention-days: 7
+
+  contracts:
+    name: Solidity contracts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          # Pinned: the default is `nightly`, a mutable input to a suite this
+          # project calls deterministic.
+          version: ${{ env.FOUNDRY_VERSION }}
+      - run: forge build
+        working-directory: contracts
+      - run: forge test -vv
+        working-directory: contracts
+
+  e2e:
+    name: Deterministic E2E
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          # Pinned: the default is `nightly`, a mutable input to a suite this
+          # project calls deterministic.
+          version: ${{ env.FOUNDRY_VERSION }}
+      - run: npm ci
+      # No public RPC, no public chain state, no hosted LLM, no hosted
+      # facilitator: the suite boots its own Anvil, MockUSDC and services.
+      - run: npm run test:e2e
+
+  package:
+    name: npm package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      # The published artifact is the project's only public surface. A
+      # placeholder org in the provenance fields means npm's repository link
+      # and "report a vulnerability" path resolve to a namespace anyone can
+      # register — a cheap way to intercept disclosure for a payments project.
+      # Assert the provenance fields point at the real repository. Stated
+      # positively rather than as a placeholder blocklist: a blocklist only
+      # catches the placeholder spelling someone thought of, and this check is
+      # what stops npm's "report a vulnerability" link resolving to a
+      # namespace an attacker can register.
+      - name: Verify package provenance metadata
+        run: node scripts/check-package-metadata.mjs
+
+      - run: npm run build
+      # The published artifact is built by a different path than everything
+      # else, so it can break while the rest of the suite stays green.
+      - run: npm run test:cli:dist
+      - run: npx vitest run tests/unit/cli/packaging.test.ts
+      # Prove the tarball installs and runs with no repository present.
+      #
+      # Two shapes, because the default one is the one that regresses silently:
+      # 1. bare — no optional peers. The binary and `createGateway` must
+      # work. A stray `import 'viem'` in either (esbuild emits one
+      # for an external whose bindings tree-shook away) makes the
+      # published CLI refuse to start, and no in-repo test sees it
+      # because the peers are always installed here.
+      # 2. peers — the subpaths resolve and compose with the main entry.
+      - name: Clean consumer install — bare, no optional peers
+        run: |
+          TARBALL="$(npm pack --silent | tail -1)"
+          mkdir -p "$RUNNER_TEMP/bare" && cd "$RUNNER_TEMP/bare"
+          npm init -y >/dev/null
+          npm install "$GITHUB_WORKSPACE/$TARBALL"
+          for peer in x402 viem @modelcontextprotocol/sdk; do
+            if [ -d "node_modules/$peer" ]; then
+              echo "optional peer $peer was installed by default — the split is not working"
+              exit 1
+            fi
+          done
+          npx agent-commerce --help
+          npx agent-commerce --version
+          npx agent-commerce version | grep -q '@modelcontextprotocol/sdk'
+          npx agent-commerce init --yes
+          npx agent-commerce validate
+          # The main entry must compose and serve with zero peers present.
+          node --input-type=module -e "
+            import { createGateway, loadConfig, receipts } from '@devlab.group/agent-commerce';
+            const loaded = await loadConfig({ path: 'config.yaml' });
+            const config = { ...loaded, protocols: { ...loaded.protocols, mcp: { ...loaded.protocols.mcp, enabled: false } } };
+            const gateway = await createGateway({
+              config,
+              store: receipts({ path: ':memory:' }),
+              paymentProviders: [],
+              protocolAdapters: [],
+            });
+            const { url } = await gateway.listen;
+            const health = await fetch(url + '/health');
+            if (!health.ok) throw new Error('GET /health -> ' + health.status);
+            await gateway.close;
+            console.log('bare install ok — gateway composed, served and closed');
+          "
+
+      - name: Clean consumer install — with optional peers
+        run: |
+          cd "$RUNNER_TEMP/bare"
+          npm install @modelcontextprotocol/sdk@1.30.0 x402@1.2.0 viem@2.55.18
+          node --input-type=module -e "
+            import { createGateway, loadConfig, receipts, CommerceError } from '@devlab.group/agent-commerce';
+            import { mcp } from '@devlab.group/agent-commerce/mcp';
+            import { x402 } from '@devlab.group/agent-commerce/x402';
+            const config = await loadConfig({ path: 'config.yaml' });
+            const gateway = await createGateway({
+              config,
+              store: receipts({ path: ':memory:' }),
+              paymentProviders: [],
+              protocolAdapters: [mcp({ mountPath: config.protocols.mcp.mountPath })],
+            });
+            const { url } = await gateway.listen;
+            const tools = await fetch(url + config.protocols.mcp.mountPath, {
+              method: 'POST',
+              headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+              body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }),
+            });
+            if (!tools.ok) throw new Error('tools/list -> ' + tools.status);
+            await gateway.close;
+            // One CommerceError class across the subpath seam: separate bundles
+            // would each carry their own and this would be false.
+            let caught;
+            try { x402({ asset: 'nope', payTo: '0x0', network: 'base-sepolia' }); } catch (e) { caught = e; }
+            if (!(caught instanceof CommerceError)) throw new Error('CommerceError identity broken across subpaths');
+            console.log('subpath install ok — mcp + x402 compose with the main entry');
+          "
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Docker images build
+        run: docker compose build

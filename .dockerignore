@@ -1,0 +1,31 @@
+node_modules
+**/node_modules
+dist
+**/dist
+coverage
+**/coverage
+.git
+.github
+data
+.deploy
+contracts/out
+contracts/cache
+contracts/lib
+**/*.tsbuildinfo
+**/*.log
+.env
+.env.local
+*.sqlite
+*.sqlite-*
+playwright-report
+graphify-out
+test-results
+# `COPY . .` would bake these into every image. The tarball is a build artifact
+# of the very package being copied, and graphify-out is a multi-megabyte
+# knowledge-graph dump.
+*.tgz
+
+# A developer's own gateway config. The image runs config-demo.yaml; copying a
+# local config.yaml in would make the built image depend on whose machine
+# built it.
+config.yaml
