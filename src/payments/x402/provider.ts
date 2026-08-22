@@ -17,7 +17,6 @@
  * beside each call site below.
  */
 
-import { x402Facilitator } from '@x402/core/facilitator';
 import type {
   Network,
   PaymentRequired,
@@ -25,8 +24,6 @@ import type {
   SettleResponse,
   VerifyResponse,
 } from '@x402/core/types';
-import { toFacilitatorEvmSigner } from '@x402/evm';
-import { registerExactEvmScheme } from '@x402/evm/exact/facilitator';
 import {
   ContractFunctionExecutionError,
   ContractFunctionRevertedError,
@@ -58,10 +55,16 @@ import {
   chainIdFromCaip2,
   createLocalFacilitatorClient,
   createLocalPublicClient,
-  LOCAL_CHAIN_ID,
   type LocalFacilitatorClient,
 } from './chain.js';
 import { assertDevKeyIsLocalOnly, assertPayToIsNotDevAddress } from './dev-key-guard.js';
+import {
+  createLocalFacilitatorBinding,
+  createRemoteFacilitatorBinding,
+  type FacilitatorBinding,
+} from './facilitator.js';
+import { resolveX402Deployment, type X402FacilitatorConfig } from './guardrails.js';
+import { describeDeploymentMode } from './networks.js';
 import { decodePaymentSubmission, isExactEvmPayload } from './payload.js';
 import { computeReplayKey } from './replay-key.js';
 
@@ -70,13 +73,6 @@ const X402_PROTOCOL_VERSION = String(X402_VERSION);
 const DEFAULT_MAX_TIMEOUT_SECONDS = 60;
 const DEFAULT_MIME_TYPE = 'application/json';
 const HEALTH_TIMEOUT_MS = 4_000;
-/**
- * Bounds every receipt wait the SDK facilitator performs. On expiry `settle()`
- * returns `settlement_pending` carrying the broadcast transaction hash rather
- * than throwing it away, so the attempt can be recorded as
- * `settlement-uncertain` instead of `failed`.
- */
-const SETTLEMENT_CONFIRMATION_TIMEOUT_MS = 60_000;
 /** `SettleResponse.errorReason` the SDK uses for "broadcast, not confirmed". */
 const SETTLEMENT_PENDING_REASON = 'settlement_pending';
 
@@ -100,80 +96,22 @@ export interface X402ProviderOptions {
   readonly payTo: `0x${string}`;
   readonly maxTimeoutSeconds?: number;
   /**
-   * Local facilitator: signer broadcasts settlement on the dev chain only.
-   * LOCAL DEVELOPMENT ONLY — DO NOT FUND.
+   * Which facilitator verifies and broadcasts.
+   *
+   * `local` runs the facilitator in this process against the dev chain, and
+   * its `signerPrivateKey` must be an Anvil well-known key — LOCAL DEVELOPMENT
+   * ONLY — DO NOT FUND. `remote` calls an HTTP facilitator, and this gateway
+   * then holds no signing key at all.
    */
-  readonly facilitator:
-    | { readonly mode: 'local'; readonly signerPrivateKey: `0x${string}` }
-    | { readonly mode: 'remote'; readonly url: string };
+  readonly facilitator: X402FacilitatorConfig;
+  /**
+   * Required to be `true` before anything settles on a mainnet. Never a
+   * default — see `guardrails.ts`.
+   */
+  readonly allowMainnet?: boolean;
   readonly logger?: Logger;
   readonly clock?: Clock;
   readonly ids?: IdGenerator;
-}
-
-interface ScopedFacilitator {
-  readonly facilitator: x402Facilitator;
-  /**
-   * True when an RPC call made through this facilitator failed at the
-   * transport level.
-   *
-   * The SDK's `exact`/EVM scheme catches its own RPC errors and reports them
-   * as an ordinary verification failure — an unreachable node comes back as
-   * `invalid_exact_evm_signature`. Fail-closed still holds, but the buyer is
-   * told their signature is bad and the attempt is recorded as their fault,
-   * when in fact nothing about their payment was ever checked. This flag is
-   * how the provider tells "we looked and it was wrong" apart from "we could
-   * not look".
-   */
-  transportFailed(): boolean;
-}
-
-/**
- * An `x402Facilitator` for one call, with the `exact`/EVM scheme registered
- * against exactly one network.
- *
- * One network, not the `eip155:*` wildcard the SDK would otherwise derive: a
- * payload naming some other chain must find no facilitator at all rather than
- * reaching a scheme that would then have to reject it.
- */
-function scopedFacilitator(client: LocalFacilitatorClient, network: Network): ScopedFacilitator {
-  let failed = false;
-  const watch = <T>(promise: Promise<T>): Promise<T> =>
-    promise.catch((err: unknown) => {
-      if (isProviderUnavailableError(err)) failed = true;
-      throw err;
-    });
-
-  // Exactly the `FacilitatorEvmSigner` surface, so the wrapper covers every
-  // call the SDK can make. `toFacilitatorEvmSigner` wants a flat `address`,
-  // which viem carries on `client.account` instead.
-  const signer = {
-    address: client.account.address,
-    readContract: (args: Parameters<LocalFacilitatorClient['readContract']>[0]) =>
-      watch(client.readContract(args)),
-    verifyTypedData: (args: Parameters<LocalFacilitatorClient['verifyTypedData']>[0]) =>
-      watch(client.verifyTypedData(args)),
-    writeContract: (args: Parameters<LocalFacilitatorClient['writeContract']>[0]) =>
-      watch(client.writeContract(args)),
-    sendTransaction: (args: Parameters<LocalFacilitatorClient['sendTransaction']>[0]) =>
-      watch(client.sendTransaction(args)),
-    waitForTransactionReceipt: (
-      args: Parameters<LocalFacilitatorClient['waitForTransactionReceipt']>[0],
-    ) => watch(client.waitForTransactionReceipt(args)),
-    getCode: (args: Parameters<LocalFacilitatorClient['getCode']>[0]) =>
-      watch(client.getCode(args)),
-  } as unknown as Parameters<typeof toFacilitatorEvmSigner>[0];
-
-  // `confirmationTimeoutMs` is what turns a lost receipt wait into
-  // `settlement_pending` + the broadcast hash instead of a discarded broadcast.
-  const facilitator = registerExactEvmScheme(new x402Facilitator(), {
-    signer: toFacilitatorEvmSigner(signer, {
-      confirmationTimeoutMs: SETTLEMENT_CONFIRMATION_TIMEOUT_MS,
-    }),
-    networks: network,
-  });
-
-  return { facilitator, transportFailed: () => failed };
 }
 
 const DEFAULT_IDS: IdGenerator = {
@@ -195,7 +133,9 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
   }
   // Applies regardless of facilitator.mode — which account signs settlement
   // has no bearing on whether the destination address's private key is
-  // public knowledge.
+  // public knowledge. `resolveX402Deployment` below covers the other half of
+  // the same question: a dev payTo on any non-local *deployment*, where the
+  // RPC host says nothing about where the money lands.
   assertPayToIsNotDevAddress(options.rpcUrl, options.payTo);
   if (!Number.isInteger(options.assetDecimals) || options.assetDecimals < 0) {
     throw new CommerceError(
@@ -205,31 +145,33 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
   }
   // The chain id is not a display detail: it is signed into the buyer's
   // EIP-712 domain, so a network identifier we cannot resolve one from is a
-  // startup failure, never a request-time default.
-  const chainId = chainIdFromCaip2(options.network);
-  if (chainId === undefined) {
-    throw new CommerceError(
-      'CONFIG_INVALID',
-      `x402 provider: "network" must be a CAIP-2 eip155 identifier (e.g. "eip155:${LOCAL_CHAIN_ID}"), got: ${options.network}`,
-    );
-  }
+  // startup failure, never a request-time default. `resolveX402Deployment`
+  // also decides what this deployment *is* — local, testnet or mainnet — and
+  // refuses every combination that could move real money by accident.
+  const { profile, mode } = resolveX402Deployment({
+    network: options.network,
+    payTo: options.payTo,
+    asset: options.asset,
+    facilitator: options.facilitator,
+    ...(options.allowMainnet !== undefined ? { allowMainnet: options.allowMainnet } : {}),
+  });
   const network = options.network as Network;
   // Constructed once, here, rather than inside settle(): assertDevKeyIsLocalOnly
   // above already proves the key is well-formed, so privateKeyToAccount is not
   // expected to throw — but if it somehow does (or the key/RPC combination is
   // otherwise unusable), that is a *configuration* problem, and a bad key
   // should fail the provider at startup, not on the first paying customer's
-  // request (after their replayKey is already reserved — see in the
-  //. This mirrors the other CONFIG_INVALID checks above,
-  // which are all one-time, construction-time validation rather than
-  // per-request checks.
-  let facilitatorClient: LocalFacilitatorClient | undefined;
+  // request, after their replayKey is already reserved. This mirrors the other
+  // CONFIG_INVALID checks above, which are all one-time, construction-time
+  // validation rather than per-request checks.
+  let binding: FacilitatorBinding;
   if (options.facilitator.mode === 'local') {
     assertDevKeyIsLocalOnly(options.rpcUrl, options.facilitator.signerPrivateKey);
+    let client: LocalFacilitatorClient;
     try {
-      facilitatorClient = createLocalFacilitatorClient(
+      client = createLocalFacilitatorClient(
         options.rpcUrl,
-        options.facilitator.signerPrivateKey,
+        options.facilitator.signerPrivateKey as `0x${string}`,
       );
     } catch (cause) {
       throw new CommerceError(
@@ -239,6 +181,12 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
         { cause },
       );
     }
+    binding = createLocalFacilitatorBinding(client, network, isProviderUnavailableError);
+  } else {
+    binding = createRemoteFacilitatorBinding(
+      { url: options.facilitator.url, auth: options.facilitator.auth },
+      isProviderUnavailableError,
+    );
   }
 
   // health()'s own read-only client, with a real transport-level timeout (see
@@ -246,15 +194,6 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
   // the chain through the facilitator signer instead, so this is the only
   // public client the provider builds.
   const healthPublicClient = createLocalPublicClient(options.rpcUrl, HEALTH_TIMEOUT_MS);
-
-  // A facilitator is built per call rather than once, so that `transportFailed`
-  // below can be scoped to a single verify()/settle() without two concurrent
-  // requests sharing the flag. The cost is an object literal and a Map insert
-  // against an RPC round-trip, so "reuse it" would optimise the wrong side.
-  const newFacilitator =
-    facilitatorClient === undefined
-      ? undefined
-      : (): ScopedFacilitator => scopedFacilitator(facilitatorClient, network);
 
   const clock = options.clock ?? systemClock;
   const ids = options.ids ?? DEFAULT_IDS;
@@ -266,9 +205,20 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
     kind: 'payment',
     implementationVersion: PACKAGE_VERSION,
     supportedSpec: `x402/v${X402_VERSION} scheme=exact family=eip155`,
-    capabilities: ['exact-evm', 'local-facilitator', 'eip-3009', 'caip-2'],
+    capabilities: [
+      'exact-evm',
+      `${binding.kind}-facilitator`,
+      'eip-3009',
+      'caip-2',
+      `mode=${mode}`,
+    ],
     status: 'stable',
-    unsupported: ['svm', 'permit2', 'upto scheme', 'remote facilitator'],
+    unsupported: [
+      'svm',
+      'permit2',
+      'upto scheme',
+      'per-request signed facilitator credentials (e.g. CDP JWT)',
+    ],
   };
 
   async function createRequirement(context: PaymentContext): Promise<PaymentRequirement> {
@@ -442,23 +392,15 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
       return rejected('wrong_amount'); // overpayment is allowed through — see the doc comment above
     }
 
-    if (newFacilitator === undefined) {
-      throw new CommerceError(
-        'PROTOCOL_UNSUPPORTED',
-        'x402 provider: remote facilitator verification is not implemented in this release; ' +
-          'only { mode: "local" } is supported',
-      );
-    }
-
-    const scope = newFacilitator();
+    const scope = binding.open();
     let sdkResult: VerifyResponse;
     try {
-      sdkResult = await scope.facilitator.verify(payload, requirements);
+      sdkResult = await scope.verify(payload, requirements);
     } catch (err) {
       if (isProviderUnavailableError(err) || scope.transportFailed()) {
         throw new CommerceError(
           'PAYMENT_PROVIDER_UNAVAILABLE',
-          'x402 provider: RPC unreachable during verify()',
+          `x402 provider: ${binding.kind} facilitator unreachable during verify()`,
           {
             cause: err,
           },
@@ -473,7 +415,7 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
       if (scope.transportFailed()) {
         throw new CommerceError(
           'PAYMENT_PROVIDER_UNAVAILABLE',
-          'x402 provider: RPC unreachable during verify()',
+          `x402 provider: ${binding.kind} facilitator unreachable during verify()`,
           { details: { reportedReason: sdkResult.invalidReason ?? 'invalid_payment' } },
         );
       }
@@ -517,14 +459,6 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
       );
     }
 
-    if (newFacilitator === undefined) {
-      throw new CommerceError(
-        'PROTOCOL_UNSUPPORTED',
-        'x402 provider: remote facilitator settlement is not implemented in this release; ' +
-          'only { mode: "local" } is supported',
-      );
-    }
-
     const requirements = requirement.challenge.accepts[0] as PaymentRequirements | undefined;
     if (!requirements) {
       throw new CommerceError(
@@ -552,15 +486,15 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
       rejectionReason,
     });
 
-    const scope = newFacilitator();
+    const scope = binding.open();
     let sdkResult: SettleResponse;
     try {
-      sdkResult = await scope.facilitator.settle(payload, requirements);
+      sdkResult = await scope.settle(payload, requirements);
     } catch (err) {
       if (isProviderUnavailableError(err) || scope.transportFailed()) {
         throw new CommerceError(
           'PAYMENT_PROVIDER_UNAVAILABLE',
-          'x402 provider: RPC unreachable during settle()',
+          `x402 provider: ${binding.kind} facilitator unreachable during settle()`,
           { cause: err },
         );
       }
@@ -620,10 +554,10 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
 
     try {
       const chainId = await healthPublicClient.getChainId();
-      if (chainId !== LOCAL_CHAIN_ID) {
+      if (chainId !== profile.chainId) {
         return {
           status: 'fail',
-          detail: `RPC at ${options.rpcUrl} reports chain id ${chainId}, expected ${LOCAL_CHAIN_ID}`,
+          detail: `RPC at ${options.rpcUrl} reports chain id ${chainId}, expected ${profile.chainId} (${profile.displayName})`,
           checkedAt,
           durationMs: clock.monotonicMs() - startedAt,
         };
@@ -639,26 +573,48 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
         };
       }
 
-      if (options.facilitator.mode === 'remote') {
+      if (binding.kind === 'remote') {
+        // "Reachable" is not the question — "will it settle *this*" is. A
+        // facilitator that is up but does not carry our scheme on our network
+        // fails every payment, and does it after the buyer has signed.
+        const kinds = await binding.supported();
+        const supportsUs = kinds.some(
+          (kind) =>
+            kind.x402Version === X402_VERSION &&
+            kind.scheme === 'exact' &&
+            kind.network === options.network,
+        );
+        if (!supportsUs) {
+          return {
+            status: 'fail',
+            detail:
+              `Facilitator ${binding.describe} does not advertise x402 v${X402_VERSION} scheme=exact ` +
+              `on ${options.network} (${profile.displayName}); no payment on this deployment can settle`,
+            checkedAt,
+            durationMs: clock.monotonicMs() - startedAt,
+          };
+        }
         return {
-          status: 'warn',
+          status: 'pass',
           detail:
-            'RPC and asset are reachable; remote facilitator mode is not implemented in v0.1.0-alpha',
+            `${describeDeploymentMode(mode)} — RPC ${options.rpcUrl} reachable, chain id ` +
+            `${profile.chainId} (${profile.displayName}), asset ${options.asset} has code, ` +
+            `facilitator ${binding.describe} supports exact/${options.network}`,
           checkedAt,
           durationMs: clock.monotonicMs() - startedAt,
         };
       }
 
       // Chain id alone cannot prove this is a dev chain: real Base Sepolia
-      // reports the same id (84532) by this project's own design (
-      //). Probe an Anvil-only RPC method — present only on a real
-      // Anvil node — before trusting a well-known dev key against it.
+      // reports the same id (84532) as this project's local chain, by design.
+      // Probe an Anvil-only RPC method — present only on a real Anvil node —
+      // before trusting a well-known dev key against it.
       const isAnvil = await probeIsAnvilNode(healthPublicClient);
       if (!isAnvil) {
         return {
           status: 'fail',
           detail:
-            `RPC at ${options.rpcUrl} reports chain id ${LOCAL_CHAIN_ID} but does not answer ` +
+            `RPC at ${options.rpcUrl} reports chain id ${profile.chainId} but does not answer ` +
             '"anvil_nodeInfo" — it does not look like a local Anvil dev node. Refusing to treat it ' +
             'as safe for a local-facilitator dev key.',
           checkedAt,
@@ -669,8 +625,8 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
       return {
         status: 'pass',
         detail:
-          `RPC ${options.rpcUrl} reachable, chain id ${LOCAL_CHAIN_ID}, asset ${options.asset} has ` +
-          'code, confirmed Anvil dev node',
+          `${describeDeploymentMode(mode)} — RPC ${options.rpcUrl} reachable, chain id ` +
+          `${profile.chainId}, asset ${options.asset} has code, confirmed Anvil dev node`,
         checkedAt,
         durationMs: clock.monotonicMs() - startedAt,
       };

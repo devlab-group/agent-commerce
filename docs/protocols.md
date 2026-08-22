@@ -99,11 +99,15 @@ it normalises into `CanonicalRequest` and lets the pipeline decide.
 
 ### Not implemented
 
-Solana/SVM, the `deferred` scheme, remote/hosted facilitators (v0.1 uses a local
-facilitator; `mode: 'remote'` is **rejected at config load** with
-`CONFIG_INVALID` rather than pretending — the gateway will not start with it,
-so the `PROTOCOL_UNSUPPORTED` this page used to promise is unreachable from
-YAML), multi-asset routing and dynamic pricing.
+Solana/SVM, the `deferred` scheme, Permit2, per-request signed facilitator
+credentials (a CDP JWT and anything like it — only `none` and `bearer` auth
+exist), multi-asset routing and dynamic pricing.
+
+A remote HTTP facilitator **is** configurable (`facilitator.mode: remote`), and
+so are Base Sepolia and Base mainnet, with the guardrails in
+[configuration.md](configuration.md). What has not happened yet is a settled
+payment on a public chain: every settlement this release has actually
+performed was against the local deterministic chain.
 
 ## HTTP surface
 

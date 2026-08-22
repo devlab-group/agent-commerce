@@ -177,21 +177,201 @@ describe('parseConfig', () => {
     });
   });
 
-  it('rejects payments.x402.facilitator.mode "remote"', () => {
-    const raw = validRawConfig();
-    (raw['payments'] as { x402: Record<string, unknown> }).x402['facilitator'] = {
-      mode: 'remote',
-      url: 'https://facilitator.example.com',
-    };
-    expectConfigInvalid(() => parseConfig(raw, {}));
-    try {
-      parseConfig(raw, {});
-    } catch (error) {
-      if (isCommerceError(error)) {
-        expect(error.message).toContain('remote');
-        expect(error.message).toContain('not supported');
-      }
+  describe('x402 deployment guardrails', () => {
+    const MERCHANT = '0x1111111111111111111111111111111111111111';
+    const BASE_USDC = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
+
+    function withX402(overrides: Record<string, unknown>): Record<string, unknown> {
+      const raw = validRawConfig();
+      const payments = raw['payments'] as { x402: Record<string, unknown> };
+      payments.x402 = { ...payments.x402, ...overrides };
+      return raw;
     }
+
+    function messageFor(raw: Record<string, unknown>): string {
+      try {
+        parseConfig(raw, {});
+      } catch (error) {
+        return isCommerceError(error) ? error.message : String(error);
+      }
+      throw new Error('expected parseConfig to reject this configuration');
+    }
+
+    it('accepts a remote facilitator on a testnet', () => {
+      const config = parseConfig(
+        withX402({
+          payTo: MERCHANT,
+          facilitator: { mode: 'remote', url: 'https://facilitator.example.com' },
+        }),
+        {},
+      );
+      // Absent auth is normalised to an explicit "no credential", so nothing
+      // downstream has to decide what `undefined` meant.
+      expect(config.payments.x402?.facilitator).toEqual({
+        mode: 'remote',
+        url: 'https://facilitator.example.com',
+        auth: { type: 'none' },
+      });
+    });
+
+    it('accepts a fully-specified mainnet configuration', () => {
+      const config = parseConfig(
+        withX402({
+          network: 'eip155:8453',
+          asset: BASE_USDC,
+          payTo: MERCHANT,
+          allowMainnet: true,
+          facilitator: {
+            mode: 'remote',
+            url: 'https://facilitator.example.com',
+            auth: { type: 'bearer', token: 'secret-token' },
+          },
+        }),
+        {},
+      );
+      expect(config.payments.x402?.allowMainnet).toBe(true);
+    });
+
+    it('rejects an unknown CAIP-2 network', () => {
+      expect(messageFor(withX402({ network: 'eip155:1' }))).toContain('not a supported network');
+      expect(messageFor(withX402({ network: 'solana:mainnet' }))).toContain(
+        'not a supported network',
+      );
+    });
+
+    it('rejects a mainnet served by the in-process facilitator', () => {
+      // The local facilitator signs with a key this process holds — a hot
+      // wallet inside the resource server, which is the arrangement this
+      // project exists to avoid.
+      const message = messageFor(
+        withX402({ network: 'eip155:8453', asset: BASE_USDC, payTo: MERCHANT, allowMainnet: true }),
+      );
+      expect(message).toContain('mainnet');
+      expect(message).toContain('remote facilitator');
+    });
+
+    it('rejects a mainnet without an explicit opt-in', () => {
+      const message = messageFor(
+        withX402({
+          network: 'eip155:8453',
+          asset: BASE_USDC,
+          payTo: MERCHANT,
+          facilitator: {
+            mode: 'remote',
+            url: 'https://facilitator.example.com',
+            auth: { type: 'bearer', token: 'secret-token' },
+          },
+        }),
+      );
+      expect(message).toContain('allowMainnet');
+    });
+
+    it('rejects an unauthenticated mainnet facilitator', () => {
+      const message = messageFor(
+        withX402({
+          network: 'eip155:8453',
+          asset: BASE_USDC,
+          payTo: MERCHANT,
+          allowMainnet: true,
+          facilitator: { mode: 'remote', url: 'https://facilitator.example.com' },
+        }),
+      );
+      expect(message).toContain('must be authenticated');
+    });
+
+    it('rejects a plain-HTTP facilitator on a public host', () => {
+      const message = messageFor(
+        withX402({
+          payTo: MERCHANT,
+          facilitator: { mode: 'remote', url: 'http://facilitator.example.com' },
+        }),
+      );
+      expect(message).toContain('plain HTTP');
+    });
+
+    it('allows a plain-HTTP facilitator on a private host below mainnet', () => {
+      // A dot-free host is a compose/k8s service name — the traffic never
+      // leaves the deployment, so requiring TLS there would only block the
+      // normal self-hosted arrangement.
+      expect(() =>
+        parseConfig(
+          withX402({
+            payTo: MERCHANT,
+            facilitator: { mode: 'remote', url: 'http://facilitator:4020' },
+          }),
+          {},
+        ),
+      ).not.toThrow();
+    });
+
+    it('rejects a well-known development payTo on a non-local deployment', () => {
+      // The fixture's payTo is Anvil account #1 — fine locally, catastrophic
+      // anywhere the money is real, because its private key is public.
+      const message = messageFor(
+        withX402({ facilitator: { mode: 'remote', url: 'https://facilitator.example.com' } }),
+      );
+      expect(message).toContain('well-known Anvil development address');
+    });
+
+    it('rejects a mainnet asset that is not the canonical USDC', () => {
+      const message = messageFor(
+        withX402({
+          network: 'eip155:8453',
+          payTo: MERCHANT,
+          allowMainnet: true,
+          facilitator: {
+            mode: 'remote',
+            url: 'https://facilitator.example.com',
+            auth: { type: 'bearer', token: 'secret-token' },
+          },
+        }),
+      );
+      expect(message).toContain('is not USDC on Base');
+    });
+
+    it('rejects a facilitator URL that is neither http nor https', () => {
+      expect(
+        messageFor(
+          withX402({ payTo: MERCHANT, facilitator: { mode: 'remote', url: 'ftp://x402.invalid' } }),
+        ),
+      ).toContain('must be https');
+      expect(
+        messageFor(
+          withX402({ payTo: MERCHANT, facilitator: { mode: 'remote', url: 'not a url' } }),
+        ),
+      ).toContain('not a valid URL');
+    });
+
+    it('rejects plain HTTP on a mainnet even to a private host', () => {
+      // Below mainnet a dot-free host is a compose service name and the
+      // traffic never leaves the deployment. On mainnet nothing earns that.
+      const message = messageFor(
+        withX402({
+          network: 'eip155:8453',
+          asset: BASE_USDC,
+          payTo: MERCHANT,
+          allowMainnet: true,
+          facilitator: {
+            mode: 'remote',
+            url: 'http://facilitator:4020',
+            auth: { type: 'bearer', token: 'secret-token' },
+          },
+        }),
+      );
+      expect(message).toContain('plain HTTP');
+    });
+
+    it('rejects an empty bearer token rather than sending it', () => {
+      const raw = withX402({
+        payTo: MERCHANT,
+        facilitator: {
+          mode: 'remote',
+          url: 'https://facilitator.example.com',
+          auth: { type: 'bearer', token: '${FACILITATOR_TOKEN:- }' },
+        },
+      });
+      expect(messageFor(raw)).toContain('empty');
+    });
   });
 
   it(`rejects a resource whose input.properties declares the reserved "${PAYMENT_INPUT_FIELD}" field`, () => {

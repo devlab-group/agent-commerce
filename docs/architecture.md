@@ -140,7 +140,7 @@ demo buyer agent is a deterministic program, and that is the path CI runs.
 | config schema, loader, env substitution    | `src/config`                   |
 | Fastify server, routes, adapter mounting   | `src/gateway`                  |
 | MCP adapter                                | `src/protocols/mcp`            |
-| x402 provider + local facilitator          | `src/payments/x402`            |
+| x402 provider + local/remote facilitator   | `src/payments/x402`            |
 | SQLite receipts/events/attempts            | `src/storage/receipts`         |
 | CLI (`init`, `validate`, `doctor`, `demo`) | `src/cli`                      |
 | demo merchant API / buyer / dashboard      | `demo/*`                       |

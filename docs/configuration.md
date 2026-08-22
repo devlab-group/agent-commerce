@@ -94,11 +94,70 @@ Startup rejects a `payTo` that is not a plausible address or is the zero
 address, and the effective destination is printed in a safe, visible form so a
 presenter can confirm where money goes.
 
-`facilitator.mode: remote` is declared in the schema but not implemented in
-v0.1 — it is **rejected at config load** with `CONFIG_INVALID`, so the gateway
-refuses to start rather than silently doing something else. (Earlier revisions
-of this page said it returns `PROTOCOL_UNSUPPORTED` at request time; that
-throw exists in the provider but no YAML can reach it.)
+## Network and facilitator
+
+`network` is a CAIP-2 identifier and must be one this build knows:
+
+| `network` | | Notes |
+|---|---|---|
+| `eip155:84532` | Base Sepolia | the chain id the local dev chain also uses |
+| `eip155:8453` | Base | mainnet; real funds |
+
+Anything else is `CONFIG_INVALID` at load. The chain id is signed into the
+buyer's EIP-712 domain, so an unrecognised network is never guessed at.
+
+`facilitator` decides who verifies and broadcasts:
+
+```yaml
+facilitator:
+  mode: local # in-process, dev chain only
+  signerPrivateKey: ${X402_FACILITATOR_PRIVATE_KEY}
+```
+
+```yaml
+facilitator:
+  mode: remote # HTTP; this gateway holds no key at all
+  url: ${X402_FACILITATOR_URL}
+  auth:
+    type: none # or: type: bearer, token: ${X402_FACILITATOR_TOKEN}
+```
+
+`auth` may be omitted, which means the same as `type: none` — an explicit
+statement that this facilitator takes no credential, not a fallback. Only
+`none` and `bearer` exist; a facilitator requiring per-request signed
+credentials (a CDP JWT, for instance) is refused rather than sent nothing.
+
+**What this deployment is** — `local`, `testnet` or `mainnet` — is derived
+from the pair, not from the network alone, because chain id 84532 is shared
+between the local dev chain and public Base Sepolia. It is reported by
+`doctor`, by `health()`, and at `/.well-known/agent-commerce`.
+
+## Mainnet guardrails
+
+`eip155:8453` moves real money, so a config naming it must also say so. All of
+these are refused at config load, before the gateway starts:
+
+| Refused | Because |
+|---|---|
+| `allowMainnet` absent or false | mainnet is never a default |
+| `facilitator.mode: local` | the in-process signer is a hot wallet inside the resource server |
+| `facilitator.auth.type: none` | an unauthenticated production facilitator |
+| a non-HTTPS `facilitator.url` | authorisations and settlement results in the clear |
+| a well-known Anvil `payTo` | its private key is public knowledge |
+| an `asset` that is not USDC on Base | settling in an unintended token |
+
+The same rules apply to any non-local deployment where they make sense: plain
+HTTP is allowed only to a local/private host, and a development `payTo` is
+refused on testnet too.
+
+`agent-commerce validate` and `agent-commerce doctor` run exactly the checks
+the gateway runs at startup — the same function, not a second copy of the
+rules.
+
+**Configurable is not the same as exercised.** Public-network settlement is
+represented and guarded here; it has not been run end to end against a public
+chain in this release. The deterministic local path is the one covered by
+tests.
 
 ## Unsupported JSON Schema keywords have a cost
 

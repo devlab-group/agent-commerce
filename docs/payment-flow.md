@@ -130,18 +130,29 @@ No public RPC, no public chain, no hosted facilitator, no real money. See
  for the exact SDK behaviour this
 relies on.
 
-## Live settlement (planned, not in v0.1.0-alpha)
+## Public networks — configurable, not yet exercised
 
-This release settles **only** against the local deterministic chain. Two
-independent things in the tree prevent a real network, deliberately:
+Base Sepolia and Base mainnet can now be configured, and so can a remote HTTP
+facilitator; what has not happened is a settled payment on a public chain.
+Every settlement this release has actually performed was against the local
+deterministic chain, and that is the path the tests cover.
 
-- `payments.x402.facilitator.mode: "remote"` is rejected at config load
-  (`src/config/schema.ts`), so a hosted facilitator cannot be configured.
-- In local mode the provider's `health` probes an Anvil-only RPC method
-  (`anvil_nodeInfo`), so against a real node it reports unhealthy and the
-  gateway's `/ready` returns 503.
+Three things shape what a public-network config is allowed to look like:
 
-There is no "live mode" to enable, and no wording here should suggest one.
-v0.1 settles against the deterministic local chain only — the three checks
-above are what stop a mainnet deployment starting, and they are checks, not
-a toggle.
+- **The deployment mode is derived, not declared.** `local`, `testnet` and
+  `mainnet` come from the network *and* the facilitator together, because chain
+  id 84532 belongs to both the local dev chain and public Base Sepolia. Nothing
+  infers "public network" from the id alone.
+- **Mainnet is refused unless every guardrail is satisfied** — explicit
+  `allowMainnet`, a remote facilitator over HTTPS carrying a credential, a
+  non-development `payTo`, and the canonical USDC for the chain. These are
+  checked at config load, so `agent-commerce validate` catches them, and the
+  gateway will not start without them. See
+  [configuration.md](configuration.md).
+- **In local mode `health()` still probes `anvil_nodeInfo`**, so a local
+  facilitator pointed at a real node reports unhealthy and `/ready` returns
+  503. In remote mode it asks the facilitator what it supports instead, and
+  fails if our scheme and network are not on the list.
+
+There is still no "live mode" toggle. There is configuration, and there are
+checks that refuse the combinations that would lose money.

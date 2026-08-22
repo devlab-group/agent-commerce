@@ -206,8 +206,7 @@ function validateObject(
     // Object.hasOwn, not `properties[key]`: a plain-object lookup for
     // "__proto__"/"constructor"/"toString"/"valueOf"/"hasOwnProperty" resolves
     // to an inherited Object.prototype member instead of undefined, so those
-    // keys would otherwise silently skip the additionalProperties check below
-    //.
+    // keys would otherwise silently skip the additionalProperties check below.
     const propSchemaRaw = own(properties, key);
     if (propSchemaRaw !== undefined) {
       if (isPlainObject(propSchemaRaw)) {

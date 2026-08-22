@@ -71,6 +71,8 @@ the generated file is right and this table is stale.
 - **Additive:** `DeliverySummary` + `toDeliverySummary`. A payer is entitled to the record of their own purchase without reading the merchant's ledger. HTTP already sent one via the payment-response header; MCP sent nothing, which is why the demo buyer had to call the (now authenticated) `/api/receipts`.
 - **Value change + additive (x402 v2):** `PAYMENT_HEADER` is now `payment-signature` and `PAYMENT_RESPONSE_HEADER` is now `payment-response`, matching the x402 v2 HTTP binding; the v1 `x-payment` / `x-payment-response` pair is no longer accepted. New `PAYMENT_REQUIRED_HEADER` (`payment-required`) carries the base64 challenge on a 402. Wire-breaking by definition, and safe only because no release exists yet.
 - **Additive:** `PaymentChallenge.envelope` and `PaymentRequiredEnvelope.payment.envelope` — the provider's own challenge document, verbatim (x402 v2's `PaymentRequired`). `accepts` is the offer list inside it; the envelope also carries the protocol version and the resource description that v1 kept per-requirement. Built once by the provider so the HTTP and MCP surfaces cannot describe different challenges.
+- **Type change (x402, non-frozen surface):** `X402ProviderOptions.facilitator` is now `X402FacilitatorConfig`; `mode: 'remote'` gained a required `auth`, and `allowMainnet` was added. `mode: 'remote'` previously parsed but was rejected at config load and threw `PROTOCOL_UNSUPPORTED` at request time, so no working configuration changes shape.
+- **Removed from the wire:** `/.well-known/agent-commerce` no longer publishes `payments.x402.facilitator.url`. A facilitator endpoint can carry a tenant path or an API key, exactly like `rpcUrl`, which the same route already withholds. It gained `payments.x402.mode` (`local` | `testnet` | `mainnet`) instead — chain id 84532 belongs to both the local dev chain and public Base Sepolia, so the network id alone cannot say which one a client is talking to.
 ---
 
 # Integration contract — exact factory signatures
@@ -120,17 +122,29 @@ export interface X402ProviderOptions {
   readonly payTo: `0x${string}`;
   readonly maxTimeoutSeconds?: number;
   /**
-   * Local facilitator: signer broadcasts settlement on the dev chain only.
-   * LOCAL DEVELOPMENT ONLY — DO NOT FUND.
+   * `local` runs the facilitator in this process and signs with an Anvil
+   * well-known key — LOCAL DEVELOPMENT ONLY — DO NOT FUND. `remote` calls an
+   * HTTP facilitator, and this gateway then holds no signing key at all.
    */
-  readonly facilitator:
-    | { readonly mode: 'local'; readonly signerPrivateKey: `0x${string}` }
-    | { readonly mode: 'remote'; readonly url: string };
+  readonly facilitator: X402FacilitatorConfig;
+  /** Required to be `true` before anything settles on a mainnet. Never a default. */
+  readonly allowMainnet?: boolean;
   readonly logger?: Logger;
   readonly clock?: Clock;
   readonly ids?: IdGenerator;
 }
 export function createX402PaymentProvider(options: X402ProviderOptions): PaymentProvider;
+
+export type FacilitatorAuth =
+  | { readonly type: 'none' }
+  | { readonly type: 'bearer'; readonly token: string };
+
+export type X402FacilitatorConfig =
+  | { readonly mode: 'local'; readonly signerPrivateKey: string }
+  | { readonly mode: 'remote'; readonly url: string; readonly auth: FacilitatorAuth };
+
+export type DeploymentMode = 'local' | 'testnet' | 'mainnet';
+export const SUPPORTED_NETWORK_IDS: readonly string[]; // ['eip155:84532', 'eip155:8453']
 ```
 
 ## `src/protocols/mcp`
@@ -212,9 +226,8 @@ export interface GatewayConfig {
       assetDecimals: number;
       payTo: string;
       maxTimeoutSeconds: number;
-      facilitator:
-        | { mode: 'local'; signerPrivateKey: string }
-        | { mode: 'remote'; url: string };
+      facilitator: X402FacilitatorConfig;
+      allowMainnet?: boolean;
     };
   };
 }

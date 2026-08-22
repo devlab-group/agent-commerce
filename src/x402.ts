@@ -23,5 +23,10 @@ export {
   createX402PaymentProvider,
   // `x402` reads well at a call site; the full name reads better in a trace.
   createX402PaymentProvider as x402,
+  type DeploymentMode,
+  type FacilitatorAuth,
+  type NetworkProfile,
+  SUPPORTED_NETWORK_IDS,
+  type X402FacilitatorConfig,
   type X402ProviderOptions,
 } from './payments/x402/index.js';

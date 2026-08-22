@@ -183,7 +183,7 @@ backpressure. Put the gateway behind your own edge if you expose it publicly.
 
 ## Dependencies
 
-`x402`, `@modelcontextprotocol/sdk`, `viem`, `fastify` and their transitive
+`@x402/core`, `@x402/evm`, `@modelcontextprotocol/sdk`, `viem`, `fastify` and their transitive
 dependencies are third-party code, pinned exactly in
 . `npm audit` runs in the release
 workflow; high and critical findings are assessed and documented before a
@@ -195,6 +195,29 @@ The repository contains Anvil's well-known development accounts, used only on
 the local demo chain and labelled `LOCAL DEVELOPMENT ONLY - DO NOT FUND`. They
 are public knowledge and anyone can spend from them. Never send real assets to
 those addresses, and never reuse them anywhere else.
+
+Two independent checks refuse them where it would matter: a dev *key* may not
+sign against an RPC that does not look local or private, and a dev *address*
+may not be the settlement destination on any non-local deployment. The second
+is the consequential one — a wrong key merely fails to sign, a wrong `payTo`
+succeeds and gives the money away.
+
+## Mainnet
+
+`eip155:8453` is refused unless the configuration says so in full: an explicit
+`allowMainnet`, a remote facilitator reached over HTTPS and carrying a
+credential, a non-development `payTo`, and the canonical USDC for the chain.
+All of it is checked at config load, so the gateway does not start otherwise
+and `agent-commerce validate` reports it without starting anything.
+
+The in-process facilitator is never allowed on a mainnet: it signs with a key
+this process holds, which is a hot wallet inside the resource server — the
+arrangement the non-custodial design exists to avoid. With a remote
+facilitator the gateway holds no signing key at all.
+
+No settlement on a public chain has been performed by this release. What is
+described here is what the configuration permits, not what has been
+demonstrated.
 
 ## Threats we are not addressing in the alpha
 

@@ -69,7 +69,13 @@ describe('descriptor', () => {
     // Alpha honesty: things this provider does NOT implement must be listed.
     expect(provider.descriptor.unsupported).toContain('svm');
     expect(provider.descriptor.unsupported).toContain('permit2');
-    expect(provider.descriptor.unsupported).toContain('remote facilitator');
+    expect(provider.descriptor.unsupported).toContain(
+      'per-request signed facilitator credentials (e.g. CDP JWT)',
+    );
+    // The deployment this provider is configured for is part of its
+    // description: chain id 84532 alone cannot say local from Base Sepolia.
+    expect(provider.descriptor.capabilities).toContain('local-facilitator');
+    expect(provider.descriptor.capabilities).toContain('mode=local');
   });
 });
 
@@ -516,14 +522,14 @@ describe('createX402PaymentProvider — payTo dev-address guard', () => {
       makeProvider({
         rpcUrl: PUBLIC_RPC_URL,
         payTo: DEV_PAY_TO,
-        facilitator: { mode: 'remote', url: 'https://facilitator.invalid' },
+        facilitator: { mode: 'remote', url: 'https://facilitator.invalid', auth: { type: 'none' } },
       }),
     ).toThrow();
     try {
       makeProvider({
         rpcUrl: PUBLIC_RPC_URL,
         payTo: DEV_PAY_TO,
-        facilitator: { mode: 'remote', url: 'https://facilitator.invalid' },
+        facilitator: { mode: 'remote', url: 'https://facilitator.invalid', auth: { type: 'none' } },
       });
       expect.fail('should have thrown');
     } catch (err) {
@@ -543,31 +549,7 @@ describe('createX402PaymentProvider — payTo dev-address guard', () => {
   });
 });
 
-describe('settle — remote facilitator is not implemented', () => {
-  it('throws PROTOCOL_UNSUPPORTED for mode: "remote", without attempting settlement', async () => {
-    const provider = makeProvider({
-      facilitator: { mode: 'remote', url: 'https://facilitator.invalid' },
-    });
-    const requirement = await provider.createRequirement(paymentContext());
-
-    await expect(
-      provider.settle({
-        requestId: 'req-1',
-        resource: RESOURCE,
-        requirement,
-        submission: { method: 'x402', payload: 'irrelevant' },
-        verification: {
-          status: 'verified',
-          provider: 'x402',
-          amount: '0.01',
-          currency: 'USD',
-        },
-      }),
-    ).rejects.toSatisfy(
-      (err: unknown) => isCommerceError(err) && err.code === 'PROTOCOL_UNSUPPORTED',
-    );
-  });
-
+describe('settle', () => {
   it('throws PAYMENT_INVALID if settle() is called without a successful verify()', async () => {
     const provider = makeProvider();
     const requirement = await provider.createRequirement(paymentContext());

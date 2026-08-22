@@ -12,6 +12,24 @@ import type { Clock } from '../../../src/core/index.js';
 const getChainIdMock = vi.fn();
 const getCodeMock = vi.fn();
 const requestMock = vi.fn();
+const supportedMock = vi.fn();
+
+vi.mock('../../../src/payments/x402/facilitator.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/payments/x402/facilitator.js')>();
+  return {
+    ...actual,
+    // The remote binding's only job in health() is to report what the
+    // facilitator advertises; the HTTP call itself belongs to the SDK.
+    createRemoteFacilitatorBinding: () => ({
+      kind: 'remote' as const,
+      describe: 'remote https://facilitator.invalid (auth=none)',
+      open: () => {
+        throw new Error('health() must not open a facilitator session');
+      },
+      supported: () => supportedMock(),
+    }),
+  };
+});
 
 vi.mock('../../../src/payments/x402/chain.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../src/payments/x402/chain.js')>();
@@ -32,6 +50,8 @@ function mockAsGenuineAnvilNode(): void {
 
 const ASSET = '0x5FbDB2315678afecb367f032d93F642f64180aa3' as const;
 const PAY_TO = '0x70997970C51812dc3A010C7d01b50e0d17dc79C8' as const;
+/** A dev payTo is refused on any non-local deployment, so remote mode needs a real one. */
+const REMOTE_PAY_TO = '0x1111111111111111111111111111111111111111' as const;
 const BUYER_PRIVATE_KEY =
   '0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a' as const;
 
@@ -44,11 +64,11 @@ async function makeProvider(facilitatorMode: 'local' | 'remote' = 'local', clock
     assetName: 'MockUSDC',
     assetVersion: '2',
     assetDecimals: 6,
-    payTo: PAY_TO,
+    payTo: facilitatorMode === 'local' ? PAY_TO : REMOTE_PAY_TO,
     facilitator:
       facilitatorMode === 'local'
         ? { mode: 'local', signerPrivateKey: BUYER_PRIVATE_KEY }
-        : { mode: 'remote', url: 'https://facilitator.invalid' },
+        : { mode: 'remote', url: 'https://facilitator.invalid', auth: { type: 'none' } },
     ...(clock ? { clock } : {}),
   });
 }
@@ -92,13 +112,33 @@ describe('health() — mocked RPC client', () => {
     expect(health.detail).toContain('anvil_nodeInfo');
   });
 
-  it('does not probe anvil_nodeInfo for remote facilitator mode', async () => {
+  it('passes for a remote facilitator that advertises our scheme and network, without probing anvil_nodeInfo', async () => {
     getChainIdMock.mockResolvedValueOnce(84532);
     getCodeMock.mockResolvedValueOnce('0x6080604052');
+    supportedMock.mockResolvedValueOnce([
+      { x402Version: 2, scheme: 'exact', network: 'eip155:84532' },
+    ]);
     const provider = await makeProvider('remote');
     const health = await provider.health();
-    expect(health.status).toBe('warn');
+    expect(health.status).toBe('pass');
+    expect(health.detail).toContain('TESTNET');
+    // The Anvil probe is a local-mode question; a public facilitator is not
+    // expected to answer it and must never be judged on it.
     expect(requestMock).not.toHaveBeenCalled();
+  });
+
+  it('fails when the remote facilitator does not advertise our scheme on our network', async () => {
+    // A facilitator that is up but cannot settle this pair fails every
+    // payment — and does it after the buyer has already signed.
+    getChainIdMock.mockResolvedValueOnce(84532);
+    getCodeMock.mockResolvedValueOnce('0x6080604052');
+    supportedMock.mockResolvedValueOnce([
+      { x402Version: 2, scheme: 'exact', network: 'eip155:8453' },
+    ]);
+    const provider = await makeProvider('remote');
+    const health = await provider.health();
+    expect(health.status).toBe('fail');
+    expect(health.detail).toContain('does not advertise');
   });
 
   it('fails when the chain id does not match', async () => {

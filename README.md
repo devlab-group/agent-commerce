@@ -244,7 +244,7 @@ PASS Config valid — 2 resource(s), merchant "Demo Data Store"
 PASS Gateway healthy and ready at http://127.0.0.1:8080
 PASS Backend 2/2 backend host(s) reachable
 PASS Protocols http=on mcp=on (/mcp)
-PASS Payments x402 v2 (scheme=exact) enabled — network=eip155:84532, destination=0x7099…79C8, facilitator=local
+PASS Payments x402 v2 (scheme=exact) enabled — LOCAL on Base Sepolia (eip155:84532), destination=0x7099…79C8, facilitator=local
 INFO Payments (MPP) planned — not implemented in v0.1
 PASS Storage sqlite schema v1 writable; receipts=2
 PASS Protocol versions reported by gateway /.well-known/agent-commerce
@@ -277,14 +277,22 @@ reachable by anyone else, know the split:
 
 [SECURITY.md](SECURITY.md) states plainly what this does and does not protect.
 
-## Live settlement — not in this release
+## Public networks — configurable, not yet exercised
 
-**v0.1.0-alpha settles only against the local deterministic chain** (Anvil +
-MockUSDC). There is no live mode, no flag to enable one, and no partial path
-toward one: `facilitator.mode: "remote"` is rejected at config load, and the
-x402 provider's health check requires an Anvil-only RPC method, so `/ready`
-returns 503 against a real network. Settling real value is **planned**, not
-shipped — see [docs/payment-flow.md](docs/payment-flow.md).
+**Every settlement this release has actually performed was against the local
+deterministic chain** (Anvil + MockUSDC), and that is the path the tests cover.
+
+Base Sepolia (`eip155:84532`), Base mainnet (`eip155:8453`) and a remote HTTP
+facilitator can now be configured, with guardrails that refuse the combinations
+that lose money — mainnet needs an explicit `allowMainnet`, a remote
+facilitator over HTTPS with a credential, a non-development `payTo`, and the
+canonical USDC for the chain. Those are checked at config load, so
+`agent-commerce validate` catches them and the gateway will not start without
+them.
+
+Configurable is not the same as proven. Settling real value on a public chain
+is **not yet demonstrated** — see [docs/payment-flow.md](docs/payment-flow.md)
+and [docs/configuration.md](docs/configuration.md).
 
 ## Development
 
