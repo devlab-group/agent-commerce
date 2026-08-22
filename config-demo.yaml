@@ -96,7 +96,7 @@ resources:
 payments:
   x402:
     enabled: true
-    network: ${X402_NETWORK:-base-sepolia}
+    network: ${X402_NETWORK:-eip155:84532}
     rpcUrl: ${X402_RPC_URL:-http://127.0.0.1:8545}
     asset: ${X402_ASSET}
     assetName: ${X402_ASSET_NAME:-MockUSDC}

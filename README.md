@@ -30,7 +30,7 @@ wallet — the gateway never holds it, and never holds your keys.
 
 ```text
 Your existing API → Agent Commerce Gateway → AI Agent
-                        MCP · x402 · receipts · doctor
+                MCP · x402 · receipts · doctor
 ```
 
 ## Demo
@@ -93,18 +93,18 @@ const { url } = await gateway.listen;
 ### Optional peers — install only the rails you use
 
 The MCP adapter and the x402 provider live on their own subpaths, because each
-needs a dependency the rest of the package does not. x402 alone pulls a browser
-wallet stack (wagmi, WalletConnect, Reown) worth ~572 MB, which a gateway
-serving a free HTTP resource has no business installing.
+needs a dependency the rest of the package does not — the x402 rail brings the
+whole EVM signing and RPC stack, which a gateway serving a free HTTP resource
+has no business installing.
 
 | You want                       | Install                        | Import                                     |
 | ------------------------------ | ------------------------------ | ------------------------------------------ |
 | gateway, config, receipts, CLI | `@devlab.group/agent-commerce` | `from '@devlab.group/agent-commerce'`      |
 | expose resources as MCP tools  | `+ @modelcontextprotocol/sdk`  | `from '@devlab.group/agent-commerce/mcp'`  |
-| accept x402 payments           | `+ x402 viem`                  | `from '@devlab.group/agent-commerce/x402'` |
+| accept x402 payments           | `+ @x402/core @x402/evm viem`  | `from '@devlab.group/agent-commerce/x402'` |
 
 ```bash
-npm install @devlab.group/agent-commerce @modelcontextprotocol/sdk x402 viem
+npm install @devlab.group/agent-commerce @modelcontextprotocol/sdk @x402/core @x402/evm viem
 ```
 
 ```ts
@@ -112,9 +112,9 @@ import { mcp } from '@devlab.group/agent-commerce/mcp';
 import { x402 } from '@devlab.group/agent-commerce/x402';
 ```
 
-Peers are pinned exactly: x402's
-schemas and EIP-712 domains cross this boundary, so a version skew is a
-correctness problem rather than a convenience one. Import a subpath without its
+Peers are pinned exactly: x402's schemas and EIP-712 domains cross this
+boundary, so a version skew is a correctness problem rather than a convenience
+one. Import a subpath without its
 peer installed and Node fails at load naming the missing package — deliberately,
 rather than starting a gateway that silently serves nothing.
 
@@ -154,7 +154,7 @@ To stop and wipe state: `docker compose down -v`.
         ┌──────────────────────────────────────────────────────┐
         │ AI Agent │
         └──────────────┬───────────────────────────────────────┘
-                       │ MCP · HTTP + X-PAYMENT
+                       │ MCP · HTTP + PAYMENT-SIGNATURE
         ┌──────────────▼───────────────────────────────────────┐
         │ Agent Commerce Gateway (yours) │
         │ │
@@ -209,7 +209,7 @@ See [docs/configuration.md](docs/configuration.md).
 | Protocol              | Status    | Pinned revision                    |
 | --------------------- | --------- | ---------------------------------- |
 | **MCP**               | Supported | `@modelcontextprotocol/sdk@1.30.0` |
-| **x402**              | Supported | `x402@1.2.0`, scheme `exact`, EVM  |
+| **x402**              | Supported | x402 v2 (`@x402/core`, `@x402/evm`), scheme `exact`, EVM |
 | **HTTP**              | Supported | native routes                      |
 | UCP                   | Planned   | —                                  |
 | ACP · MPP · A2A · AP2 | Planned   | —                                  |
@@ -244,7 +244,7 @@ PASS Config valid — 2 resource(s), merchant "Demo Data Store"
 PASS Gateway healthy and ready at http://127.0.0.1:8080
 PASS Backend 2/2 backend host(s) reachable
 PASS Protocols http=on mcp=on (/mcp)
-PASS Payments x402 enabled — network=base-sepolia, destination=0x7099…79C8, facilitator=local
+PASS Payments x402 v2 (scheme=exact) enabled — network=eip155:84532, destination=0x7099…79C8, facilitator=local
 INFO Payments (MPP) planned — not implemented in v0.1
 PASS Storage sqlite schema v1 writable; receipts=2
 PASS Protocol versions reported by gateway /.well-known/agent-commerce

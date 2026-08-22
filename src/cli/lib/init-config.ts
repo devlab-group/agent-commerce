@@ -125,7 +125,7 @@ export function buildInitConfigObject(answers: InitAnswers): Record<string, unkn
       ? {
           x402: {
             enabled: true,
-            network: 'base-sepolia',
+            network: 'eip155:84532',
             rpcUrl: 'http://127.0.0.1:8545',
             asset: PLACEHOLDER_ASSET_ADDRESS,
             assetName: 'MockUSDC',

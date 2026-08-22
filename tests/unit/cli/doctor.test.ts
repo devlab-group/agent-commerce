@@ -28,7 +28,7 @@ function healthyFetch(overrides: Record<string, () => Response | Promise<Respons
 
 const X402_CONFIG = {
   enabled: true,
-  network: 'base-sepolia',
+  network: 'eip155:84532',
   rpcUrl: 'http://127.0.0.1:8545',
   // Deliberately NOT the init placeholder (0x…dEaD): doctor WARNs on that,
   // which would mask every other assertion in this file.
@@ -425,7 +425,7 @@ describe('runDoctor — degraded scenarios never hang and degrade gracefully', (
     );
     const payments = report.checks.find((c) => c.name === 'Payments');
     expect(payments?.status).toBe('FAIL');
-    expect(payments?.detail).toContain('base-sepolia');
+    expect(payments?.detail).toContain('eip155:84532');
     expect(payments?.detail).toContain('"base"');
   });
 

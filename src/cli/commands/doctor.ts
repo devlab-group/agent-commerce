@@ -272,7 +272,11 @@ export async function runDoctor(
   if (x402 === undefined || !x402.enabled) {
     checks.push({ name: 'Payments', status: 'INFO', detail: 'x402 not configured' });
   } else {
-    const summary = `x402 enabled — network=${x402.network}, destination=${maskMiddle(x402.payTo)}, facilitator=${x402.facilitator.mode}`;
+    // The protocol version is named because chain id 84532 is shared with the
+    // public Base Sepolia testnet: `facilitator=local` is what says this
+    // deployment settles on a local dev node, and nothing here may be read as
+    // a claim about a public network.
+    const summary = `x402 v2 (scheme=exact) enabled — network=${x402.network}, destination=${maskMiddle(x402.payTo)}, facilitator=${x402.facilitator.mode}`;
     const live = wellKnown?.ok ? extractWellKnownX402(wellKnown.body) : undefined;
     if (sameAddress(x402.asset, PLACEHOLDER_ASSET_ADDRESS)) {
       // `init --yes` writes this placeholder, and the

@@ -52,8 +52,10 @@ The gateway is in the middle of the *protocol* and outside the *custody*.
 ```
 
 Steps 1–2 and 4–5 are the same over plain HTTP; the challenge arrives as a
-`402` body and the proof travels in the `X-PAYMENT` header instead of the
-reserved `_payment` tool input.
+`402` body — and, for x402 v2 clients, in the base64 `PAYMENT-REQUIRED`
+response header — while the proof travels in the `PAYMENT-SIGNATURE` header
+instead of the reserved `_payment` tool input. The settlement result comes back
+in `PAYMENT-RESPONSE`.
 
 ## Why the money cannot be redirected
 
@@ -73,7 +75,7 @@ happened without ever being able to take it.
 | no proof supplied | `PaymentRequiredOutcome`, 402 + envelope | no |
 | malformed proof | `PAYMENT_INVALID` | no |
 | bad signature | `PAYMENT_INVALID` | no |
-| wrong amount (`value < maxAmountRequired`) | `PAYMENT_INVALID` | no |
+| wrong amount (`value < amount`) | `PAYMENT_INVALID` | no |
 | wrong recipient (`to != payTo`) | `PAYMENT_INVALID` | no |
 | wrong network | `PAYMENT_INVALID` | no |
 | wrong asset | `PAYMENT_INVALID` | no |
@@ -115,7 +117,9 @@ asset supports is a configuration error, not a rounding opportunity.
 
 The demo and CI settle for real, on a chain they own:
 
-- Anvil, `--chain-id 84532`, so x402's `base-sepolia` network id matches.
+- Anvil, `--chain-id 84532`, advertised as the CAIP-2 network `eip155:84532`.
+  That id is shared with the public Base Sepolia testnet, so nothing infers
+  "public network" from it — `health()` probes for `anvil_nodeInfo` instead.
 - `MockUSDC`: 6 decimals, EIP-3009, EIP-712 domain `("MockUSDC", "2")`.
 - Anvil's well-known accounts as deployer/facilitator, merchant and buyer —
   `LOCAL DEVELOPMENT ONLY - DO NOT FUND`.

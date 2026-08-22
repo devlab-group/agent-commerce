@@ -28,7 +28,7 @@ Never logged, never persisted, never returned:
 
 - private keys, seed phrases, mnemonics
 - `Authorization` headers and backend API secrets
-- the `X-PAYMENT` header and raw payment authorisation payloads
+- the `PAYMENT-SIGNATURE` header and raw payment authorisation payloads
 - `signature`, `secret`, `apiKey`, `signerPrivateKey`, `adminToken` and `token`
   fields, **at the top level and one level deep** (see below)
 

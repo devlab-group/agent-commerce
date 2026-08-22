@@ -85,7 +85,7 @@ const PAYMENT_REQUIRED_ENVELOPE = {
         scheme: 'exact',
         payTo: '0x70997970C51812dc3A010C7d01b50e0d17dc79C8',
         asset: '0x5fbdb2315678afecb367f032d93f642f64180aa3',
-        maxAmountRequired: '10000',
+        amount: '10000',
       },
     ],
   },
@@ -388,7 +388,7 @@ describe('the buyer checks the 402 challenge before signing', () => {
   const good = {
     payTo: expected.merchant,
     asset: expected.asset,
-    maxAmountRequired: '10000',
+    amount: '10000',
   };
 
   it('accepts the challenge the demo actually expects', () => {
@@ -412,9 +412,9 @@ describe('the buyer checks the 402 challenge before signing', () => {
       { asset: '0x000000000000000000000000000000000000dEaD' },
       'expected asset',
     ],
-    ['an amount above the cap', { maxAmountRequired: '100001' }, 'outside the accepted range'],
-    ['a zero amount', { maxAmountRequired: '0' }, 'outside the accepted range'],
-    ['a non-integer amount', { maxAmountRequired: '1.5' }, 'not an integer'],
+    ['an amount above the cap', { amount: '100001' }, 'outside the accepted range'],
+    ['a zero amount', { amount: '0' }, 'outside the accepted range'],
+    ['a non-integer amount', { amount: '1.5' }, 'not an integer'],
     ['a missing recipient', { payTo: undefined }, 'expected merchant'],
   ])('refuses to sign %s', (_label, override, expectedMessage) => {
     expect(() => assertPaymentIsExpected({ ...good, ...override }, expected)).toThrowError(

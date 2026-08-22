@@ -147,15 +147,14 @@ describe('published package metadata', () => {
   });
 
   it('gates the heavy adapters behind subpaths with optional peers', () => {
-    // Installing `createGateway` used to pull x402's browser wallet stack:
-    // 713 MB and 340 packages for a consumer serving a free HTTP resource.
-    // These three are the whole weight (~665 MB) and none is needed by the
+    // Installing `createGateway` used to pull the whole EVM/wallet stack for
+    // a consumer serving a free HTTP resource. None of these is needed by the
     // main entry or the CLI, so they are optional peers reached by subpath.
     const exportsField = manifest.exports as Record<string, unknown> | undefined;
     for (const subpath of ['./mcp', './x402']) {
       expect(exportsField?.[subpath]).toBeDefined();
     }
-    for (const peer of ['@modelcontextprotocol/sdk', 'x402', 'viem']) {
+    for (const peer of ['@modelcontextprotocol/sdk', '@x402/core', '@x402/evm', 'viem']) {
       expect(manifest.peerDependencies?.[peer]).toBeDefined();
       expect(manifest.peerDependenciesMeta?.[peer]?.optional).toBe(true);
       // In `dependencies` too would defeat the point — npm installs those.
@@ -328,7 +327,7 @@ describe.skipIf(!existsSync(libEntry))('optional-peer subpaths', () => {
 
   it('imports only its own peer, in each subpath', () => {
     expect(bareImportsOf(mcpEntry)).toEqual(['@modelcontextprotocol/sdk']);
-    expect(bareImportsOf(x402Entry).sort()).toEqual(['viem', 'x402']);
+    expect(bareImportsOf(x402Entry).sort()).toEqual(['@x402/core', '@x402/evm', 'viem']);
   });
 
   it('exports its factory under both the short and the full name', () => {
@@ -358,7 +357,7 @@ describe.skipIf(!existsSync(libEntry))('optional-peer subpaths', () => {
         `import { CommerceError } from ${JSON.stringify(libEntry)};
          import { x402 } from ${JSON.stringify(x402Entry)};
          let caught;
-         try { x402({ asset: 'not-an-address', payTo: '0x0', network: 'base-sepolia' }); }
+         try { x402({ asset: 'not-an-address', payTo: '0x0', network: 'eip155:84532' }); }
          catch (e) { caught = e; }
          process.stdout.write(String(caught instanceof CommerceError));`,
       ],

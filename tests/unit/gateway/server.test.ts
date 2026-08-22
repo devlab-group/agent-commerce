@@ -224,7 +224,7 @@ describe('createGateway HTTP surface', () => {
     const body = res.json();
     expect(body.merchant.id).toBe('demo-store');
     expect(body.payments.x402.payTo).toBe('0x70997970C51812dc3A010C7d01b50e0d17dc79C8');
-    expect(body.payments.x402.network).toBe('base-sepolia');
+    expect(body.payments.x402.network).toBe('eip155:84532');
     expect(body.adapters).toHaveLength(1);
     expect(body.paymentProviders).toHaveLength(1);
     expect(body.store).toBeDefined();
@@ -767,7 +767,7 @@ describe('createGateway HTTP surface', () => {
       payments: {
         x402: {
           enabled: true,
-          network: 'base-sepolia',
+          network: 'eip155:84532',
           rpcUrl: 'http://127.0.0.1:8545',
           asset: '0x1111111111111111111111111111111111111111',
           assetName: 'MockUSDC',

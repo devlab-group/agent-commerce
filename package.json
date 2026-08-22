@@ -96,14 +96,18 @@
   },
   "peerDependencies": {
     "@modelcontextprotocol/sdk": "1.30.0",
-    "x402": "1.2.0",
+    "@x402/core": "2.23.0",
+    "@x402/evm": "2.23.0",
     "viem": "2.55.18"
   },
   "peerDependenciesMeta": {
     "@modelcontextprotocol/sdk": {
       "optional": true
     },
-    "x402": {
+    "@x402/core": {
+      "optional": true
+    },
+    "@x402/evm": {
       "optional": true
     },
     "viem": {
@@ -119,6 +123,8 @@
     "@types/react-dom": "19.2.4",
     "@vitejs/plugin-react": "6.0.5",
     "@vitest/coverage-v8": "4.1.10",
+    "@x402/core": "2.23.0",
+    "@x402/evm": "2.23.0",
     "pino-pretty": "13.1.2",
     "react": "19.0.8",
     "react-dom": "19.0.8",
@@ -127,8 +133,7 @@
     "typescript": "5.9.3",
     "viem": "2.55.18",
     "vite": "8.2.1",
-    "vitest": "4.1.10",
-    "x402": "1.2.0"
+    "vitest": "4.1.10"
   },
   "overrides": {
     "zod": "3.25.76"

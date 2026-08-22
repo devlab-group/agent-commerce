@@ -178,7 +178,7 @@ describe('bearer-token-shaped keys', () => {
       payTo: '0xdef',
       requestId: 'req_1',
       resourceId: 'market_report',
-      network: 'base-sepolia',
+      network: 'eip155:84532',
       asset: '0x123',
       status: 'settled',
       txHash: '0xfeed',

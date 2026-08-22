@@ -41,7 +41,8 @@ function versionReport(): string {
   const deps = { ...pkg.dependencies, ...pkg.peerDependencies };
   const wanted = [
     '@modelcontextprotocol/sdk',
-    'x402',
+    '@x402/core',
+    '@x402/evm',
     'viem',
     'better-sqlite3',
     'fastify',

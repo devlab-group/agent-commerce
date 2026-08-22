@@ -32,6 +32,7 @@ config.yaml
 graphify-out/
 playwright-report/
 test-results/
+.internal-docs
 
 # npm package build output and local tarballs from `npm pack`.
 *.tgz

@@ -11,10 +11,10 @@
  *
  * Chain id alone cannot tell a real network from this project's local dev
  * chain: Base Sepolia's own chain id is 84532, the same id this project
- * deliberately reuses for the local chain so the unmodified x402
- * SDK's `getNetworkId('base-sepolia')` lines up with it. A dev key or dev
- * payTo pointed at a real RPC by a config mistake is instantly drainable —
- * this is checked once at provider construction, not per payment.
+ * deliberately reuses for the local chain so the unmodified x402 SDK can talk
+ * to it. A dev key or dev payTo pointed at a real RPC by a config mistake is
+ * instantly drainable — this is checked once at provider construction, not per
+ * payment.
  */
 import { CommerceError } from '../../core/index.js';
 import { ANVIL_WELL_KNOWN_ACCOUNTS } from './local-chain/accounts.js';

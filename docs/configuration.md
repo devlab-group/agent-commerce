@@ -77,7 +77,7 @@ request input, and redirects are not followed. See [security.md](security.md).
 payments:
   x402:
     enabled: true
-    network: ${X402_NETWORK} # base-sepolia (id 84532) locally
+    network: ${X402_NETWORK} # CAIP-2; eip155:84532 locally
     rpcUrl: ${X402_RPC_URL}
     asset: ${X402_ASSET} # ERC-20 with EIP-3009
     assetName: ${X402_ASSET_NAME} # EIP-712 domain name

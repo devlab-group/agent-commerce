@@ -13,7 +13,7 @@ not scale, and handing the money to a proprietary middleman defeats the point.
         ┌──────────────────────────────────────────────────────────┐
         │ AI Agent │
         └───────────────┬──────────────────────────────────────────┘
-                        │ MCP (tools/list, tools/call) · HTTP + X-PAYMENT
+                        │ MCP (tools/list, tools/call) · HTTP + PAYMENT-SIGNATURE
         ┌───────────────▼──────────────────────────────────────────┐
         │ Agent Commerce Gateway │
         │ (runs in MERCHANT infrastructure) │

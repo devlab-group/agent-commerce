@@ -1,6 +1,7 @@
 /**
  * Pino logger factory with redaction. Never log secrets: Authorization
- * headers, the X-PAYMENT header, private keys, seeds, mnemonics, signatures.
+ * headers, the payment-signature header, private keys, seeds, mnemonics,
+ * signatures.
  *
  * Two independent things are built here, deliberately not the same pino
  * instance (Fastify's `loggerInstance` option forces its generic `Logger`
@@ -76,7 +77,7 @@ const SECRET_FIELD_NAMES = [
  */
 export const REDACT_PATHS: readonly string[] = [
   'req.headers.authorization',
-  'req.headers["x-payment"]',
+  'req.headers["payment-signature"]',
   ...SECRET_FIELD_NAMES,
   ...SECRET_FIELD_NAMES.map((name) => `*.${name}`),
 ];

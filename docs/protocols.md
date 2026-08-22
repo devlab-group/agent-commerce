@@ -8,8 +8,8 @@ implemented, exactly what is not, and pins the revisions.
 | Protocol | Status | Revision | What works |
 |---|---|---|---|
 | **MCP** | Supported | `@modelcontextprotocol/sdk@1.30.0` | tool discovery, tool invocation, payment-required and error mapping |
-| **x402** | Supported | `x402@1.2.0`, scheme `exact`, EVM | challenge, verification, settlement, replay binding |
-| **HTTP** | Supported | — | native resource routes with `X-PAYMENT` |
+| **x402** | Supported | x402 **v2** (`@x402/core@2.23.0`, `@x402/evm@2.23.0`), scheme `exact`, EVM, EIP-3009 | challenge, verification, settlement, replay binding |
+| **HTTP** | Supported | — | native resource routes with `PAYMENT-SIGNATURE` |
 | UCP | Planned | — | not in v0.1 |
 | ACP | Planned | — | not in v0.1 |
 | MPP | Planned | — | not in v0.1 |
@@ -53,20 +53,24 @@ representation, shared with the HTTP surface and the demo buyer through
   "message": "Payment of 0.01 USDC is required for resource \"market_report\". …",
   "payment": {
     "provider": "x402",
-    "version": "1",
+    "version": "2",
     "amount": "0.01",
     "currency": "USDC",
     "destination": "0x…",
-    "network": "base-sepolia",
+    "network": "eip155:84532",
     "asset": "0x…",
     "expiresAt": "…",
-    "accepts": [ /* x402 PaymentRequirements, verbatim */ ]
+    "accepts": [ /* x402 v2 PaymentRequirements, verbatim */ ],
+    "envelope": { /* x402 v2 PaymentRequired, verbatim */ }
   }
 }
 ```
 
-The client signs `accepts[0]` and retries the same tool call with `_payment` set
-to the base64 `X-PAYMENT` value.
+`envelope` is the whole x402 v2 `PaymentRequired` document — the thing an x402
+client SDK consumes directly. `accepts` is the same list it contains, kept as a
+separate field because it is provider-agnostic. The client signs the offer and
+retries the same tool call with `_payment` set to the base64 payment payload;
+over HTTP the same value goes in the `PAYMENT-SIGNATURE` header.
 
 Errors map to the same envelope shape with `status: "error"` and a
 `CommerceErrorCode`. Stack traces and internal messages never cross the
@@ -109,7 +113,7 @@ YAML), multi-asset routing and dynamic pricing.
 | `GET /ready` | readiness — config, store, required adapters and configured payment providers |
 | `GET /.well-known/agent-commerce` | merchant info, adapter descriptors, pinned versions, effective settlement destination |
 | `GET /api/resources` | canonical resource list |
-| `POST /api/resources/:id/invoke` | invoke; `X-PAYMENT` in, `402` + envelope when unpaid, `X-PAYMENT-RESPONSE` out |
+| `POST /api/resources/:id/invoke` | invoke; `PAYMENT-SIGNATURE` in, `402` + body envelope and `PAYMENT-REQUIRED` header when unpaid, `PAYMENT-RESPONSE` out |
 | `GET /api/receipts`, `GET /api/events` | audit |
 | `GET /api/events/stream` | SSE event feed |
 | `/mcp` | MCP Streamable HTTP |

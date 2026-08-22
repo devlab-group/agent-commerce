@@ -21,7 +21,13 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 
 const CORS_METHODS = 'GET,POST,DELETE,OPTIONS';
-const CORS_HEADERS = 'content-type,x-payment,x-request-id,authorization';
+const CORS_HEADERS = 'content-type,payment-signature,x-request-id,authorization';
+/**
+ * Without this a browser client can read neither the challenge nor the
+ * settlement result: cross-origin JS only sees the CORS-safelisted response
+ * headers unless they are named here.
+ */
+const CORS_EXPOSED_HEADERS = 'payment-required,payment-response,x-request-id';
 
 export interface AccessControlOptions {
   readonly publicBaseUrl: string;
@@ -63,6 +69,7 @@ export function buildAccessControlHook(
       reply.header('access-control-allow-origin', origin);
       reply.header('access-control-allow-methods', CORS_METHODS);
       reply.header('access-control-allow-headers', CORS_HEADERS);
+      reply.header('access-control-expose-headers', CORS_EXPOSED_HEADERS);
       reply.header('vary', 'Origin');
       if (request.method === 'OPTIONS') {
         // Preflight: never carries credentials, so it must not hit a

@@ -38,7 +38,7 @@ const BUYER_PRIVATE_KEY =
 async function makeProvider(facilitatorMode: 'local' | 'remote' = 'local', clock?: Clock) {
   const { createX402PaymentProvider } = await import('../../../src/payments/x402/provider.js');
   return createX402PaymentProvider({
-    network: 'base-sepolia',
+    network: 'eip155:84532',
     rpcUrl: 'http://127.0.0.1:19322',
     asset: ASSET,
     assetName: 'MockUSDC',

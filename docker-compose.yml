@@ -106,7 +106,7 @@ services:
       MERCHANT_API_BASE_URL: http://merchant-api:3000
       RECEIPT_STORE_PATH: /workspace/data/receipts.sqlite
       AGENT_COMMERCE_CONFIG: /workspace/config-demo.yaml
-      X402_NETWORK: base-sepolia
+      X402_NETWORK: eip155:84532
       X402_RPC_URL: http://anvil:8545
       LOCAL_CHAIN_MANIFEST: /workspace/.deploy/local.json
       # Operator routes carry the merchant's commerce ledger. This demo value is

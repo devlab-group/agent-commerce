@@ -64,6 +64,7 @@ export {
   isPaymentRequiredEnvelope,
   PAYMENT_HEADER,
   PAYMENT_INPUT_FIELD,
+  PAYMENT_REQUIRED_HEADER,
   PAYMENT_RESPONSE_HEADER,
   toDeliverySummary,
   toErrorEnvelope,
