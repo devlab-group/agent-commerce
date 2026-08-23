@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- * FROZEN PUBLIC CONTRACT — v0.1.0-alpha
+ * FROZEN PUBLIC CONTRACT — frozen at v0.1.0-alpha
  * ============================================================================
  *
  * Every cross-package type and interface in the project is re-exported here.

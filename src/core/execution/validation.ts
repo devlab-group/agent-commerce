@@ -15,7 +15,7 @@
  * `exclusiveMinimum/Maximum`, `multipleOf`, `oneOf`, `anyOf`, `allOf`, `not`,
  * `$ref`, `const`, `patternProperties`, `minItems`, `maxItems`, `uniqueItems`,
  * tuple-style `items` arrays. An unrecognised `type` value is not enforced
- * either. This is a deliberate, documented limitation for v0.1.0-alpha — do
+ * either. This is a deliberate, documented limitation of this release — do
  * not assume any of the above is validated.
  */
 import type { JsonSchema } from '../domain/common.js';

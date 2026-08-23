@@ -75,7 +75,7 @@ describe('StatusPanel', () => {
       wellKnown: {
         gateway: {
           implementationVersion: '0.1.0',
-          supportedSpec: 'agent-commerce/v0.1.0-alpha',
+          supportedSpec: 'agent-commerce/v0.2.0-beta',
         },
         merchant: { id: 'demo', name: 'Demo Merchant', publicBaseUrl: 'http://localhost:8080' },
         protocols: { http: { enabled: true }, mcp: { enabled: true, mountPath: '/mcp' } },
@@ -95,7 +95,7 @@ describe('StatusPanel', () => {
       wellKnown: {
         gateway: {
           implementationVersion: '0.1.0',
-          supportedSpec: 'agent-commerce/v0.1.0-alpha',
+          supportedSpec: 'agent-commerce/v0.2.0-beta',
         },
         merchant: { id: 'demo', name: 'Demo Merchant', publicBaseUrl: 'http://localhost:8080' },
         protocols: { http: { enabled: true }, mcp: { enabled: true, mountPath: '/mcp' } },
@@ -113,7 +113,7 @@ describe('StatusPanel', () => {
       wellKnown: {
         gateway: {
           implementationVersion: '0.1.0',
-          supportedSpec: 'agent-commerce/v0.1.0-alpha',
+          supportedSpec: 'agent-commerce/v0.2.0-beta',
         },
         merchant: { id: 'demo', name: 'Demo Merchant', publicBaseUrl: 'http://localhost:8080' },
         protocols: { http: { enabled: true }, mcp: { enabled: true, mountPath: '/mcp' } },
@@ -145,7 +145,7 @@ describe('StatusPanel', () => {
       wellKnown: {
         gateway: {
           implementationVersion: '0.1.0',
-          supportedSpec: 'agent-commerce/v0.1.0-alpha',
+          supportedSpec: 'agent-commerce/v0.2.0-beta',
         },
         merchant: { id: 'demo', name: 'Demo Merchant', publicBaseUrl: 'http://localhost:8080' },
         protocols: { http: { enabled: true }, mcp: { enabled: false, mountPath: '/mcp' } },

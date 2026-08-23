@@ -358,7 +358,7 @@ export async function runDoctor(
   checks.push({
     name: 'Payments (MPP)',
     status: 'INFO',
-    detail: 'planned — not implemented in v0.1',
+    detail: 'planned — not implemented in this release',
   });
 
   // 7. Storage

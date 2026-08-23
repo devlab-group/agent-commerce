@@ -1,6 +1,6 @@
 # Payment flow
 
-How a paid resource actually gets paid for, end to end, in v0.1.0-alpha.
+How a paid resource actually gets paid for, end to end.
 
 ## Roles
 

@@ -52,7 +52,7 @@ import { type AdapterRuntime, getAdapterHealth } from './adapters.js';
  * spec, and announcing a new one on every version bump would tell every
  * client the protocol moved when it did not.
  */
-const GATEWAY_SUPPORTED_SPEC = 'agent-commerce/v0.1.0-alpha';
+const GATEWAY_SUPPORTED_SPEC = 'agent-commerce/v0.2.0-beta';
 
 export interface WellKnownDocument {
   readonly gateway: { readonly implementationVersion: string; readonly supportedSpec: string };

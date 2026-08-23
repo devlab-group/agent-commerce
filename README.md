@@ -13,7 +13,7 @@
   <img alt="Status" src="https://img.shields.io/badge/status-alpha-orange">
 </p>
 
-> **Alpha.** `v0.1.0-alpha` is experimental. Do not use it with production funds
+> **Beta.** `v0.2.0-beta` is experimental. Do not use it with production funds
 > without an independent review. See [SECURITY.md](SECURITY.md).
 
 ---
@@ -316,7 +316,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Roadmap
 
-**Now (v0.1.0-alpha)** — MCP, x402, receipts, doctor, deterministic demo.
+**Now (v0.2.0-beta)** — MCP, x402 v2, Base Sepolia settlement, receipts, doctor, deterministic demo.
 
 **Next** — OpenAPI import · a stronger conformance suite · a `doctor` GitHub
 Action · UCP · MPP · ACP · A2A · AP2 · Shopify and WooCommerce examples ·

@@ -94,7 +94,7 @@ describe('parseConfig', () => {
     expectConfigInvalid(() => parseConfig(raw, {}));
   });
 
-  it('rejects pricing.type "dynamic" with an explicit not-supported-in-v0.1 message', () => {
+  it('rejects pricing.type "dynamic" with an explicit not-supported message', () => {
     const raw = validRawConfig();
     (raw['resources'] as Record<string, unknown>)['dynamic_res'] = {
       name: 'Dynamic',
@@ -107,7 +107,7 @@ describe('parseConfig', () => {
       parseConfig(raw, {});
     } catch (error) {
       if (isCommerceError(error)) {
-        expect(error.message).toContain('not supported in v0.1');
+        expect(error.message).toContain('not supported in this release');
       }
     }
   });

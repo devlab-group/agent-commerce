@@ -539,7 +539,7 @@ function normaliseResource(
 
   for (const protocol of entry.expose) {
     if (!SUPPORTED_PROTOCOLS.has(protocol)) {
-      const hint = protocol === 'ucp' ? ' (UCP is planned, not supported in v0.1.0-alpha)' : '';
+      const hint = protocol === 'ucp' ? ' (UCP is planned, not supported in this release)' : '';
       throw new CommerceError(
         'CONFIG_INVALID',
         `Resource "${id}" exposes unsupported protocol "${protocol}"${hint}. Supported: http, mcp.`,
@@ -577,7 +577,7 @@ function normaliseResource(
   if (entry.pricing.type === 'dynamic') {
     throw new CommerceError(
       'CONFIG_INVALID',
-      `Resource "${id}" uses pricing.type "dynamic", which is not supported in v0.1.0-alpha`,
+      `Resource "${id}" uses pricing.type "dynamic", which is not supported in this release`,
       { details: { path: `resources.${id}.pricing.type`, resourceId: id } },
     );
   }

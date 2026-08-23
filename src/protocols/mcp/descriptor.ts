@@ -26,7 +26,7 @@ export const MCP_SUPPORTED_SPEC = LATEST_PROTOCOL_VERSION;
 export const MCP_CAPABILITIES: readonly string[] = ['tools/list', 'tools/call'];
 
 /**
- * MCP surfaces this adapter does not implement in v0.1.0-alpha. Kept explicit
+ * MCP surfaces this adapter does not implement in this release. Kept explicit
  * so `doctor` / the support matrix never imply blanket protocol compatibility.
  *
  * `dns-rebinding-protection` is not a missing *feature* so much as a
