@@ -113,7 +113,12 @@ describe('published package metadata', () => {
   });
 
   it('exposes the agent-commerce executable, pointing at compiled JS', () => {
-    expect(manifest.bin?.['agent-commerce']).toBe('./dist/cli/index.js');
+    const bin = manifest.bin?.['agent-commerce'];
+    expect(bin).toBe('dist/cli/index.js');
+    // No leading `./`: npm >= 12 treats that as an invalid bin target and
+    // *removes the entry*, publishing a package with no binary at all. It says
+    // so in a `npm warn`, one line above the output everyone reads.
+    expect(bin?.startsWith('./')).toBe(false);
   });
 
   it('is not a workspace: no pnpm-workspace.yaml, and the root is publishable', () => {

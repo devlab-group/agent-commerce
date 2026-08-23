@@ -133,4 +133,23 @@ jobs:
       # `--access public` is not passed here: publishConfig.access carries it,
       # and a packaging test asserts that, so the two cannot disagree.
       # Provenance is attached automatically when publishing via OIDC.
-      - run: npm publish
+      #
+      # The dist-tag is derived from the version rather than hardcoded: npm >= 12
+      # refuses to publish a prerelease without an explicit `--tag`, because the
+      # default is `latest` and that would serve a beta to everyone running a
+      # plain `npm install`. `0.2.0-beta.0` publishes under `beta`, `1.0.0-rc.1`
+      # under `rc`, and only a version with no prerelease part takes `latest`.
+      - name: Publish
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          case "$version" in
+            *-*)
+              suffix="${version#*-}"
+              tag="${suffix%%.*}"
+              ;;
+            *)
+              tag="latest"
+              ;;
+          esac
+          echo "publishing $version under dist-tag $tag"
+          npm publish --tag "$tag"

@@ -9,7 +9,7 @@
     "npm": ">=10"
   },
   "bin": {
-    "agent-commerce": "./dist/cli/index.js"
+    "agent-commerce": "dist/cli/index.js"
   },
   "exports": {
     ".": {
