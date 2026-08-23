@@ -1,7 +1,9 @@
 # Security Policy
 
-> **Beta warning.** `v0.2.0-beta` is experimental software. Do not use it with
-> production funds without an independent security review.
+> **No commissioned security audit.** `v1.0.0` commits to a stable public API
+> and wire contract; it makes no assurance claim about the payment path. There
+> is no third-party audit report to point you at. Weigh that before putting
+> production funds through it.
 
 ## Non-custodial by design
 
@@ -171,13 +173,6 @@ backend or your business secure.
 - **It does not rate limit anything.** Free resources are an unauthenticated
   proxy to your backend at whatever rate a caller chooses. Rate limiting,
   quotas and abuse controls belong in your API or your edge.
-
-## Supported versions
-
-| Version      | Supported                     |
-| ------------ | ----------------------------- |
-| `0.2.x-beta` | Latest beta only, best effort |
-| `0.1.x`      | Not supported                 |
 
 ## Reporting a vulnerability
 

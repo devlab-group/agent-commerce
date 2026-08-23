@@ -151,7 +151,8 @@ export function resolveX402Deployment(input: X402DeploymentInput): X402Deploymen
   // The zero address lived only in the config loader, so a library consumer
   // calling `createX402PaymentProvider` directly — the path this shared
   // definition exists to cover — could boot a mainnet provider whose every
-  // payment burns. Round 6's lesson, regressed for one check.
+  // payment burns — sharing a *call* is not sharing a definition, and this
+  // check had drifted out of the shared one.
   if (/^0x0{40}$/i.test(input.payTo)) {
     throw invalid(
       'payments.x402: "payTo" is the zero address. Every payment settled there is destroyed.',

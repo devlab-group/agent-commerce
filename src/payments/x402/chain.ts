@@ -11,11 +11,14 @@
  * The `Local` prefix on everything here describes the *chain* these clients
  * are built for, not a test-only status: `provider.ts` calls
  * `createLocalPublicClient` and `createLocalFacilitatorClient` on the real
- * settlement path, for every payment. This is not demo scaffolding that a
- * production build could drop — v0.1 settles against the deterministic local
- * chain, so this file *is* the settlement transport. Supporting a public
- * network means making `buildLocalChain`'s hardcoded `LOCAL_CHAIN_ID` a
- * parameter, not bypassing this module.
+ * settlement path, and this is not demo scaffolding a production build could
+ * drop.
+ *
+ * Public networks are supported, and `buildLocalChain` now takes the chain id
+ * as a parameter — exactly what this comment used to say would be required.
+ * What stays local is the *facilitator* client: signing in-process is refused
+ * on any mainnet, so that client can only ever exist on the dev chain. The
+ * read-only health client is built for whatever network is configured.
  *
  * `dev-key-guard.ts` is the boundary that keeps that arrangement safe: it
  * refuses at provider construction if a dev key or dev `payTo` is pointed at

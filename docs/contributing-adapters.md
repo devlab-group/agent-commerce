@@ -32,7 +32,7 @@ export function createExampleAdapter: HttpProtocolAdapter {
     descriptor: {
       name: 'example',
       kind: 'protocol',
-      implementationVersion: '0.2.0-beta.0',
+      implementationVersion: '1.0.0',
       supportedSpec: 'example-spec@2026-01-01', // pin it, do not hand-wave
       capabilities: ['discovery', 'invoke'],
       unsupported: ['subscriptions', 'batch'], // be explicit

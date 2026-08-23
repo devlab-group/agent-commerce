@@ -10,11 +10,11 @@ implemented, exactly what is not, and pins the revisions.
 | **MCP**  | Supported | `@modelcontextprotocol/sdk@1.30.0`                                                   | tool discovery, tool invocation, payment-required and error mapping |
 | **x402** | Supported | x402 **v2** (`@x402/core@2.23.0`, `@x402/evm@2.23.0`), scheme `exact`, EVM, EIP-3009 | challenge, verification, settlement, replay binding                 |
 | **HTTP** | Supported | —                                                                                    | native resource routes with `PAYMENT-SIGNATURE`                     |
-| UCP      | Planned   | —                                                                                    | not in v0.1                                                         |
-| ACP      | Planned   | —                                                                                    | not in v0.1                                                         |
-| MPP      | Planned   | —                                                                                    | not in v0.1                                                         |
-| A2A      | Planned   | —                                                                                    | not in v0.1                                                         |
-| AP2      | Planned   | —                                                                                    | not in v0.1                                                         |
+| UCP      | Planned   | —                                                                                    | planned, no code ships                                                         |
+| ACP      | Planned   | —                                                                                    | planned, no code ships                                                         |
+| MPP      | Planned   | —                                                                                    | planned, no code ships                                                         |
+| A2A      | Planned   | —                                                                                    | planned, no code ships                                                         |
+| AP2      | Planned   | —                                                                                    | planned, no code ships                                                         |
 
 "Planned" means **no code ships for it**. There is no partial adapter, no
 endpoint and no diagnostic pretending otherwise.

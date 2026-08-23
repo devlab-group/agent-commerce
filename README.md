@@ -13,8 +13,11 @@
   <img alt="Status" src="https://img.shields.io/badge/status-alpha-orange">
 </p>
 
-> **Beta.** `v0.2.0-beta` is experimental. Do not use it with production funds
-> without an independent review. See [SECURITY.md](SECURITY.md).
+> **No commissioned security audit.** `v1.0.0` commits to a stable public API
+> and wire contract; it makes no assurance claim about the payment path. There
+> is no third-party audit report to point you at. Weigh that before putting
+> production funds through it.
+> See [SECURITY.md](SECURITY.md).
 
 ---
 
@@ -401,8 +404,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Roadmap
 
-**Now (v0.2.0-beta)** — MCP, x402 v2, settlement on the local chain, Base
-Sepolia and Base mainnet, receipts, doctor, deterministic demo.
+**Now (v1.0.0)** — MCP, x402 v2, settlement on the local chain, Base Sepolia
+and Base mainnet, receipts, doctor, deterministic demo.
 
 **Next** — OpenAPI import · a stronger conformance suite · a `doctor` GitHub
 Action · UCP · MPP · ACP · A2A · AP2 · Shopify and WooCommerce examples ·

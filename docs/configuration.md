@@ -54,7 +54,7 @@ resources:
       headers: # secrets by reference only
         Authorization: Bearer ${BACKEND_TOKEN}
     pricing:
-      type: fixed # free | fixed (dynamic is rejected in v0.1)
+      type: fixed # free | fixed (dynamic is rejected)
       amount: "0.01" # decimal string, display units, never a float
       currency: USDC
     expose: [http, mcp]
