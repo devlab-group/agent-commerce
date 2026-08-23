@@ -27,7 +27,12 @@ contracts/broadcast/
 # repository ships and docker compose runs; `config.yaml` is whatever the
 # person working here points at their own backend, and it is not ours to
 # commit. `agent-commerce init` writes this name by default.
-config.yaml
+#
+# Anchored with a leading slash: an unanchored `config.yaml` matches at every
+# depth, which silently excluded all four examples/*/config.yaml from the
+# repository. They existed locally, so the test that validates them passed —
+# and failed the moment CI checked out a tree that had never contained them.
+/config.yaml
 
 .vite/
 .turbo/

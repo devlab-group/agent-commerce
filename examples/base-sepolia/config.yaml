@@ -1,0 +1,98 @@
+# ---------------------------------------------------------------------------
+# Example: base-sepolia
+#
+# The same gateway, settling on a public testnet instead of the local chain.
+# Nothing here is a different code path — it is the local config with a
+# different network and a remote facilitator, which is the whole point.
+#
+# Two things are gone compared to the local examples:
+#   - no signerPrivateKey. With a remote facilitator this gateway holds no
+#     signing key at all; the facilitator broadcasts and pays the gas.
+#   - no MockUSDC. `asset` is Circle's real USDC on Base Sepolia.
+#
+# The buyer's key lives with the buyer and never appears in any config.
+#
+# npm run agent-commerce -- validate --config examples/base-sepolia/config.yaml
+# ---------------------------------------------------------------------------
+
+version: 1
+
+merchant:
+  id: base-sepolia-example
+  name: Base Sepolia Example
+  publicBaseUrl: ${GATEWAY_PUBLIC_BASE_URL:-http://localhost:8080}
+
+server:
+  port: ${GATEWAY_PORT:-8080}
+  host: 0.0.0.0
+  # Operator routes (receipts, events) 404 without this. Uncomment and set it
+  # before exposing the gateway anywhere.
+  # adminToken: ${GATEWAY_ADMIN_TOKEN}
+
+storage:
+  receipts:
+    driver: sqlite
+    path: ${RECEIPT_STORE_PATH:-./data/receipts.sqlite}
+
+protocols:
+  http:
+    enabled: true
+  mcp:
+    enabled: true
+    mountPath: /mcp
+
+resources:
+  premium_report:
+    name: Premium Report
+    description: One paid endpoint, settled in USDC on Base Sepolia.
+    input:
+      type: object
+      properties: {}
+      additionalProperties: false
+    backend:
+      type: http
+      method: GET
+      url: ${MERCHANT_API_BASE_URL:-http://localhost:3000}/api/report
+      timeoutMs: 10000
+    pricing:
+      type: fixed
+      amount: "0.01"
+      currency: USDC
+    expose: [http, mcp]
+    payments: [x402]
+
+payments:
+  x402:
+    enabled: true
+
+    # Base Sepolia. The chain id it carries (84532) is the same one this
+    # project's local dev chain uses, which is why `local` vs `testnet` is
+    # decided by the facilitator below, not by this line.
+    network: eip155:84532
+
+    # Only used for health checks here — the facilitator does the chain work.
+    # A public endpoint is fine; a dedicated one is more reliable.
+    rpcUrl: ${X402_RPC_URL:-https://base-sepolia-rpc.publicnode.com}
+
+    # Circle's USDC on Base Sepolia. EIP-712 domain ("USDC", "2"), 6 decimals.
+    # Test funds: https://faucet.circle.com
+    asset: "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
+    assetName: USDC
+    assetVersion: "2"
+    assetDecimals: 6
+
+    # Merchant-controlled settlement destination. NEVER a gateway-owned wallet,
+    # and never an Anvil development address — startup refuses that here.
+    payTo: ${MERCHANT_WALLET}
+
+    # Longer than the local default: a public chain's block time and a hosted
+    # facilitator's queue are not ours to control.
+    maxTimeoutSeconds: 300
+
+    facilitator:
+      mode: remote
+      url: ${X402_FACILITATOR_URL:-https://x402.org/facilitator}
+      # The public testnet facilitator takes no credential. A hosted
+      # production one will; use `type: bearer` with `token: ${...}` then.
+      auth:
+        type: none

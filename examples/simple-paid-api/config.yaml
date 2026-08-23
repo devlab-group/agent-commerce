@@ -1,0 +1,76 @@
+# ---------------------------------------------------------------------------
+# Example: simple-paid-api
+#
+# The smallest possible integration: one existing HTTP endpoint, fronted by
+# the gateway, paywalled with x402. No free tier, no MCP — just "wrap one
+# endpoint in a paywall". See README.md in this directory for exact commands.
+#
+# Every `${VAR:-default}` falls back to the local demo stack's own defaults,
+# so this file validates standalone with no environment at all:
+# npm run agent-commerce -- validate --config examples/simple-paid-api/config.yaml
+# ---------------------------------------------------------------------------
+
+version: 1
+
+merchant:
+  id: simple-paid-api-example
+  name: Simple Paid API Example
+  publicBaseUrl: ${GATEWAY_PUBLIC_BASE_URL:-http://localhost:8080}
+
+server:
+  port: ${GATEWAY_PORT:-8080}
+  host: 0.0.0.0
+
+storage:
+  receipts:
+    driver: sqlite
+    path: ${RECEIPT_STORE_PATH:-./data/receipts.sqlite}
+
+protocols:
+  http:
+    enabled: true
+  mcp:
+    enabled: false
+    mountPath: /mcp
+
+resources:
+  # The one paid endpoint. Swap `backend.url` for your own API and this is a
+  # complete integration.
+  premium_report:
+    name: Premium Report
+    description: A single paid endpoint on your existing backend. 0.01 USDC per call.
+    input:
+      type: object
+      properties: {}
+      additionalProperties: false
+    backend:
+      type: http
+      method: GET
+      url: ${MERCHANT_API_BASE_URL:-http://localhost:3000}/api/report
+      timeoutMs: 10000
+    pricing:
+      type: fixed
+      amount: "0.01"
+      currency: USDC
+    expose: [http]
+    payments: [x402]
+
+payments:
+  x402:
+    enabled: true
+    network: ${X402_NETWORK:-eip155:84532}
+    rpcUrl: ${X402_RPC_URL:-http://127.0.0.1:8545}
+    # Placeholder — replace with the deployed MockUSDC address from
+    # `.deploy/local.json` after `npm run chain:deploy` (see README.md).
+    asset: ${X402_ASSET:-0x000000000000000000000000000000000000dEaD}
+    assetName: ${X402_ASSET_NAME:-MockUSDC}
+    assetVersion: ${X402_ASSET_VERSION:-2}
+    assetDecimals: ${X402_ASSET_DECIMALS:-6}
+    # Merchant-controlled settlement destination. NEVER a gateway-owned wallet.
+    # LOCAL DEVELOPMENT ONLY - DO NOT FUND (Anvil's well-known account #1).
+    payTo: ${MERCHANT_WALLET:-0x70997970C51812dc3A010C7d01b50e0d17dc79C8}
+    maxTimeoutSeconds: 120
+    facilitator:
+      mode: local
+      # LOCAL DEVELOPMENT ONLY - DO NOT FUND (Anvil's well-known account #0).
+      signerPrivateKey: ${X402_FACILITATOR_PRIVATE_KEY:-0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d}
