@@ -88,7 +88,25 @@ describe('MockUSDC artifact', () => {
   );
 });
 
-describe('deployLocalChain (real ephemeral anvil)', () => {
+/**
+ * The three suites below spawn a real ephemeral Anvil, so they need Foundry on
+ * PATH. Skipping when it is absent keeps `npm test` runnable on a machine that
+ * only has Node — but a *silent* skip is how a lost CI step reads as a pass, so
+ * in CI a missing toolchain is a hard failure instead.
+ *
+ * `forge` is the probe because Foundry installs `forge` and `anvil` as one
+ * toolchain, and `isForgeAvailable` already exists for the artifact check.
+ */
+const HAS_FOUNDRY = isForgeAvailable();
+if (!HAS_FOUNDRY && process.env['CI']) {
+  throw new Error(
+    'Foundry is not on PATH, but CI is set. These suites spawn a real Anvil and ' +
+      'must not be skipped in CI — add foundry-rs/foundry-toolchain to the job.',
+  );
+}
+const describeWithAnvil = HAS_FOUNDRY ? describe : describe.skip;
+
+describeWithAnvil('deployLocalChain (real ephemeral anvil)', () => {
   let anvil: AnvilHandle;
 
   beforeAll(async () => {
@@ -155,7 +173,7 @@ describe('deployLocalChain (real ephemeral anvil)', () => {
   }, 30_000);
 });
 
-describe('deployLocalChain — wrong chain id', () => {
+describeWithAnvil('deployLocalChain — wrong chain id', () => {
   it('rejects when pointed at a chain that is not id 84532', async () => {
     const wrongChain = await startAnvil({ port: 18714, chainId: 31337, silent: true });
     try {
@@ -168,7 +186,7 @@ describe('deployLocalChain — wrong chain id', () => {
   }, 30_000);
 });
 
-describe('assertNoUnknownDeployment', () => {
+describeWithAnvil('assertNoUnknownDeployment', () => {
   // The CLI-only guard (see its own doc comment in deploy-engine.ts) against
   // the failure dx's investigation found: running `npm run chain:deploy` on the
   // host while a dockerised stack already deployed to the same chain, with

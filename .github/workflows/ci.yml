@@ -5,6 +5,10 @@ on:
     branches: [master]
   pull_request:
   workflow_dispatch:
+  # Callable, so `release.yml` can gate publishing on the *same* job
+  # definitions rather than a second copy that drifts. `needs:` cannot reach
+  # across workflows; a reusable workflow is how one workflow waits on another.
+  workflow_call:
 
 # Least privilege. Without this the workflow token takes the repository
 # default (often write-all), and `actions/checkout` writes it into
