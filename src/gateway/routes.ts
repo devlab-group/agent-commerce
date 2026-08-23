@@ -13,6 +13,7 @@ import {
   type ExecutionPipeline,
   type Logger,
   PAYMENT_HEADER,
+  PAYMENT_REQUIRED_HEADER,
   PAYMENT_RESPONSE_HEADER,
   type PaymentProvider,
   type ReceiptStore,
@@ -233,7 +234,18 @@ async function handleInvoke(
     const outcome = await options.pipeline.execute(canonicalRequest);
 
     if (outcome.kind === 'payment-required') {
-      reply.status(402).send(toPaymentRequiredEnvelope(outcome));
+      const envelope = toPaymentRequiredEnvelope(outcome);
+      if (envelope.payment.envelope !== undefined) {
+        // x402 v2 clients read the challenge from this header and never look
+        // at the body. The body is still sent — it is richer, and it is the
+        // only channel the MCP surface has — but the header is what makes an
+        // off-the-shelf client able to pay.
+        reply.header(PAYMENT_REQUIRED_HEADER, encodeHeaderDocument(envelope.payment.envelope));
+      }
+      // A challenge is per-request (fresh nonce window, fresh expiry). Caching
+      // one would hand a later buyer an expired offer.
+      reply.header('cache-control', 'no-store');
+      reply.status(402).send(envelope);
       return;
     }
 
@@ -260,6 +272,7 @@ interface PaymentSummary {
   readonly provider: string;
   readonly amount: string;
   readonly currency: string;
+  readonly network?: string;
   readonly externalReference?: string;
 }
 
@@ -269,7 +282,7 @@ function errorPaymentSummary(
   const payment = error.details?.['payment'];
   if (typeof payment !== 'object' || payment === null) return undefined;
   const rec = payment as Record<string, unknown>;
-  const { status, provider, amount, currency, externalReference } = rec;
+  const { status, provider, amount, currency, network, externalReference } = rec;
   if (
     typeof status !== 'string' ||
     typeof provider !== 'string' ||
@@ -283,12 +296,35 @@ function errorPaymentSummary(
     provider,
     amount,
     currency,
+    ...(typeof network === 'string' ? { network } : {}),
     ...(typeof externalReference === 'string' ? { externalReference } : {}),
   };
 }
 
+/**
+ * Base64 of a JSON document, the encoding every x402 v2 payment header uses.
+ *
+ * Hand-rolled rather than imported from the x402 SDK on purpose: this module
+ * is reachable from the package's main entry point, which must import zero
+ * optional peers, and it is two lines.
+ */
+function encodeHeaderDocument(document: unknown): string {
+  return Buffer.from(JSON.stringify(document), 'utf8').toString('base64');
+}
+
+/**
+ * The settlement result, in the shape an x402 v2 client decodes from
+ * `PAYMENT-RESPONSE` (`SettleResponse`), mapped from the canonical
+ * {@link PaymentResult} the pipeline produced.
+ *
+ * `provider`, `amount` and `currency` are ours and are additive: a v2 client
+ * reads the fields it knows and ignores the rest.
+ */
 function encodePaymentSummary(payment: PaymentSummary): string {
-  const summary = {
+  return encodeHeaderDocument({
+    success: payment.status === 'settled',
+    transaction: payment.externalReference ?? '',
+    network: payment.network ?? '',
     status: payment.status,
     provider: payment.provider,
     amount: payment.amount,
@@ -296,8 +332,7 @@ function encodePaymentSummary(payment: PaymentSummary): string {
     ...(payment.externalReference !== undefined
       ? { externalReference: payment.externalReference }
       : {}),
-  };
-  return Buffer.from(JSON.stringify(summary), 'utf8').toString('base64');
+  });
 }
 
 /** Undefined = no limit given / unparseable (caller applies its own default). A

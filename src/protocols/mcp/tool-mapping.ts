@@ -54,14 +54,14 @@ function paymentProofNote(resource: CommerceResource): string {
 
 /**
  * Description for the reserved `_payment` input property. Mentions x402's
- * `X-PAYMENT` header convention by name only when the resource actually lists
- * x402 as its method — a different future rail would have a different proof
- * encoding, so that detail must not be asserted for it.
+ * `PAYMENT-SIGNATURE` header convention by name only when the resource
+ * actually lists x402 as its method — a different future rail would have a
+ * different proof encoding, so that detail must not be asserted for it.
  */
 function paymentInputFieldDescription(resource: CommerceResource): string {
   const method = primaryPaymentMethod(resource);
   if (method === 'x402') {
-    return 'x402 payment proof (base64 X-PAYMENT value) returned from a previous payment-required response.';
+    return 'x402 payment proof (base64 PAYMENT-SIGNATURE value) returned from a previous payment-required response.';
   }
   if (method !== undefined) {
     return `${method} payment proof (base64-encoded) returned from a previous payment-required response.`;

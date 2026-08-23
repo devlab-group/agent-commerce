@@ -8,4 +8,10 @@
  */
 
 export { type CreatePaymentProofOptions, createPaymentProof } from './client.js';
+export type { FacilitatorAuth, X402FacilitatorConfig } from './guardrails.js';
+export {
+  type DeploymentMode,
+  type NetworkProfile,
+  SUPPORTED_NETWORK_IDS,
+} from './networks.js';
 export { createX402PaymentProvider, type X402ProviderOptions } from './provider.js';

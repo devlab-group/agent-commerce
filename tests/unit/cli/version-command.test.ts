@@ -26,7 +26,8 @@ describe('runVersion', () => {
     expect(joined).toContain('Pinned protocol / SDK versions:');
     // These come from sibling package.json files, not literals in the source.
     expect(joined).toMatch(/@modelcontextprotocol\/sdk\s+1\.30\.0/);
-    expect(joined).toMatch(/x402\s+1\.2\.0/);
+    expect(joined).toMatch(/@x402\/core\s+2\.23\.0/);
+    expect(joined).toMatch(/@x402\/evm\s+2\.23\.0/);
     expect(joined).toMatch(/better-sqlite3\s+13\.0\.3/);
   });
 });

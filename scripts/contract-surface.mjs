@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Lead verification gate: snapshot the SEMANTIC public contract surface.
+ * Snapshot the SEMANTIC public contract surface.
  *
  * The earlier text-diff gate could not tell a formatter run from a real type
  * change, so it cried wolf. This walks the exported symbols of
@@ -9,8 +9,8 @@
  * it; adding, removing or altering a type will.
  *
  * node scripts/contract-surface.mjs # check against the baseline
- * node scripts/contract-surface.mjs --write # re-baseline (LEAD ONLY, after
- * # an approved contract change)
+ * node scripts/contract-surface.mjs --write # re-baseline, after an
+ * # approved contract change
  */
 import { createRequire } from 'node:module';
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';

@@ -88,7 +88,7 @@ export function assertPaymentIsExpected(
   accepts: {
     payTo?: string | undefined;
     asset?: string | undefined;
-    maxAmountRequired?: string | undefined;
+    amount?: string | undefined;
   },
   expected: { merchant: string; asset: string; maxValue: bigint },
 ): void {
@@ -110,11 +110,11 @@ export function assertPaymentIsExpected(
   }
   let value: bigint;
   try {
-    value = BigInt(accepts.maxAmountRequired ?? '');
+    value = BigInt(accepts.amount ?? '');
   } catch {
     throw new DemoAgentStepError(
       step,
-      `challenge amount "${String(accepts.maxAmountRequired)}" is not an integer — refusing to sign`,
+      `challenge amount "${String(accepts.amount)}" is not an integer — refusing to sign`,
     );
   }
   if (value <= 0n || value > expected.maxValue) {
@@ -237,7 +237,7 @@ export async function runDemoAgent(deps: DemoAgentDeps = {}): Promise<number> {
       maxValue: BigInt(MAX_DEMO_PAYMENT_UNITS),
     });
     log.buyer(
-      `challenge checked before signing: pays ${accepts.maxAmountRequired} units of ${accepts.asset} to ${accepts.payTo}`,
+      `challenge checked before signing: pays ${accepts.amount} units of ${accepts.asset} to ${accepts.payTo}`,
     );
 
     const proof = await step('build the x402 payment proof', async () =>

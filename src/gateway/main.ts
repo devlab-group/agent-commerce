@@ -60,13 +60,8 @@ async function main(): Promise<void> {
         assetDecimals: x402.assetDecimals,
         payTo: x402.payTo as `0x${string}`,
         maxTimeoutSeconds: x402.maxTimeoutSeconds,
-        facilitator:
-          x402.facilitator.mode === 'local'
-            ? {
-                mode: 'local',
-                signerPrivateKey: x402.facilitator.signerPrivateKey as `0x${string}`,
-              }
-            : { mode: 'remote', url: x402.facilitator.url },
+        facilitator: x402.facilitator,
+        ...(x402.allowMainnet !== undefined ? { allowMainnet: x402.allowMainnet } : {}),
         logger,
       }),
     );

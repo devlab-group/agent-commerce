@@ -531,6 +531,7 @@ export function createExecutionPipeline(
                 provider: paymentResult.provider,
                 amount: paymentResult.amount,
                 currency: paymentResult.currency,
+                ...(paymentResult.network !== undefined ? { network: paymentResult.network } : {}),
                 ...(paymentResult.externalReference !== undefined
                   ? { externalReference: paymentResult.externalReference }
                   : {}),

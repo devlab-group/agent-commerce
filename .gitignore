@@ -7,6 +7,8 @@ coverage/
 *.log
 .env
 .env.local
+.env.testnet
+.env.*.local
 data/
 *.sqlite
 *.sqlite-journal
@@ -32,6 +34,7 @@ config.yaml
 graphify-out/
 playwright-report/
 test-results/
+.internal-docs
 
 # npm package build output and local tarballs from `npm pack`.
 *.tgz

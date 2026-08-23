@@ -1,6 +1,6 @@
 /**
  * Exercises the branches of provider.ts that depend on what the x402 SDK
- * (`x402/facilitator`) or the underlying RPC client return — success,
+ * facilitator or the underlying RPC client return — success,
  * rejection-with-reason, rejection-without-reason, and various thrown-error
  * shapes. These are mocked at the SDK/client boundary rather than driven
  * through a live chain so this stays a fast, deterministic unit test; real,
@@ -22,9 +22,22 @@ import { createX402PaymentProvider } from '../../../src/payments/x402/provider.j
 const verifyMock = vi.fn();
 const settleMock = vi.fn();
 
-vi.mock('x402/facilitator', () => ({
-  verify: (...args: unknown[]) => verifyMock(...args),
-  settle: (...args: unknown[]) => settleMock(...args),
+// The provider drives `x402Facilitator.verify()/settle()`; the scheme
+// registration is a no-op here because the mocked facilitator answers
+// directly instead of routing to a scheme.
+vi.mock('@x402/core/facilitator', () => ({
+  x402Facilitator: class {
+    verify(...args: unknown[]) {
+      return verifyMock(...args);
+    }
+    settle(...args: unknown[]) {
+      return settleMock(...args);
+    }
+  },
+}));
+
+vi.mock('@x402/evm/exact/facilitator', () => ({
+  registerExactEvmScheme: (facilitator: unknown) => facilitator,
 }));
 
 const ASSET = '0x5FbDB2315678afecb367f032d93F642f64180aa3' as const;
@@ -60,7 +73,7 @@ describe('provider — SDK-boundary branches (mocked x402/facilitator)', () => {
 
   function makeProvider() {
     return createX402PaymentProvider({
-      network: 'base-sepolia',
+      network: 'eip155:84532',
       rpcUrl: RPC_URL,
       asset: ASSET,
       assetName: 'MockUSDC',
@@ -78,8 +91,10 @@ describe('provider — SDK-boundary branches (mocked x402/facilitator)', () => {
       ...paymentContext(),
       resource: resourceWithoutDescription,
     });
-    const accepted = requirement.challenge.accepts[0] as Record<string, unknown>;
-    expect(accepted['description']).toBe(RESOURCE.name);
+    // v2 keeps the human-readable description on the PaymentRequired
+    // envelope's `resource`, not on the individual requirement.
+    const envelope = requirement.challenge.envelope as { resource: Record<string, unknown> };
+    expect(envelope.resource['description']).toBe(RESOURCE.name);
   });
 
   it('rejects at construction time for a non-integer or negative assetDecimals', async () => {
@@ -88,7 +103,7 @@ describe('provider — SDK-boundary branches (mocked x402/facilitator)', () => {
 
     function baseOptions() {
       return {
-        network: 'base-sepolia',
+        network: 'eip155:84532',
         rpcUrl: RPC_URL,
         asset: ASSET,
         assetName: 'MockUSDC',
@@ -231,7 +246,7 @@ describe('provider — SDK-boundary branches (mocked x402/facilitator)', () => {
     settleMock.mockResolvedValueOnce({
       success: true,
       transaction: '0xdeadbeef',
-      network: 'base-sepolia',
+      network: 'eip155:84532',
       payer: '0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC',
     });
 
@@ -245,7 +260,7 @@ describe('provider — SDK-boundary branches (mocked x402/facilitator)', () => {
         provider: 'x402',
         amount: '0.01',
         currency: 'USD',
-        network: 'base-sepolia',
+        network: 'eip155:84532',
         asset: ASSET,
         replayKey: '0xabc',
       },
@@ -253,7 +268,7 @@ describe('provider — SDK-boundary branches (mocked x402/facilitator)', () => {
     expect(result.status).toBe('settled');
     expect(result.externalReference).toBe('0xdeadbeef');
     expect(result.payee).toBe(PAY_TO);
-    expect(result.network).toBe('base-sepolia');
+    expect(result.network).toBe('eip155:84532');
     expect(result.asset).toBe(ASSET);
     expect(result.replayKey).toBe('0xabc');
     expect(result.settledAt).toBeDefined();
@@ -270,7 +285,7 @@ describe('provider — SDK-boundary branches (mocked x402/facilitator)', () => {
     settleMock.mockResolvedValueOnce({
       success: true,
       transaction: '0xfeedface',
-      network: 'base-sepolia',
+      network: 'eip155:84532',
     });
 
     const result = await provider.settle({
@@ -295,7 +310,7 @@ describe('provider — SDK-boundary branches (mocked x402/facilitator)', () => {
 
     settleMock.mockResolvedValueOnce({
       success: false,
-      network: 'base-sepolia',
+      network: 'eip155:84532',
       errorReason: 'insufficient_funds',
       payer: '0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC',
     });
@@ -319,7 +334,7 @@ describe('provider — SDK-boundary branches (mocked x402/facilitator)', () => {
     expect(withReason.asset).toBe(ASSET);
     expect(withReason.replayKey).toBe('0xdef');
 
-    settleMock.mockResolvedValueOnce({ success: false, network: 'base-sepolia' });
+    settleMock.mockResolvedValueOnce({ success: false, network: 'eip155:84532' });
     const withoutReason = await provider.settle({
       requestId: 'req-1',
       resource: RESOURCE,
@@ -353,14 +368,14 @@ describe('provider — SDK-boundary branches (mocked x402/facilitator)', () => {
         provider: 'x402',
         amount: '0.01',
         currency: 'USD',
-        network: 'base-sepolia',
+        network: 'eip155:84532',
         asset: ASSET,
         replayKey: '0xreverted',
       },
     });
     expect(reverted.status).toBe('rejected');
     expect(reverted.rejectionReason).toBe('transaction_reverted');
-    expect(reverted.network).toBe('base-sepolia');
+    expect(reverted.network).toBe('eip155:84532');
     expect(reverted.asset).toBe(ASSET);
     expect(reverted.replayKey).toBe('0xreverted');
 
@@ -400,12 +415,11 @@ describe('provider — SDK-boundary branches (mocked x402/facilitator)', () => {
   });
 
   it('settle() attaches transactionHash to PAYMENT_PROVIDER_UNAVAILABLE when the broadcast succeeded but confirmation timed out', async () => {
-    // Simulates the real x402/facilitator settle() shape: it calls
-    // writeContract() then waitForTransactionReceipt() on the client we pass
-    // in, and only returns the hash to us on success. On a post-broadcast
-    // timeout the hash never reaches our return value — it must be captured
-    // by intercepting the client's waitForTransactionReceipt call instead
-    //.
+    // The SDK bounds its own receipt wait and reports the outcome rather than
+    // throwing: `settlement_pending` means the transfer was broadcast and may
+    // well be on-chain. That becomes an *unavailable* provider
+    // carrying the hash, never a plain rejection, so the attempt is recorded
+    // `settlement-uncertain` and the payer is told what to check.
     const provider = makeProvider();
     const requirement = await provider.createRequirement(paymentContext());
     const proof = await createPaymentProof({
@@ -415,17 +429,13 @@ describe('provider — SDK-boundary branches (mocked x402/facilitator)', () => {
     });
 
     const BROADCAST_TX_HASH = `0x${'ab'.repeat(32)}` as const;
-    settleMock.mockImplementationOnce(
-      async (client: {
-        waitForTransactionReceipt: (args: { hash: string }) => Promise<unknown>;
-      }) => {
-        // Fire-and-forget, like the real SDK does — never awaited before the
-        // timeout throw, and the unreachable RPC call is swallowed so it
-        // can't make this test flaky.
-        void client.waitForTransactionReceipt({ hash: BROADCAST_TX_HASH }).catch(() => {});
-        throw new Error('The transaction may not be processed on a block yet - timed out');
-      },
-    );
+    settleMock.mockResolvedValueOnce({
+      success: false,
+      errorReason: 'settlement_pending',
+      transaction: BROADCAST_TX_HASH,
+      network: 'eip155:84532',
+      payer: '0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC',
+    });
 
     await expect(
       provider.settle({
@@ -503,7 +513,7 @@ describe('provider — provider-unavailable classification against real viem err
 
   function makeProvider() {
     return createX402PaymentProvider({
-      network: 'base-sepolia',
+      network: 'eip155:84532',
       rpcUrl: RPC_URL,
       asset: ASSET,
       assetName: 'MockUSDC',

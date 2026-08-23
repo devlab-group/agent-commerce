@@ -8,24 +8,21 @@ const BUYER_ADDRESS = '0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC';
 const ASSET = '0x5FbDB2315678afecb367f032d93F642f64180aa3' as const;
 const PAY_TO = '0x70997970C51812dc3A010C7d01b50e0d17dc79C8' as const;
 
+// x402 v2 `PaymentRequirements`: the resource description moved up to the
+// `PaymentRequired` envelope, and `maxAmountRequired` became `amount`.
 const ACCEPTS = {
   scheme: 'exact',
-  network: 'base-sepolia',
-  maxAmountRequired: '10000',
-  resource:
-    'resource://agent-commerce/base-sepolia/0x0000000000000000000000000000000000000002/resources/demo.report',
-  description: 'Demo report',
-  mimeType: 'application/json',
+  network: 'eip155:84532',
+  amount: '10000',
   payTo: PAY_TO,
   maxTimeoutSeconds: 60,
   asset: ASSET,
-  extra: { name: 'MockUSDC', version: '2' },
+  extra: { name: 'MockUSDC', version: '2', assetTransferMethod: 'eip3009' },
 };
 
 function decode(proof: string): {
   x402Version: number;
-  scheme: string;
-  network: string;
+  accepted: { scheme: string; network: string };
   payload: { signature: `0x${string}`; authorization: Record<string, string> };
 } {
   return JSON.parse(Buffer.from(proof, 'base64').toString('utf8'));
@@ -41,8 +38,9 @@ describe('createPaymentProof', () => {
 
     expect(() => Buffer.from(proof, 'base64')).not.toThrow();
     const decoded = decode(proof);
-    expect(decoded.scheme).toBe('exact');
-    expect(decoded.network).toBe('base-sepolia');
+    expect(decoded.x402Version).toBe(2);
+    expect(decoded.accepted.scheme).toBe('exact');
+    expect(decoded.accepted.network).toBe('eip155:84532');
     expect(decoded.payload.authorization.from?.toLowerCase()).toBe(BUYER_ADDRESS.toLowerCase());
     expect(decoded.payload.authorization.to?.toLowerCase()).toBe(PAY_TO.toLowerCase());
     expect(decoded.payload.authorization.value).toBe('10000');

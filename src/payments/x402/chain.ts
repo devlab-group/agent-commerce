@@ -1,13 +1,12 @@
 /**
  * Local deterministic chain wiring.
  *
- * The x402 SDK's own `createConnectedClient(network)` / `createSigner(...)`
- * helpers resolve RPC endpoints from a hard-coded table of public networks —
- * exactly what we must never touch: the tests must stay deterministic.
- * Instead we build plain viem clients pointed at `options.rpcUrl`,
- * using a custom `Chain` object whose id is 84532 so that x402's
- * `getNetworkId('base-sepolia')` (which returns 84532) matches the chain the
- * client is actually talking to.
+ * The x402 SDK resolves RPC endpoints for public networks from its own
+ * tables — exactly what we must never touch: the tests must stay
+ * deterministic. Instead we build plain viem clients pointed at
+ * `options.rpcUrl`, using a custom `Chain` object whose id is 84532, the
+ * chain id carried by the CAIP-2 network identifier the gateway advertises
+ * (`eip155:84532`).
  *
  * The `Local` prefix on everything here describes the *chain* these clients
  * are built for, not a test-only status: `provider.ts` calls
@@ -46,8 +45,31 @@ export type LocalFacilitatorClient = Client<
   PublicActions<Transport, Chain, Account> & WalletActions<Chain, Account>
 >;
 
-/** x402's `getNetworkId('base-sepolia')`. Not a public testnet. */
+/**
+ * Chain id of the local deterministic dev chain. Shared with the public Base
+ * Sepolia testnet, which is why nothing may infer "this is a public network"
+ * from the id alone — `provider.ts` probes for a real Anvil node instead.
+ */
 export const LOCAL_CHAIN_ID = 84532;
+
+/** CAIP-2 identifier the local dev chain is advertised under. */
+export const LOCAL_NETWORK = `eip155:${LOCAL_CHAIN_ID}`;
+
+/**
+ * Chain id carried by a CAIP-2 `eip155` network identifier.
+ *
+ * x402 v2 identifies networks as CAIP-2 strings rather than the v1 name table,
+ * so the chain id a signature is bound to is read straight off the wire value
+ * instead of looked up. Returns `undefined` for anything that is not an
+ * `eip155` identifier — a caller must never fall back to a default chain id,
+ * because the chain id is part of the EIP-712 domain a buyer signed.
+ */
+export function chainIdFromCaip2(network: string): number | undefined {
+  const match = /^eip155:(\d+)$/.exec(network);
+  if (!match?.[1]) return undefined;
+  const chainId = Number(match[1]);
+  return Number.isSafeInteger(chainId) && chainId > 0 ? chainId : undefined;
+}
 
 export function buildLocalChain(rpcUrl: string): Chain {
   return {

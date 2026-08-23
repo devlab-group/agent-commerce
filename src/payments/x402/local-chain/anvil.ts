@@ -1,9 +1,9 @@
 /**
  * Starts the deterministic local Anvil chain used by the demo and by the
- * payment unit/E2E suites: chain id 84532 — REQUIRED, because x402's
- * `getNetworkId('base-sepolia')` returns 84532 and the whole
- * point of this chain is to let the unmodified x402 SDK talk to a private
- * network under a public network's name.
+ * payment unit/E2E suites: chain id 84532 — REQUIRED, because the gateway
+ * advertises the CAIP-2 network `eip155:84532` and the chain id a buyer signs
+ * against is read straight off it. The whole point of this chain is to let the
+ * unmodified x402 SDK talk to a private network under a public chain's id.
  *
  * Lives in `src/payments/x402/local-chain` (not `scripts/chain`,
  * which has no `node_modules` of its own — see `deploy-engine.ts`'s header

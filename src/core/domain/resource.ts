@@ -32,7 +32,7 @@ export const DEFAULT_BACKEND_TIMEOUT_MS = 10_000;
  * Canonical pricing.
  *
  * `dynamic` exists in the type system for forward compatibility but is
- * REJECTED by config validation in v0.1.0-alpha.
+ * REJECTED by config validation in this release.
  */
 export type Pricing =
   | { readonly type: 'free' }

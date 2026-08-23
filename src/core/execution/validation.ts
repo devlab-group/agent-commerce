@@ -15,7 +15,7 @@
  * `exclusiveMinimum/Maximum`, `multipleOf`, `oneOf`, `anyOf`, `allOf`, `not`,
  * `$ref`, `const`, `patternProperties`, `minItems`, `maxItems`, `uniqueItems`,
  * tuple-style `items` arrays. An unrecognised `type` value is not enforced
- * either. This is a deliberate, documented limitation for v0.1.0-alpha — do
+ * either. This is a deliberate, documented limitation of this release — do
  * not assume any of the above is validated.
  */
 import type { JsonSchema } from '../domain/common.js';
@@ -206,8 +206,7 @@ function validateObject(
     // Object.hasOwn, not `properties[key]`: a plain-object lookup for
     // "__proto__"/"constructor"/"toString"/"valueOf"/"hasOwnProperty" resolves
     // to an inherited Object.prototype member instead of undefined, so those
-    // keys would otherwise silently skip the additionalProperties check below
-    //.
+    // keys would otherwise silently skip the additionalProperties check below.
     const propSchemaRaw = own(properties, key);
     if (propSchemaRaw !== undefined) {
       if (isPlainObject(propSchemaRaw)) {

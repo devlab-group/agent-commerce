@@ -2,6 +2,11 @@ import { existsSync } from 'node:fs';
 import picocolors from 'picocolors';
 import { extractPathParameterNames } from '../../core/execution/index.js';
 import { type CommerceResource, isCommerceError, type ReceiptStore } from '../../core/index.js';
+import {
+  describeDeploymentMode,
+  findNetworkProfile,
+  resolveDeploymentMode,
+} from '../../payments/x402/networks.js';
 import { createSqliteReceiptStore } from '../../storage/receipts/index.js';
 import { type ConfigLoader, type GatewayConfig, loadConfigDynamic } from '../lib/config-client.js';
 import { type FetchLike, fetchJson } from '../lib/http.js';
@@ -272,7 +277,28 @@ export async function runDoctor(
   if (x402 === undefined || !x402.enabled) {
     checks.push({ name: 'Payments', status: 'INFO', detail: 'x402 not configured' });
   } else {
-    const summary = `x402 enabled — network=${x402.network}, destination=${maskMiddle(x402.payTo)}, facilitator=${x402.facilitator.mode}`;
+    // The protocol version is named because chain id 84532 is shared with the
+    // public Base Sepolia testnet: the *mode* is what says whether this
+    // deployment settles on a local dev node or a public network, and nothing
+    // here may be read as a claim about a public network on its own.
+    //
+    // A config whose network is unknown cannot reach here in normal operation
+    // — `parseConfig` refuses it — so an absent profile means doctor is
+    // reading a config some other loader produced. Say so rather than guess.
+    const profile = findNetworkProfile(x402.network);
+    const mode = profile ? resolveDeploymentMode(profile, x402.facilitator.mode) : undefined;
+    // Naming the public network while in local mode would read as a claim to
+    // be on it — the exact confusion the shared chain id creates. Local says
+    // "dev chain"; only a remote facilitator earns the network's name.
+    const where =
+      profile === undefined || mode === undefined
+        ? `unknown network ${x402.network}`
+        : mode === 'local'
+          ? `LOCAL dev chain (${x402.network}, chain id shared with ${profile.displayName})`
+          : `${describeDeploymentMode(mode)} on ${profile.displayName} (${x402.network})`;
+    const facilitatorDetail =
+      x402.facilitator.mode === 'local' ? 'local' : `remote (auth=${x402.facilitator.auth.type})`;
+    const summary = `x402 v2 (scheme=exact) enabled — ${where}, destination=${maskMiddle(x402.payTo)}, facilitator=${facilitatorDetail}`;
     const live = wellKnown?.ok ? extractWellKnownX402(wellKnown.body) : undefined;
     if (sameAddress(x402.asset, PLACEHOLDER_ASSET_ADDRESS)) {
       // `init --yes` writes this placeholder, and the
@@ -313,11 +339,26 @@ export async function runDoctor(
           : { name: 'Payments', status: 'FAIL', detail: mismatch },
       );
     }
+    if (mode === 'mainnet') {
+      // Reporting, not re-checking. Every one of these is refused at config
+      // load (src/payments/x402/guardrails.ts), so a config that got this far
+      // has already passed them — but an operator about to move real money
+      // should be told which guarantees they are relying on, and see the
+      // banner without having to read a log.
+      checks.push({
+        name: 'Mainnet safety',
+        status: 'INFO',
+        detail:
+          `${describeDeploymentMode('mainnet')} — enforced at config load: explicit allowMainnet ` +
+          'opt-in, remote facilitator over HTTPS with a credential, non-development payTo, ' +
+          'and the canonical asset for this network. Payments are fail-closed.',
+      });
+    }
   }
   checks.push({
     name: 'Payments (MPP)',
     status: 'INFO',
-    detail: 'planned — not implemented in v0.1',
+    detail: 'planned — not implemented in this release',
   });
 
   // 7. Storage
@@ -329,9 +370,8 @@ export async function runDoctor(
     // from the host) silently produces a fresh empty database and a false
     // "healthy, receipts=0" PASS — a read-only command must not have this
     // side effect, and it shadows the real store's real receipts entirely.
-    //. `:memory:` never exists on disk by
-    // definition, so it always falls through to the real open/health/count
-    // branch below, same as today.
+    // `:memory:` never exists on disk by definition, so it always falls
+    // through to the real open/health/count branch below, same as today.
     config.storage.receipts.path !== ':memory:' &&
     !existsSync(config.storage.receipts.path)
   ) {

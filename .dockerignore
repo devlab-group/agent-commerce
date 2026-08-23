@@ -20,6 +20,7 @@ contracts/lib
 playwright-report
 graphify-out
 test-results
+.internal-docs
 # `COPY . .` would bake these into every image. The tarball is a build artifact
 # of the very package being copied, and graphify-out is a multi-megabyte
 # knowledge-graph dump.

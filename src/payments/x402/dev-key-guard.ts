@@ -6,15 +6,14 @@
  * settlement revenue to a dev address (`assertPayToIsNotDevAddress`). The
  * second is the more consequential of the two — a wrong key merely fails to
  * sign, a wrong payTo silently succeeds and gives the money away, since the
- * private key behind every well-known Anvil address is public (see in
- * the.
+ * private key behind every well-known Anvil address is public knowledge.
  *
  * Chain id alone cannot tell a real network from this project's local dev
  * chain: Base Sepolia's own chain id is 84532, the same id this project
- * deliberately reuses for the local chain so the unmodified x402
- * SDK's `getNetworkId('base-sepolia')` lines up with it. A dev key or dev
- * payTo pointed at a real RPC by a config mistake is instantly drainable —
- * this is checked once at provider construction, not per payment.
+ * deliberately reuses for the local chain so the unmodified x402 SDK can talk
+ * to it. A dev key or dev payTo pointed at a real RPC by a config mistake is
+ * instantly drainable — this is checked once at provider construction, not per
+ * payment.
  */
 import { CommerceError } from '../../core/index.js';
 import { ANVIL_WELL_KNOWN_ACCOUNTS } from './local-chain/accounts.js';
@@ -43,9 +42,8 @@ export function isWellKnownDevAddress(address: string): boolean {
  * hostnames — the shape of a docker-compose/k8s service name (e.g.
  * "anvil"), which a real public DNS name essentially never has.
  *
- * ASSUMPTION (the loosest edge of this guard, named explicitly per external
- *: every dot-free, colon-free hostname is treated as
- * private, with no exceptions. A single-label *public* hostname (no dots) is
+ * ASSUMPTION, and the loosest edge of this guard: every dot-free, colon-free
+ * hostname is treated as private, with no exceptions. A single-label *public* hostname (no dots) is
  * essentially nonexistent in practice — ICANN does not delegate bare
  * gTLDs/TLDs as public A/AAAA records — but this function cannot tell "no
  * dots because it's a compose service name" from "no dots because it's an
@@ -84,7 +82,7 @@ function parseHostnameOrThrow(rpcUrl: string): string {
  * facilitator key) and "not a key at all" (e.g. a truncated 63-char string)
  * must never share a code path: a malformed key that slips past this guard
  * only fails later, inside `settle()`, after the buyer's replayKey is already
- * reserved (see in the.
+ * reserved.
  */
 export function assertDevKeyIsLocalOnly(rpcUrl: string, signerPrivateKey: string): void {
   if (!PRIVATE_KEY_SHAPE.test(signerPrivateKey)) {

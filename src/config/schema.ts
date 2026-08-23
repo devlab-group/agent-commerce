@@ -36,6 +36,7 @@ import {
   PAYMENT_INPUT_FIELD,
   type Pricing,
 } from '../core/index.js';
+import { resolveX402Deployment, type X402FacilitatorConfig } from '../payments/x402/guardrails.js';
 import { substituteEnv } from './env.js';
 
 const SUPPORTED_CONFIG_VERSION = 1;
@@ -169,6 +170,17 @@ const ResourceEntrySchema = z
 
 const ResourcesMapSchema = z.record(z.string().min(1), ResourceEntrySchema);
 
+/**
+ * Facilitator credentials, kept generic on purpose: x402 facilitators are not
+ * a single-vendor category, and an auth block shaped around one provider's
+ * credentials would make the abstraction a fiction. A facilitator needing
+ * per-request signed credentials is refused rather than sent nothing.
+ */
+const FacilitatorAuthSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('none') }).strict(),
+  z.object({ type: z.literal('bearer'), token: z.string().min(1) }).strict(),
+]);
+
 const FacilitatorSchema = z.discriminatedUnion('mode', [
   z
     .object({
@@ -180,6 +192,11 @@ const FacilitatorSchema = z.discriminatedUnion('mode', [
     .object({
       mode: z.literal('remote'),
       url: z.string().min(1),
+      // Absent means "this facilitator takes no credential" — an explicit
+      // statement, normalised to `{ type: 'none' }` below. On a mainnet that
+      // combination is refused outright, so the default can never quietly
+      // become an unauthenticated production facilitator.
+      auth: FacilitatorAuthSchema.optional(),
     })
     .strict(),
 ]);
@@ -196,6 +213,8 @@ const X402Schema = z
     payTo: z.string().min(1),
     maxTimeoutSeconds: NumberOrString,
     facilitator: FacilitatorSchema,
+    /** Real funds. Never defaulted — see src/payments/x402/guardrails.ts. */
+    allowMainnet: BooleanOrString.optional(),
   })
   .strict();
 
@@ -251,9 +270,8 @@ export interface GatewayConfig {
       readonly assetDecimals: number;
       readonly payTo: string;
       readonly maxTimeoutSeconds: number;
-      readonly facilitator:
-        | { readonly mode: 'local'; readonly signerPrivateKey: string }
-        | { readonly mode: 'remote'; readonly url: string };
+      readonly facilitator: X402FacilitatorConfig;
+      readonly allowMainnet?: boolean;
     };
   };
 }
@@ -402,48 +420,57 @@ function normalise(raw: RawConfig): GatewayConfig {
   };
 
   const x402Raw = raw.payments.x402;
-  // facilitator.mode "remote" is documented as unimplemented (three
-  // places), but was accepted at config load — the provider constructed and
-  // health() returned only "warn" (not consulted by /ready), so the failure
-  // landed inside settle(), after the buyer's payment authorisation was
-  // already burned. Every buyer who hit it lost that authorisation
-  // permanently and had to sign a fresh one that failed identically. Reject
-  // it here, next to the dynamic-pricing and UCP rejections, so
-  // `agent-commerce validate` catches it where an operator expects it.
-  if (x402Raw?.facilitator.mode === 'remote') {
-    throw new CommerceError(
-      'CONFIG_INVALID',
-      'payments.x402.facilitator.mode "remote" is not supported in v0.1.0-alpha; use "local" (the deterministic dev-chain facilitator)',
-      { details: { path: 'payments.x402.facilitator.mode' } },
-    );
-  }
-  const x402 = x402Raw
-    ? {
-        enabled: toBoolean(x402Raw.enabled, 'payments.x402.enabled'),
-        network: x402Raw.network,
-        rpcUrl: x402Raw.rpcUrl,
-        asset: x402Raw.asset,
-        assetName: x402Raw.assetName,
-        assetVersion: x402Raw.assetVersion,
-        assetDecimals: toNumber(x402Raw.assetDecimals, 'payments.x402.assetDecimals', {
-          min: 0,
-          max: 36,
-        }),
-        payTo: x402Raw.payTo,
-        maxTimeoutSeconds: toNumber(x402Raw.maxTimeoutSeconds, 'payments.x402.maxTimeoutSeconds', {
-          min: 1,
-        }),
-        // Only "local" can reach here — "remote" was rejected above.
-        facilitator: {
-          mode: 'local' as const,
-          signerPrivateKey: x402Raw.facilitator.signerPrivateKey,
-        },
-      }
-    : undefined;
+  const facilitator: X402FacilitatorConfig | undefined =
+    x402Raw === undefined
+      ? undefined
+      : x402Raw.facilitator.mode === 'local'
+        ? { mode: 'local', signerPrivateKey: x402Raw.facilitator.signerPrivateKey }
+        : {
+            mode: 'remote',
+            url: x402Raw.facilitator.url,
+            auth: x402Raw.facilitator.auth ?? { type: 'none' },
+          };
+  const x402 =
+    x402Raw && facilitator
+      ? {
+          enabled: toBoolean(x402Raw.enabled, 'payments.x402.enabled'),
+          network: x402Raw.network,
+          rpcUrl: x402Raw.rpcUrl,
+          asset: x402Raw.asset,
+          assetName: x402Raw.assetName,
+          assetVersion: x402Raw.assetVersion,
+          assetDecimals: toNumber(x402Raw.assetDecimals, 'payments.x402.assetDecimals', {
+            min: 0,
+            max: 36,
+          }),
+          payTo: x402Raw.payTo,
+          maxTimeoutSeconds: toNumber(
+            x402Raw.maxTimeoutSeconds,
+            'payments.x402.maxTimeoutSeconds',
+            {
+              min: 1,
+            },
+          ),
+          facilitator,
+          ...(x402Raw.allowMainnet !== undefined
+            ? { allowMainnet: toBoolean(x402Raw.allowMainnet, 'payments.x402.allowMainnet') }
+            : {}),
+        }
+      : undefined;
 
   if (x402) {
     validateAddress('payments.x402.payTo', x402.payTo);
     validateAddress('payments.x402.asset', x402.asset);
+    // The same call the provider makes at construction, run here so
+    // `agent-commerce validate` reports an unsafe deployment where an operator
+    // expects to hear about it, rather than at first boot.
+    resolveX402Deployment({
+      network: x402.network,
+      payTo: x402.payTo,
+      asset: x402.asset,
+      facilitator: x402.facilitator,
+      ...(x402.allowMainnet !== undefined ? { allowMainnet: x402.allowMainnet } : {}),
+    });
   }
 
   const resources = Object.entries(raw.resources).map(([id, entry]) =>
@@ -512,7 +539,7 @@ function normaliseResource(
 
   for (const protocol of entry.expose) {
     if (!SUPPORTED_PROTOCOLS.has(protocol)) {
-      const hint = protocol === 'ucp' ? ' (UCP is planned, not supported in v0.1.0-alpha)' : '';
+      const hint = protocol === 'ucp' ? ' (UCP is planned, not supported in this release)' : '';
       throw new CommerceError(
         'CONFIG_INVALID',
         `Resource "${id}" exposes unsupported protocol "${protocol}"${hint}. Supported: http, mcp.`,
@@ -550,7 +577,7 @@ function normaliseResource(
   if (entry.pricing.type === 'dynamic') {
     throw new CommerceError(
       'CONFIG_INVALID',
-      `Resource "${id}" uses pricing.type "dynamic", which is not supported in v0.1.0-alpha`,
+      `Resource "${id}" uses pricing.type "dynamic", which is not supported in this release`,
       { details: { path: `resources.${id}.pricing.type`, resourceId: id } },
     );
   }

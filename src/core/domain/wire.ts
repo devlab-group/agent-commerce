@@ -13,15 +13,32 @@ import type { DeliveredOutcome, PaymentRequiredOutcome } from './request.js';
 
 /**
  * Reserved input property carrying a payment proof on protocols that have no
- * header channel (MCP tool calls). Over HTTP the `X-PAYMENT` header is used.
+ * header channel (MCP tool calls). Over HTTP the `PAYMENT-SIGNATURE` header is
+ * used.
  */
 export const PAYMENT_INPUT_FIELD = '_payment';
 
-/** HTTP header carrying the payment proof. */
-export const PAYMENT_HEADER = 'x-payment';
+/**
+ * HTTP request header carrying the payment proof.
+ *
+ * x402 v2 header names, lowercased because that is how Node presents incoming
+ * headers. v1's `X-PAYMENT` / `X-PAYMENT-RESPONSE` pair is not accepted: this
+ * gateway speaks one protocol version, and quietly honouring both would mean
+ * two verification paths for the same money.
+ */
+export const PAYMENT_HEADER = 'payment-signature';
 
-/** HTTP response header carrying the settlement reference. */
-export const PAYMENT_RESPONSE_HEADER = 'x-payment-response';
+/** HTTP response header carrying the settlement result. */
+export const PAYMENT_RESPONSE_HEADER = 'payment-response';
+
+/**
+ * HTTP response header carrying the base64 payment challenge on a 402.
+ *
+ * The 402 body still carries {@link PaymentRequiredEnvelope} — richer, and the
+ * only channel MCP has — but an x402 v2 client reads the challenge from this
+ * header and ignores the body, so both are sent.
+ */
+export const PAYMENT_REQUIRED_HEADER = 'payment-required';
 
 /**
  * Key under which a protocol adapter attaches a {@link DeliverySummary} to its
@@ -54,6 +71,12 @@ export interface PaymentRequiredEnvelope {
     readonly expiresAt?: IsoTimestamp;
     /** Provider-native requirement objects, passed through verbatim. */
     readonly accepts: readonly Readonly<Record<string, unknown>>[];
+    /**
+     * The provider's own challenge document, verbatim — see
+     * {@link PaymentChallenge.envelope}. Present for providers that have one;
+     * a buyer's protocol client can hand this straight to its SDK.
+     */
+    readonly envelope?: Readonly<Record<string, unknown>>;
   };
 }
 
@@ -76,7 +99,7 @@ export interface ErrorEnvelope {
  * `/api/receipts` is an operator route behind `server.adminToken`.
  *
  * Before this existed the two surfaces disagreed: HTTP callers received a
- * settlement summary in `X-PAYMENT-RESPONSE` while MCP callers received
+ * settlement summary in the payment-response header while MCP callers received
  * nothing, so an MCP buyer's only route to their own receipt was the merchant's
  * ledger. Both surfaces now emit this same shape.
  */
@@ -139,6 +162,7 @@ export function toPaymentRequiredEnvelope(
       ...(r.asset !== undefined ? { asset: r.asset } : {}),
       ...(r.expiresAt !== undefined ? { expiresAt: r.expiresAt } : {}),
       accepts: r.challenge.accepts,
+      ...(r.challenge.envelope !== undefined ? { envelope: r.challenge.envelope } : {}),
     },
   };
 }

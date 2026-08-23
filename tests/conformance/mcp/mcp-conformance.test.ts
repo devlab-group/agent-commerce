@@ -294,7 +294,7 @@ describe('mcp adapter: invocation', () => {
         challenge: {
           provider: 'x402',
           version: '1',
-          accepts: [{ scheme: 'exact', network: 'base-sepolia', payTo: '0xMerchantWallet' }],
+          accepts: [{ scheme: 'exact', network: 'eip155:84532', payTo: '0xMerchantWallet' }],
         },
       },
     });
@@ -315,7 +315,7 @@ describe('mcp adapter: invocation', () => {
     expect(Array.isArray(payment.accepts)).toBe(true);
     expect((payment.accepts as unknown[])[0]).toEqual({
       scheme: 'exact',
-      network: 'base-sepolia',
+      network: 'eip155:84532',
       payTo: '0xMerchantWallet',
     });
 
@@ -370,7 +370,7 @@ describe('mcp adapter: invocation', () => {
         provider: 'x402',
         amount: '0.05',
         currency: 'USDC',
-        network: 'base-sepolia',
+        network: 'eip155:84532',
         externalReference: '0xsettlementtxhash',
       },
       receipt: {
@@ -407,7 +407,7 @@ describe('mcp adapter: invocation', () => {
         amount: '0.05',
         currency: 'USDC',
         externalReference: '0xsettlementtxhash',
-        network: 'base-sepolia',
+        network: 'eip155:84532',
       },
     });
   });

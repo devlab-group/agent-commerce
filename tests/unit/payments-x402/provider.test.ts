@@ -23,7 +23,7 @@ const BUYER_PRIVATE_KEY =
 
 function makeProvider(overrides: Partial<X402ProviderOptions> = {}) {
   return createX402PaymentProvider({
-    network: 'base-sepolia',
+    network: 'eip155:84532',
     rpcUrl: UNREACHABLE_RPC_URL,
     asset: ASSET,
     assetName: 'MockUSDC',
@@ -63,17 +63,24 @@ describe('descriptor', () => {
     expect(provider.descriptor.name).toBe('x402');
     expect(provider.descriptor.kind).toBe('payment');
     expect(provider.descriptor.status).toBe('stable');
-    expect(provider.descriptor.supportedSpec).toContain('x402@1.2.0');
+    expect(provider.descriptor.supportedSpec).toContain('x402/v2');
     expect(provider.descriptor.capabilities).toContain('exact-evm');
     expect(provider.descriptor.capabilities).toContain('eip-3009');
     // Alpha honesty: things this provider does NOT implement must be listed.
     expect(provider.descriptor.unsupported).toContain('svm');
-    expect(provider.descriptor.unsupported).toContain('remote facilitator');
+    expect(provider.descriptor.unsupported).toContain('permit2');
+    expect(provider.descriptor.unsupported).toContain(
+      'per-request signed facilitator credentials (e.g. CDP JWT)',
+    );
+    // The deployment this provider is configured for is part of its
+    // description: chain id 84532 alone cannot say local from Base Sepolia.
+    expect(provider.descriptor.capabilities).toContain('local-facilitator');
+    expect(provider.descriptor.capabilities).toContain('mode=local');
   });
 });
 
 describe('createRequirement', () => {
-  it('builds an x402 PaymentRequirements object with base-unit maxAmountRequired', async () => {
+  it('builds an x402 v2 PaymentRequirements object with a base-unit amount', async () => {
     const provider = makeProvider();
     const requirement = await provider.createRequirement(paymentContext());
 
@@ -82,20 +89,45 @@ describe('createRequirement', () => {
     expect(requirement.requestId).toBe('req-1');
     expect(requirement.amount).toBe('0.01');
     expect(requirement.destination).toBe(PAY_TO);
-    expect(requirement.network).toBe('base-sepolia');
+    expect(requirement.network).toBe('eip155:84532');
     expect(requirement.asset).toBe(ASSET);
     expect(requirement.challenge.provider).toBe('x402');
     expect(requirement.challenge.accepts).toHaveLength(1);
 
     const accepted = requirement.challenge.accepts[0] as Record<string, unknown>;
     expect(accepted['scheme']).toBe('exact');
-    expect(accepted['network']).toBe('base-sepolia');
-    expect(accepted['maxAmountRequired']).toBe('10000'); // 0.01 * 10^6
+    expect(accepted['network']).toBe('eip155:84532');
+    expect(accepted['amount']).toBe('10000'); // 0.01 * 10^6
     expect(accepted['payTo']).toBe(PAY_TO);
     expect(accepted['asset']).toBe(ASSET);
     // extra.name/version is REQUIRED — the facilitator must never
     // need an on-chain version() call to build the EIP-712 domain.
-    expect(accepted['extra']).toEqual({ name: 'MockUSDC', version: '2' });
+    // assetTransferMethod pins the one method this provider settles, so a
+    // conforming client never picks the Permit2 path.
+    expect(accepted['extra']).toEqual({
+      name: 'MockUSDC',
+      version: '2',
+      assetTransferMethod: 'eip3009',
+    });
+  });
+
+  it('carries the v2 PaymentRequired envelope, matching the accepts it lists', async () => {
+    const provider = makeProvider();
+    const requirement = await provider.createRequirement(paymentContext());
+
+    const envelope = requirement.challenge.envelope as Record<string, unknown> | undefined;
+    expect(envelope).toBeDefined();
+    expect(envelope?.['x402Version']).toBe(2);
+    expect(requirement.challenge.version).toBe('2');
+    // The envelope must offer the same requirement the challenge lists —
+    // two surfaces describing different offers is the drift this exists to
+    // prevent.
+    expect(envelope?.['accepts']).toEqual(requirement.challenge.accepts);
+
+    const resource = envelope?.['resource'] as Record<string, unknown>;
+    expect(resource['url']).toContain('demo.report');
+    expect(resource['description']).toBe('A paid demo report');
+    expect(resource['mimeType']).toBe('application/json');
   });
 
   it('sets an expiresAt in the future, bounded by maxTimeoutSeconds', async () => {
@@ -233,8 +265,9 @@ describe('verify — rejects before touching the network', () => {
       accepts: requirement.challenge.accepts[0] as Record<string, unknown>,
     });
     // Decode, tamper with the network, re-encode using the same wire format.
+    // v2 carries the network on the accepted requirement, not at the top level.
     const decoded = JSON.parse(Buffer.from(proof, 'base64').toString('utf8'));
-    decoded.network = 'base';
+    decoded.accepted.network = 'eip155:8453';
     const tamperedProof = Buffer.from(JSON.stringify(decoded)).toString('base64');
 
     const result = await provider.verify({
@@ -329,16 +362,55 @@ describe('verify — rejects before touching the network', () => {
     expect(result.rejectionReason).toBe('malformed_payment_payload');
   });
 
-  it('rejects an SVM-shaped payload (unsupported scheme for this provider)', async () => {
+  it('rejects a v1 payload — this gateway speaks x402 v2 only', async () => {
     const provider = makeProvider();
     const requirement = await provider.createRequirement(paymentContext());
-    const svmPayload = {
+    const v1Payload = {
       x402Version: 1,
       scheme: 'exact',
-      network: 'solana',
-      payload: { transaction: 'YQ==' },
+      network: 'base-sepolia',
+      payload: {
+        signature: `0x${'ab'.repeat(65)}`,
+        authorization: {
+          from: PAY_TO,
+          to: PAY_TO,
+          value: '10000',
+          validAfter: '0',
+          validBefore: '99999999999',
+          nonce: `0x${'cd'.repeat(32)}`,
+        },
+      },
     };
-    const proof = Buffer.from(JSON.stringify(svmPayload)).toString('base64');
+    const proof = Buffer.from(JSON.stringify(v1Payload)).toString('base64');
+
+    const result = await provider.verify({
+      requestId: 'req-1',
+      resource: RESOURCE,
+      requirement,
+      submission: { method: 'x402', payload: proof },
+    });
+    expect(result.status).toBe('rejected');
+    expect(result.rejectionReason).toBe('malformed_payment_payload');
+  });
+
+  it('rejects a Permit2 payload — the challenge asks for EIP-3009', async () => {
+    const provider = makeProvider();
+    const requirement = await provider.createRequirement(paymentContext());
+    const permit2Payload = {
+      x402Version: 2,
+      accepted: requirement.challenge.accepts[0],
+      payload: {
+        signature: `0x${'ab'.repeat(65)}`,
+        permit2Authorization: {
+          from: PAY_TO,
+          permitted: { token: ASSET, amount: '10000' },
+          spender: PAY_TO,
+          nonce: '1',
+          deadline: '99999999999',
+        },
+      },
+    };
+    const proof = Buffer.from(JSON.stringify(permit2Payload)).toString('base64');
 
     const result = await provider.verify({
       requestId: 'req-1',
@@ -450,14 +522,14 @@ describe('createX402PaymentProvider — payTo dev-address guard', () => {
       makeProvider({
         rpcUrl: PUBLIC_RPC_URL,
         payTo: DEV_PAY_TO,
-        facilitator: { mode: 'remote', url: 'https://facilitator.invalid' },
+        facilitator: { mode: 'remote', url: 'https://facilitator.invalid', auth: { type: 'none' } },
       }),
     ).toThrow();
     try {
       makeProvider({
         rpcUrl: PUBLIC_RPC_URL,
         payTo: DEV_PAY_TO,
-        facilitator: { mode: 'remote', url: 'https://facilitator.invalid' },
+        facilitator: { mode: 'remote', url: 'https://facilitator.invalid', auth: { type: 'none' } },
       });
       expect.fail('should have thrown');
     } catch (err) {
@@ -477,31 +549,7 @@ describe('createX402PaymentProvider — payTo dev-address guard', () => {
   });
 });
 
-describe('settle — remote facilitator is not implemented', () => {
-  it('throws PROTOCOL_UNSUPPORTED for mode: "remote", without attempting settlement', async () => {
-    const provider = makeProvider({
-      facilitator: { mode: 'remote', url: 'https://facilitator.invalid' },
-    });
-    const requirement = await provider.createRequirement(paymentContext());
-
-    await expect(
-      provider.settle({
-        requestId: 'req-1',
-        resource: RESOURCE,
-        requirement,
-        submission: { method: 'x402', payload: 'irrelevant' },
-        verification: {
-          status: 'verified',
-          provider: 'x402',
-          amount: '0.01',
-          currency: 'USD',
-        },
-      }),
-    ).rejects.toSatisfy(
-      (err: unknown) => isCommerceError(err) && err.code === 'PROTOCOL_UNSUPPORTED',
-    );
-  });
-
+describe('settle', () => {
   it('throws PAYMENT_INVALID if settle() is called without a successful verify()', async () => {
     const provider = makeProvider();
     const requirement = await provider.createRequirement(paymentContext());

@@ -27,6 +27,18 @@ export interface PaymentChallenge {
   /** Provider protocol version, e.g. the x402 `x402Version` value as a string. */
   readonly version: string;
   readonly accepts: readonly Readonly<Record<string, unknown>>[];
+  /**
+   * The provider's own challenge document, verbatim — for x402 v2 the
+   * `PaymentRequired` object a buyer's client consumes.
+   *
+   * `accepts` alone is not that document: v2 moves the resource description
+   * out of the individual requirements and up onto the envelope, and the
+   * protocol version rides there too. Protocol adapters that have a native
+   * channel for it (the HTTP `PAYMENT-REQUIRED` header) emit this as-is
+   * rather than reassembling it, so every surface offers the same challenge
+   * instead of each building its own from parts. Opaque to core.
+   */
+  readonly envelope?: Readonly<Record<string, unknown>>;
 }
 
 /**
@@ -52,8 +64,8 @@ export interface PaymentRequirement {
 /**
  * Opaque payment proof supplied by the buyer's client.
  *
- * For x402 over HTTP this is the base64 `X-PAYMENT` header value; over MCP it
- * is the same string carried in the tool input's `_payment` field.
+ * For x402 over HTTP this is the base64 `PAYMENT-SIGNATURE` header value; over
+ * MCP it is the same string carried in the tool input's `_payment` field.
  */
 export interface PaymentSubmission {
   readonly method: PaymentMethodName;

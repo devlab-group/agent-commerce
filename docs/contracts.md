@@ -10,21 +10,21 @@ The cross-package contract is `src/core/public-types.ts`.
 
 ## Frozen surface
 
-| Type | File | Consumed by |
-|---|---|---|
-| `CommerceResource`, `ResourceRegistry`, `BackendHandler`, `Pricing` | `domain/resource.ts` | config, gateway, mcp, cli, dx |
-| `PaymentRequirement`, `PaymentChallenge`, `PaymentSubmission`, `PaymentResult`, `PaymentProvider`, `PaymentContext`, `PaymentVerificationContext`, `PaymentSettlementContext` | `domain/payment.ts` | gateway, payment-x402, mcp, dx |
-| `CommerceReceipt`, `PaymentAttempt` | `domain/receipt.ts` | receipt-store, gateway, cli, dashboard |
-| `CommerceEvent`, `CommerceEventType`, `EventSink` | `domain/event.ts` | everything |
-| `CanonicalRequest`, `ExecutionOutcome`, `DeliveredOutcome`, `PaymentRequiredOutcome`, `ExecutionPipeline` | `domain/request.ts` | gateway, mcp |
-| `AdapterDescriptor`, `AdapterHealth`, `JsonSchema`, `ProtocolName`, `PaymentMethodName`, `DecimalAmount`, `IsoTimestamp` | `domain/common.ts` | everything |
-| `CommerceError`, `CommerceErrorCode`, `COMMERCE_ERROR_HTTP_STATUS`, `toCommerceError`, `isCommerceError` | `errors/**` | everything |
-| `ProtocolAdapter`, `HttpProtocolAdapter`, `ProtocolAdapterContext` | `interfaces/protocol-adapter.ts` | gateway, mcp |
-| `ReceiptStore`, `PaymentAttemptReservation`, `PaymentAttemptUpdate`, `ListOptions` | `interfaces/store.ts` | receipt-store, gateway, cli |
-| `BackendExecutor`, `BackendRequest`, `BackendResponse` | `interfaces/backend.ts` | core, gateway |
-| `Logger`, `NOOP_LOGGER`, `Clock`, `IdGenerator`, `systemClock` | `interfaces/logger.ts`, `interfaces/runtime.ts` | everything |
-| `PaymentRequiredEnvelope`, `toPaymentRequiredEnvelope`, `isPaymentRequiredEnvelope`, `DeliverySummary`, `toDeliverySummary`, `DELIVERY_SUMMARY_META_KEY`, `ErrorEnvelope`, `toErrorEnvelope`, `PAYMENT_HEADER`, `PAYMENT_RESPONSE_HEADER`, `PAYMENT_INPUT_FIELD` | `domain/wire.ts` | gateway, mcp, dx, demo |
-| `COMMERCE_ERROR_CODES`, `COMMERCE_EVENT_TYPES`, `RETRYABLE_ERROR_CODES`, `DEFAULT_BACKEND_TIMEOUT_MS`, `isHttpProtocolAdapter`, `BackendMethod`, `CommerceErrorInfo`, `CommerceErrorOptions` | `errors/**`, `domain/**`, `interfaces/**` | everything |
+| Type                                                                                                                                                                                                                                                             | File                                            | Consumed by                            |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------- | -------------------------------------- |
+| `CommerceResource`, `ResourceRegistry`, `BackendHandler`, `Pricing`                                                                                                                                                                                              | `domain/resource.ts`                            | config, gateway, mcp, cli, dx          |
+| `PaymentRequirement`, `PaymentChallenge`, `PaymentSubmission`, `PaymentResult`, `PaymentProvider`, `PaymentContext`, `PaymentVerificationContext`, `PaymentSettlementContext`                                                                                    | `domain/payment.ts`                             | gateway, payment-x402, mcp, dx         |
+| `CommerceReceipt`, `PaymentAttempt`                                                                                                                                                                                                                              | `domain/receipt.ts`                             | receipt-store, gateway, cli, dashboard |
+| `CommerceEvent`, `CommerceEventType`, `EventSink`                                                                                                                                                                                                                | `domain/event.ts`                               | everything                             |
+| `CanonicalRequest`, `ExecutionOutcome`, `DeliveredOutcome`, `PaymentRequiredOutcome`, `ExecutionPipeline`                                                                                                                                                        | `domain/request.ts`                             | gateway, mcp                           |
+| `AdapterDescriptor`, `AdapterHealth`, `JsonSchema`, `ProtocolName`, `PaymentMethodName`, `DecimalAmount`, `IsoTimestamp`                                                                                                                                         | `domain/common.ts`                              | everything                             |
+| `CommerceError`, `CommerceErrorCode`, `COMMERCE_ERROR_HTTP_STATUS`, `toCommerceError`, `isCommerceError`                                                                                                                                                         | `errors/**`                                     | everything                             |
+| `ProtocolAdapter`, `HttpProtocolAdapter`, `ProtocolAdapterContext`                                                                                                                                                                                               | `interfaces/protocol-adapter.ts`                | gateway, mcp                           |
+| `ReceiptStore`, `PaymentAttemptReservation`, `PaymentAttemptUpdate`, `ListOptions`                                                                                                                                                                               | `interfaces/store.ts`                           | receipt-store, gateway, cli            |
+| `BackendExecutor`, `BackendRequest`, `BackendResponse`                                                                                                                                                                                                           | `interfaces/backend.ts`                         | core, gateway                          |
+| `Logger`, `NOOP_LOGGER`, `Clock`, `IdGenerator`, `systemClock`                                                                                                                                                                                                   | `interfaces/logger.ts`, `interfaces/runtime.ts` | everything                             |
+| `PaymentRequiredEnvelope`, `toPaymentRequiredEnvelope`, `isPaymentRequiredEnvelope`, `DeliverySummary`, `toDeliverySummary`, `DELIVERY_SUMMARY_META_KEY`, `ErrorEnvelope`, `toErrorEnvelope`, `PAYMENT_HEADER`, `PAYMENT_RESPONSE_HEADER`, `PAYMENT_INPUT_FIELD` | `domain/wire.ts`                                | gateway, mcp, dx, demo                 |
+| `COMMERCE_ERROR_CODES`, `COMMERCE_EVENT_TYPES`, `RETRYABLE_ERROR_CODES`, `DEFAULT_BACKEND_TIMEOUT_MS`, `isHttpProtocolAdapter`, `BackendMethod`, `CommerceErrorInfo`, `CommerceErrorOptions`                                                                     | `errors/**`, `domain/**`, `interfaces/**`       | everything                             |
 
 **The authoritative enumeration is [`contract-surface.txt`](contract-surface.txt)**
 — 68 symbols, generated by `scripts/contract-surface.mjs` from the barrel
@@ -68,7 +68,11 @@ the generated file is right and this table is stale.
 - **Additive:** `ReceiptStore.countReceipts`. Counting by list length saturated at the store's own list clamp, so `doctor` reported a frozen 500.
 - **Additive:** `DELIVERY_SUMMARY_META_KEY` — the `_meta` key adapters attach the summary under. Frozen so producer and consumer cannot drift on the string.
 - **Value change (no type change):** `DELIVERY_SUMMARY_META_KEY` is now `agent-commerce/delivery`. The wire identifiers were realigned with the `/.well-known/agent-commerce` route and the package name; safe only because no release exists yet for a client to have matched against.
-- **Additive:** `DeliverySummary` + `toDeliverySummary`. A payer is entitled to the record of their own purchase without reading the merchant's ledger. HTTP already sent one via `X-PAYMENT-RESPONSE`; MCP sent nothing, which is why the demo buyer had to call the (now authenticated) `/api/receipts`.
+- **Additive:** `DeliverySummary` + `toDeliverySummary`. A payer is entitled to the record of their own purchase without reading the merchant's ledger. HTTP already sent one via the payment-response header; MCP sent nothing, which is why the demo buyer had to call the (now authenticated) `/api/receipts`.
+- **Value change + additive (x402 v2):** `PAYMENT_HEADER` is now `payment-signature` and `PAYMENT_RESPONSE_HEADER` is now `payment-response`, matching the x402 v2 HTTP binding; the v1 `x-payment` / `x-payment-response` pair is no longer accepted. New `PAYMENT_REQUIRED_HEADER` (`payment-required`) carries the base64 challenge on a 402. Wire-breaking by definition, and safe only because no release exists yet.
+- **Additive:** `PaymentChallenge.envelope` and `PaymentRequiredEnvelope.payment.envelope` — the provider's own challenge document, verbatim (x402 v2's `PaymentRequired`). `accepts` is the offer list inside it; the envelope also carries the protocol version and the resource description that v1 kept per-requirement. Built once by the provider so the HTTP and MCP surfaces cannot describe different challenges.
+- **Type change (x402, non-frozen surface):** `X402ProviderOptions.facilitator` is now `X402FacilitatorConfig`; `mode: 'remote'` gained a required `auth`, and `allowMainnet` was added. `mode: 'remote'` previously parsed but was rejected at config load and threw `PROTOCOL_UNSUPPORTED` at request time, so no working configuration changes shape.
+- **Removed from the wire:** `/.well-known/agent-commerce` no longer publishes `payments.x402.facilitator.url`. A facilitator endpoint can carry a tenant path or an API key, exactly like `rpcUrl`, which the same route already withholds. It gained `payments.x402.mode` (`local` | `testnet` | `mainnet`) instead — chain id 84532 belongs to both the local dev chain and public Base Sepolia, so the network id alone cannot say which one a client is talking to.
 ---
 
 # Integration contract — exact factory signatures
@@ -103,7 +107,7 @@ export function createSqliteReceiptStore(
 
 ```ts
 export interface X402ProviderOptions {
-  /** x402 network name. Local deterministic chain uses 'base-sepolia'. */
+  /** CAIP-2 network identifier. Local deterministic chain uses 'eip155:84532'. */
   readonly network: string;
   /** RPC endpoint. Local chain: http://127.0.0.1:8545 */
   readonly rpcUrl: string;
@@ -118,17 +122,29 @@ export interface X402ProviderOptions {
   readonly payTo: `0x${string}`;
   readonly maxTimeoutSeconds?: number;
   /**
-   * Local facilitator: signer broadcasts settlement on the dev chain only.
-   * LOCAL DEVELOPMENT ONLY — DO NOT FUND.
+   * `local` runs the facilitator in this process and signs with an Anvil
+   * well-known key — LOCAL DEVELOPMENT ONLY — DO NOT FUND. `remote` calls an
+   * HTTP facilitator, and this gateway then holds no signing key at all.
    */
-  readonly facilitator:
-    | { readonly mode: 'local'; readonly signerPrivateKey: `0x${string}` }
-    | { readonly mode: 'remote'; readonly url: string };
+  readonly facilitator: X402FacilitatorConfig;
+  /** Required to be `true` before anything settles on a mainnet. Never a default. */
+  readonly allowMainnet?: boolean;
   readonly logger?: Logger;
   readonly clock?: Clock;
   readonly ids?: IdGenerator;
 }
 export function createX402PaymentProvider(options: X402ProviderOptions): PaymentProvider;
+
+export type FacilitatorAuth =
+  | { readonly type: 'none' }
+  | { readonly type: 'bearer'; readonly token: string };
+
+export type X402FacilitatorConfig =
+  | { readonly mode: 'local'; readonly signerPrivateKey: string }
+  | { readonly mode: 'remote'; readonly url: string; readonly auth: FacilitatorAuth };
+
+export type DeploymentMode = 'local' | 'testnet' | 'mainnet';
+export const SUPPORTED_NETWORK_IDS: readonly string[]; // ['eip155:84532', 'eip155:8453']
 ```
 
 ## `src/protocols/mcp`
@@ -210,26 +226,25 @@ export interface GatewayConfig {
       assetDecimals: number;
       payTo: string;
       maxTimeoutSeconds: number;
-      facilitator:
-        | { mode: 'local'; signerPrivateKey: string }
-        | { mode: 'remote'; url: string };
+      facilitator: X402FacilitatorConfig;
+      allowMainnet?: boolean;
     };
   };
 }
 ```
 
 ## Gateway HTTP surface
-| Route | Purpose |
-|---|---|
-| `GET /health` | liveness — always 200 when the process is up |
-| `GET /ready` | readiness — 200 only when config, store, every required adapter **and every configured payment provider** are healthy (`fail` blocks; `warn` is degraded-but-serving) |
-| `GET /.well-known/agent-commerce` | merchant + adapter descriptors, protocol/spec versions |
-| `GET /api/resources` | canonical resource list (no secrets) |
-| `POST /api/resources/:id/invoke` | HTTP protocol surface; `X-PAYMENT` header carries the proof; 402 + `PaymentRequiredEnvelope` when unpaid |
-| `GET /api/receipts?limit=` | recent receipts (dashboard/CLI) |
-| `GET /api/events?limit=` | recent events (dashboard/CLI) |
-| `GET /api/events/stream` | Server-Sent Events feed of `CommerceEvent` |
-| `<mcp.mountPath>` (default `/mcp`) | MCP Streamable HTTP, delegated to the adapter |
+| Route                              | Purpose                                                                                                                                                                                      |
+| ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /health`                      | liveness — always 200 when the process is up                                                                                                                                                 |
+| `GET /ready`                       | readiness — 200 only when config, store, every required adapter **and every configured payment provider** are healthy (`fail` blocks; `warn` is degraded-but-serving)                        |
+| `GET /.well-known/agent-commerce`  | merchant + adapter descriptors, protocol/spec versions                                                                                                                                       |
+| `GET /api/resources`               | canonical resource list (no secrets)                                                                                                                                                         |
+| `POST /api/resources/:id/invoke`   | HTTP protocol surface; `PAYMENT-SIGNATURE` header carries the proof; 402 + `PaymentRequiredEnvelope` body and `PAYMENT-REQUIRED` header when unpaid; `PAYMENT-RESPONSE` header on settlement |
+| `GET /api/receipts?limit=`         | recent receipts (dashboard/CLI)                                                                                                                                                              |
+| `GET /api/events?limit=`           | recent events (dashboard/CLI)                                                                                                                                                                |
+| `GET /api/events/stream`           | Server-Sent Events feed of `CommerceEvent`                                                                                                                                                   |
+| `<mcp.mountPath>` (default `/mcp`) | MCP Streamable HTTP, delegated to the adapter                                                                                                                                                |
 
 ## Local chain deployment manifest
 `npm run chain:deploy` writes `.deploy/local.json` (git-ignored). Everything else
@@ -308,7 +323,7 @@ export interface CreatePaymentProofOptions {
   };
 }
 
-/** Returns the base64 `X-PAYMENT` value to send back to the gateway. */
+/** Returns the base64 `PAYMENT-SIGNATURE` value to send back to the gateway. */
 export function createPaymentProof(options: CreatePaymentProofOptions): Promise<string>;
 ```
 

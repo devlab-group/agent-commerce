@@ -75,7 +75,7 @@ describe('StatusPanel', () => {
       wellKnown: {
         gateway: {
           implementationVersion: '0.1.0',
-          supportedSpec: 'agent-commerce/v0.1.0-alpha',
+          supportedSpec: 'agent-commerce/v0.2.0-beta',
         },
         merchant: { id: 'demo', name: 'Demo Merchant', publicBaseUrl: 'http://localhost:8080' },
         protocols: { http: { enabled: true }, mcp: { enabled: true, mountPath: '/mcp' } },
@@ -95,7 +95,7 @@ describe('StatusPanel', () => {
       wellKnown: {
         gateway: {
           implementationVersion: '0.1.0',
-          supportedSpec: 'agent-commerce/v0.1.0-alpha',
+          supportedSpec: 'agent-commerce/v0.2.0-beta',
         },
         merchant: { id: 'demo', name: 'Demo Merchant', publicBaseUrl: 'http://localhost:8080' },
         protocols: { http: { enabled: true }, mcp: { enabled: true, mountPath: '/mcp' } },
@@ -113,7 +113,7 @@ describe('StatusPanel', () => {
       wellKnown: {
         gateway: {
           implementationVersion: '0.1.0',
-          supportedSpec: 'agent-commerce/v0.1.0-alpha',
+          supportedSpec: 'agent-commerce/v0.2.0-beta',
         },
         merchant: { id: 'demo', name: 'Demo Merchant', publicBaseUrl: 'http://localhost:8080' },
         protocols: { http: { enabled: true }, mcp: { enabled: true, mountPath: '/mcp' } },
@@ -123,7 +123,7 @@ describe('StatusPanel', () => {
         payments: {
           x402: {
             enabled: true,
-            network: 'base-sepolia',
+            network: 'eip155:84532',
             asset: '0x5fbdb2315678afecb367f032d93f642f64180aa3',
             assetName: 'MockUSDC',
             assetVersion: '2',
@@ -131,11 +131,12 @@ describe('StatusPanel', () => {
             payTo: '0x70997970C51812dc3A010C7d01b50e0d17dc79C8',
             maxTimeoutSeconds: 120,
             facilitator: { mode: 'local' },
+            mode: 'local',
           },
         },
       },
     });
-    expect(html).toContain('base-sepolia');
+    expect(html).toContain('eip155:84532');
     expect(html).toContain('0x70997970C51812dc3A010C7d01b50e0d17dc79C8');
   });
 
@@ -144,7 +145,7 @@ describe('StatusPanel', () => {
       wellKnown: {
         gateway: {
           implementationVersion: '0.1.0',
-          supportedSpec: 'agent-commerce/v0.1.0-alpha',
+          supportedSpec: 'agent-commerce/v0.2.0-beta',
         },
         merchant: { id: 'demo', name: 'Demo Merchant', publicBaseUrl: 'http://localhost:8080' },
         protocols: { http: { enabled: true }, mcp: { enabled: false, mountPath: '/mcp' } },

@@ -24,7 +24,11 @@ describe('createGatewayLogger', () => {
 
     instance.info({ wallet: { signerPrivateKey: '0xSUPER_SECRET' } }, 'facilitator configured');
     instance.info(
-      { req: { headers: { authorization: 'Bearer secret-token', 'x-payment': 'base64proof' } } },
+      {
+        req: {
+          headers: { authorization: 'Bearer secret-token', 'payment-signature': 'base64proof' },
+        },
+      },
       'request',
     );
 

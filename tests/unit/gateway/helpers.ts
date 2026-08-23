@@ -249,7 +249,7 @@ export function makeGatewayConfig(overrides: Partial<GatewayConfig> = {}): Gatew
     payments: {
       x402: {
         enabled: true,
-        network: 'base-sepolia',
+        network: 'eip155:84532',
         rpcUrl: 'http://127.0.0.1:8545',
         asset: '0x1111111111111111111111111111111111111111',
         assetName: 'MockUSDC',

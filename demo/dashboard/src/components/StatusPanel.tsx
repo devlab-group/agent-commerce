@@ -127,11 +127,7 @@ export function StatusPanel({ wellKnown, error }: StatusPanelProps) {
             </tr>
             <tr>
               <th>Facilitator</th>
-              <td>
-                {x402.facilitator.mode === 'local'
-                  ? 'local (dev chain only)'
-                  : x402.facilitator.url}
-              </td>
+              <td>{x402.facilitator.mode === 'local' ? 'local (dev chain only)' : 'remote'}</td>
             </tr>
           </tbody>
         </table>

@@ -11,6 +11,10 @@
  * file and torn down in `afterAll`.
  */
 
+import { x402Client } from '@x402/core/client';
+import type { PaymentRequired } from '@x402/core/types';
+import { registerExactEvmScheme } from '@x402/evm/exact/client';
+import { privateKeyToAccount } from 'viem/accounts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type {
   CommerceResource,
@@ -86,7 +90,7 @@ beforeAll(async () => {
   anvil = await startAnvil({ port: PORT, silent: true });
   deployment = await deployLocalChain({ rpcUrl: anvil.rpcUrl, buyerInitialBalance: '100.00' });
   provider = createX402PaymentProvider({
-    network: 'base-sepolia',
+    network: 'eip155:84532',
     rpcUrl: anvil.rpcUrl,
     asset: deployment.asset,
     assetName: deployment.assetName,
@@ -203,7 +207,8 @@ describe('x402 settlement — real local chain', () => {
     const before = await balances();
     const { requirement, proof } = await buildValidProof('1.00');
     const decoded = JSON.parse(Buffer.from(proof, 'base64').toString('utf8'));
-    decoded.network = 'base';
+    // v2 carries the network on the accepted requirement, not at the top level.
+    decoded.accepted.network = 'eip155:8453';
     const tamperedProof = Buffer.from(JSON.stringify(decoded)).toString('base64');
 
     const verifyResult = await provider.verify({
@@ -249,7 +254,7 @@ describe('x402 settlement — real local chain', () => {
     expect(after).toEqual(before);
   });
 
-  it('8. replay: the same authorisation settled twice fails on chain the second time; replayKey is stable; merchant balance increases only once', async () => {
+  it('8. replay: replayKey is stable across presentations, the second settlement moves no funds', async () => {
     const { requirement, proof } = await buildValidProof('2.00');
     const before = await balances();
 
@@ -260,6 +265,20 @@ describe('x402 settlement — real local chain', () => {
       submission: { method: 'x402', payload: proof },
     });
     expect(verify1.status).toBe('verified');
+
+    // The same authorisation presented against a *different* request id,
+    // before anything has settled — the case the gateway's own replay
+    // reservation exists for, because nothing on chain has happened yet and
+    // both requests could otherwise proceed to settle concurrently.
+    const verifyAgainBeforeSettling = await provider.verify({
+      requestId: 'req-replay-2',
+      resource: RESOURCE,
+      requirement,
+      submission: { method: 'x402', payload: proof },
+    });
+    expect(verifyAgainBeforeSettling.status).toBe('verified');
+    expect(verifyAgainBeforeSettling.replayKey).toBeDefined();
+    expect(verifyAgainBeforeSettling.replayKey).toBe(verify1.replayKey);
 
     const settle1 = await provider.settle({
       requestId: 'req-replay-1',
@@ -273,27 +292,26 @@ describe('x402 settlement — real local chain', () => {
     const afterFirst = await balances();
     assertBalanceDelta(before, afterFirst, 2_000_000n);
 
-    // Replay: same authorisation, presented against a *different* request id.
-    const verify2 = await provider.verify({
-      requestId: 'req-replay-2',
+    // Once the nonce is spent on chain, verify() catches the replay too — a
+    // second line of defence, not the first. It only exists after settlement,
+    // which is why the gateway reserves the replayKey before settling rather
+    // than relying on this.
+    const verifyAfterSettling = await provider.verify({
+      requestId: 'req-replay-3',
       resource: RESOURCE,
       requirement,
       submission: { method: 'x402', payload: proof },
     });
-    // The x402 SDK's verify() does not itself track used nonces —
-    // this is exactly why the gateway reserves replayKey before settling.
-    expect(verify2.status).toBe('verified');
-    expect(verify2.replayKey).toBeDefined();
-    expect(verify2.replayKey).toBe(verify1.replayKey);
+    expect(verifyAfterSettling.status).toBe('rejected');
 
+    // And settling the already-spent authorisation anyway moves nothing.
     const settle2 = await provider.settle({
       requestId: 'req-replay-2',
       resource: RESOURCE,
       requirement,
       submission: { method: 'x402', payload: proof },
-      verification: verify2,
+      verification: verifyAgainBeforeSettling,
     });
-    // The authorisation's nonce is already used on chain — settlement must fail.
     expect(settle2.status).toBe('rejected');
 
     const afterSecond = await balances();
@@ -322,7 +340,7 @@ describe('x402 settlement — real local chain', () => {
 
   it('10. provider failure: RPC unreachable yields PAYMENT_PROVIDER_UNAVAILABLE, not a silent pass', async () => {
     const unavailableProvider = createX402PaymentProvider({
-      network: 'base-sepolia',
+      network: 'eip155:84532',
       rpcUrl: 'http://127.0.0.1:18791', // nothing listening here
       asset: deployment.asset,
       assetName: deployment.assetName,
@@ -358,5 +376,57 @@ describe('x402 settlement — real local chain', () => {
     const health = await provider.health();
     expect(health.status).toBe('pass');
     expect(health.detail).toContain('Anvil');
+  });
+
+  it('12. interop: a payment built by the x402 SDK client settles against this gateway', async () => {
+    // Everything else in this file signs through our own `createPaymentProof`,
+    // which exists so the negative cases can produce deliberately-wrong
+    // authorisations. That makes it possible for our challenge and our
+    // verification to agree with each other and with nothing else. This case
+    // hands the challenge to the SDK's own client — the same one an
+    // off-the-shelf buyer agent uses — and settles what it produces.
+    const buyer = privateKeyToAccount(deployment.buyer.privateKey);
+    const client = new x402Client();
+    registerExactEvmScheme(client, { signer: buyer, networks: ['eip155:84532'] });
+    // MockUSDC is not one of the assets the SDK recognises by default, and the
+    // default spend controls allow only recognised ones. A real buyer would
+    // allowlist the asset it intends to pay in; the demo chain's token has no
+    // entry to allowlist, so controls are off for this local-only case.
+    client.setSpendControls(false);
+
+    const requirement = await provider.createRequirement(paymentContext({ amount: '1.00' }));
+    const challenge = requirement.challenge.envelope as unknown as PaymentRequired;
+    const payload = await client.createPaymentPayload(challenge);
+    const proof = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64');
+
+    const before = await balances();
+    const verifyResult = await provider.verify({
+      requestId: requirement.requestId,
+      resource: RESOURCE,
+      requirement,
+      submission: { method: 'x402', payload: proof },
+    });
+    expect(verifyResult.status).toBe('verified');
+
+    const settleResult = await provider.settle({
+      requestId: requirement.requestId,
+      resource: RESOURCE,
+      requirement,
+      submission: { method: 'x402', payload: proof },
+      verification: verifyResult,
+    });
+    expect(settleResult.status).toBe('settled');
+
+    const after = await balances();
+    await expectRealSettlement({
+      rpcUrl: anvil.rpcUrl,
+      asset: deployment.asset,
+      buyer: deployment.buyer.address,
+      merchant: deployment.merchant.address,
+      before,
+      after,
+      amountBaseUnits: 1_000_000n,
+      txHash: settleResult.externalReference as string,
+    });
   });
 });

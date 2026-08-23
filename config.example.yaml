@@ -101,8 +101,37 @@ payments:
     payTo: ${MERCHANT_WALLET}
     # Seconds a payment challenge stays valid.
     maxTimeoutSeconds: 120
-    # Local facilitator used only on the deterministic dev chain. In production
-    # point `facilitator.url` at an external facilitator instead.
+    # Who verifies the authorisation and broadcasts the transfer.
+    #
+    # mode: local   the facilitator runs in this process and signs with
+    #               signerPrivateKey. Deterministic dev chain only — the key
+    #               must be an Anvil well-known one, and startup refuses it
+    #               against anything that is not a local/private RPC.
+    #
+    # mode: remote  an HTTP facilitator does the signing; this gateway holds no
+    #               key at all. Requires https on any public host, and a
+    #               credential on a mainnet.
     facilitator:
       mode: local
       signerPrivateKey: ${X402_FACILITATOR_PRIVATE_KEY}
+    #
+    # A public testnet instead — no key anywhere in this file:
+    #
+    # network: eip155:84532
+    # facilitator:
+    #   mode: remote
+    #   url: https://x402.org/facilitator
+    #   auth:
+    #     type: none
+    #
+    # Base mainnet. Every line below is required; none of them are defaults:
+    #
+    # network: eip155:8453
+    # asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"  # USDC on Base
+    # allowMainnet: true
+    # facilitator:
+    #   mode: remote
+    #   url: ${X402_FACILITATOR_URL}
+    #   auth:
+    #     type: bearer
+    #     token: ${X402_FACILITATOR_TOKEN}

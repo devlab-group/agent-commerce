@@ -1,6 +1,6 @@
 # Security Policy
 
-> **Alpha warning.** `v0.1.0-alpha` is experimental software. Do not use it with
+> **Beta warning.** `v0.2.0-beta` is experimental software. Do not use it with
 > production funds without an independent security review.
 
 ## Non-custodial by design

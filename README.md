@@ -13,7 +13,7 @@
   <img alt="Status" src="https://img.shields.io/badge/status-alpha-orange">
 </p>
 
-> **Alpha.** `v0.1.0-alpha` is experimental. Do not use it with production funds
+> **Beta.** `v0.2.0-beta` is experimental. Do not use it with production funds
 > without an independent review. See [SECURITY.md](SECURITY.md).
 
 ---
@@ -30,7 +30,7 @@ wallet — the gateway never holds it, and never holds your keys.
 
 ```text
 Your existing API → Agent Commerce Gateway → AI Agent
-                        MCP · x402 · receipts · doctor
+                MCP · x402 · receipts · doctor
 ```
 
 ## Demo
@@ -93,18 +93,18 @@ const { url } = await gateway.listen;
 ### Optional peers — install only the rails you use
 
 The MCP adapter and the x402 provider live on their own subpaths, because each
-needs a dependency the rest of the package does not. x402 alone pulls a browser
-wallet stack (wagmi, WalletConnect, Reown) worth ~572 MB, which a gateway
-serving a free HTTP resource has no business installing.
+needs a dependency the rest of the package does not — the x402 rail brings the
+whole EVM signing and RPC stack, which a gateway serving a free HTTP resource
+has no business installing.
 
 | You want                       | Install                        | Import                                     |
 | ------------------------------ | ------------------------------ | ------------------------------------------ |
 | gateway, config, receipts, CLI | `@devlab.group/agent-commerce` | `from '@devlab.group/agent-commerce'`      |
 | expose resources as MCP tools  | `+ @modelcontextprotocol/sdk`  | `from '@devlab.group/agent-commerce/mcp'`  |
-| accept x402 payments           | `+ x402 viem`                  | `from '@devlab.group/agent-commerce/x402'` |
+| accept x402 payments           | `+ @x402/core @x402/evm viem`  | `from '@devlab.group/agent-commerce/x402'` |
 
 ```bash
-npm install @devlab.group/agent-commerce @modelcontextprotocol/sdk x402 viem
+npm install @devlab.group/agent-commerce @modelcontextprotocol/sdk @x402/core @x402/evm viem
 ```
 
 ```ts
@@ -112,9 +112,9 @@ import { mcp } from '@devlab.group/agent-commerce/mcp';
 import { x402 } from '@devlab.group/agent-commerce/x402';
 ```
 
-Peers are pinned exactly: x402's
-schemas and EIP-712 domains cross this boundary, so a version skew is a
-correctness problem rather than a convenience one. Import a subpath without its
+Peers are pinned exactly: x402's schemas and EIP-712 domains cross this
+boundary, so a version skew is a correctness problem rather than a convenience
+one. Import a subpath without its
 peer installed and Node fails at load naming the missing package — deliberately,
 rather than starting a gateway that silently serves nothing.
 
@@ -154,7 +154,7 @@ To stop and wipe state: `docker compose down -v`.
         ┌──────────────────────────────────────────────────────┐
         │ AI Agent │
         └──────────────┬───────────────────────────────────────┘
-                       │ MCP · HTTP + X-PAYMENT
+                       │ MCP · HTTP + PAYMENT-SIGNATURE
         ┌──────────────▼───────────────────────────────────────┐
         │ Agent Commerce Gateway (yours) │
         │ │
@@ -209,7 +209,7 @@ See [docs/configuration.md](docs/configuration.md).
 | Protocol              | Status    | Pinned revision                    |
 | --------------------- | --------- | ---------------------------------- |
 | **MCP**               | Supported | `@modelcontextprotocol/sdk@1.30.0` |
-| **x402**              | Supported | `x402@1.2.0`, scheme `exact`, EVM  |
+| **x402**              | Supported | x402 v2 (`@x402/core`, `@x402/evm`), scheme `exact`, EVM |
 | **HTTP**              | Supported | native routes                      |
 | UCP                   | Planned   | —                                  |
 | ACP · MPP · A2A · AP2 | Planned   | —                                  |
@@ -244,7 +244,7 @@ PASS Config valid — 2 resource(s), merchant "Demo Data Store"
 PASS Gateway healthy and ready at http://127.0.0.1:8080
 PASS Backend 2/2 backend host(s) reachable
 PASS Protocols http=on mcp=on (/mcp)
-PASS Payments x402 enabled — network=base-sepolia, destination=0x7099…79C8, facilitator=local
+PASS Payments x402 v2 (scheme=exact) enabled — LOCAL on Base Sepolia (eip155:84532), destination=0x7099…79C8, facilitator=local
 INFO Payments (MPP) planned — not implemented in v0.1
 PASS Storage sqlite schema v1 writable; receipts=2
 PASS Protocol versions reported by gateway /.well-known/agent-commerce
@@ -277,14 +277,32 @@ reachable by anyone else, know the split:
 
 [SECURITY.md](SECURITY.md) states plainly what this does and does not protect.
 
-## Live settlement — not in this release
+## Public networks
 
-**v0.1.0-alpha settles only against the local deterministic chain** (Anvil +
-MockUSDC). There is no live mode, no flag to enable one, and no partial path
-toward one: `facilitator.mode: "remote"` is rejected at config load, and the
-x402 provider's health check requires an Anvil-only RPC method, so `/ready`
-returns 503 against a real network. Settling real value is **planned**, not
-shipped — see [docs/payment-flow.md](docs/payment-flow.md).
+**Base Sepolia settlement is demonstrated**, not merely configurable: USDC has
+moved from buyer to merchant through the public facilitator, with the gateway
+holding no key and paying no gas. The transaction is in
+[docs/testnet.md](docs/testnet.md). The deterministic local chain
+(Anvil + MockUSDC) is still what the default test suite covers.
+
+Base Sepolia (`eip155:84532`), Base mainnet (`eip155:8453`) and a remote HTTP
+facilitator can now be configured, with guardrails that refuse the combinations
+that lose money — mainnet needs an explicit `allowMainnet`, a remote
+facilitator over HTTPS with a credential, a non-development `payTo`, and the
+canonical USDC for the chain. Those are checked at config load, so
+`agent-commerce validate` catches them and the gateway will not start without
+them.
+
+A ready-to-run testnet config is in
+[`examples/base-sepolia/`](examples/base-sepolia/), and
+`npm run test:testnet` drives the whole flow against Base Sepolia and reads
+the balances and transaction receipt back off the chain to prove it. It needs
+a funded test wallet, skips itself without one, and is deliberately outside
+`npm test` and `npm run test:e2e` — both of those must stay offline.
+
+**Mainnet is a different claim, and it is not made.** `eip155:8453` is
+configurable and guarded, and no payment has been settled on it. See
+[docs/testnet.md](docs/testnet.md).
 
 ## Development
 
@@ -298,7 +316,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Roadmap
 
-**Now (v0.1.0-alpha)** — MCP, x402, receipts, doctor, deterministic demo.
+**Now (v0.2.0-beta)** — MCP, x402 v2, Base Sepolia settlement, receipts, doctor, deterministic demo.
 
 **Next** — OpenAPI import · a stronger conformance suite · a `doctor` GitHub
 Action · UCP · MPP · ACP · A2A · AP2 · Shopify and WooCommerce examples ·
@@ -315,6 +333,7 @@ discipline is a release requirement, not a mood.
 | [Payment flow](docs/payment-flow.md)           | the paid round trip, and every way it fails |
 | [Protocols](docs/protocols.md)                 | exactly what is and is not supported        |
 | [Configuration](docs/configuration.md)         | `config.yaml` reference                     |
+| [Base Sepolia](docs/testnet.md)                | running on a public testnet, and proving it |
 | [Security model](docs/security.md)             | trust boundaries, and what we do not defend |
 | [Contracts](docs/contracts.md)                 | the frozen cross-package contract           |
 | [Adapter guide](docs/contributing-adapters.md) | add a protocol or a payment rail            |

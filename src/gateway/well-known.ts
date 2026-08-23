@@ -11,10 +11,10 @@
  * provider embeds an API key in the URL itself (Alchemy's `/v2/<KEY>`,
  * Infura's `/v3/<KEY>`, QuickNode's per-endpoint token) — on any non-local
  * deployment, echoing it back on an open route hands out a live credential
- * to anyone who asks. The facilitator private key never appears either
- *. `doctor`'s live/local cross-check
- * (src/cli) only reads `asset`/`network`/`payTo` from this document, so
- * dropping `rpcUrl` does not affect it.
+ * to anyone who asks. The facilitator URL is withheld for the same reason,
+ * and the facilitator private key never appears at all. `doctor`'s
+ * live/local cross-check (src/cli) only reads `asset`/`network`/`payTo` from
+ * this document, so dropping `rpcUrl` does not affect it.
  *
  * `WellKnownDocument` is also exported via the package's
  * `./well-known.js` subpath (non-frozen — see docs/contracts.md's change
@@ -37,6 +37,11 @@ import type {
   PaymentProvider,
   ReceiptStore,
 } from '../core/index.js';
+import {
+  type DeploymentMode,
+  requireNetworkProfile,
+  resolveDeploymentMode,
+} from '../payments/x402/networks.js';
 import { PACKAGE_VERSION } from '../version.js';
 import { type AdapterRuntime, getAdapterHealth } from './adapters.js';
 
@@ -47,7 +52,7 @@ import { type AdapterRuntime, getAdapterHealth } from './adapters.js';
  * spec, and announcing a new one on every version bump would tell every
  * client the protocol moved when it did not.
  */
-const GATEWAY_SUPPORTED_SPEC = 'agent-commerce/v0.1.0-alpha';
+const GATEWAY_SUPPORTED_SPEC = 'agent-commerce/v0.2.0-beta';
 
 export interface WellKnownDocument {
   readonly gateway: { readonly implementationVersion: string; readonly supportedSpec: string };
@@ -66,9 +71,9 @@ export interface WellKnownDocument {
       readonly assetDecimals: number;
       readonly payTo: string;
       readonly maxTimeoutSeconds: number;
-      readonly facilitator:
-        | { readonly mode: 'local' }
-        | { readonly mode: 'remote'; readonly url: string };
+      readonly facilitator: { readonly mode: 'local' | 'remote' };
+      /** What this deployment actually is. */
+      readonly mode: DeploymentMode;
     };
   };
 }
@@ -115,12 +120,18 @@ export async function buildWellKnownDocument(
               assetDecimals: x402.assetDecimals,
               payTo: x402.payTo,
               maxTimeoutSeconds: x402.maxTimeoutSeconds,
-              // Never the signerPrivateKey — only whether the facilitator is
-              // local (dev-chain only) or remote, plus its (non-secret) URL.
-              facilitator:
-                x402.facilitator.mode === 'local'
-                  ? { mode: 'local' as const }
-                  : { mode: 'remote' as const, url: x402.facilitator.url },
+              // Never the signerPrivateKey, and never the facilitator URL:
+              // a facilitator endpoint is a per-deployment operational detail
+              // that can carry a tenant path or an API key, exactly like
+              // `rpcUrl` above. Only whether it is local or remote is public.
+              facilitator: { mode: x402.facilitator.mode },
+              // Chain id 84532 is shared between the local dev chain and
+              // public Base Sepolia, so the network id alone cannot say which
+              // one a client is talking to. This can.
+              mode: resolveDeploymentMode(
+                requireNetworkProfile(x402.network, 'payments.x402.network'),
+                x402.facilitator.mode,
+              ),
             },
           }
         : {}),

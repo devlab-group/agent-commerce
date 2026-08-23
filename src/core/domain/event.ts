@@ -2,8 +2,7 @@
  * Canonical commerce events.
  *
  * FROZEN CONTRACT. Every event in a single flow shares one `requestId` so that
- * logs, payment attempts, backend calls and receipts are correlatable
- *.
+ * logs, payment attempts, backend calls and receipts are correlatable.
  */
 import type { IsoTimestamp } from './common.js';
 

@@ -224,7 +224,7 @@ describe('createGateway HTTP surface', () => {
     const body = res.json();
     expect(body.merchant.id).toBe('demo-store');
     expect(body.payments.x402.payTo).toBe('0x70997970C51812dc3A010C7d01b50e0d17dc79C8');
-    expect(body.payments.x402.network).toBe('base-sepolia');
+    expect(body.payments.x402.network).toBe('eip155:84532');
     expect(body.adapters).toHaveLength(1);
     expect(body.paymentProviders).toHaveLength(1);
     expect(body.store).toBeDefined();
@@ -767,7 +767,7 @@ describe('createGateway HTTP surface', () => {
       payments: {
         x402: {
           enabled: true,
-          network: 'base-sepolia',
+          network: 'eip155:84532',
           rpcUrl: 'http://127.0.0.1:8545',
           asset: '0x1111111111111111111111111111111111111111',
           assetName: 'MockUSDC',
@@ -775,16 +775,22 @@ describe('createGateway HTTP surface', () => {
           assetDecimals: 6,
           payTo: '0x70997970C51812dc3A010C7d01b50e0d17dc79C8',
           maxTimeoutSeconds: 120,
-          facilitator: { mode: 'remote', url: 'https://facilitator.example.com' },
+          facilitator: {
+            mode: 'remote',
+            url: 'https://facilitator.example.com',
+            auth: { type: 'none' },
+          },
         },
       },
     });
     const gateway = await buildGateway({ config: configWithRemote });
     const res = await gateway.server.inject({ method: 'GET', url: '/.well-known/agent-commerce' });
-    expect(res.json().payments.x402.facilitator).toEqual({
-      mode: 'remote',
-      url: 'https://facilitator.example.com',
-    });
+    // The facilitator URL is never published: it is a per-deployment
+    // operational detail that can carry a tenant path or an API key, exactly
+    // like rpcUrl.
+    expect(res.json().payments.x402.facilitator).toEqual({ mode: 'remote' });
+    expect(JSON.stringify(res.json())).not.toContain('facilitator.example.com');
+    expect(res.json().payments.x402.mode).toBe('testnet');
 
     const noPaymentsGateway = await buildGateway({ config: makeGatewayConfig({ payments: {} }) });
     const res2 = await noPaymentsGateway.server.inject({

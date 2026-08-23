@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- * FROZEN PUBLIC CONTRACT — v0.1.0-alpha
+ * FROZEN PUBLIC CONTRACT — frozen at v0.1.0-alpha
  * ============================================================================
  *
  * Every cross-package type and interface in the project is re-exported here.
@@ -64,6 +64,7 @@ export {
   isPaymentRequiredEnvelope,
   PAYMENT_HEADER,
   PAYMENT_INPUT_FIELD,
+  PAYMENT_REQUIRED_HEADER,
   PAYMENT_RESPONSE_HEADER,
   toDeliverySummary,
   toErrorEnvelope,

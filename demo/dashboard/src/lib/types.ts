@@ -57,9 +57,10 @@ export interface WellKnownX402 {
   /** Merchant-controlled settlement destination — never a gateway-owned wallet. Public info. */
   readonly payTo: string;
   readonly maxTimeoutSeconds: number;
-  readonly facilitator:
-    | { readonly mode: 'local' }
-    | { readonly mode: 'remote'; readonly url: string };
+  /** No URL: a facilitator endpoint can carry a tenant path or an API key. */
+  readonly facilitator: { readonly mode: 'local' | 'remote' };
+  /** local | testnet | mainnet — chain id 84532 alone cannot say which. */
+  readonly mode: string;
 }
 
 /** `GET /.well-known/agent-commerce` (src/gateway/well-known.ts). */

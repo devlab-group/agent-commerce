@@ -1,6 +1,6 @@
 # Payment flow
 
-How a paid resource actually gets paid for, end to end, in v0.1.0-alpha.
+How a paid resource actually gets paid for, end to end.
 
 ## Roles
 
@@ -52,8 +52,10 @@ The gateway is in the middle of the *protocol* and outside the *custody*.
 ```
 
 Steps 1–2 and 4–5 are the same over plain HTTP; the challenge arrives as a
-`402` body and the proof travels in the `X-PAYMENT` header instead of the
-reserved `_payment` tool input.
+`402` body — and, for x402 v2 clients, in the base64 `PAYMENT-REQUIRED`
+response header — while the proof travels in the `PAYMENT-SIGNATURE` header
+instead of the reserved `_payment` tool input. The settlement result comes back
+in `PAYMENT-RESPONSE`.
 
 ## Why the money cannot be redirected
 
@@ -73,7 +75,7 @@ happened without ever being able to take it.
 | no proof supplied | `PaymentRequiredOutcome`, 402 + envelope | no |
 | malformed proof | `PAYMENT_INVALID` | no |
 | bad signature | `PAYMENT_INVALID` | no |
-| wrong amount (`value < maxAmountRequired`) | `PAYMENT_INVALID` | no |
+| wrong amount (`value < amount`) | `PAYMENT_INVALID` | no |
 | wrong recipient (`to != payTo`) | `PAYMENT_INVALID` | no |
 | wrong network | `PAYMENT_INVALID` | no |
 | wrong asset | `PAYMENT_INVALID` | no |
@@ -115,7 +117,9 @@ asset supports is a configuration error, not a rounding opportunity.
 
 The demo and CI settle for real, on a chain they own:
 
-- Anvil, `--chain-id 84532`, so x402's `base-sepolia` network id matches.
+- Anvil, `--chain-id 84532`, advertised as the CAIP-2 network `eip155:84532`.
+  That id is shared with the public Base Sepolia testnet, so nothing infers
+  "public network" from it — `health()` probes for `anvil_nodeInfo` instead.
 - `MockUSDC`: 6 decimals, EIP-3009, EIP-712 domain `("MockUSDC", "2")`.
 - Anvil's well-known accounts as deployer/facilitator, merchant and buyer —
   `LOCAL DEVELOPMENT ONLY - DO NOT FUND`.
@@ -126,18 +130,31 @@ No public RPC, no public chain, no hosted facilitator, no real money. See
  for the exact SDK behaviour this
 relies on.
 
-## Live settlement (planned, not in v0.1.0-alpha)
+## Public networks
 
-This release settles **only** against the local deterministic chain. Two
-independent things in the tree prevent a real network, deliberately:
+Base Sepolia settlement is demonstrated — see [testnet.md](testnet.md) for the
+transaction. Base mainnet is configurable and guarded, and nothing has settled
+on it. The deterministic local chain remains what the default suite covers.
 
-- `payments.x402.facilitator.mode: "remote"` is rejected at config load
-  (`src/config/schema.ts`), so a hosted facilitator cannot be configured.
-- In local mode the provider's `health` probes an Anvil-only RPC method
-  (`anvil_nodeInfo`), so against a real node it reports unhealthy and the
-  gateway's `/ready` returns 503.
+Three things shape what a public-network config is allowed to look like:
 
-There is no "live mode" to enable, and no wording here should suggest one.
-v0.1 settles against the deterministic local chain only — the three checks
-above are what stop a mainnet deployment starting, and they are checks, not
-a toggle.
+- **The deployment mode is derived, not declared.** `local`, `testnet` and
+  `mainnet` come from the network *and* the facilitator together, because chain
+  id 84532 belongs to both the local dev chain and public Base Sepolia. Nothing
+  infers "public network" from the id alone.
+- **Mainnet is refused unless every guardrail is satisfied** — explicit
+  `allowMainnet`, a remote facilitator over HTTPS carrying a credential, a
+  non-development `payTo`, and the canonical USDC for the chain. These are
+  checked at config load, so `agent-commerce validate` catches them, and the
+  gateway will not start without them. See
+  [configuration.md](configuration.md).
+- **In local mode `health()` still probes `anvil_nodeInfo`**, so a local
+  facilitator pointed at a real node reports unhealthy and `/ready` returns
+  503. In remote mode it asks the facilitator what it supports instead, and
+  fails if our scheme and network are not on the list.
+
+There is still no "live mode" toggle. There is configuration, and there are
+checks that refuse the combinations that would lose money.
+
+Running it, and proving a payment settled there:
+[testnet.md](testnet.md).
