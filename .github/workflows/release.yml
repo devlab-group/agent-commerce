@@ -54,6 +54,11 @@ jobs:
       - name: Quickstart exactly as documented in the README
         run: |
           npm ci
+          # The README's own instruction for a user that is not uid 1000.
+          # GitHub runners are uid 1001, so the checkout is owned by 1001 while
+          # compose's `user:` default is 1000 — the chain-deploy step then
+          # cannot write .deploy/local.json and the whole stack fails.
+          export DOCKER_UID="$(id -u)" DOCKER_GID="$(id -g)"
           docker compose up -d --build
           npm run agent-commerce -- doctor --config config-demo.yaml
           npm run demo:agent

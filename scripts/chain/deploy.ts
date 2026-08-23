@@ -82,7 +82,27 @@ async function main(): Promise<void> {
   };
 
   mkdirSync(dirname(manifestPath), { recursive: true });
-  writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+  try {
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+  } catch (err) {
+    // The chain is already deployed by this point; the only thing that failed
+    // is recording where. Under docker compose that is almost always a uid
+    // mismatch — the container runs as `user: ${DOCKER_UID:-1000}` while the
+    // checkout belongs to whoever cloned it — and a raw EACCES stack trace
+    // sends people looking at the chain instead of at their uid.
+    if ((err as NodeJS.ErrnoException).code === 'EACCES') {
+      throw new Error(
+        `Cannot write the deployment manifest to ${manifestPath}: permission denied.\n` +
+          'Under docker compose this means the chain-deploy container is running as a ' +
+          'different user than the one that owns this checkout. Export your own ids and ' +
+          'bring the stack up again:\n\n' +
+          '  export DOCKER_UID="$(id -u)" DOCKER_GID="$(id -g)"\n' +
+          '  docker compose up -d --build\n',
+        { cause: err },
+      );
+    }
+    throw err;
+  }
 
   console.log(`\nWrote manifest to ${manifestPath}`);
   console.log(`  asset (MockUSDC): ${manifest.asset}`);
