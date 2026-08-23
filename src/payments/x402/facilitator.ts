@@ -17,7 +17,7 @@
  * object literal against an RPC or HTTP round-trip.
  */
 import { x402Facilitator } from '@x402/core/facilitator';
-import { FacilitatorResponseError, HTTPFacilitatorClient } from '@x402/core/http';
+import { HTTPFacilitatorClient } from '@x402/core/http';
 import type {
   Network,
   PaymentPayload,
@@ -196,7 +196,6 @@ function cdpAuthHeaders(apiKeyId: string, apiKeySecret: string): AuthHeaderFacto
  */
 export function createRemoteFacilitatorBinding(
   options: RemoteFacilitatorOptions,
-  isTransportError: (err: unknown) => boolean,
 ): FacilitatorBinding {
   const auth = options.auth;
   let createAuthHeaders: AuthHeaderFactory | undefined;
@@ -226,12 +225,21 @@ export function createRemoteFacilitatorBinding(
         try {
           return await call();
         } catch (err) {
-          // A facilitator that timed out or answered with something
-          // unparseable produced no verdict. Treating either as a payment
-          // failure would blame the buyer for the facilitator being down —
-          // and for settle(), a timeout is explicitly indeterminate: the
-          // transfer may have gone through after we stopped waiting.
-          if (err instanceof FacilitatorResponseError || isTransportError(err)) failed = true;
+          // *Any* throw out of the SDK client means no verdict was obtained.
+          // A verdict arrives as a returned `VerifyResponse`/`SettleResponse`,
+          // including a negative one; the client only throws when it could not
+          // reach the facilitator, could not authenticate to it, got a non-2xx,
+          // or could not parse what came back. None of those are facts about
+          // the payment, and recording them against the payer would blame the
+          // buyer for our credential or the facilitator's outage.
+          //
+          // Deliberately not a predicate over error shapes: the SDK throws a
+          // bare `Error` for an HTTP status (`Facilitator verify failed (401)`)
+          // and a `FacilitatorResponseError` for a bad body, so matching on
+          // type or message would have missed exactly the credential case that
+          // matters most. For settle() this also preserves the indeterminate
+          // reading — a timeout may have settled after we stopped waiting.
+          failed = true;
           throw err;
         }
       };

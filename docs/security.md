@@ -183,11 +183,27 @@ backpressure. Put the gateway behind your own edge if you expose it publicly.
 
 ## Dependencies
 
-`@x402/core`, `@x402/evm`, `@modelcontextprotocol/sdk`, `viem`, `fastify` and their transitive
-dependencies are third-party code, pinned exactly in
-. `npm audit` runs in the release
-workflow; high and critical findings are assessed and documented before a
-release rather than auto-blocking on irrelevant transitive advisories.
+`@x402/core`, `@x402/evm`, `@modelcontextprotocol/sdk`, `viem`, `fastify`,
+`pino` and `better-sqlite3` are third-party code, pinned exactly. `npm audit`
+runs in the release workflow; high and critical findings are assessed and
+documented before a release rather than auto-blocking on irrelevant transitive
+advisories.
+
+What a consumer actually installs, audited against the published tarball:
+
+| Install                                                             | `npm audit`            |
+| ------------------------------------------------------------------- | ---------------------- |
+| the package alone                                                   | **0 vulnerabilities**  |
+| plus `@modelcontextprotocol/sdk`, `@x402/core`, `@x402/evm`, `viem` | **0 vulnerabilities**  |
+| plus `@coinbase/x402` (only for `auth.type: cdp`)                   | 2 — 1 high, 1 moderate |
+
+The whole delta is CDP: `@coinbase/x402` → `@coinbase/cdp-sdk` → `axios`, which
+carries a set of high-severity advisories, plus a Solana client tree this
+project has no use for. It is an optional peer, imported dynamically only when
+that auth type is configured, so nobody else pays for it — and `auth.type:
+bearer` covers any facilitator with a static token and installs nothing. This
+is stated rather than buried because the affected path is the one handling real
+money.
 
 ## Development keys
 
@@ -226,11 +242,59 @@ resource server*, so compromising that process means draining the gas wallet
 and broadcasting arbitrary transactions from it. With a remote facilitator the
 gateway holds no signing key at all.
 
-## Threats we are not addressing in the alpha
+## Adversarial scenarios, and where each is tested
+
+Every row below has an executed test, not a claim. Nothing here is asserted by
+reading a log line: settlement outcomes are read back off the chain, and
+rejection outcomes assert that balances did not move.
+
+| Scenario                                                             | Outcome                                                           | Where                                             |
+| -------------------------------------------------------------------- | ----------------------------------------------------------------- | ------------------------------------------------- |
+| header tampering (`PAYMENT-SIGNATURE` mangled, wrong header, absent) | 402, no delivery                                                  | `tests/unit/gateway`, `tests/e2e/payment`         |
+| payload tampering (any field of the authorisation)                   | `PAYMENT_INVALID`                                                 | `tests/e2e/payment`, `tests/unit/payments-x402`   |
+| network substitution                                                 | `wrong_network` before settlement                                 | `tests/e2e/payment`                               |
+| asset substitution (a real but different token)                      | `wrong_asset` before settlement                                   | `tests/e2e/payment`                               |
+| `payTo` substitution                                                 | `wrong_recipient` before settlement                               | `tests/e2e/payment`, testnet suite                |
+| amount manipulation (below the price)                                | `wrong_amount` before settlement                                  | `tests/e2e/payment`                               |
+| replay, sequentially                                                 | refused, no second transfer                                       | `tests/e2e/payment`, mainnet suite                |
+| **duplicate concurrent request**                                     | settles once, other gets `PAYMENT_REPLAYED`                       | `tests/integration/adversarial-payment.test.ts`   |
+| **replay after a gateway restart**                                   | still refused — the reservation is in SQLite                      | same                                              |
+| expired authorisation (`validBefore` in the past)                    | refused before settlement                                         | `tests/e2e/payment`                               |
+| facilitator timeout                                                  | `PAYMENT_PROVIDER_UNAVAILABLE`, settlement treated as *uncertain* | `tests/unit/payments-x402`                        |
+| **facilitator 401 / 5xx**                                            | `PAYMENT_PROVIDER_UNAVAILABLE`, never charged to the buyer        | `tests/integration/adversarial-payment.test.ts`   |
+| **malformed facilitator response**                                   | refused; never read as a verdict                                  | same                                              |
+| backend timeout                                                      | `BACKEND_TIMEOUT`                                                 | `tests/unit/core/execution`                       |
+| backend 500 after payment                                            | receipt records paid-and-undelivered; payer told it settled       | `tests/unit/gateway`, `tests/unit/core/execution` |
+| receipt-store failure                                                | `STORAGE_ERROR`, never mislabelled `PAYMENT_REPLAYED`             | `tests/unit/storage-receipts`                     |
+| RPC unreachable during verify                                        | `PAYMENT_PROVIDER_UNAVAILABLE`, not "bad signature"               | `tests/unit/payments-x402`                        |
+
+Two of those exist because writing them found a bug. The SDK's `exact`/EVM
+scheme reports an unreachable node as `invalid_exact_evm_signature`, and its
+HTTP facilitator client throws a bare `Error` for a 401 or 5xx — both would
+have recorded a failure of ours as the payer's fault, and burned an
+authorisation nothing had checked. The provider now treats *any* throw out of a
+facilitator call as "no verdict obtained", because a verdict arrives as a
+returned value.
+
+## Threats we are not addressing
 
 Buyer identity and screening · fraud and disputes · refunds and chargebacks ·
 multi-tenancy and RBAC · host compromise · supply-chain attestation ·
 side-channel and timing analysis · protocol-level censorship or MEV around
-settlement · availability guarantees.
+settlement · availability guarantees · a malicious facilitator withholding
+settlement (it cannot redirect funds, but it can decline to broadcast, and
+fail-closed means the resource is simply not delivered).
 
-An independent security audit has not been performed.
+## Independent review
+
+**No independent security review has been performed.** Not commissioned, not
+scheduled, not in progress. Everything above is self-assessment by the people
+who wrote the code, which is the weakest kind of assurance there is.
+
+Before treating this as production-ready for real funds, the areas worth an
+outside pair of eyes are `src/payments/x402` (verification and settlement),
+payment enforcement in `src/core/execution/pipeline.ts`, the mainnet guards in
+`src/payments/x402/guardrails.ts`, and the receipt and payment-attempt state
+transitions in `src/storage/receipts`.
+
+This section is updated when that changes, and not before.

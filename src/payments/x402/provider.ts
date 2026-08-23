@@ -193,10 +193,10 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
     }
     binding = createLocalFacilitatorBinding(client, network, isProviderUnavailableError);
   } else {
-    binding = createRemoteFacilitatorBinding(
-      { url: options.facilitator.url, auth: options.facilitator.auth },
-      isProviderUnavailableError,
-    );
+    binding = createRemoteFacilitatorBinding({
+      url: options.facilitator.url,
+      auth: options.facilitator.auth,
+    });
   }
 
   // health()'s own read-only client, with a real transport-level timeout (see

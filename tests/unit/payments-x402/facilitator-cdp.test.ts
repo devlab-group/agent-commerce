@@ -53,7 +53,7 @@ async function buildBinding(auth: {
   const { createRemoteFacilitatorBinding } = await import(
     '../../../src/payments/x402/facilitator.js'
   );
-  createRemoteFacilitatorBinding({ url: FACILITATOR_URL, auth }, () => false);
+  createRemoteFacilitatorBinding({ url: FACILITATOR_URL, auth });
   const config = captured[0];
   if (!config) throw new Error('the binding built no HTTP client');
   return config;
@@ -135,13 +135,10 @@ describe('facilitator auth: cdp', () => {
     const { createRemoteFacilitatorBinding } = await import(
       '../../../src/payments/x402/facilitator.js'
     );
-    const binding = createRemoteFacilitatorBinding(
-      {
-        url: FACILITATOR_URL,
-        auth: { type: 'cdp', apiKeyId: 'key-id', apiKeySecret: 'super-secret' },
-      },
-      () => false,
-    );
+    const binding = createRemoteFacilitatorBinding({
+      url: FACILITATOR_URL,
+      auth: { type: 'cdp', apiKeyId: 'key-id', apiKeySecret: 'super-secret' },
+    });
     // `describe` reaches logs, health details and doctor output.
     expect(binding.describe).not.toContain('super-secret');
     expect(binding.describe).not.toContain('key-id');
