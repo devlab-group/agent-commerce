@@ -301,8 +301,10 @@ a funded test wallet, skips itself without one, and is deliberately outside
 `npm test` and `npm run test:e2e` — both of those must stay offline.
 
 **Mainnet is a different claim, and it is not made.** `eip155:8453` is
-configurable and guarded, and no payment has been settled on it. See
-[docs/testnet.md](docs/testnet.md).
+configurable and guarded — an explicit opt-in, a remote authenticated
+facilitator over HTTPS, a non-development `payTo` and the canonical USDC, all
+checked at config load — but no payment has been settled on it. See
+[docs/mainnet.md](docs/mainnet.md).
 
 ## Development
 
@@ -334,6 +336,7 @@ discipline is a release requirement, not a mood.
 | [Protocols](docs/protocols.md)                 | exactly what is and is not supported        |
 | [Configuration](docs/configuration.md)         | `config.yaml` reference                     |
 | [Base Sepolia](docs/testnet.md)                | running on a public testnet, and proving it |
+| [Base mainnet](docs/mainnet.md)                | real funds: what is refused, and why         |
 | [Security model](docs/security.md)             | trust boundaries, and what we do not defend |
 | [Contracts](docs/contracts.md)                 | the frozen cross-package contract           |
 | [Adapter guide](docs/contributing-adapters.md) | add a protocol or a payment rail            |

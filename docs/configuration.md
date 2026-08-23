@@ -154,10 +154,15 @@ refused on testnet too.
 the gateway runs at startup — the same function, not a second copy of the
 rules.
 
+`facilitator.auth` has three types: `none`, `bearer` (a static token, needs
+nothing installed) and `cdp` (Coinbase Developer Platform, which signs a fresh
+JWT per request and needs the optional peer `@coinbase/x402`). Anything else is
+refused at config load rather than sent nothing.
+
 **Base Sepolia is exercised; mainnet is not.** A real payment has settled on
 Base Sepolia through the public facilitator ([testnet.md](testnet.md)). Nothing
-has settled on `eip155:8453`, and the guardrails above are checks, not
-evidence.
+has settled on `eip155:8453` — see [mainnet.md](mainnet.md) for what the
+guardrails refuse there, which are checks, not evidence.
 
 ## Unsupported JSON Schema keywords have a cost
 

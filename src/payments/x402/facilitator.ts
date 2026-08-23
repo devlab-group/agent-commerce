@@ -27,6 +27,7 @@ import type {
 } from '@x402/core/types';
 import { toFacilitatorEvmSigner } from '@x402/evm';
 import { registerExactEvmScheme } from '@x402/evm/exact/facilitator';
+import { CommerceError } from '../../core/index.js';
 import type { LocalFacilitatorClient } from './chain.js';
 import type { FacilitatorAuth } from './guardrails.js';
 
@@ -143,6 +144,50 @@ export interface RemoteFacilitatorOptions {
   readonly timeoutMs?: number;
 }
 
+/** The SDK's path-keyed auth-header shape. A flat object throws inside it. */
+type AuthHeaderFactory = () => Promise<Record<string, Record<string, string>>>;
+
+/**
+ * CDP signs a fresh JWT per request over method + host + path, so a static
+ * header cannot express it. `@coinbase/x402` does that signing, and is
+ * imported dynamically: a static import would drag the whole CDP SDK — and its
+ * Solana, axios and JOSE dependencies — into the `/x402` subpath for everyone,
+ * including the majority who use a facilitator that needs no credential at all.
+ *
+ * The import is started at construction rather than on the first payment. A
+ * missing peer must surface as an unhealthy provider before a buyer signs
+ * anything, not as a failure inside verify() with their authorisation already
+ * spent.
+ */
+function cdpAuthHeaders(apiKeyId: string, apiKeySecret: string): AuthHeaderFactory {
+  const loading = import('@coinbase/x402').then(
+    (mod) => mod.createCdpAuthHeaders(apiKeyId, apiKeySecret),
+    (cause: unknown) => {
+      throw new CommerceError(
+        'CONFIG_INVALID',
+        'x402 provider: facilitator.auth.type is "cdp", which needs the optional peer ' +
+          '"@coinbase/x402". Install it (npm install @coinbase/x402), or use a facilitator ' +
+          'that accepts a static token with auth.type "bearer".',
+        { cause },
+      );
+    },
+  );
+  // Nothing awaits this until the first call; without a handler the rejection
+  // above would be an unhandled promise rejection at startup.
+  loading.catch(() => {});
+
+  return async () => {
+    const create = await loading;
+    if (!create) {
+      throw new CommerceError(
+        'PAYMENT_PROVIDER_UNAVAILABLE',
+        'x402 provider: @coinbase/x402 returned no auth-header factory',
+      );
+    }
+    return (await create()) as Record<string, Record<string, string>>;
+  };
+}
+
 /**
  * An HTTP facilitator.
  *
@@ -154,15 +199,17 @@ export function createRemoteFacilitatorBinding(
   isTransportError: (err: unknown) => boolean,
 ): FacilitatorBinding {
   const auth = options.auth;
-  const createAuthHeaders =
-    auth.type === 'bearer'
-      ? async (): Promise<Record<string, Record<string, string>>> => {
-          // The SDK requires a path-keyed object; a flat headers object throws
-          // rather than silently dropping auth on every request.
-          const headers = { Authorization: `Bearer ${auth.token}` };
-          return { verify: headers, settle: headers, supported: headers };
-        }
-      : undefined;
+  let createAuthHeaders: AuthHeaderFactory | undefined;
+  if (auth.type === 'bearer') {
+    createAuthHeaders = async () => {
+      // The SDK requires a path-keyed object; a flat headers object throws
+      // rather than silently dropping auth on every request.
+      const headers = { Authorization: `Bearer ${auth.token}` };
+      return { verify: headers, settle: headers, supported: headers };
+    };
+  } else if (auth.type === 'cdp') {
+    createAuthHeaders = cdpAuthHeaders(auth.apiKeyId, auth.apiKeySecret);
+  }
 
   const client = new HTTPFacilitatorClient({
     url: options.url,

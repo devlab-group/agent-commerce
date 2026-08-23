@@ -361,6 +361,55 @@ describe('parseConfig', () => {
       expect(message).toContain('plain HTTP');
     });
 
+    it('accepts a mainnet facilitator authenticated with CDP credentials', () => {
+      const config = parseConfig(
+        withX402({
+          network: 'eip155:8453',
+          asset: BASE_USDC,
+          payTo: MERCHANT,
+          allowMainnet: true,
+          facilitator: {
+            mode: 'remote',
+            url: 'https://api.cdp.coinbase.com/platform/v2/x402',
+            auth: { type: 'cdp', apiKeyId: 'key-id', apiKeySecret: 'key-secret' },
+          },
+        }),
+        {},
+      );
+      expect(config.payments.x402?.facilitator).toMatchObject({
+        mode: 'remote',
+        auth: { type: 'cdp', apiKeyId: 'key-id', apiKeySecret: 'key-secret' },
+      });
+    });
+
+    it('rejects an empty CDP credential rather than sending it', () => {
+      const message = messageFor(
+        withX402({
+          payTo: MERCHANT,
+          facilitator: {
+            mode: 'remote',
+            url: 'https://facilitator.example.com',
+            auth: { type: 'cdp', apiKeyId: 'key-id', apiKeySecret: '${CDP_SECRET:- }' },
+          },
+        }),
+      );
+      expect(message).toContain('apiKeySecret is empty');
+    });
+
+    it('rejects an auth type nobody implements, rather than sending nothing', () => {
+      const message = messageFor(
+        withX402({
+          payTo: MERCHANT,
+          facilitator: {
+            mode: 'remote',
+            url: 'https://facilitator.example.com',
+            auth: { type: 'hmac', secret: 's' },
+          },
+        }),
+      );
+      expect(message).toContain('payments.x402.facilitator');
+    });
+
     it('rejects an empty bearer token rather than sending it', () => {
       const raw = withX402({
         payTo: MERCHANT,

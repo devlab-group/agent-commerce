@@ -72,6 +72,7 @@ export function readVersionReport(): VersionReport {
 
   const candidates: readonly [string, string][] = [
     ['@modelcontextprotocol/sdk', 'protocols/mcp'],
+    ['@coinbase/x402', 'payments/x402'],
     ['@x402/core', 'payments/x402'],
     ['@x402/evm', 'payments/x402'],
     ['viem', 'payments/x402'],

@@ -179,6 +179,15 @@ const ResourcesMapSchema = z.record(z.string().min(1), ResourceEntrySchema);
 const FacilitatorAuthSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('none') }).strict(),
   z.object({ type: z.literal('bearer'), token: z.string().min(1) }).strict(),
+  // Coinbase Developer Platform. Needs the optional peer `@coinbase/x402`,
+  // which signs a fresh JWT per request; a static header cannot express it.
+  z
+    .object({
+      type: z.literal('cdp'),
+      apiKeyId: z.string().min(1),
+      apiKeySecret: z.string().min(1),
+    })
+    .strict(),
 ]);
 
 const FacilitatorSchema = z.discriminatedUnion('mode', [

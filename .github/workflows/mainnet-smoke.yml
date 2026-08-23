@@ -1,0 +1,85 @@
+name: Mainnet smoke (Base) — REAL FUNDS
+
+# Manual only, and deliberately awkward. Every run of this workflow moves real
+# money on Base. It is not on a schedule, not on a push, and not on a pull
+# request: a fork PR that could trigger it would be a way to drain the wallet
+# by opening one.
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type SPEND REAL FUNDS to confirm'
+        required: true
+        default: ''
+      amount:
+        description: 'USDC to spend (every run spends it)'
+        required: false
+        default: '0.01'
+
+permissions:
+  contents: read
+
+concurrency:
+  # Never two at once: both runs share one buyer wallet, and two in-flight
+  # EIP-3009 authorisations against one nonce space is the race the gateway's
+  # replay reservation exists to catch — not something to trigger on purpose.
+  group: mainnet-smoke
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    name: Base mainnet settlement
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # A protected environment adds a required reviewer in front of real money.
+    environment: mainnet
+    steps:
+      - name: Confirm intent
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          if [ "$CONFIRM" != "SPEND REAL FUNDS" ]; then
+            echo "::error::This workflow spends real money. Re-run and type: SPEND REAL FUNDS"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      # The CDP auth type needs this optional peer; it is not installed by
+      # default and nothing else in the suite requires it.
+      - run: npm install --no-save @coinbase/x402@2.1.0
+
+      - name: Settle on Base
+        env:
+          ALLOW_X402_MAINNET: 'true'
+          X402_MAINNET_BUYER_PRIVATE_KEY: ${{ secrets.X402_MAINNET_BUYER_PRIVATE_KEY }}
+          X402_MAINNET_MERCHANT_ADDRESS: ${{ secrets.X402_MAINNET_MERCHANT_ADDRESS }}
+          X402_MAINNET_RPC_URL: ${{ secrets.X402_MAINNET_RPC_URL }}
+          X402_FACILITATOR_URL: ${{ secrets.X402_FACILITATOR_URL }}
+          CDP_API_KEY_ID: ${{ secrets.CDP_API_KEY_ID }}
+          CDP_API_KEY_SECRET: ${{ secrets.CDP_API_KEY_SECRET }}
+          X402_FACILITATOR_TOKEN: ${{ secrets.X402_FACILITATOR_TOKEN }}
+          X402_MAINNET_AMOUNT: ${{ inputs.amount }}
+        run: npm run test:mainnet
+
+      # The suite skips itself when a credential is missing, which would
+      # otherwise look exactly like a pass on a workflow whose whole purpose is
+      # to prove a real settlement happened.
+      - name: Fail if the smoke test skipped
+        if: always()
+        env:
+          BUYER: ${{ secrets.X402_MAINNET_BUYER_PRIVATE_KEY }}
+          MERCHANT: ${{ secrets.X402_MAINNET_MERCHANT_ADDRESS }}
+          FACILITATOR: ${{ secrets.X402_FACILITATOR_URL }}
+        run: |
+          if [ -z "$BUYER" ] || [ -z "$MERCHANT" ] || [ -z "$FACILITATOR" ]; then
+            echo "::error::mainnet secrets are not set in the 'mainnet' environment; the smoke test skipped and proved nothing."
+            exit 1
+          fi

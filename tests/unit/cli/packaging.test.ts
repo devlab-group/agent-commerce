@@ -159,7 +159,13 @@ describe('published package metadata', () => {
     for (const subpath of ['./mcp', './x402']) {
       expect(exportsField?.[subpath]).toBeDefined();
     }
-    for (const peer of ['@modelcontextprotocol/sdk', '@x402/core', '@x402/evm', 'viem']) {
+    for (const peer of [
+      '@coinbase/x402',
+      '@modelcontextprotocol/sdk',
+      '@x402/core',
+      '@x402/evm',
+      'viem',
+    ]) {
       expect(manifest.peerDependencies?.[peer]).toBeDefined();
       expect(manifest.peerDependenciesMeta?.[peer]?.optional).toBe(true);
       // In `dependencies` too would defeat the point — npm installs those.

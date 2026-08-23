@@ -218,8 +218,9 @@ facilitator the gateway holds no signing key at all.
 Base Sepolia settlement has been performed and verified on chain
 ([testnet.md](testnet.md)). **Mainnet has not**, and nothing here should be
 read as a claim that it has: what this section describes is what the
-configuration permits and refuses, not what has been exercised with real
-funds.
+configuration permits and refuses, not what has been exercised with real funds.
+The full runbook, including the supply-chain cost of the CDP auth type, is
+[mainnet.md](mainnet.md).
 
 ## Threats we are not addressing in the alpha
 

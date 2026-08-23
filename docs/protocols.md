@@ -99,9 +99,11 @@ it normalises into `CanonicalRequest` and lets the pipeline decide.
 
 ### Not implemented
 
-Solana/SVM, the `deferred` scheme, Permit2, per-request signed facilitator
-credentials (a CDP JWT and anything like it — only `none` and `bearer` auth
-exist), multi-asset routing and dynamic pricing.
+Solana/SVM, the `deferred` scheme, Permit2, multi-asset routing and dynamic
+pricing.
+
+Facilitator auth covers `none`, `bearer` and `cdp`; any other scheme is refused
+at config load rather than sent nothing.
 
 A remote HTTP facilitator **is** supported (`facilitator.mode: remote`), and
 Base Sepolia settlement is demonstrated on chain — see

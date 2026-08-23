@@ -27,15 +27,25 @@ import {
 /**
  * How the gateway authenticates to a remote facilitator.
  *
- * Deliberately generic: x402 facilitators are not a Coinbase-only category,
- * and a scheme that only fits one vendor's credentials would make the
- * abstraction a fiction. `bearer` covers every facilitator that takes a static
- * token; a facilitator needing per-request signed credentials (CDP's JWT among
- * them) is not supported yet and is refused rather than silently sent nothing.
+ * Deliberately a list, not a vendor: x402 facilitators are not a Coinbase-only
+ * category, and a scheme that only fitted one vendor's credentials would make
+ * the abstraction a fiction.
+ *
+ * - `none` — the facilitator takes no credential (the public testnet one).
+ * - `bearer` — a static token. Covers most self-hosted and third-party
+ * facilitators, and needs nothing installed.
+ * - `cdp` — Coinbase Developer Platform, which signs a fresh JWT per request
+ * over method + host + path, so a static header cannot express it. Handled by
+ * the optional peer `@coinbase/x402`, imported only when this type is
+ * configured. Anyone not using CDP never installs it.
+ *
+ * A facilitator whose scheme is none of these is refused at config load rather
+ * than sent nothing.
  */
 export type FacilitatorAuth =
   | { readonly type: 'none' }
-  | { readonly type: 'bearer'; readonly token: string };
+  | { readonly type: 'bearer'; readonly token: string }
+  | { readonly type: 'cdp'; readonly apiKeyId: string; readonly apiKeySecret: string };
 
 export type X402FacilitatorConfig =
   | { readonly mode: 'local'; readonly signerPrivateKey: string }
@@ -93,11 +103,17 @@ export function resolveX402Deployment(input: X402DeploymentInput): X402Deploymen
         'payments.x402.facilitator.auth',
       );
     }
-    if (input.facilitator.auth.type === 'bearer' && input.facilitator.auth.token.trim() === '') {
-      throw invalid(
-        'payments.x402: facilitator.auth.type is "bearer" but the token is empty. An empty credential is refused rather than sent.',
-        'payments.x402.facilitator.auth.token',
-      );
+    // An empty credential is refused rather than sent: a blank token or key
+    // reaches the facilitator as "unauthenticated" and fails every payment
+    // after the buyer has already signed. `${VAR:- }` resolving to whitespace
+    // is the realistic way this happens.
+    for (const [field, value] of credentialFields(input.facilitator.auth)) {
+      if (value.trim() === '') {
+        throw invalid(
+          `payments.x402: facilitator.auth.type is "${input.facilitator.auth.type}" but ${field} is empty. An empty credential is refused rather than sent.`,
+          `payments.x402.facilitator.auth.${field}`,
+        );
+      }
     }
   }
 
@@ -156,6 +172,21 @@ function assertFacilitatorUrlIsSafe(url: string, mode: DeploymentMode): void {
     `payments.x402: facilitator.url "${url}" uses plain HTTP. Payment authorisations and settlement results would travel unencrypted. Use https, or point at a local/private host on a non-mainnet deployment.`,
     'payments.x402.facilitator.url',
   );
+}
+
+/** The secret-bearing fields of an auth block, for emptiness checks only. Never logged. */
+function credentialFields(auth: FacilitatorAuth): readonly (readonly [string, string])[] {
+  switch (auth.type) {
+    case 'bearer':
+      return [['token', auth.token]];
+    case 'cdp':
+      return [
+        ['apiKeyId', auth.apiKeyId],
+        ['apiKeySecret', auth.apiKeySecret],
+      ];
+    default:
+      return [];
+  }
 }
 
 function sameAddress(a: string, b: string): boolean {
