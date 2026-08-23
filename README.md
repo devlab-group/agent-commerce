@@ -102,6 +102,7 @@ has no business installing.
 | gateway, config, receipts, CLI | `@devlab.group/agent-commerce` | `from '@devlab.group/agent-commerce'`      |
 | expose resources as MCP tools  | `+ @modelcontextprotocol/sdk`  | `from '@devlab.group/agent-commerce/mcp'`  |
 | accept x402 payments           | `+ @x402/core @x402/evm viem`  | `from '@devlab.group/agent-commerce/x402'` |
+| authenticate to a CDP facilitator | `+ @coinbase/x402`          | (no import — loaded on demand)             |
 
 ```bash
 npm install @devlab.group/agent-commerce @modelcontextprotocol/sdk @x402/core @x402/evm viem
@@ -117,6 +118,13 @@ boundary, so a version skew is a correctness problem rather than a convenience
 one. Import a subpath without its
 peer installed and Node fails at load naming the missing package — deliberately,
 rather than starting a gateway that silently serves nothing.
+
+`@coinbase/x402` is the odd one out: it has no import of its own and is loaded
+dynamically, only when `facilitator.auth.type: cdp` is configured. It is worth
+avoiding if you can — it brings `@coinbase/cdp-sdk` and `axios`, which carry
+high-severity advisories, while the package itself and the other three peers
+audit clean. `auth.type: bearer` covers any facilitator with a static token and
+installs nothing.
 
 ## Quickstart
 
@@ -235,7 +243,12 @@ checkable, not marketing. Detail: [docs/protocols.md](docs/protocols.md).
 
 Detail: [docs/payment-flow.md](docs/payment-flow.md).
 
-### Settled on public networks
+## Public networks
+
+Same gateway, same pipeline — a different `network` and a facilitator that is
+not this process. No code changes, and no "live mode" to switch on.
+
+### It has actually settled
 
 Not a roadmap entry. Both of these moved 0.01 USDC from a buyer to a merchant
 through a remote facilitator:
@@ -253,6 +266,86 @@ success is not the proof.
 
 Reproduce with `npm run test:testnet` / `npm run test:mainnet` — both spend
 real funds, skip themselves without credentials, and never run in CI.
+
+### The facilitator model
+
+A **facilitator** verifies the buyer's authorisation and broadcasts the
+transfer. It is the only component that needs gas, and it is never this
+gateway on a public network.
+
+| `facilitator.mode` | Who signs | Where it is allowed |
+| --- | --- | --- |
+| `local` | this process, with an Anvil dev key | the local dev chain only |
+| `remote` | an HTTP facilitator you point at | anywhere |
+
+With `remote`, the gateway holds **no signing key at all**. The buyer signs an
+EIP-3009 authorisation offline — no ETH required — and the facilitator pays the
+gas. A facilitator cannot redirect your money: the authorisation names its
+recipient, amount and chain, so it can broadcast exactly that transfer or
+nothing. What it can do is see every authorisation you handle, and stop
+answering.
+
+Three auth types: `none`, `bearer` (a static token, installs nothing) and `cdp`
+(Coinbase Developer Platform, which signs a fresh JWT per request). Anything
+else is refused at config load rather than sent nothing. You can also run your
+own — `remote` does not care who operates the endpoint.
+
+### Base Sepolia
+
+```yaml
+payments:
+  x402:
+    enabled: true
+    network: eip155:84532
+    rpcUrl: https://base-sepolia-rpc.publicnode.com # health checks only
+    asset: "0x036CbD53842c5426634e7929541eC2318f3dCF7e" # Circle USDC
+    assetName: USDC
+    assetVersion: "2"
+    assetDecimals: 6
+    payTo: ${MERCHANT_WALLET}
+    maxTimeoutSeconds: 300
+    facilitator:
+      mode: remote
+      url: https://x402.org/facilitator
+      auth: { type: none }
+```
+
+Full config in [`examples/base-sepolia/`](examples/base-sepolia/). Test USDC
+from [faucet.circle.com](https://faucet.circle.com); the buyer needs no ETH.
+`npm run test:testnet` drives the whole flow and reads the result back off the
+chain.
+
+Chain id 84532 belongs to **both** Base Sepolia and this project's local dev
+chain, deliberately. Nothing infers "public network" from it — `local`,
+`testnet` and `mainnet` are derived from the network *and* the facilitator
+together, and reported by `doctor`, `health()` and `/.well-known`.
+
+### Base mainnet
+
+Real funds, so nothing is defaulted. Every one of these is checked at config
+load, and the gateway will not start without them:
+
+| Required | |
+| --- | --- |
+| `allowMainnet: true` | mainnet is never a default |
+| `facilitator.mode: remote` | `local` needs a funded gas key inside this process |
+| an HTTPS `facilitator.url` | |
+| `allowUnauthenticatedFacilitator: true` | only if that facilitator takes no credential |
+| a non-development `payTo` | |
+| `asset` = USDC on Base, `assetName: "USD Coin"` | **not** `"USDC"` — that deployment predates the rename, and the buyer signs the name into their EIP-712 domain |
+
+Full config in [`examples/base-mainnet/`](examples/base-mainnet/), and
+[`examples/base-mainnet-payai/`](examples/base-mainnet-payai/) for an
+unauthenticated facilitator. `npm run test:mainnet` proves it end to end and
+spends real USDC on every run.
+
+`agent-commerce validate` reports any of the above before anything starts, and
+`doctor` prints `LIVE MAINNET MODE — REAL FUNDS`.
+
+> Neither public-network suite runs in CI — there is no workflow and there must
+> not be one. A workflow means a funded key in repository secrets, spendable by
+> anyone with write access. Both suites run from the machine that holds the
+> wallet, and skip themselves without credentials.
 
 ## Diagnostics
 
