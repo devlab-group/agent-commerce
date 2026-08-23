@@ -133,12 +133,21 @@ async function waitForBalances(
   timeoutMs = 90_000,
 ): Promise<BalanceSnapshot> {
   const deadline = Date.now() + timeoutMs;
-  let snapshot = await balances();
-  while (!predicate(snapshot) && Date.now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, 2_000));
-    snapshot = await balances();
+  let snapshot: BalanceSnapshot | undefined;
+  let lastError: unknown;
+  while (Date.now() < deadline) {
+    try {
+      snapshot = await balances();
+      lastError = undefined;
+      if (predicate(snapshot)) return snapshot;
+    } catch (err) {
+      // A public RPC rate-limiting the poll is not evidence about the payment.
+      lastError = err;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 3_000));
   }
-  return snapshot;
+  if (snapshot) return snapshot;
+  throw lastError ?? new Error('no balance snapshot was ever read');
 }
 
 function balances(): Promise<BalanceSnapshot> {
@@ -158,7 +167,7 @@ if (missing.length > 0) {
   // eslint-disable-next-line no-console
   console.log(
     `[testnet] skipped — set ${missing.join(' and ')} to run the Base Sepolia smoke test. ` +
-      'It spends real testnet USDC from a dedicated wallet; see docs/testnet.md.',
+      'It spends real testnet USDC from a dedicated wallet.',
   );
 }
 

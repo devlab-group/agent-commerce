@@ -5,16 +5,16 @@ implemented, exactly what is not, and pins the revisions.
 
 ## Support matrix
 
-| Protocol | Status | Revision | What works |
-|---|---|---|---|
-| **MCP** | Supported | `@modelcontextprotocol/sdk@1.30.0` | tool discovery, tool invocation, payment-required and error mapping |
-| **x402** | Supported | x402 **v2** (`@x402/core@2.23.0`, `@x402/evm@2.23.0`), scheme `exact`, EVM, EIP-3009 | challenge, verification, settlement, replay binding |
-| **HTTP** | Supported | — | native resource routes with `PAYMENT-SIGNATURE` |
-| UCP | Planned | — | not in v0.1 |
-| ACP | Planned | — | not in v0.1 |
-| MPP | Planned | — | not in v0.1 |
-| A2A | Planned | — | not in v0.1 |
-| AP2 | Planned | — | not in v0.1 |
+| Protocol | Status    | Revision                                                                             | What works                                                          |
+| -------- | --------- | ------------------------------------------------------------------------------------ | ------------------------------------------------------------------- |
+| **MCP**  | Supported | `@modelcontextprotocol/sdk@1.30.0`                                                   | tool discovery, tool invocation, payment-required and error mapping |
+| **x402** | Supported | x402 **v2** (`@x402/core@2.23.0`, `@x402/evm@2.23.0`), scheme `exact`, EVM, EIP-3009 | challenge, verification, settlement, replay binding                 |
+| **HTTP** | Supported | —                                                                                    | native resource routes with `PAYMENT-SIGNATURE`                     |
+| UCP      | Planned   | —                                                                                    | not in v0.1                                                         |
+| ACP      | Planned   | —                                                                                    | not in v0.1                                                         |
+| MPP      | Planned   | —                                                                                    | not in v0.1                                                         |
+| A2A      | Planned   | —                                                                                    | not in v0.1                                                         |
+| AP2      | Planned   | —                                                                                    | not in v0.1                                                         |
 
 "Planned" means **no code ships for it**. There is no partial adapter, no
 endpoint and no diagnostic pretending otherwise.
@@ -106,22 +106,21 @@ Facilitator auth covers `none`, `bearer` and `cdp`; any other scheme is refused
 at config load rather than sent nothing.
 
 A remote HTTP facilitator **is** supported (`facilitator.mode: remote`), and
-Base Sepolia settlement is demonstrated on chain — see
-[testnet.md](testnet.md). Base mainnet is configurable and guarded by
-[configuration.md](configuration.md)'s checks, and nothing has settled on it.
+so are Base Sepolia and Base mainnet — both have settled real payments through
+one. What guards mainnet is in [configuration.md](configuration.md).
 
 ## HTTP surface
 
-| Route | Purpose |
-|---|---|
-| `GET /health` | liveness |
-| `GET /ready` | readiness — config, store, required adapters and configured payment providers |
-| `GET /.well-known/agent-commerce` | merchant info, adapter descriptors, pinned versions, effective settlement destination |
-| `GET /api/resources` | canonical resource list |
-| `POST /api/resources/:id/invoke` | invoke; `PAYMENT-SIGNATURE` in, `402` + body envelope and `PAYMENT-REQUIRED` header when unpaid, `PAYMENT-RESPONSE` out |
-| `GET /api/receipts`, `GET /api/events` | audit |
-| `GET /api/events/stream` | SSE event feed |
-| `/mcp` | MCP Streamable HTTP |
+| Route                                  | Purpose                                                                                                                 |
+| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `GET /health`                          | liveness                                                                                                                |
+| `GET /ready`                           | readiness — config, store, required adapters and configured payment providers                                           |
+| `GET /.well-known/agent-commerce`      | merchant info, adapter descriptors, pinned versions, effective settlement destination                                   |
+| `GET /api/resources`                   | canonical resource list                                                                                                 |
+| `POST /api/resources/:id/invoke`       | invoke; `PAYMENT-SIGNATURE` in, `402` + body envelope and `PAYMENT-REQUIRED` header when unpaid, `PAYMENT-RESPONSE` out |
+| `GET /api/receipts`, `GET /api/events` | audit                                                                                                                   |
+| `GET /api/events/stream`               | SSE event feed                                                                                                          |
+| `/mcp`                                 | MCP Streamable HTTP                                                                                                     |
 
 ## Adding a protocol
 

@@ -25,15 +25,15 @@ npm run agent-commerce -- validate
 
 ## Top level
 
-| Key | Required | Purpose |
-|---|---|---|
-| `version` | yes | must be `1` |
-| `merchant` | yes | `id`, `name`, `publicBaseUrl` |
-| `server` | yes | `port`, `host` |
-| `storage.receipts` | yes | `driver: sqlite`, `path` |
-| `protocols` | yes | which surfaces are enabled |
-| `resources` | yes | the capabilities you expose |
-| `payments` | when a paid resource exists | rail configuration |
+| Key                | Required                    | Purpose                       |
+| ------------------ | --------------------------- | ----------------------------- |
+| `version`          | yes                         | must be `1`                   |
+| `merchant`         | yes                         | `id`, `name`, `publicBaseUrl` |
+| `server`           | yes                         | `port`, `host`                |
+| `storage.receipts` | yes                         | `driver: sqlite`, `path`      |
+| `protocols`        | yes                         | which surfaces are enabled    |
+| `resources`        | yes                         | the capabilities you expose   |
+| `payments`         | when a paid resource exists | rail configuration            |
 
 ## Resources
 
@@ -98,10 +98,10 @@ presenter can confirm where money goes.
 
 `network` is a CAIP-2 identifier and must be one this build knows:
 
-| `network` | | Notes |
-|---|---|---|
+| `network`      |              | Notes                                      |
+| -------------- | ------------ | ------------------------------------------ |
 | `eip155:84532` | Base Sepolia | the chain id the local dev chain also uses |
-| `eip155:8453` | Base | mainnet; real funds |
+| `eip155:8453`  | Base         | mainnet; real funds                        |
 
 Anything else is `CONFIG_INVALID` at load. The chain id is signed into the
 buyer's EIP-712 domain, so an unrecognised network is never guessed at.
@@ -137,14 +137,15 @@ between the local dev chain and public Base Sepolia. It is reported by
 `eip155:8453` moves real money, so a config naming it must also say so. All of
 these are refused at config load, before the gateway starts:
 
-| Refused | Because |
-|---|---|
-| `allowMainnet` absent or false | mainnet is never a default |
-| `facilitator.mode: local` | the in-process signer is a hot wallet inside the resource server |
-| `facilitator.auth.type: none` | an unauthenticated production facilitator |
-| a non-HTTPS `facilitator.url` | authorisations and settlement results in the clear |
-| a well-known Anvil `payTo` | its private key is public knowledge |
-| an `asset` that is not USDC on Base | settling in an unintended token |
+| Refused                             | Because                                                     |
+| ----------------------------------- | ----------------------------------------------------------- |
+| `allowMainnet` absent or false      | mainnet is never a default                                  |
+| `facilitator.mode: local`           | a funded gas key inside the resource server                 |
+| `facilitator.auth.type: none`       | unless `allowUnauthenticatedFacilitator` accepts it by name |
+| a non-HTTPS `facilitator.url`       | authorisations and settlement results in the clear          |
+| a well-known Anvil `payTo`          | its private key is public knowledge                         |
+| an `asset` that is not USDC on Base | settling in an unintended token                             |
+| an `assetName` that is not the EIP-712 domain USDC reports | every payment refused after the buyer signed |
 
 The same rules apply to any non-local deployment where they make sense: plain
 HTTP is allowed only to a local/private host, and a development `payTo` is
@@ -159,10 +160,24 @@ nothing installed) and `cdp` (Coinbase Developer Platform, which signs a fresh
 JWT per request and needs the optional peer `@coinbase/x402`). Anything else is
 refused at config load rather than sent nothing.
 
-**Base Sepolia is exercised; mainnet is not.** A real payment has settled on
-Base Sepolia through the public facilitator ([testnet.md](testnet.md)). Nothing
-has settled on `eip155:8453` — see [mainnet.md](mainnet.md) for what the
-guardrails refuse there, which are checks, not evidence.
+### `assetName` is the EIP-712 domain, not the symbol
+
+The two USDC deployments disagree. Base Sepolia's reports `"USDC"`; Base
+mainnet's reports `"USD Coin"` — it predates the rename. The buyer signs that
+string into their EIP-712 domain and the scheme checks it, so naming the
+obvious-looking value gets every payment refused
+`invalid_exact_evm_token_name_mismatch` *after* they have signed. Both values
+are pinned in the network registry (`src/payments/x402/networks.ts`) and
+checked at config load, so a mismatch stops the gateway starting instead.
+
+### Running against a public network
+
+Worked configurations live in `examples/base-sepolia/` and
+`examples/base-mainnet/` (plus `examples/base-mainnet-payai/`, which uses an
+unauthenticated facilitator). `npm run test:testnet` and `npm run test:mainnet`
+drive the whole flow against the real chains and read balances and the
+transaction receipt back off them; both spend real funds, skip themselves
+without credentials, and never run in CI.
 
 ## Unsupported JSON Schema keywords have a cost
 

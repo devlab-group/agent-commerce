@@ -206,13 +206,13 @@ See [docs/configuration.md](docs/configuration.md).
 
 ## Protocol support
 
-| Protocol              | Status    | Pinned revision                    |
-| --------------------- | --------- | ---------------------------------- |
-| **MCP**               | Supported | `@modelcontextprotocol/sdk@1.30.0` |
+| Protocol              | Status    | Pinned revision                                          |
+| --------------------- | --------- | -------------------------------------------------------- |
+| **MCP**               | Supported | `@modelcontextprotocol/sdk@1.30.0`                       |
 | **x402**              | Supported | x402 v2 (`@x402/core`, `@x402/evm`), scheme `exact`, EVM |
-| **HTTP**              | Supported | native routes                      |
-| UCP                   | Planned   | —                                  |
-| ACP · MPP · A2A · AP2 | Planned   | —                                  |
+| **HTTP**              | Supported | native routes                                            |
+| UCP                   | Planned   | —                                                        |
+| ACP · MPP · A2A · AP2 | Planned   | —                                                        |
 
 "Planned" means **no code ships for it**. Each adapter reports its own
 `supportedSpec`, `capabilities` and `unsupported` list at runtime via
@@ -234,6 +234,25 @@ checkable, not marketing. Detail: [docs/protocols.md](docs/protocols.md).
   hash in the receipt. A log line saying "payment successful" would not count.
 
 Detail: [docs/payment-flow.md](docs/payment-flow.md).
+
+### Settled on public networks
+
+Not a roadmap entry. Both of these moved 0.01 USDC from a buyer to a merchant
+through a remote facilitator:
+
+| Network      | Transaction                                                                                                           |
+| ------------ | --------------------------------------------------------------------------------------------------------------------- |
+| Base Sepolia | [`0xea41b234c4…`](https://sepolia.basescan.org/tx/0xea41b234c4645a4d335589ec9753646aa7cccd1b97e9e15823b88bff7b54a247) |
+| Base         | [`0x57ec81c2a3…`](https://basescan.org/tx/0x57ec81c2a360d14d59a43cf4e24be09a6bd75cbe6185016372895bda73e42763)         |
+
+In both, the gateway held no key, signed nothing and paid no gas — the buyer
+signed an EIP-3009 authorisation offline holding no ETH, and the facilitator
+broadcast it. Each run reads the buyer and merchant balances and the
+transaction receipt back off the chain afterwards; the gateway's own report of
+success is not the proof.
+
+Reproduce with `npm run test:testnet` / `npm run test:mainnet` — both spend
+real funds, skip themselves without credentials, and never run in CI.
 
 ## Diagnostics
 
@@ -277,35 +296,6 @@ reachable by anyone else, know the split:
 
 [SECURITY.md](SECURITY.md) states plainly what this does and does not protect.
 
-## Public networks
-
-**Base Sepolia settlement is demonstrated**, not merely configurable: USDC has
-moved from buyer to merchant through the public facilitator, with the gateway
-holding no key and paying no gas. The transaction is in
-[docs/testnet.md](docs/testnet.md). The deterministic local chain
-(Anvil + MockUSDC) is still what the default test suite covers.
-
-Base Sepolia (`eip155:84532`), Base mainnet (`eip155:8453`) and a remote HTTP
-facilitator can now be configured, with guardrails that refuse the combinations
-that lose money — mainnet needs an explicit `allowMainnet`, a remote
-facilitator over HTTPS with a credential, a non-development `payTo`, and the
-canonical USDC for the chain. Those are checked at config load, so
-`agent-commerce validate` catches them and the gateway will not start without
-them.
-
-A ready-to-run testnet config is in
-[`examples/base-sepolia/`](examples/base-sepolia/), and
-`npm run test:testnet` drives the whole flow against Base Sepolia and reads
-the balances and transaction receipt back off the chain to prove it. It needs
-a funded test wallet, skips itself without one, and is deliberately outside
-`npm test` and `npm run test:e2e` — both of those must stay offline.
-
-**Mainnet is a different claim, and it is not made.** `eip155:8453` is
-configurable and guarded — an explicit opt-in, a remote authenticated
-facilitator over HTTPS, a non-development `payTo` and the canonical USDC, all
-checked at config load — but no payment has been settled on it. See
-[docs/mainnet.md](docs/mainnet.md).
-
 ## Development
 
 ```bash
@@ -318,7 +308,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Roadmap
 
-**Now (v0.2.0-beta)** — MCP, x402 v2, Base Sepolia settlement, receipts, doctor, deterministic demo.
+**Now (v0.2.0-beta)** — MCP, x402 v2, settlement on the local chain, Base
+Sepolia and Base mainnet, receipts, doctor, deterministic demo.
 
 **Next** — OpenAPI import · a stronger conformance suite · a `doctor` GitHub
 Action · UCP · MPP · ACP · A2A · AP2 · Shopify and WooCommerce examples ·
@@ -335,8 +326,6 @@ discipline is a release requirement, not a mood.
 | [Payment flow](docs/payment-flow.md)           | the paid round trip, and every way it fails |
 | [Protocols](docs/protocols.md)                 | exactly what is and is not supported        |
 | [Configuration](docs/configuration.md)         | `config.yaml` reference                     |
-| [Base Sepolia](docs/testnet.md)                | running on a public testnet, and proving it |
-| [Base mainnet](docs/mainnet.md)                | real funds: what is refused, and why         |
 | [Security model](docs/security.md)             | trust boundaries, and what we do not defend |
 | [Contracts](docs/contracts.md)                 | the frozen cross-package contract           |
 | [Adapter guide](docs/contributing-adapters.md) | add a protocol or a payment rail            |

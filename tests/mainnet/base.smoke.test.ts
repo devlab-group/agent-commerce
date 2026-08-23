@@ -43,7 +43,9 @@ import {
 const ALLOWED = process.env['ALLOW_X402_MAINNET'] === 'true';
 const BUYER_KEY = process.env['X402_MAINNET_BUYER_PRIVATE_KEY'];
 const MERCHANT = process.env['X402_MAINNET_MERCHANT_ADDRESS'];
-const RPC_URL = process.env['X402_MAINNET_RPC_URL'] ?? 'https://mainnet.base.org';
+// Any public endpoint will rate-limit a polling loop; `mainnet.base.org` did,
+// mid-run, and reported a settled payment as a failure. Use a dedicated one.
+const RPC_URL = process.env['X402_MAINNET_RPC_URL'] ?? 'https://base.drpc.org';
 const FACILITATOR_URL = process.env['X402_FACILITATOR_URL'];
 const CDP_API_KEY_ID = process.env['CDP_API_KEY_ID'];
 const CDP_API_KEY_SECRET = process.env['CDP_API_KEY_SECRET'];
@@ -61,15 +63,14 @@ const missing = [
   BUYER_KEY ? undefined : 'X402_MAINNET_BUYER_PRIVATE_KEY',
   MERCHANT ? undefined : 'X402_MAINNET_MERCHANT_ADDRESS',
   FACILITATOR_URL ? undefined : 'X402_FACILITATOR_URL',
-  CDP_API_KEY_ID || BEARER
-    ? undefined
-    : 'CDP_API_KEY_ID + CDP_API_KEY_SECRET (or X402_FACILITATOR_TOKEN)',
+  // No credential requirement: a facilitator may legitimately take none, and
+  // `allowUnauthenticatedFacilitator` is how that is accepted.
 ].filter((name): name is string => name !== undefined);
 
 if (missing.length > 0) {
   // eslint-disable-next-line no-console
   console.log(
-    `[mainnet] skipped — needs ${missing.join(', ')}. This suite spends REAL FUNDS; see docs/mainnet.md.`,
+    `[mainnet] skipped — needs ${missing.join(', ')}. This suite spends REAL FUNDS; see examples/base-mainnet/README.md.`,
   );
 }
 
@@ -77,7 +78,8 @@ function authBlock(): Record<string, unknown> {
   if (CDP_API_KEY_ID && CDP_API_KEY_SECRET) {
     return { type: 'cdp', apiKeyId: CDP_API_KEY_ID, apiKeySecret: CDP_API_KEY_SECRET };
   }
-  return { type: 'bearer', token: BEARER };
+  if (BEARER) return { type: 'bearer', token: BEARER };
+  return { type: 'none' };
 }
 
 function rawConfig(overrides: { allowMainnet?: boolean } = {}): Record<string, unknown> {
@@ -107,12 +109,14 @@ function rawConfig(overrides: { allowMainnet?: boolean } = {}): Record<string, u
         network: NETWORK,
         rpcUrl: RPC_URL,
         asset: USDC,
-        assetName: 'USDC',
+        assetName: 'USD Coin',
         assetVersion: '2',
         assetDecimals: 6,
         payTo: MERCHANT,
         maxTimeoutSeconds: 600,
         ...(overrides.allowMainnet === false ? {} : { allowMainnet: true }),
+        // Only meaningful when no credential is configured; harmless otherwise.
+        allowUnauthenticatedFacilitator: true,
         facilitator: { mode: 'remote', url: FACILITATOR_URL, auth: authBlock() },
       },
     },
@@ -141,18 +145,33 @@ describeOrSkip('Base mainnet — real funds', () => {
    * Independent RPC nodes do not give read-your-writes: the facilitator
    * confirms against its node and returns while ours is still a block behind.
    * The expected delta stays exact; only the waiting is tolerant.
+   *
+   * Read errors inside the window are tolerated too, and that is not
+   * laxity — a public RPC rate-limiting the poll is not evidence about the
+   * payment. Failing there once reported a settlement that had plainly
+   * happened as a failure. If the deadline passes the last snapshot is
+   * returned and the exact-delta assertion fails on real numbers, or the
+   * underlying error surfaces if nothing was ever read.
    */
   async function waitForBalances(
     predicate: (snapshot: BalanceSnapshot) => boolean,
     timeoutMs = 180_000,
   ): Promise<BalanceSnapshot> {
     const deadline = Date.now() + timeoutMs;
-    let snapshot = await balances();
-    while (!predicate(snapshot) && Date.now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, 3_000));
-      snapshot = await balances();
+    let snapshot: BalanceSnapshot | undefined;
+    let lastError: unknown;
+    while (Date.now() < deadline) {
+      try {
+        snapshot = await balances();
+        lastError = undefined;
+        if (predicate(snapshot)) return snapshot;
+      } catch (err) {
+        lastError = err;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 6_000));
     }
-    return snapshot;
+    if (snapshot) return snapshot;
+    throw lastError ?? new Error('no balance snapshot was ever read');
   }
 
   beforeAll(async () => {
@@ -195,6 +214,9 @@ describeOrSkip('Base mainnet — real funds', () => {
           maxTimeoutSeconds: x402.maxTimeoutSeconds,
           facilitator: x402.facilitator,
           ...(x402.allowMainnet !== undefined ? { allowMainnet: x402.allowMainnet } : {}),
+          ...(x402.allowUnauthenticatedFacilitator !== undefined
+            ? { allowUnauthenticatedFacilitator: x402.allowUnauthenticatedFacilitator }
+            : {}),
           logger,
         }),
       ],

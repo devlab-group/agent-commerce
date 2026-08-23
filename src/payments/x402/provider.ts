@@ -109,6 +109,11 @@ export interface X402ProviderOptions {
    * default — see `guardrails.ts`.
    */
   readonly allowMainnet?: boolean;
+  /**
+   * Required to be `true` to settle on a mainnet through a facilitator that
+   * takes no credential. Never a default.
+   */
+  readonly allowUnauthenticatedFacilitator?: boolean;
   readonly logger?: Logger;
   readonly clock?: Clock;
   readonly ids?: IdGenerator;
@@ -152,8 +157,13 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
     network: options.network,
     payTo: options.payTo,
     asset: options.asset,
+    assetName: options.assetName,
+    assetVersion: options.assetVersion,
     facilitator: options.facilitator,
     ...(options.allowMainnet !== undefined ? { allowMainnet: options.allowMainnet } : {}),
+    ...(options.allowUnauthenticatedFacilitator !== undefined
+      ? { allowUnauthenticatedFacilitator: options.allowUnauthenticatedFacilitator }
+      : {}),
   });
   const network = options.network as Network;
   // Constructed once, here, rather than inside settle(): assertDevKeyIsLocalOnly

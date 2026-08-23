@@ -345,13 +345,23 @@ export async function runDoctor(
       // has already passed them — but an operator about to move real money
       // should be told which guarantees they are relying on, and see the
       // banner without having to read a log.
+      // An unauthenticated mainnet facilitator is allowed, but only by name.
+      // Saying so here is the point: the acknowledgement lives in a config
+      // file someone wrote weeks ago, and this is where they look today.
+      const unauthenticated =
+        x402.facilitator.mode === 'remote' && x402.facilitator.auth.type === 'none';
       checks.push({
         name: 'Mainnet safety',
-        status: 'INFO',
-        detail:
-          `${describeDeploymentMode('mainnet')} — enforced at config load: explicit allowMainnet ` +
-          'opt-in, remote facilitator over HTTPS with a credential, non-development payTo, ' +
-          'and the canonical asset for this network. Payments are fail-closed.',
+        status: unauthenticated ? 'WARN' : 'INFO',
+        detail: unauthenticated
+          ? `${describeDeploymentMode('mainnet')} — settling through a facilitator that takes no ` +
+            'credential, accepted via allowUnauthenticatedFacilitator. It sees every payment ' +
+            'authorisation you handle, with no account or terms behind it. Everything else is ' +
+            'enforced at config load: explicit allowMainnet opt-in, HTTPS, non-development ' +
+            'payTo, canonical asset. Payments are fail-closed.'
+          : `${describeDeploymentMode('mainnet')} — enforced at config load: explicit allowMainnet ` +
+            'opt-in, remote facilitator over HTTPS with a credential, non-development payTo, ' +
+            'and the canonical asset for this network. Payments are fail-closed.',
       });
     }
   }

@@ -86,14 +86,14 @@ field. A merchant that wants pass-through is a per-resource opt-in, post-alpha.
 
 Validated at the boundary, before anything else happens:
 
-| Input | Check |
-|---|---|
-| resource input | JSON Schema from the resource definition, closed by default at every level: an object schema — root, nested under `properties`, or nested under `items` — that omits `additionalProperties` gets `additionalProperties: false` stamped on recursively at config load, not just at the root; an operator who sets it explicitly (including explicitly to `true`) is respected at whichever level they set it. A resource that declares no `input:` at all gets an empty closed schema, not an always-valid one — declaring nothing means accepting nothing. Unknown properties, including prototype-named keys (`__proto__`, `constructor`, …), are matched by own-property lookup only. |
-| path parameters | URL-encoded on substitution |
-| body size | capped at 256 KB, one number for both surfaces, enforced in two different places: Fastify's `bodyLimit` runs inside a body parser on the HTTP routes; `/mcp` deliberately installs a no-op parser so the MCP transport can read the raw stream, so the mount enforces its own byte count instead. A cap that only protects one of two entry points, or two caps that can silently drift apart, is how `/mcp` ended up with no cap at all in the first place. |
-| content type | JSON enforced on the invoke routes. **Not** on `/mcp`, where a wildcard no-op parser hands the raw stream to the MCP SDK and the SDK does its own enforcement. |
-| payment proof | decoded and schema-validated by the payment provider; a malformed proof is a rejection, never a crash |
-| configuration | Zod, strict, before startup |
+| Input           | Check                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| resource input  | JSON Schema from the resource definition, closed by default at every level: an object schema — root, nested under `properties`, or nested under `items` — that omits `additionalProperties` gets `additionalProperties: false` stamped on recursively at config load, not just at the root; an operator who sets it explicitly (including explicitly to `true`) is respected at whichever level they set it. A resource that declares no `input:` at all gets an empty closed schema, not an always-valid one — declaring nothing means accepting nothing. Unknown properties, including prototype-named keys (`__proto__`, `constructor`, …), are matched by own-property lookup only. |
+| path parameters | URL-encoded on substitution                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| body size       | capped at 256 KB, one number for both surfaces, enforced in two different places: Fastify's `bodyLimit` runs inside a body parser on the HTTP routes; `/mcp` deliberately installs a no-op parser so the MCP transport can read the raw stream, so the mount enforces its own byte count instead. A cap that only protects one of two entry points, or two caps that can silently drift apart, is how `/mcp` ended up with no cap at all in the first place.                                                                                                                                                                                                                            |
+| content type    | JSON enforced on the invoke routes. **Not** on `/mcp`, where a wildcard no-op parser hands the raw stream to the MCP SDK and the SDK does its own enforcement.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| payment proof   | decoded and schema-validated by the payment provider; a malformed proof is a rejection, never a crash                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| configuration   | Zod, strict, before startup                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 
 The reserved `_payment` field is stripped from tool input before schema
 validation, so it can never collide with a resource's own properties.
@@ -119,13 +119,13 @@ Covered in detail in [payment-flow.md](payment-flow.md). The invariants:
 
 The surface splits by audience, and the split is enforced, not advisory:
 
-| Route | Audience | Protection |
-|---|---|---|
-| `POST /api/resources/:id/invoke` | agents | payment, not authentication |
-| `/mcp` | agents | payment, not authentication |
-| `GET /api/resources`, `/health`, `/.well-known/agent-commerce` | anyone | none — public by design |
-| `GET /ready` | operators | none, but detail is a fixed vocabulary, never raw errors |
-| `GET /api/receipts`, `/api/events`, `/api/events/stream` | **operators** | `server.adminToken`, compared in constant time |
+| Route                                                          | Audience      | Protection                                               |
+| -------------------------------------------------------------- | ------------- | -------------------------------------------------------- |
+| `POST /api/resources/:id/invoke`                               | agents        | payment, not authentication                              |
+| `/mcp`                                                         | agents        | payment, not authentication                              |
+| `GET /api/resources`, `/health`, `/.well-known/agent-commerce` | anyone        | none — public by design                                  |
+| `GET /ready`                                                   | operators     | none, but detail is a fixed vocabulary, never raw errors |
+| `GET /api/receipts`, `/api/events`, `/api/events/stream`       | **operators** | `server.adminToken`, compared in constant time           |
 
 The operator routes carry the merchant's commerce ledger. With no
 `server.adminToken` configured they return **404**, not open data — a missing
@@ -205,22 +205,26 @@ succeeds and gives the money away.
 ## Mainnet
 
 `eip155:8453` is refused unless the configuration says so in full: an explicit
-`allowMainnet`, a remote facilitator reached over HTTPS and carrying a
-credential, a non-development `payTo`, and the canonical USDC for the chain.
-All of it is checked at config load, so the gateway does not start otherwise
-and `agent-commerce validate` reports it without starting anything.
+`allowMainnet`, a remote facilitator reached over HTTPS, a second explicit
+acknowledgement (`allowUnauthenticatedFacilitator`) if that facilitator takes
+no credential, a non-development `payTo`, and the canonical USDC for the chain
+including the EIP-712 domain name it reports. All of it is checked at config
+load, so the gateway does not start otherwise and `agent-commerce validate`
+reports it without starting anything.
 
-The in-process facilitator is never allowed on a mainnet: it signs with a key
-this process holds, which is a hot wallet inside the resource server — the
-arrangement the non-custodial design exists to avoid. With a remote
-facilitator the gateway holds no signing key at all.
+A facilitator cannot redirect your money — an EIP-3009 authorisation names its
+recipient, its amount and its chain, so it can broadcast exactly that transfer
+or nothing. What it can do is see every authorisation you handle, and stop
+answering. That is why an unauthenticated one is a separate, explicit
+acknowledgement rather than a warning.
 
-Base Sepolia settlement has been performed and verified on chain
-([testnet.md](testnet.md)). **Mainnet has not**, and nothing here should be
-read as a claim that it has: what this section describes is what the
-configuration permits and refuses, not what has been exercised with real funds.
-The full runbook, including the supply-chain cost of the CDP auth type, is
-[mainnet.md](mainnet.md).
+The in-process facilitator is never allowed on a mainnet. To be precise about
+why: it is not a custody problem — the facilitator signer never holds buyer or
+merchant funds, it pays gas and broadcasts `transferWithAuthorization`, and the
+money moves buyer to merchant directly on-chain. It is a *funded key inside the
+resource server*, so compromising that process means draining the gas wallet
+and broadcasting arbitrary transactions from it. With a remote facilitator the
+gateway holds no signing key at all.
 
 ## Threats we are not addressing in the alpha
 

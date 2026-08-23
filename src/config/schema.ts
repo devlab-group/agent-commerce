@@ -224,6 +224,8 @@ const X402Schema = z
     facilitator: FacilitatorSchema,
     /** Real funds. Never defaulted — see src/payments/x402/guardrails.ts. */
     allowMainnet: BooleanOrString.optional(),
+    /** Accepts a mainnet facilitator that takes no credential. Never defaulted. */
+    allowUnauthenticatedFacilitator: BooleanOrString.optional(),
   })
   .strict();
 
@@ -281,6 +283,7 @@ export interface GatewayConfig {
       readonly maxTimeoutSeconds: number;
       readonly facilitator: X402FacilitatorConfig;
       readonly allowMainnet?: boolean;
+      readonly allowUnauthenticatedFacilitator?: boolean;
     };
   };
 }
@@ -464,6 +467,14 @@ function normalise(raw: RawConfig): GatewayConfig {
           ...(x402Raw.allowMainnet !== undefined
             ? { allowMainnet: toBoolean(x402Raw.allowMainnet, 'payments.x402.allowMainnet') }
             : {}),
+          ...(x402Raw.allowUnauthenticatedFacilitator !== undefined
+            ? {
+                allowUnauthenticatedFacilitator: toBoolean(
+                  x402Raw.allowUnauthenticatedFacilitator,
+                  'payments.x402.allowUnauthenticatedFacilitator',
+                ),
+              }
+            : {}),
         }
       : undefined;
 
@@ -477,8 +488,13 @@ function normalise(raw: RawConfig): GatewayConfig {
       network: x402.network,
       payTo: x402.payTo,
       asset: x402.asset,
+      assetName: x402.assetName,
+      assetVersion: x402.assetVersion,
       facilitator: x402.facilitator,
       ...(x402.allowMainnet !== undefined ? { allowMainnet: x402.allowMainnet } : {}),
+      ...(x402.allowUnauthenticatedFacilitator !== undefined
+        ? { allowUnauthenticatedFacilitator: x402.allowUnauthenticatedFacilitator }
+        : {}),
     });
   }
 

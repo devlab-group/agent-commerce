@@ -62,6 +62,9 @@ async function main(): Promise<void> {
         maxTimeoutSeconds: x402.maxTimeoutSeconds,
         facilitator: x402.facilitator,
         ...(x402.allowMainnet !== undefined ? { allowMainnet: x402.allowMainnet } : {}),
+        ...(x402.allowUnauthenticatedFacilitator !== undefined
+          ? { allowUnauthenticatedFacilitator: x402.allowUnauthenticatedFacilitator }
+          : {}),
         logger,
       }),
     );

@@ -7,8 +7,10 @@
 # a default is a way to lose it by accident.
 #
 # The gateway holds no key here. A mainnet deployment must use a remote
-# facilitator — the in-process one signs with a key this process would have to
-# hold, which is a hot wallet inside the resource server, and that is refused.
+# facilitator: the in-process one would need a funded gas key inside this
+# process, so compromising the resource server drains it. That is refused.
+# (It is not a custody question — that signer never holds buyer or merchant
+# funds; the money moves buyer to merchant directly on-chain.)
 #
 # ALLOW_X402_MAINNET=true MERCHANT_WALLET=0x... X402_FACILITATOR_URL=... \
 #   CDP_API_KEY_ID=... CDP_API_KEY_SECRET=... \
@@ -73,12 +75,15 @@ payments:
     # Health checks and nothing else — the facilitator does the chain work.
     # A dedicated endpoint is strongly preferred here; the public one is rate
     # limited and its outages become your readiness failures.
-    rpcUrl: ${X402_RPC_URL:-https://mainnet.base.org}
+    rpcUrl: ${X402_RPC_URL:-https://base.drpc.org}
 
     # required, and checked: a mainnet config may only name USDC on Base.
     # Settling a mainnet payment in an unintended token is refused.
     asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
-    assetName: USDC
+    # The EIP-712 domain name the mainnet contract actually reports. Not
+    # "USDC": that deployment predates the rename, and a mismatch is
+    # refused after the buyer has already signed.
+    assetName: "USD Coin"
     assetVersion: "2"
     assetDecimals: 6
 

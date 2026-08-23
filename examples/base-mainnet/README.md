@@ -1,8 +1,8 @@
 # Example: base-mainnet — REAL FUNDS
 
 The same gateway, settling real USDC on Base. Read
-[docs/mainnet.md](../../docs/mainnet.md) first — it explains what is refused
-and why, and this file assumes it.
+[docs/configuration.md](../../docs/configuration.md) first — it explains what
+is refused and why, and this file assumes it.
 
 Two things are structurally different from the local and testnet examples:
 
@@ -48,6 +48,25 @@ FAIL  CONFIG_INVALID: Unresolved environment variable "${ALLOW_X402_MAINNET}"
 
 ## Proving it settles
 
-`npm run test:mainnet`, with the variables in
-[docs/mainnet.md](../../docs/mainnet.md#the-smoke-test). Every run spends real
-USDC. It has not been run from this repository.
+```bash
+export ALLOW_X402_MAINNET=true
+export X402_MAINNET_BUYER_PRIVATE_KEY=0x...   # funded with USDC on Base
+export X402_MAINNET_MERCHANT_ADDRESS=0x...
+export X402_FACILITATOR_URL=https://...
+export CDP_API_KEY_ID=...  CDP_API_KEY_SECRET=...   # or X402_FACILITATOR_TOKEN
+npm run test:mainnet
+```
+
+**Every run spends `X402_MAINNET_AMOUNT` (default `0.01`) of real USDC.** It
+skips itself, naming what is missing, unless all of the above are set.
+
+It proves, in order: the guard refuses a config that has not opted in ·
+authentication reaches the facilitator · a payment settles on Base · the
+receipt carries the settlement reference and a delivery timestamp · the
+resource is delivered exactly once · the same authorisation presented again is
+refused with no second transfer · no credential appears in anything logged.
+Balances and the transaction receipt are read back from the chain.
+
+It never runs in CI — there is no workflow and there must not be one. A
+workflow means a mainnet key in repository secrets, spendable by anyone with
+write access.

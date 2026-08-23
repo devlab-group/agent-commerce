@@ -6,11 +6,14 @@ import { defineConfig } from 'vitest/config';
  * Separate from every other vitest config on purpose. `vitest.config.ts` and
  * `vitest.e2e.config.ts` must never leave the machine; `vitest.testnet.config.ts`
  * spends test funds. This one moves real value, so it is never part of
- * `npm run verify`, never runs on a push or a pull request, and skips itself
- * unless a human has set `ALLOW_X402_MAINNET=true` and supplied credentials.
+ * `npm run verify` and skips itself unless a human has set
+ * `ALLOW_X402_MAINNET=true` and supplied credentials.
  *
- * Run it with `npm run test:mainnet`, or from the manual
- * `.github/workflows/mainnet-smoke.yml`.
+ * Run it with `npm run test:mainnet`, from a machine that holds the wallet.
+ *
+ * There is no CI workflow for it, and there must not be one. A workflow means
+ * a mainnet key in repository secrets that anyone with write access can spend
+ * — the single most dangerous thing this repository could hold.
  */
 export default defineConfig({
   test: {

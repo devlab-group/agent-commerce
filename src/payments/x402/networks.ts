@@ -28,11 +28,23 @@ export interface NetworkProfile {
   readonly displayName: string;
   readonly kind: 'testnet' | 'mainnet';
   /**
-   * The USDC deployment this network is expected to settle in. Enforced only
-   * on mainnet (see `guardrails.ts`) — a testnet is where a mock token is a
-   * legitimate thing to point at.
+   * The USDC deployment this network is expected to settle in, with the EIP-712
+   * domain the token actually reports. Enforced only on mainnet (see
+   * `guardrails.ts`) — a testnet is where a mock token is a legitimate thing to
+   * point at.
+   *
+   * `name` is not decorative and is not the symbol: it is signed into every
+   * buyer's EIP-712 domain, and the two USDC deployments disagree. Base Sepolia
+   * reports `"USDC"`; Base mainnet reports `"USD Coin"`. Configure the wrong
+   * one and every payment is refused `invalid_exact_evm_token_name_mismatch`
+   * after the buyer has signed. Read back from the contracts, not assumed.
    */
-  readonly canonicalAsset?: { readonly symbol: string; readonly address: string };
+  readonly canonicalAsset?: {
+    readonly symbol: string;
+    readonly address: string;
+    readonly name: string;
+    readonly version: string;
+  };
 }
 
 const PROFILES: readonly NetworkProfile[] = [
@@ -41,14 +53,24 @@ const PROFILES: readonly NetworkProfile[] = [
     chainId: 84532,
     displayName: 'Base Sepolia',
     kind: 'testnet',
-    canonicalAsset: { symbol: 'USDC', address: '0x036CbD53842c5426634e7929541eC2318f3dCF7e' },
+    canonicalAsset: {
+      symbol: 'USDC',
+      address: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+      name: 'USDC',
+      version: '2',
+    },
   },
   {
     id: 'eip155:8453',
     chainId: 8453,
     displayName: 'Base',
     kind: 'mainnet',
-    canonicalAsset: { symbol: 'USDC', address: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913' },
+    canonicalAsset: {
+      symbol: 'USDC',
+      address: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+      name: 'USD Coin',
+      version: '2',
+    },
   },
 ];
 

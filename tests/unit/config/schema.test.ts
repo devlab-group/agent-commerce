@@ -219,6 +219,7 @@ describe('parseConfig', () => {
         withX402({
           network: 'eip155:8453',
           asset: BASE_USDC,
+          assetName: 'USD Coin',
           payTo: MERCHANT,
           allowMainnet: true,
           facilitator: {
@@ -255,6 +256,7 @@ describe('parseConfig', () => {
         withX402({
           network: 'eip155:8453',
           asset: BASE_USDC,
+          assetName: 'USD Coin',
           payTo: MERCHANT,
           facilitator: {
             mode: 'remote',
@@ -266,17 +268,57 @@ describe('parseConfig', () => {
       expect(message).toContain('allowMainnet');
     });
 
-    it('rejects an unauthenticated mainnet facilitator', () => {
+    it('rejects an unauthenticated mainnet facilitator until it is accepted by name', () => {
+      const unauthenticated = {
+        network: 'eip155:8453',
+        asset: BASE_USDC,
+        assetName: 'USD Coin',
+        payTo: MERCHANT,
+        allowMainnet: true,
+        facilitator: { mode: 'remote', url: 'https://facilitator.example.com/v2/x402' },
+      };
+      const message = messageFor(withX402(unauthenticated));
+      expect(message).toContain('allowUnauthenticatedFacilitator');
+      // The origin, so an operator can see *which* counterparty they are being
+      // asked about — but never the path, which can carry a tenant or a key.
+      expect(message).toContain('https://facilitator.example.com');
+      expect(message).not.toContain('/v2/x402');
+
+      // Accepting it explicitly is allowed. It is a real choice, not a bug.
+      const config = parseConfig(
+        withX402({ ...unauthenticated, allowUnauthenticatedFacilitator: true }),
+        {},
+      );
+      expect(config.payments.x402?.allowUnauthenticatedFacilitator).toBe(true);
+    });
+
+    it('does not let allowUnauthenticatedFacilitator stand in for allowMainnet', () => {
+      // Two different decisions: "I meant to use real money" and "I accept
+      // this counterparty". Neither implies the other.
       const message = messageFor(
         withX402({
           network: 'eip155:8453',
           asset: BASE_USDC,
+          assetName: 'USD Coin',
           payTo: MERCHANT,
-          allowMainnet: true,
+          allowUnauthenticatedFacilitator: true,
           facilitator: { mode: 'remote', url: 'https://facilitator.example.com' },
         }),
       );
-      expect(message).toContain('must be authenticated');
+      expect(message).toContain('allowMainnet');
+    });
+
+    it('needs no acknowledgement for an unauthenticated facilitator below mainnet', () => {
+      // The public testnet facilitator takes no credential and never will.
+      expect(() =>
+        parseConfig(
+          withX402({
+            payTo: MERCHANT,
+            facilitator: { mode: 'remote', url: 'https://x402.org/facilitator' },
+          }),
+          {},
+        ),
+      ).not.toThrow();
     });
 
     it('rejects a plain-HTTP facilitator on a public host', () => {
@@ -311,6 +353,49 @@ describe('parseConfig', () => {
         withX402({ facilitator: { mode: 'remote', url: 'https://facilitator.example.com' } }),
       );
       expect(message).toContain('well-known Anvil development address');
+    });
+
+    it('rejects a mainnet assetName that is not the EIP-712 domain the token reports', () => {
+      // Base mainnet USDC reports "USD Coin"; Base Sepolia's reports "USDC".
+      // The name is signed into the buyer's domain, so the obvious-looking
+      // value gets every payment refused *after* they signed.
+      const message = messageFor(
+        withX402({
+          network: 'eip155:8453',
+          asset: BASE_USDC,
+          assetName: 'USDC',
+          payTo: MERCHANT,
+          allowMainnet: true,
+          facilitator: {
+            mode: 'remote',
+            url: 'https://facilitator.example.com',
+            auth: { type: 'bearer', token: 'secret-token' },
+          },
+        }),
+      );
+      expect(message).toContain('EIP-712 domain name');
+      expect(message).toContain('USD Coin');
+    });
+
+    it('accepts the EIP-712 domain the mainnet token actually reports', () => {
+      expect(() =>
+        parseConfig(
+          withX402({
+            network: 'eip155:8453',
+            asset: BASE_USDC,
+            assetName: 'USD Coin',
+            assetVersion: '2',
+            payTo: MERCHANT,
+            allowMainnet: true,
+            facilitator: {
+              mode: 'remote',
+              url: 'https://facilitator.example.com',
+              auth: { type: 'bearer', token: 'secret-token' },
+            },
+          }),
+          {},
+        ),
+      ).not.toThrow();
     });
 
     it('rejects a mainnet asset that is not the canonical USDC', () => {
@@ -349,6 +434,7 @@ describe('parseConfig', () => {
         withX402({
           network: 'eip155:8453',
           asset: BASE_USDC,
+          assetName: 'USD Coin',
           payTo: MERCHANT,
           allowMainnet: true,
           facilitator: {
@@ -366,6 +452,7 @@ describe('parseConfig', () => {
         withX402({
           network: 'eip155:8453',
           asset: BASE_USDC,
+          assetName: 'USD Coin',
           payTo: MERCHANT,
           allowMainnet: true,
           facilitator: {
