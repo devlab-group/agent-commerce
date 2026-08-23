@@ -10,16 +10,7 @@
   <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-strict-3178c6">
   <img alt="MCP" src="https://img.shields.io/badge/MCP-supported-6b4fbb">
   <img alt="x402" src="https://img.shields.io/badge/x402-supported-0052ff">
-  <img alt="Status" src="https://img.shields.io/badge/status-alpha-orange">
 </p>
-
-> **No commissioned security audit.** `v1.0.0` commits to a stable public API
-> and wire contract; it makes no assurance claim about the payment path. There
-> is no third-party audit report to point you at. Weigh that before putting
-> production funds through it.
-> See [SECURITY.md](SECURITY.md).
-
----
 
 ## What it is, in ten seconds
 
@@ -100,12 +91,12 @@ needs a dependency the rest of the package does not — the x402 rail brings the
 whole EVM signing and RPC stack, which a gateway serving a free HTTP resource
 has no business installing.
 
-| You want                       | Install                        | Import                                     |
-| ------------------------------ | ------------------------------ | ------------------------------------------ |
-| gateway, config, receipts, CLI | `@devlab.group/agent-commerce` | `from '@devlab.group/agent-commerce'`      |
-| expose resources as MCP tools  | `+ @modelcontextprotocol/sdk`  | `from '@devlab.group/agent-commerce/mcp'`  |
-| accept x402 payments           | `+ @x402/core @x402/evm viem`  | `from '@devlab.group/agent-commerce/x402'` |
-| authenticate to a CDP facilitator | `+ @coinbase/x402`          | (no import — loaded on demand)             |
+| You want                          | Install                        | Import                                     |
+| --------------------------------- | ------------------------------ | ------------------------------------------ |
+| gateway, config, receipts, CLI    | `@devlab.group/agent-commerce` | `from '@devlab.group/agent-commerce'`      |
+| expose resources as MCP tools     | `+ @modelcontextprotocol/sdk`  | `from '@devlab.group/agent-commerce/mcp'`  |
+| accept x402 payments              | `+ @x402/core @x402/evm viem`  | `from '@devlab.group/agent-commerce/x402'` |
+| authenticate to a CDP facilitator | `+ @coinbase/x402`             | (no import — loaded on demand)             |
 
 ```bash
 npm install @devlab.group/agent-commerce @modelcontextprotocol/sdk @x402/core @x402/evm viem
@@ -276,10 +267,10 @@ A **facilitator** verifies the buyer's authorisation and broadcasts the
 transfer. It is the only component that needs gas, and it is never this
 gateway on a public network.
 
-| `facilitator.mode` | Who signs | Where it is allowed |
-| --- | --- | --- |
-| `local` | this process, with an Anvil dev key | the local dev chain only |
-| `remote` | an HTTP facilitator you point at | anywhere |
+| `facilitator.mode` | Who signs                           | Where it is allowed      |
+| ------------------ | ----------------------------------- | ------------------------ |
+| `local`            | this process, with an Anvil dev key | the local dev chain only |
+| `remote`           | an HTTP facilitator you point at    | anywhere                 |
 
 With `remote`, the gateway holds **no signing key at all**. The buyer signs an
 EIP-3009 authorisation offline — no ETH required — and the facilitator pays the
@@ -328,13 +319,13 @@ together, and reported by `doctor`, `health()` and `/.well-known`.
 Real funds, so nothing is defaulted. Every one of these is checked at config
 load, and the gateway will not start without them:
 
-| Required | |
-| --- | --- |
-| `allowMainnet: true` | mainnet is never a default |
-| `facilitator.mode: remote` | `local` needs a funded gas key inside this process |
-| an HTTPS `facilitator.url` | |
-| `allowUnauthenticatedFacilitator: true` | only if that facilitator takes no credential |
-| a non-development `payTo` | |
+| Required                                        |                                                                                                                |
+| ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `allowMainnet: true`                            | mainnet is never a default                                                                                     |
+| `facilitator.mode: remote`                      | `local` needs a funded gas key inside this process                                                             |
+| an HTTPS `facilitator.url`                      |                                                                                                                |
+| `allowUnauthenticatedFacilitator: true`         | only if that facilitator takes no credential                                                                   |
+| a non-development `payTo`                       |                                                                                                                |
 | `asset` = USDC on Base, `assetName: "USD Coin"` | **not** `"USDC"` — that deployment predates the rename, and the buyer signs the name into their EIP-712 domain |
 
 Full config in [`examples/base-mainnet/`](examples/base-mainnet/), and
