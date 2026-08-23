@@ -68,7 +68,7 @@ export interface ReceiptStore {
    * Receipts whose delivery did not succeed — `backendStatus` outside 2xx.
    *
    * A paid-but-undelivered purchase is the one row a merchant must notice:
-   * settlement is final and v0.1 has no refunds, so *seeing* it is the only
+   * settlement is final and this release has no refunds, so *seeing* it is the only
    * remedy available. Counted rather than listed for the same reason as
    * {@link countReceipts} — `listReceipts` is clamped, so counting by list
    * length silently saturates.

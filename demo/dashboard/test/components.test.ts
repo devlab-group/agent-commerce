@@ -75,7 +75,7 @@ describe('StatusPanel', () => {
       wellKnown: {
         gateway: {
           implementationVersion: '0.1.0',
-          supportedSpec: 'agent-commerce/v0.2.0-beta',
+          supportedSpec: 'agent-commerce/v1.0.0',
         },
         merchant: { id: 'demo', name: 'Demo Merchant', publicBaseUrl: 'http://localhost:8080' },
         protocols: { http: { enabled: true }, mcp: { enabled: true, mountPath: '/mcp' } },
@@ -95,7 +95,7 @@ describe('StatusPanel', () => {
       wellKnown: {
         gateway: {
           implementationVersion: '0.1.0',
-          supportedSpec: 'agent-commerce/v0.2.0-beta',
+          supportedSpec: 'agent-commerce/v1.0.0',
         },
         merchant: { id: 'demo', name: 'Demo Merchant', publicBaseUrl: 'http://localhost:8080' },
         protocols: { http: { enabled: true }, mcp: { enabled: true, mountPath: '/mcp' } },
@@ -113,7 +113,7 @@ describe('StatusPanel', () => {
       wellKnown: {
         gateway: {
           implementationVersion: '0.1.0',
-          supportedSpec: 'agent-commerce/v0.2.0-beta',
+          supportedSpec: 'agent-commerce/v1.0.0',
         },
         merchant: { id: 'demo', name: 'Demo Merchant', publicBaseUrl: 'http://localhost:8080' },
         protocols: { http: { enabled: true }, mcp: { enabled: true, mountPath: '/mcp' } },
@@ -145,7 +145,7 @@ describe('StatusPanel', () => {
       wellKnown: {
         gateway: {
           implementationVersion: '0.1.0',
-          supportedSpec: 'agent-commerce/v0.2.0-beta',
+          supportedSpec: 'agent-commerce/v1.0.0',
         },
         merchant: { id: 'demo', name: 'Demo Merchant', publicBaseUrl: 'http://localhost:8080' },
         protocols: { http: { enabled: true }, mcp: { enabled: false, mountPath: '/mcp' } },
@@ -247,7 +247,7 @@ describe('ReceiptList', () => {
   });
 
   // A settled payment with a non-2xx backendStatus is the one row an operator
-  // must be able to spot — v0.1 has no refunds, so seeing it is the only
+  // must be able to spot — there are no refunds, so seeing it is the only
   // remedy. Without this, it renders identically to a successful delivery.
   describe('paid-but-undelivered visibility', () => {
     it('renders a settled+500 receipt as not delivered and highlights it for attention', () => {

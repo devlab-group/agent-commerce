@@ -5,7 +5,7 @@ architecture is deliberate and the scope is deliberately narrow.
 
 ## Ground rules
 
-1. **Scope discipline is a release requirement.** v0.1 is MCP + x402 only.
+1. **Scope discipline is a release requirement.** This release is MCP + x402 only.
    New protocols and rails land after the adapter model survives real use.
    Classify every proposal as `BLOCKER` / `QUALITY` / `NICE-TO-HAVE` /
    `POST-ALPHA` — the default answer to a new capability is `POST-ALPHA`.

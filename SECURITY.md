@@ -1,7 +1,9 @@
 # Security Policy
 
-> **Beta warning.** `v0.2.0-beta` is experimental software. Do not use it with
-> production funds without an independent security review.
+> **No commissioned security audit.** `v1.0.0` commits to a stable public API
+> and wire contract; it makes no assurance claim about the payment path. There
+> is no third-party audit report to point you at. Weigh that before putting
+> production funds through it.
 
 ## Non-custodial by design
 
@@ -17,7 +19,8 @@ custodian.
   itself. With x402 `exact`/EVM this is an EIP-3009 `transferWithAuthorization`:
   the buyer signs an authorisation that names the merchant as recipient, so a
   facilitator that broadcasts it cannot redirect the money.
-- Rationale and detail:.
+- Rationale and detail: [`docs/payment-flow.md`](docs/payment-flow.md), which
+  walks the money path end to end.
 
 ## Private-key policy
 
@@ -128,12 +131,12 @@ backend or your business secure.
   the resource. There is no KYC, sanctions screening, fraud scoring or dispute
   mechanism.
 - **It does not make payments reversible.** On-chain settlement is final. There
-  are no refunds, chargebacks or escrow in v0.1.
+  are no refunds, chargebacks or escrow.
 - **It does not protect against SSRF beyond configuration discipline.** The
   gateway calls the backend URLs an administrator configured. Redirects are not
   followed. But if you configure an internal URL, the gateway will call it —
   agent- or user-controlled backend URLs are forbidden, and there is no
-  allowlist enforcement in v0.1.
+  allowlist enforcement.
 - **It does not audit the payment protocol or its SDKs.** x402, the MCP SDK and
   their transitive dependencies are third-party code.
 - **It does not provide multi-tenancy, RBAC or policy controls.**
@@ -170,13 +173,6 @@ backend or your business secure.
 - **It does not rate limit anything.** Free resources are an unauthenticated
   proxy to your backend at whatever rate a caller chooses. Rate limiting,
   quotas and abuse controls belong in your API or your edge.
-- **The alpha has not had an independent security audit.**
-
-## Supported versions
-
-| Version       | Supported                      |
-| ------------- | ------------------------------ |
-| `0.1.x-alpha` | Latest alpha only, best effort |
 
 ## Reporting a vulnerability
 

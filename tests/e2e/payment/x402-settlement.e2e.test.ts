@@ -338,6 +338,26 @@ describe('x402 settlement — real local chain', () => {
     expect(after).toEqual(before);
   });
 
+  it('9b. an authorisation that is not yet valid (validAfter in the future) is rejected before settlement', async () => {
+    // The mirror image of test 9, and the half that had no test: EIP-3009
+    // bounds an authorisation at both ends, `MockUSDC` enforces both, and the
+    // SDK has its own `ErrValidAfterInFuture`. Untested enforcement is
+    // indistinguishable from absent enforcement.
+    const before = await balances();
+    const notYetValid = Math.floor(Date.now() / 1000) + 3600;
+    const { requirement, proof } = await buildValidProof('1.00', { validAfter: notYetValid });
+
+    const verifyResult = await provider.verify({
+      requestId: requirement.requestId,
+      resource: RESOURCE,
+      requirement,
+      submission: { method: 'x402', payload: proof },
+    });
+    expect(verifyResult.status).toBe('rejected');
+    const after = await balances();
+    expect(after).toEqual(before);
+  });
+
   it('10. provider failure: RPC unreachable yields PAYMENT_PROVIDER_UNAVAILABLE, not a silent pass', async () => {
     const unavailableProvider = createX402PaymentProvider({
       network: 'eip155:84532',

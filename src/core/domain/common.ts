@@ -14,10 +14,10 @@
  */
 export type JsonSchema = Record<string, unknown>;
 
-/** Protocol surfaces a resource can be exposed through in v0.1. */
+/** Protocol surfaces a resource can be exposed through in this release. */
 export type ProtocolName = 'http' | 'mcp';
 
-/** Payment methods a resource can accept in v0.1. */
+/** Payment methods a resource can accept in this release. */
 export type PaymentMethodName = 'x402';
 
 /** ISO-8601 timestamp string, always UTC with millisecond precision. */

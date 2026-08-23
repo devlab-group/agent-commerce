@@ -7,7 +7,10 @@ pragma solidity ^0.8.24;
 /// holds real value with this contract's address.
 ///
 /// Implements a minimal ERC-20 plus EIP-3009 `transferWithAuthorization`, matching the
-/// subset of Circle's FiatTokenV2 ABI that the pinned x402 SDK (version 1.2.0) expects: both
+/// subset of Circle's FiatTokenV2 ABI that the pinned x402 SDK expects — the core and evm
+/// packages at 2.23.0, protocol v2. Their scoped npm names are spelled out nowhere in this
+/// comment on purpose: solc reads a word starting with "at" in a doc comment as a NatSpec
+/// tag and refuses to compile the file. Both
 /// the `(v,r,s)` EOA-signature overload and the `(bytes signature)` overload, because the SDK
 /// selects between them by signature length.
 contract MockUSDC {

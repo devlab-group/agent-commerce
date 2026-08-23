@@ -1,0 +1,116 @@
+# ---------------------------------------------------------------------------
+# Example: base-mainnet — REAL FUNDS
+#
+# Every line marked "required" below is checked at config load. The gateway
+# will not start without them, and `agent-commerce validate` reports which one
+# is missing. None of them have defaults: on a network where money is real,
+# a default is a way to lose it by accident.
+#
+# The gateway holds no key here. A mainnet deployment must use a remote
+# facilitator: the in-process one would need a funded gas key inside this
+# process, so compromising the resource server drains it. That is refused.
+# (It is not a custody question — that signer never holds buyer or merchant
+# funds; the money moves buyer to merchant directly on-chain.)
+#
+# ALLOW_X402_MAINNET=true MERCHANT_WALLET=0x... X402_FACILITATOR_URL=... \
+#   CDP_API_KEY_ID=... CDP_API_KEY_SECRET=... \
+#   npm run agent-commerce -- validate --config examples/base-mainnet/config.yaml
+# ---------------------------------------------------------------------------
+
+version: 1
+
+merchant:
+  id: base-mainnet-example
+  name: Base Mainnet Example
+  publicBaseUrl: ${GATEWAY_PUBLIC_BASE_URL}
+
+server:
+  port: ${GATEWAY_PORT:-8080}
+  host: 0.0.0.0
+  # Required in practice: operator routes carry the commerce ledger — payer
+  # addresses, amounts, settlement hashes. Without this they 404, which is safe
+  # but means you cannot read your own receipts over HTTP.
+  adminToken: ${GATEWAY_ADMIN_TOKEN}
+  allowedOrigins: []
+
+storage:
+  receipts:
+    driver: sqlite
+    path: ${RECEIPT_STORE_PATH:-./data/receipts.sqlite}
+
+protocols:
+  http:
+    enabled: true
+  mcp:
+    enabled: true
+    mountPath: /mcp
+
+resources:
+  premium_report:
+    name: Premium Report
+    description: One paid endpoint, settled in USDC on Base.
+    input:
+      type: object
+      properties: {}
+      additionalProperties: false
+    backend:
+      type: http
+      method: GET
+      url: ${MERCHANT_API_BASE_URL}/api/report
+      timeoutMs: 10000
+    pricing:
+      type: fixed
+      amount: "0.01"
+      currency: USDC
+    expose: [http, mcp]
+    payments: [x402]
+
+payments:
+  x402:
+    enabled: true
+
+    # required. Base mainnet.
+    network: eip155:8453
+
+    # Health checks and nothing else — the facilitator does the chain work.
+    # A dedicated endpoint is strongly preferred here; the public one is rate
+    # limited and its outages become your readiness failures.
+    rpcUrl: ${X402_RPC_URL:-https://base.drpc.org}
+
+    # required, and checked: a mainnet config may only name USDC on Base.
+    # Settling a mainnet payment in an unintended token is refused.
+    asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+    # The EIP-712 domain name the mainnet contract actually reports. Not
+    # "USDC": that deployment predates the rename, and a mismatch is
+    # refused after the buyer has already signed.
+    assetName: "USD Coin"
+    assetVersion: "2"
+    assetDecimals: 6
+
+    # required. Your wallet. Never a gateway-owned one, and never a
+    # development address — startup refuses a well-known Anvil account here.
+    payTo: ${MERCHANT_WALLET}
+
+    # Public-chain block times and a hosted facilitator's queue are not yours
+    # to control. Short windows here become failed payments.
+    maxTimeoutSeconds: 600
+
+    # required, and required to be `true`. Mainnet is never a default.
+    allowMainnet: ${ALLOW_X402_MAINNET}
+
+    facilitator:
+      # required. `local` is refused on mainnet.
+      mode: remote
+      # required, and must be https.
+      url: ${X402_FACILITATOR_URL}
+      # required to be something other than `none` on mainnet.
+      #
+      # `cdp` needs the optional peer @coinbase/x402, which signs a fresh JWT
+      # per request. For any facilitator that takes a static token, use:
+      #   auth:
+      #     type: bearer
+      #     token: ${X402_FACILITATOR_TOKEN}
+      auth:
+        type: cdp
+        apiKeyId: ${CDP_API_KEY_ID}
+        apiKeySecret: ${CDP_API_KEY_SECRET}

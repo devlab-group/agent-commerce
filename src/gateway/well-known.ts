@@ -52,7 +52,7 @@ import { type AdapterRuntime, getAdapterHealth } from './adapters.js';
  * spec, and announcing a new one on every version bump would tell every
  * client the protocol moved when it did not.
  */
-const GATEWAY_SUPPORTED_SPEC = 'agent-commerce/v0.2.0-beta';
+const GATEWAY_SUPPORTED_SPEC = 'agent-commerce/v1.0.0';
 
 export interface WellKnownDocument {
   readonly gateway: { readonly implementationVersion: string; readonly supportedSpec: string };
@@ -86,14 +86,31 @@ export interface BuildWellKnownOptions {
   readonly clock: Clock;
 }
 
+/**
+ * Strips a health result down to what an anonymous caller may see.
+ *
+ * `/ready` already codifies this rule and maps `detail` to a fixed vocabulary,
+ * because the raw string is exactly the internal detail an unauthenticated
+ * route must not carry — `getAdapterHealth` puts `describeError()` there for a
+ * thrown `health()`, and a start failure puts the raw throw message, routinely
+ * a module path or an internal hostname. This route is the same trust level and
+ * was returning it verbatim. `createGateway` is public API and accepts
+ * arbitrary adapters, so "our own adapters say nothing sensitive" is not a
+ * property this code can rely on.
+ */
+function publicHealth(health: AdapterHealth): AdapterHealth {
+  const { detail: _detail, ...rest } = health;
+  return rest;
+}
+
 export async function buildWellKnownDocument(
   options: BuildWellKnownOptions,
 ): Promise<WellKnownDocument> {
   const adapters = await Promise.all(
-    options.adapterRuntimes.map(async (runtime) => ({
-      ...runtime.adapter.descriptor,
-      health: await getAdapterHealth(runtime, options.clock),
-    })),
+    options.adapterRuntimes.map(async (runtime) => {
+      const health = await getAdapterHealth(runtime, options.clock);
+      return { ...runtime.adapter.descriptor, health: publicHealth(health) };
+    }),
   );
 
   const x402 = options.config.payments.x402;

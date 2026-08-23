@@ -47,12 +47,16 @@ in configuration error messages — errors name the *variable*, not the value.
 
 ## SSRF
 
-The gateway makes outbound HTTP calls to URLs it was configured with. For v0.1:
+The gateway makes outbound HTTP calls to URLs it was configured with:
 
 - backend URLs are **administrator-controlled configuration only**;
 - dynamic, agent- or user-controlled backend URLs are **forbidden** — no code
   path constructs a backend URL from request input beyond `{param}` substitution
-  into a configured template, with each value URL-encoded;
+  into a configured template, with each value URL-encoded. A parameter may only
+  appear once the authority is complete: a template whose `{param}` reaches the
+  scheme, host or port is refused at config load, because caller input would
+  otherwise choose which host the gateway calls and every path-position defence
+  (containment check, `encodeURIComponent`) is inert there;
 - **redirects are not followed** (`redirect: 'manual'`); a 3xx is a
   `BACKEND_ERROR`;
 - every call is bounded by an explicit timeout.
@@ -68,7 +72,7 @@ Caller input can never override a query parameter the operator baked into
 `backend.url`. A collision is rejected, not silently applied — otherwise an
 input key named after an embedded `?apikey=…` would replace it.
 
-Not implemented in v0.1: an IP/CIDR allowlist or a private-address blocklist. If
+Not implemented: an IP/CIDR allowlist or a private-address blocklist. If
 you configure `http://169.254.169.254/…`, the gateway will call it. Treat
 configuration as privileged.
 
@@ -86,14 +90,14 @@ field. A merchant that wants pass-through is a per-resource opt-in, post-alpha.
 
 Validated at the boundary, before anything else happens:
 
-| Input | Check |
-|---|---|
-| resource input | JSON Schema from the resource definition, closed by default at every level: an object schema — root, nested under `properties`, or nested under `items` — that omits `additionalProperties` gets `additionalProperties: false` stamped on recursively at config load, not just at the root; an operator who sets it explicitly (including explicitly to `true`) is respected at whichever level they set it. A resource that declares no `input:` at all gets an empty closed schema, not an always-valid one — declaring nothing means accepting nothing. Unknown properties, including prototype-named keys (`__proto__`, `constructor`, …), are matched by own-property lookup only. |
-| path parameters | URL-encoded on substitution |
-| body size | capped at 256 KB, one number for both surfaces, enforced in two different places: Fastify's `bodyLimit` runs inside a body parser on the HTTP routes; `/mcp` deliberately installs a no-op parser so the MCP transport can read the raw stream, so the mount enforces its own byte count instead. A cap that only protects one of two entry points, or two caps that can silently drift apart, is how `/mcp` ended up with no cap at all in the first place. |
-| content type | JSON enforced on the invoke routes. **Not** on `/mcp`, where a wildcard no-op parser hands the raw stream to the MCP SDK and the SDK does its own enforcement. |
-| payment proof | decoded and schema-validated by the payment provider; a malformed proof is a rejection, never a crash |
-| configuration | Zod, strict, before startup |
+| Input           | Check                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| resource input  | JSON Schema from the resource definition, closed by default at every level: an object schema — root, nested under `properties`, nested under `items`, or nested under an `additionalProperties` subschema — that omits `additionalProperties` gets `additionalProperties: false` stamped on recursively at config load, not just at the root. That enumeration was written from the stamper rather than from the validator and drifted three times; it now matches what `compileJsonSchema` actually recurses into; an operator who sets it explicitly (including explicitly to `true`) is respected at whichever level they set it. A resource that declares no `input:` at all gets an empty closed schema, not an always-valid one — declaring nothing means accepting nothing. Unknown properties, including prototype-named keys (`__proto__`, `constructor`, …), are matched by own-property lookup only. |
+| path parameters | URL-encoded on substitution                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| body size       | capped at 256 KB, one number for both surfaces, enforced in two different places: Fastify's `bodyLimit` runs inside a body parser on the HTTP routes; `/mcp` deliberately installs a no-op parser so the MCP transport can read the raw stream, so the mount enforces its own byte count instead. A cap that only protects one of two entry points, or two caps that can silently drift apart, is how `/mcp` ended up with no cap at all in the first place.                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| content type    | JSON enforced on the invoke routes. **Not** on `/mcp`, where a wildcard no-op parser hands the raw stream to the MCP SDK and the SDK does its own enforcement.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| payment proof   | decoded and schema-validated by the payment provider; a malformed proof is a rejection, never a crash                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| configuration   | Zod, strict, before startup                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 
 The reserved `_payment` field is stripped from tool input before schema
 validation, so it can never collide with a resource's own properties.
@@ -119,13 +123,13 @@ Covered in detail in [payment-flow.md](payment-flow.md). The invariants:
 
 The surface splits by audience, and the split is enforced, not advisory:
 
-| Route | Audience | Protection |
-|---|---|---|
-| `POST /api/resources/:id/invoke` | agents | payment, not authentication |
-| `/mcp` | agents | payment, not authentication |
-| `GET /api/resources`, `/health`, `/.well-known/agent-commerce` | anyone | none — public by design |
-| `GET /ready` | operators | none, but detail is a fixed vocabulary, never raw errors |
-| `GET /api/receipts`, `/api/events`, `/api/events/stream` | **operators** | `server.adminToken`, compared in constant time |
+| Route                                                          | Audience      | Protection                                               |
+| -------------------------------------------------------------- | ------------- | -------------------------------------------------------- |
+| `POST /api/resources/:id/invoke`                               | agents        | payment, not authentication                              |
+| `/mcp`                                                         | agents        | payment, not authentication                              |
+| `GET /api/resources`, `/health`, `/.well-known/agent-commerce` | anyone        | none — public by design                                  |
+| `GET /ready`                                                   | operators     | none, but detail is a fixed vocabulary, never raw errors |
+| `GET /api/receipts`, `/api/events`, `/api/events/stream`       | **operators** | `server.adminToken`, compared in constant time           |
 
 The operator routes carry the merchant's commerce ledger. With no
 `server.adminToken` configured they return **404**, not open data — a missing
@@ -156,14 +160,13 @@ The backend's **status code** is returned — that is ours to state and useful �
 and the body is logged server-side at debug level only.
 
 The same rule governs health and readiness detail: a fixed vocabulary on the
-wire, raw messages to the log. See
-; the rule generalises to any
-value crossing a trust boundary.
+wire, raw messages to the log; the rule generalises to any value crossing a
+trust boundary.
 
 ## Denial of service
 
-Not a focus of v0.1, but more is in place than this section used to list
-. What exists:
+Not a focus of this release, but more is in place than this section used to
+list. What exists:
 
 - request body-size cap, enforced inside the body parsers
 - a **1 MB cap on the merchant backend's *response*** — `AbortSignal.timeout`
@@ -183,11 +186,27 @@ backpressure. Put the gateway behind your own edge if you expose it publicly.
 
 ## Dependencies
 
-`@x402/core`, `@x402/evm`, `@modelcontextprotocol/sdk`, `viem`, `fastify` and their transitive
-dependencies are third-party code, pinned exactly in
-. `npm audit` runs in the release
-workflow; high and critical findings are assessed and documented before a
-release rather than auto-blocking on irrelevant transitive advisories.
+`@x402/core`, `@x402/evm`, `@modelcontextprotocol/sdk`, `viem`, `fastify`,
+`pino` and `better-sqlite3` are third-party code, pinned exactly. `npm audit`
+runs in the release workflow; high and critical findings are assessed and
+documented before a release rather than auto-blocking on irrelevant transitive
+advisories.
+
+What a consumer actually installs, audited against the published tarball:
+
+| Install                                                             | `npm audit`            |
+| ------------------------------------------------------------------- | ---------------------- |
+| the package alone                                                   | **0 vulnerabilities**  |
+| plus `@modelcontextprotocol/sdk`, `@x402/core`, `@x402/evm`, `viem` | **0 vulnerabilities**  |
+| plus `@coinbase/x402` (only for `auth.type: cdp`)                   | 2 — 1 high, 1 moderate |
+
+The whole delta is CDP: `@coinbase/x402` → `@coinbase/cdp-sdk` → `axios`, which
+carries a set of high-severity advisories, plus a Solana client tree this
+project has no use for. It is an optional peer, imported dynamically only when
+that auth type is configured, so nobody else pays for it — and `auth.type:
+bearer` covers any facilitator with a static token and installs nothing. This
+is stated rather than buried because the affected path is the one handling real
+money.
 
 ## Development keys
 
@@ -205,27 +224,71 @@ succeeds and gives the money away.
 ## Mainnet
 
 `eip155:8453` is refused unless the configuration says so in full: an explicit
-`allowMainnet`, a remote facilitator reached over HTTPS and carrying a
-credential, a non-development `payTo`, and the canonical USDC for the chain.
-All of it is checked at config load, so the gateway does not start otherwise
-and `agent-commerce validate` reports it without starting anything.
+`allowMainnet`, a remote facilitator reached over HTTPS, a second explicit
+acknowledgement (`allowUnauthenticatedFacilitator`) if that facilitator takes
+no credential, a non-development `payTo`, and the canonical USDC for the chain
+including the EIP-712 domain name it reports. All of it is checked at config
+load, so the gateway does not start otherwise and `agent-commerce validate`
+reports it without starting anything.
 
-The in-process facilitator is never allowed on a mainnet: it signs with a key
-this process holds, which is a hot wallet inside the resource server — the
-arrangement the non-custodial design exists to avoid. With a remote
-facilitator the gateway holds no signing key at all.
+A facilitator cannot redirect your money — an EIP-3009 authorisation names its
+recipient, its amount and its chain, so it can broadcast exactly that transfer
+or nothing. What it can do is see every authorisation you handle, and stop
+answering. That is why an unauthenticated one is a separate, explicit
+acknowledgement rather than a warning.
 
-Base Sepolia settlement has been performed and verified on chain
-([testnet.md](testnet.md)). **Mainnet has not**, and nothing here should be
-read as a claim that it has: what this section describes is what the
-configuration permits and refuses, not what has been exercised with real
-funds.
+The in-process facilitator is never allowed on a mainnet. To be precise about
+why: it is not a custody problem — the facilitator signer never holds buyer or
+merchant funds, it pays gas and broadcasts `transferWithAuthorization`, and the
+money moves buyer to merchant directly on-chain. It is a *funded key inside the
+resource server*, so compromising that process means draining the gas wallet
+and broadcasting arbitrary transactions from it. With a remote facilitator the
+gateway holds no signing key at all.
 
-## Threats we are not addressing in the alpha
+## Adversarial scenarios, and where each is tested
+
+Every row below has an executed test, not a claim. Nothing here is asserted by
+reading a log line: settlement outcomes are read back off the chain, and
+rejection outcomes assert that balances did not move.
+
+| Scenario                                                             | Outcome                                                           | Where                                             |
+| -------------------------------------------------------------------- | ----------------------------------------------------------------- | ------------------------------------------------- |
+| header tampering (`PAYMENT-SIGNATURE` mangled, wrong header, absent) | 402, no delivery                                                  | `tests/unit/gateway`, `tests/e2e/payment`         |
+| payload tampering (any field of the authorisation)                   | `PAYMENT_INVALID`                                                 | `tests/e2e/payment`, `tests/unit/payments-x402`   |
+| network substitution                                                 | `wrong_network` before settlement                                 | `tests/e2e/payment`                               |
+| asset substitution (a real but different token)                      | `wrong_asset` before settlement                                   | `tests/e2e/payment`                               |
+| `payTo` substitution                                                 | `wrong_recipient` before settlement                               | `tests/e2e/payment`, testnet suite                |
+| amount manipulation (below the price)                                | `wrong_amount` before settlement                                  | `tests/e2e/payment`                               |
+| replay, sequentially                                                 | refused, no second transfer                                       | `tests/e2e/payment`, mainnet suite                |
+| **duplicate concurrent request**                                     | settles once, other gets `PAYMENT_REPLAYED`                       | `tests/integration/adversarial-payment.test.ts`   |
+| **replay after a gateway restart**                                   | still refused — the reservation is in SQLite                      | same                                              |
+| expired authorisation (`validBefore` in the past)                    | refused before settlement                                         | `tests/e2e/payment`                               |
+| not-yet-valid authorisation (`validAfter` in the future)             | refused before settlement                                         | `tests/e2e/payment`                               |
+| a `{param}` in the host position of `backend.url`                    | refused at config load                                            | `tests/unit/config/schema.test.ts`                |
+| an unknown key nested under an `additionalProperties` schema         | rejected by the closed schema                                     | same                                              |
+| a hostile or unbounded facilitator rejection string                  | clamped before it reaches buyer, event or ledger                  | `tests/unit/payments-x402`                        |
+| facilitator timeout                                                  | `PAYMENT_PROVIDER_UNAVAILABLE`, settlement treated as *uncertain* | `tests/unit/payments-x402`                        |
+| **facilitator 401 / 5xx**                                            | `PAYMENT_PROVIDER_UNAVAILABLE`, never charged to the buyer        | `tests/integration/adversarial-payment.test.ts`   |
+| **malformed facilitator response**                                   | refused; never read as a verdict                                  | same                                              |
+| backend timeout                                                      | `BACKEND_TIMEOUT`                                                 | `tests/unit/core/execution`                       |
+| backend 500 after payment                                            | receipt records paid-and-undelivered; payer told it settled       | `tests/unit/gateway`, `tests/unit/core/execution` |
+| receipt-store failure                                                | `STORAGE_ERROR`, never mislabelled `PAYMENT_REPLAYED`             | `tests/unit/storage-receipts`                     |
+| a local reader racing the ledger's creation                          | database and sidecars are 0600 from the moment SQLite opens them  | `tests/unit/storage-receipts/permissions.test.ts` |
+| RPC unreachable during verify                                        | `PAYMENT_PROVIDER_UNAVAILABLE`, not "bad signature"               | `tests/unit/payments-x402`                        |
+
+Two of those exist because writing them found a bug. The SDK's `exact`/EVM
+scheme reports an unreachable node as `invalid_exact_evm_signature`, and its
+HTTP facilitator client throws a bare `Error` for a 401 or 5xx — both would
+have recorded a failure of ours as the payer's fault, and burned an
+authorisation nothing had checked. The provider now treats *any* throw out of a
+facilitator call as "no verdict obtained", because a verdict arrives as a
+returned value.
+
+## Threats we are not addressing
 
 Buyer identity and screening · fraud and disputes · refunds and chargebacks ·
 multi-tenancy and RBAC · host compromise · supply-chain attestation ·
 side-channel and timing analysis · protocol-level censorship or MEV around
-settlement · availability guarantees.
-
-An independent security audit has not been performed.
+settlement · availability guarantees · a malicious facilitator withholding
+settlement (it cannot redirect funds, but it can decline to broadcast, and
+fail-closed means the resource is simply not delivered).

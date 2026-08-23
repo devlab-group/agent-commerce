@@ -75,6 +75,23 @@ const DEFAULT_MIME_TYPE = 'application/json';
 const HEALTH_TIMEOUT_MS = 4_000;
 /** `SettleResponse.errorReason` the SDK uses for "broadcast, not confirmed". */
 const SETTLEMENT_PENDING_REASON = 'settlement_pending';
+/**
+ * `invalidReason`/`errorReason` are `z.string()` in the SDK schema — no length
+ * or charset bound. They become the message a buyer is told about their own
+ * payment, a persisted and SSE-streamed event field, and a column in the
+ * merchant's ledger. A remote facilitator is a counterparty this design
+ * explicitly contemplates having no account or terms with, so treat its
+ * strings as untrusted input rather than as diagnostics.
+ */
+const MAX_REASON_LENGTH = 64;
+const REASON_SHAPE = /^[a-z0-9_.-]+$/i;
+
+function sanitiseReason(reason: string | undefined, fallback: string): string {
+  if (reason === undefined) return fallback;
+  const trimmed = reason.trim();
+  if (trimmed.length === 0 || trimmed.length > MAX_REASON_LENGTH) return fallback;
+  return REASON_SHAPE.test(trimmed) ? trimmed : fallback;
+}
 
 export interface X402ProviderOptions {
   /**
@@ -109,6 +126,11 @@ export interface X402ProviderOptions {
    * default — see `guardrails.ts`.
    */
   readonly allowMainnet?: boolean;
+  /**
+   * Required to be `true` to settle on a mainnet through a facilitator that
+   * takes no credential. Never a default.
+   */
+  readonly allowUnauthenticatedFacilitator?: boolean;
   readonly logger?: Logger;
   readonly clock?: Clock;
   readonly ids?: IdGenerator;
@@ -152,8 +174,13 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
     network: options.network,
     payTo: options.payTo,
     asset: options.asset,
+    assetName: options.assetName,
+    assetVersion: options.assetVersion,
     facilitator: options.facilitator,
     ...(options.allowMainnet !== undefined ? { allowMainnet: options.allowMainnet } : {}),
+    ...(options.allowUnauthenticatedFacilitator !== undefined
+      ? { allowUnauthenticatedFacilitator: options.allowUnauthenticatedFacilitator }
+      : {}),
   });
   const network = options.network as Network;
   // Constructed once, here, rather than inside settle(): assertDevKeyIsLocalOnly
@@ -183,17 +210,21 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
     }
     binding = createLocalFacilitatorBinding(client, network, isProviderUnavailableError);
   } else {
-    binding = createRemoteFacilitatorBinding(
-      { url: options.facilitator.url, auth: options.facilitator.auth },
-      isProviderUnavailableError,
-    );
+    binding = createRemoteFacilitatorBinding({
+      url: options.facilitator.url,
+      auth: options.facilitator.auth,
+    });
   }
 
   // health()'s own read-only client, with a real transport-level timeout (see
   // createLocalPublicClient's doc comment). Verification and settlement read
   // the chain through the facilitator signer instead, so this is the only
   // public client the provider builds.
-  const healthPublicClient = createLocalPublicClient(options.rpcUrl, HEALTH_TIMEOUT_MS);
+  const healthPublicClient = createLocalPublicClient(
+    options.rpcUrl,
+    HEALTH_TIMEOUT_MS,
+    profile.chainId,
+  );
 
   const clock = options.clock ?? systemClock;
   const ids = options.ids ?? DEFAULT_IDS;
@@ -300,13 +331,13 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
    * data; the SDK's scheme facilitator likewise takes the requirements as an
    * explicit argument rather than reading them off the payload.
    *
-   * Deliberately accepts overpayment: only `authorizedValue < required` is
-   * rejected (`wrong_amount`), never `authorizedValue > required`. This
-   * matches x402's own semantics — the requirement's `amount` names a floor,
-   * not an exact amount — and the settled `PaymentResult.amount` always
-   * records the actual authorised value, so bookkeeping stays truthful to what
-   * really moved rather than silently topping up or rejecting a generous
-   * buyer.
+   * The amount must match **exactly**. This once accepted overpayment on the
+   * reading that `amount` names a floor — but the pinned `@x402/evm@2.23.0`
+   * exact/EVM scheme compares with `!==` and rejects anything else as
+   * `invalid_exact_evm_payload_authorization_value_mismatch`, in both verify
+   * and settle, and hosted facilitators run that same code. Accepting more
+   * here only moved the rejection downstream and turned a clean
+   * `wrong_amount` into an opaque SDK reason.
    */
   async function verify(context: PaymentVerificationContext): Promise<PaymentResult> {
     const { requirement, submission } = context;
@@ -388,8 +419,11 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
     } catch {
       return rejected('malformed_payment_payload');
     }
-    if (authorizedValue < required) {
-      return rejected('wrong_amount'); // overpayment is allowed through — see the doc comment above
+    if (authorizedValue !== required) {
+      // Both directions: the scheme enforces equality, so an overpayment is
+      // rejected here with a reason the buyer can act on rather than by the
+      // facilitator with one they cannot.
+      return rejected('wrong_amount');
     }
 
     const scope = binding.open();
@@ -419,7 +453,15 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
           { details: { reportedReason: sdkResult.invalidReason ?? 'invalid_payment' } },
         );
       }
-      return rejected(sdkResult.invalidReason ?? 'invalid_payment');
+      // The raw string still reaches the operator's logs below; only what is
+      // shown to the buyer and written to the ledger is constrained.
+      if (sdkResult.invalidReason !== undefined) {
+        logger.debug(
+          { reportedReason: sdkResult.invalidReason },
+          'x402 verify(): facilitator rejection reason',
+        );
+      }
+      return rejected(sanitiseReason(sdkResult.invalidReason, 'invalid_payment'));
     }
 
     // Derived from the chain id the authorisation is actually bound to, never
@@ -526,8 +568,14 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
           },
         );
       }
+      if (sdkResult.errorReason !== undefined) {
+        logger.debug(
+          { reportedReason: sdkResult.errorReason },
+          'x402 settle(): facilitator failure reason',
+        );
+      }
       return {
-        ...rejectedSettlement(sdkResult.errorReason ?? 'settlement_failed'),
+        ...rejectedSettlement(sanitiseReason(sdkResult.errorReason, 'settlement_failed')),
         network: sdkResult.network,
         ...(sdkResult.payer !== undefined ? { payer: sdkResult.payer } : {}),
       };

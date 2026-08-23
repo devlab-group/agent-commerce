@@ -18,11 +18,11 @@ the gateway never sees it.
 
 ## What you need
 
-| | |
-|---|---|
-| A merchant address | any address you control. `MERCHANT_WALLET`. Address only — no key, ever. |
+|                                  |                                                                                                                     |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| A merchant address               | any address you control. `MERCHANT_WALLET`. Address only — no key, ever.                                            |
 | A buyer wallet with testnet USDC | https://faucet.circle.com. The buyer needs **no ETH**: EIP-3009 is signed offline and the facilitator pays the gas. |
-| A Base Sepolia RPC | only for health checks. The public default works; a dedicated endpoint is more reliable. |
+| A Base Sepolia RPC               | only for health checks. The public default works; a dedicated endpoint is more reliable.                            |
 
 Unlike the other examples, this one does **not** validate with no environment
 set: `MERCHANT_WALLET` has no default, because the only default available
@@ -64,7 +64,7 @@ network** — the gateway's own report of success is not the proof. It spends
 an explanation when those variables are absent.
 
 It has been run: [`0xf3288399…`](https://sepolia.basescan.org/tx/0xf3288399e31eab683f9bced802fad2dcf44072f93e1aa51223a0f8398e7668e8)
-settled 0.01 USDC on 2026-08-22. See [docs/testnet.md](../../docs/testnet.md).
+settled 0.01 USDC on 2026-08-22.
 
 It is deliberately outside `npm test` and `npm run test:e2e`: both of those
 must stay deterministic and offline.

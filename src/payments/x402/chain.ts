@@ -11,11 +11,14 @@
  * The `Local` prefix on everything here describes the *chain* these clients
  * are built for, not a test-only status: `provider.ts` calls
  * `createLocalPublicClient` and `createLocalFacilitatorClient` on the real
- * settlement path, for every payment. This is not demo scaffolding that a
- * production build could drop — v0.1 settles against the deterministic local
- * chain, so this file *is* the settlement transport. Supporting a public
- * network means making `buildLocalChain`'s hardcoded `LOCAL_CHAIN_ID` a
- * parameter, not bypassing this module.
+ * settlement path, and this is not demo scaffolding a production build could
+ * drop.
+ *
+ * Public networks are supported, and `buildLocalChain` now takes the chain id
+ * as a parameter — exactly what this comment used to say would be required.
+ * What stays local is the *facilitator* client: signing in-process is refused
+ * on any mainnet, so that client can only ever exist on the dev chain. The
+ * read-only health client is built for whatever network is configured.
  *
  * `dev-key-guard.ts` is the boundary that keeps that arrangement safe: it
  * refuses at provider construction if a dev key or dev `payTo` is pointed at
@@ -71,9 +74,17 @@ export function chainIdFromCaip2(network: string): number | undefined {
   return Number.isSafeInteger(chainId) && chainId > 0 ? chainId : undefined;
 }
 
-export function buildLocalChain(rpcUrl: string): Chain {
+/**
+ * `chainId` defaults to the local dev chain because the *facilitator* client
+ * can only ever exist there — a local facilitator is refused on any mainnet.
+ * The read-only health client is different: it is built for whatever network
+ * is configured, including Base, and inherited 84532 on every one of them.
+ * Inert while it only issues raw `getChainId`/`getCode`/`anvil_nodeInfo`, and
+ * wrong the moment anything through it consults `chain.id`.
+ */
+export function buildLocalChain(rpcUrl: string, chainId: number = LOCAL_CHAIN_ID): Chain {
   return {
-    id: LOCAL_CHAIN_ID,
+    id: chainId,
     name: 'agent-commerce-local',
     nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
     rpcUrls: {
@@ -92,9 +103,13 @@ export function buildLocalChain(rpcUrl: string): Chain {
  * only stops *waiting* for the request while the request itself keeps
  * running server-side. Omit it to keep viem's own default (10s).
  */
-export function createLocalPublicClient(rpcUrl: string, timeoutMs?: number): PublicClient {
+export function createLocalPublicClient(
+  rpcUrl: string,
+  timeoutMs?: number,
+  chainId?: number,
+): PublicClient {
   return createPublicClient({
-    chain: buildLocalChain(rpcUrl),
+    chain: buildLocalChain(rpcUrl, chainId),
     transport: http(rpcUrl, timeoutMs !== undefined ? { timeout: timeoutMs } : undefined),
   });
 }

@@ -57,7 +57,7 @@ the generated file is right and this table is stale.
 ## Change log
 
 - Initial freeze (v0.1.0-alpha)
-- UCP removed from v0.1 scope; `ProtocolName` = `'http' | 'mcp'`
+- UCP removed from scope; `ProtocolName` = `'http' | 'mcp'`
 - `core` adds `./execution` subpath (non-frozen)
 - `payment-x402` adds `./testing.js` subpath (non-frozen); becomes the canonical import path for `readLocalChainManifest`
 - **Behaviour change (no type change):** `toCommerceError` no longer copies an arbitrary Error's `message` into the client-visible `message`. The original is kept on `cause`, which is never serialised. Found in the contract-freeze adversarial review.

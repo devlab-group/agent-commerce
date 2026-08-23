@@ -13,8 +13,11 @@
   <img alt="Status" src="https://img.shields.io/badge/status-alpha-orange">
 </p>
 
-> **Beta.** `v0.2.0-beta` is experimental. Do not use it with production funds
-> without an independent review. See [SECURITY.md](SECURITY.md).
+> **No commissioned security audit.** `v1.0.0` commits to a stable public API
+> and wire contract; it makes no assurance claim about the payment path. There
+> is no third-party audit report to point you at. Weigh that before putting
+> production funds through it.
+> See [SECURITY.md](SECURITY.md).
 
 ---
 
@@ -87,7 +90,7 @@ const gateway = await createGateway({
   paymentProviders: [],
   protocolAdapters: [],
 });
-const { url } = await gateway.listen;
+const { url } = await gateway.listen();
 ```
 
 ### Optional peers — install only the rails you use
@@ -102,6 +105,7 @@ has no business installing.
 | gateway, config, receipts, CLI | `@devlab.group/agent-commerce` | `from '@devlab.group/agent-commerce'`      |
 | expose resources as MCP tools  | `+ @modelcontextprotocol/sdk`  | `from '@devlab.group/agent-commerce/mcp'`  |
 | accept x402 payments           | `+ @x402/core @x402/evm viem`  | `from '@devlab.group/agent-commerce/x402'` |
+| authenticate to a CDP facilitator | `+ @coinbase/x402`          | (no import — loaded on demand)             |
 
 ```bash
 npm install @devlab.group/agent-commerce @modelcontextprotocol/sdk @x402/core @x402/evm viem
@@ -117,6 +121,13 @@ boundary, so a version skew is a correctness problem rather than a convenience
 one. Import a subpath without its
 peer installed and Node fails at load naming the missing package — deliberately,
 rather than starting a gateway that silently serves nothing.
+
+`@coinbase/x402` is the odd one out: it has no import of its own and is loaded
+dynamically, only when `facilitator.auth.type: cdp` is configured. It is worth
+avoiding if you can — it brings `@coinbase/cdp-sdk` and `axios`, which carry
+high-severity advisories, while the package itself and the other three peers
+audit clean. `auth.type: bearer` covers any facilitator with a static token and
+installs nothing.
 
 ## Quickstart
 
@@ -206,13 +217,13 @@ See [docs/configuration.md](docs/configuration.md).
 
 ## Protocol support
 
-| Protocol              | Status    | Pinned revision                    |
-| --------------------- | --------- | ---------------------------------- |
-| **MCP**               | Supported | `@modelcontextprotocol/sdk@1.30.0` |
+| Protocol              | Status    | Pinned revision                                          |
+| --------------------- | --------- | -------------------------------------------------------- |
+| **MCP**               | Supported | `@modelcontextprotocol/sdk@1.30.0`                       |
 | **x402**              | Supported | x402 v2 (`@x402/core`, `@x402/evm`), scheme `exact`, EVM |
-| **HTTP**              | Supported | native routes                      |
-| UCP                   | Planned   | —                                  |
-| ACP · MPP · A2A · AP2 | Planned   | —                                  |
+| **HTTP**              | Supported | native routes                                            |
+| UCP                   | Planned   | —                                                        |
+| ACP · MPP · A2A · AP2 | Planned   | —                                                        |
 
 "Planned" means **no code ships for it**. Each adapter reports its own
 `supportedSpec`, `capabilities` and `unsupported` list at runtime via
@@ -235,19 +246,123 @@ checkable, not marketing. Detail: [docs/protocols.md](docs/protocols.md).
 
 Detail: [docs/payment-flow.md](docs/payment-flow.md).
 
+## Public networks
+
+Same gateway, same pipeline — a different `network` and a facilitator that is
+not this process. No code changes, and no "live mode" to switch on.
+
+### It has actually settled
+
+Not a roadmap entry. Both of these moved 0.01 USDC from a buyer to a merchant
+through a remote facilitator:
+
+| Network      | Transaction                                                                                                           |
+| ------------ | --------------------------------------------------------------------------------------------------------------------- |
+| Base Sepolia | [`0xea41b234c4…`](https://sepolia.basescan.org/tx/0xea41b234c4645a4d335589ec9753646aa7cccd1b97e9e15823b88bff7b54a247) |
+| Base         | [`0x57ec81c2a3…`](https://basescan.org/tx/0x57ec81c2a360d14d59a43cf4e24be09a6bd75cbe6185016372895bda73e42763)         |
+
+In both, the gateway held no key, signed nothing and paid no gas — the buyer
+signed an EIP-3009 authorisation offline holding no ETH, and the facilitator
+broadcast it. Each run reads the buyer and merchant balances and the
+transaction receipt back off the chain afterwards; the gateway's own report of
+success is not the proof.
+
+Reproduce with `npm run test:testnet` / `npm run test:mainnet` — both spend
+real funds, skip themselves without credentials, and never run in CI.
+
+### The facilitator model
+
+A **facilitator** verifies the buyer's authorisation and broadcasts the
+transfer. It is the only component that needs gas, and it is never this
+gateway on a public network.
+
+| `facilitator.mode` | Who signs | Where it is allowed |
+| --- | --- | --- |
+| `local` | this process, with an Anvil dev key | the local dev chain only |
+| `remote` | an HTTP facilitator you point at | anywhere |
+
+With `remote`, the gateway holds **no signing key at all**. The buyer signs an
+EIP-3009 authorisation offline — no ETH required — and the facilitator pays the
+gas. A facilitator cannot redirect your money: the authorisation names its
+recipient, amount and chain, so it can broadcast exactly that transfer or
+nothing. What it can do is see every authorisation you handle, and stop
+answering.
+
+Three auth types: `none`, `bearer` (a static token, installs nothing) and `cdp`
+(Coinbase Developer Platform, which signs a fresh JWT per request). Anything
+else is refused at config load rather than sent nothing. You can also run your
+own — `remote` does not care who operates the endpoint.
+
+### Base Sepolia
+
+```yaml
+payments:
+  x402:
+    enabled: true
+    network: eip155:84532
+    rpcUrl: https://base-sepolia-rpc.publicnode.com # health checks only
+    asset: "0x036CbD53842c5426634e7929541eC2318f3dCF7e" # Circle USDC
+    assetName: USDC
+    assetVersion: "2"
+    assetDecimals: 6
+    payTo: ${MERCHANT_WALLET}
+    maxTimeoutSeconds: 300
+    facilitator:
+      mode: remote
+      url: https://x402.org/facilitator
+      auth: { type: none }
+```
+
+Full config in [`examples/base-sepolia/`](examples/base-sepolia/). Test USDC
+from [faucet.circle.com](https://faucet.circle.com); the buyer needs no ETH.
+`npm run test:testnet` drives the whole flow and reads the result back off the
+chain.
+
+Chain id 84532 belongs to **both** Base Sepolia and this project's local dev
+chain, deliberately. Nothing infers "public network" from it — `local`,
+`testnet` and `mainnet` are derived from the network *and* the facilitator
+together, and reported by `doctor`, `health()` and `/.well-known`.
+
+### Base mainnet
+
+Real funds, so nothing is defaulted. Every one of these is checked at config
+load, and the gateway will not start without them:
+
+| Required | |
+| --- | --- |
+| `allowMainnet: true` | mainnet is never a default |
+| `facilitator.mode: remote` | `local` needs a funded gas key inside this process |
+| an HTTPS `facilitator.url` | |
+| `allowUnauthenticatedFacilitator: true` | only if that facilitator takes no credential |
+| a non-development `payTo` | |
+| `asset` = USDC on Base, `assetName: "USD Coin"` | **not** `"USDC"` — that deployment predates the rename, and the buyer signs the name into their EIP-712 domain |
+
+Full config in [`examples/base-mainnet/`](examples/base-mainnet/), and
+[`examples/base-mainnet-payai/`](examples/base-mainnet-payai/) for an
+unauthenticated facilitator. `npm run test:mainnet` proves it end to end and
+spends real USDC on every run.
+
+`agent-commerce validate` reports any of the above before anything starts, and
+`doctor` prints `LIVE MAINNET MODE — REAL FUNDS`.
+
+> Neither public-network suite runs in CI — there is no workflow and there must
+> not be one. A workflow means a funded key in repository secrets, spendable by
+> anyone with write access. Both suites run from the machine that holds the
+> wallet, and skip themselves without credentials.
+
 ## Diagnostics
 
 ```console
 $ npm run agent-commerce -- doctor --config config-demo.yaml
 
-PASS Config valid — 2 resource(s), merchant "Demo Data Store"
-PASS Gateway healthy and ready at http://127.0.0.1:8080
-PASS Backend 2/2 backend host(s) reachable
-PASS Protocols http=on mcp=on (/mcp)
-PASS Payments x402 v2 (scheme=exact) enabled — LOCAL on Base Sepolia (eip155:84532), destination=0x7099…79C8, facilitator=local
-INFO Payments (MPP) planned — not implemented in v0.1
-PASS Storage sqlite schema v1 writable; receipts=2
-PASS Protocol versions reported by gateway /.well-known/agent-commerce
+PASS  Config               valid — 2 resource(s), merchant "Demo Data Store" (using local chain manifest .deploy/local.json for X402_ASSET, X402_ASSET_NAME, X402_ASSET_VERSION, X402_ASSET_DECIMALS, MERCHANT_WALLET, X402_FACILITATOR_PRIVATE_KEY)
+PASS  Gateway              healthy and ready at http://127.0.0.1:8080
+PASS  Backend              2/2 backend host(s) reachable
+PASS  Protocols            http=on mcp=on (/mcp)
+PASS  Payments             x402 v2 (scheme=exact) enabled — LOCAL dev chain (eip155:84532, chain id shared with Base Sepolia), destination=0x7099…79C8, facilitator=local
+INFO  Payments (MPP)       planned — not implemented in this release
+PASS  Storage              sqlite schema v1 writable; receipts=2
+PASS  Protocol versions    reported by gateway /.well-known/agent-commerce
 
 Score: 7/7 checks passed
 ```
@@ -277,33 +392,6 @@ reachable by anyone else, know the split:
 
 [SECURITY.md](SECURITY.md) states plainly what this does and does not protect.
 
-## Public networks
-
-**Base Sepolia settlement is demonstrated**, not merely configurable: USDC has
-moved from buyer to merchant through the public facilitator, with the gateway
-holding no key and paying no gas. The transaction is in
-[docs/testnet.md](docs/testnet.md). The deterministic local chain
-(Anvil + MockUSDC) is still what the default test suite covers.
-
-Base Sepolia (`eip155:84532`), Base mainnet (`eip155:8453`) and a remote HTTP
-facilitator can now be configured, with guardrails that refuse the combinations
-that lose money — mainnet needs an explicit `allowMainnet`, a remote
-facilitator over HTTPS with a credential, a non-development `payTo`, and the
-canonical USDC for the chain. Those are checked at config load, so
-`agent-commerce validate` catches them and the gateway will not start without
-them.
-
-A ready-to-run testnet config is in
-[`examples/base-sepolia/`](examples/base-sepolia/), and
-`npm run test:testnet` drives the whole flow against Base Sepolia and reads
-the balances and transaction receipt back off the chain to prove it. It needs
-a funded test wallet, skips itself without one, and is deliberately outside
-`npm test` and `npm run test:e2e` — both of those must stay offline.
-
-**Mainnet is a different claim, and it is not made.** `eip155:8453` is
-configurable and guarded, and no payment has been settled on it. See
-[docs/testnet.md](docs/testnet.md).
-
 ## Development
 
 ```bash
@@ -316,7 +404,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Roadmap
 
-**Now (v0.2.0-beta)** — MCP, x402 v2, Base Sepolia settlement, receipts, doctor, deterministic demo.
+**Now (v1.0.0)** — MCP, x402 v2, settlement on the local chain, Base Sepolia
+and Base mainnet, receipts, doctor, deterministic demo.
 
 **Next** — OpenAPI import · a stronger conformance suite · a `doctor` GitHub
 Action · UCP · MPP · ACP · A2A · AP2 · Shopify and WooCommerce examples ·
@@ -333,7 +422,6 @@ discipline is a release requirement, not a mood.
 | [Payment flow](docs/payment-flow.md)           | the paid round trip, and every way it fails |
 | [Protocols](docs/protocols.md)                 | exactly what is and is not supported        |
 | [Configuration](docs/configuration.md)         | `config.yaml` reference                     |
-| [Base Sepolia](docs/testnet.md)                | running on a public testnet, and proving it |
 | [Security model](docs/security.md)             | trust boundaries, and what we do not defend |
 | [Contracts](docs/contracts.md)                 | the frozen cross-package contract           |
 | [Adapter guide](docs/contributing-adapters.md) | add a protocol or a payment rail            |

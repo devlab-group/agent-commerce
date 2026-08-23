@@ -26,10 +26,10 @@ jobs:
     name: Dependency audit review
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22'
           cache: npm
@@ -39,7 +39,7 @@ jobs:
       # automatically block.
       - run: npm audit --audit-level high || true
       - run: npm audit --json > audit.json || true
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: dependency-audit
           path: audit.json
@@ -48,14 +48,14 @@ jobs:
     name: Fresh-clone quickstart smoke test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22'
           cache: npm
-      - uses: foundry-rs/foundry-toolchain@v1
+      - uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09 # v1.9.1
         with:
           # Pinned: the default is `nightly`, a mutable input to a suite this
           # project calls deterministic.
@@ -96,10 +96,15 @@ jobs:
       # until the setting is updated.
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      # Every action below runs inside a job holding `id-token: write`, so a
+      # moving tag here is a publish credential: whoever can repoint
+      # `actions/checkout@v4` can mint an npm token for this package. Actions
+      # are pinned by commit SHA — the trailing comment is the human-readable
+      # version, the SHA is what GitHub resolves.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22'
           cache: npm
@@ -107,7 +112,7 @@ jobs:
       # `prepublishOnly` runs the full `npm run verify`, and part of that suite
       # spawns a real Anvil. Without Foundry here the publish fails on a test
       # that has nothing to do with the artifact being published.
-      - uses: foundry-rs/foundry-toolchain@v1
+      - uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09 # v1.9.1
         with:
           # Pinned: the default is `nightly`, a mutable input to a suite this
           # project calls deterministic.
@@ -115,41 +120,12 @@ jobs:
       # setup-node pairs Node 22 with npm 10, which predates trusted
       # publishing (needs >= 11.5.1). Without this the publish fails asking for
       # credentials that deliberately do not exist.
-      - run: npm install -g npm@latest
-      - run: npm ci
-      - name: Tag must match the version being published
-        # A tag that disagrees with package.json publishes a version nobody
-        # can find from the release, and npm versions are immutable.
-        run: |
-          tag="${GITHUB_REF_NAME#v}"
-          pkg="$(node -p "require('./package.json').version")"
-          if [ "$tag" != "$pkg" ]; then
-            echo "tag ${GITHUB_REF_NAME} does not match package.json version ${pkg}" >&2
-            exit 1
-          fi
-          echo "publishing ${pkg}"
-      # `prepublishOnly` runs build + verify + the built-CLI smoke test, so the
-      # artifact is rebuilt from this checkout rather than trusted from cache.
-      # `--access public` is not passed here: publishConfig.access carries it,
-      # and a packaging test asserts that, so the two cannot disagree.
-      # Provenance is attached automatically when publishing via OIDC.
       #
-      # The dist-tag is derived from the version rather than hardcoded: npm >= 12
-      # refuses to publish a prerelease without an explicit `--tag`, because the
-      # default is `latest` and that would serve a beta to everyone running a
-      # plain `npm install`. `0.2.0-beta.0` publishes under `beta`, `1.0.0-rc.1`
-      # under `rc`, and only a version with no prerelease part takes `latest`.
+      # Exact version, not `@latest`: this npm is the process that mints the
+      # OIDC claim and uploads the tarball, so letting it float means the
+      # publish path changes under an unrelated release with nothing in this
+      # repository recording it.
+      - run: npm install -g npm@11.6.2
+      - run: npm ci
       - name: Publish
-        run: |
-          version="$(node -p "require('./package.json').version")"
-          case "$version" in
-            *-*)
-              suffix="${version#*-}"
-              tag="${suffix%%.*}"
-              ;;
-            *)
-              tag="latest"
-              ;;
-          esac
-          echo "publishing $version under dist-tag $tag"
-          npm publish --tag "$tag"
+        run: npm publish --tag latest

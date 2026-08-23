@@ -74,7 +74,7 @@ export const NO_SCHEMA_RESOURCE: CommerceResource = {
 
 /**
  * Dynamic pricing exists in the type system for forward compatibility (config
- * validation rejects it in v0.1) — the adapter must still describe it as paid
+ * validation rejects it) — the adapter must still describe it as paid
  * without inventing an amount/currency it does not have.
  */
 export const DYNAMIC_PRICED_RESOURCE: CommerceResource = {

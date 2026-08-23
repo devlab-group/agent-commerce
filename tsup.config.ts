@@ -40,6 +40,7 @@ function versionReport(): string {
   // install small. Reading only `dependencies` would blank the report.
   const deps = { ...pkg.dependencies, ...pkg.peerDependencies };
   const wanted = [
+    '@coinbase/x402',
     '@modelcontextprotocol/sdk',
     '@x402/core',
     '@x402/evm',

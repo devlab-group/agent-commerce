@@ -4,12 +4,12 @@ How a paid resource actually gets paid for, end to end.
 
 ## Roles
 
-| Role | Holds a key? | Where it runs |
-|---|---|---|
-| Buyer agent | yes — its own | the agent's machine (`demo/agent` in the demo) |
-| Gateway | **no** | merchant infrastructure |
-| Facilitator | a gas-paying signer | local dev chain in the demo; external in production |
-| Merchant | destination address only | configuration (`payTo`) |
+| Role        | Holds a key?             | Where it runs                                       |
+| ----------- | ------------------------ | --------------------------------------------------- |
+| Buyer agent | yes — its own            | the agent's machine (`demo/agent` in the demo)      |
+| Gateway     | **no**                   | merchant infrastructure                             |
+| Facilitator | a gas-paying signer      | local dev chain in the demo; external in production |
+| Merchant    | destination address only | configuration (`payTo`)                             |
 
 The gateway is in the middle of the *protocol* and outside the *custody*.
 
@@ -70,21 +70,21 @@ happened without ever being able to take it.
 
 ## Fail-closed matrix
 
-| Condition | Result | Delivered? |
-|---|---|---|
-| no proof supplied | `PaymentRequiredOutcome`, 402 + envelope | no |
-| malformed proof | `PAYMENT_INVALID` | no |
-| bad signature | `PAYMENT_INVALID` | no |
-| wrong amount (`value < amount`) | `PAYMENT_INVALID` | no |
-| wrong recipient (`to != payTo`) | `PAYMENT_INVALID` | no |
-| wrong network | `PAYMENT_INVALID` | no |
-| wrong asset | `PAYMENT_INVALID` | no |
-| authorisation expired / not yet valid | `PAYMENT_INVALID` | no |
-| insufficient balance | `PAYMENT_INVALID` | no |
-| authorisation already seen | `PAYMENT_REPLAYED` | no |
-| provider/RPC unreachable | `PAYMENT_PROVIDER_UNAVAILABLE` (retryable) | no |
-| settlement transaction fails | `PAYMENT_SETTLEMENT_FAILED` | no |
-| backend fails **after** settlement | `BACKEND_ERROR` / `BACKEND_TIMEOUT` | no — payment recorded, delivery failed |
+| Condition                             | Result                                     | Delivered?                             |
+| ------------------------------------- | ------------------------------------------ | -------------------------------------- |
+| no proof supplied                     | `PaymentRequiredOutcome`, 402 + envelope   | no                                     |
+| malformed proof                       | `PAYMENT_INVALID`                          | no                                     |
+| bad signature                         | `PAYMENT_INVALID`                          | no                                     |
+| wrong amount (`value < amount`)       | `PAYMENT_INVALID`                          | no                                     |
+| wrong recipient (`to != payTo`)       | `PAYMENT_INVALID`                          | no                                     |
+| wrong network                         | `PAYMENT_INVALID`                          | no                                     |
+| wrong asset                           | `PAYMENT_INVALID`                          | no                                     |
+| authorisation expired / not yet valid | `PAYMENT_INVALID`                          | no                                     |
+| insufficient balance                  | `PAYMENT_INVALID`                          | no                                     |
+| authorisation already seen            | `PAYMENT_REPLAYED`                         | no                                     |
+| provider/RPC unreachable              | `PAYMENT_PROVIDER_UNAVAILABLE` (retryable) | no                                     |
+| settlement transaction fails          | `PAYMENT_SETTLEMENT_FAILED`                | no                                     |
+| backend fails **after** settlement    | `BACKEND_ERROR` / `BACKEND_TIMEOUT`        | no — payment recorded, delivery failed |
 
 The last row is the honest one: settlement is final, so a backend failure after
 payment is a reconciliation problem, not a rollback. It is recorded as a
@@ -126,35 +126,43 @@ The demo and CI settle for real, on a chain they own:
 - The E2E asserts the buyer's balance falls and the merchant's rises by exactly
   the price, and that the receipt carries a real transaction hash.
 
-No public RPC, no public chain, no hosted facilitator, no real money. See
- for the exact SDK behaviour this
-relies on.
+No public RPC, no public chain, no hosted facilitator, no real money.
 
 ## Public networks
 
-Base Sepolia settlement is demonstrated — see [testnet.md](testnet.md) for the
-transaction. Base mainnet is configurable and guarded, and nothing has settled
-on it. The deterministic local chain remains what the default suite covers.
-
-Three things shape what a public-network config is allowed to look like:
+Base Sepolia (`eip155:84532`) and Base (`eip155:8453`) both settle, and both
+have been exercised against the real chains — the same pipeline, the same
+provider, a different `network` and a remote facilitator. Four things shape
+what a public-network config is allowed to look like:
 
 - **The deployment mode is derived, not declared.** `local`, `testnet` and
   `mainnet` come from the network *and* the facilitator together, because chain
   id 84532 belongs to both the local dev chain and public Base Sepolia. Nothing
   infers "public network" from the id alone.
-- **Mainnet is refused unless every guardrail is satisfied** — explicit
-  `allowMainnet`, a remote facilitator over HTTPS carrying a credential, a
-  non-development `payTo`, and the canonical USDC for the chain. These are
-  checked at config load, so `agent-commerce validate` catches them, and the
-  gateway will not start without them. See
-  [configuration.md](configuration.md).
-- **In local mode `health()` still probes `anvil_nodeInfo`**, so a local
-  facilitator pointed at a real node reports unhealthy and `/ready` returns
-  503. In remote mode it asks the facilitator what it supports instead, and
-  fails if our scheme and network are not on the list.
+- **Mainnet is refused unless every guardrail is satisfied** — an explicit
+  `allowMainnet`, a remote facilitator over HTTPS, a second explicit
+  acknowledgement if that facilitator takes no credential, a non-development
+  `payTo`, and the canonical USDC for the chain including the EIP-712 domain
+  name it actually reports. All checked at config load, so
+  `agent-commerce validate` catches them and the gateway will not start
+  without them. See [configuration.md](configuration.md).
+- **`assetName` is part of that.** Base mainnet's USDC reports `"USD Coin"`,
+  Base Sepolia's reports `"USDC"`, and the buyer signs that string into their
+  EIP-712 domain. Naming the wrong one gets every payment refused
+  `invalid_exact_evm_token_name_mismatch` *after* they signed — so it is
+  refused at startup instead.
+- **`health()` asks the right question per mode.** In local mode it probes
+  `anvil_nodeInfo`, so a local facilitator pointed at a real node reports
+  unhealthy and `/ready` refuses to serve. In remote mode it asks the
+  facilitator what it supports and fails if our scheme and network are not on
+  its list — a facilitator that is up but cannot settle this pair would
+  otherwise fail every payment after the buyer signed.
 
-There is still no "live mode" toggle. There is configuration, and there are
-checks that refuse the combinations that would lose money.
+There is no "live mode" toggle in the sense of a switch that makes things
+work. `allowMainnet` is an acknowledgement, not an enabler: everything is
+already wired, and what that flag does is refuse to proceed until someone has
+said out loud that the money is real.
 
-Running it, and proving a payment settled there:
-[testnet.md](testnet.md).
+Running against a public network is [configuration.md](configuration.md); a
+worked config for each is in `examples/base-sepolia/` and
+`examples/base-mainnet/`.

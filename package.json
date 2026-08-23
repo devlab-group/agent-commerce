@@ -1,6 +1,6 @@
 {
   "name": "@devlab.group/agent-commerce",
-  "version": "0.2.0-beta.0",
+  "version": "1.0.0",
   "description": "Open-source, self-hosted, non-custodial commerce and payment orchestration gateway for AI agents.",
   "license": "Apache-2.0",
   "type": "module",
@@ -66,6 +66,7 @@
     "test:coverage": "vitest run --coverage",
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
     "test:testnet": "vitest run --config vitest.testnet.config.ts",
+    "test:mainnet": "vitest run --config vitest.mainnet.config.ts",
     "check:contract": "node scripts/contract-surface.mjs",
     "check:metadata": "node scripts/check-package-metadata.mjs",
     "verify": "npm run check:contract && npm run lint && npm run typecheck && npm test",
@@ -96,12 +97,16 @@
     "zod": "3.25.76"
   },
   "peerDependencies": {
+    "@coinbase/x402": "2.1.0",
     "@modelcontextprotocol/sdk": "1.30.0",
     "@x402/core": "2.23.0",
     "@x402/evm": "2.23.0",
     "viem": "2.55.18"
   },
   "peerDependenciesMeta": {
+    "@coinbase/x402": {
+      "optional": true
+    },
     "@modelcontextprotocol/sdk": {
       "optional": true
     },
@@ -117,6 +122,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.9",
+    "@coinbase/x402": "2.1.0",
     "@modelcontextprotocol/sdk": "1.30.0",
     "@types/better-sqlite3": "9.6.0",
     "@types/node": "24.13.3",

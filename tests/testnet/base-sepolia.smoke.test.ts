@@ -5,7 +5,9 @@
  * Deliberately NOT part of `npm test` or `npm run test:e2e`: those must stay
  * deterministic and offline. This one spends real testnet USDC, talks to a
  * public RPC and a hosted facilitator, and is run on demand
- * (`npm run test:testnet`) or from the manual GitHub Actions workflow.
+ * (`npm run test:testnet`) from the machine that holds the wallet. Never
+ * triggered by a push or a pull request: there is no workflow for it and there
+ * must not be one, because that would mean a funded key in repository secrets.
  *
  * It skips itself — loudly, naming the variable — when the credentials are
  * absent, so a developer who runs it by accident gets an explanation rather
@@ -133,12 +135,21 @@ async function waitForBalances(
   timeoutMs = 90_000,
 ): Promise<BalanceSnapshot> {
   const deadline = Date.now() + timeoutMs;
-  let snapshot = await balances();
-  while (!predicate(snapshot) && Date.now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, 2_000));
-    snapshot = await balances();
+  let snapshot: BalanceSnapshot | undefined;
+  let lastError: unknown;
+  while (Date.now() < deadline) {
+    try {
+      snapshot = await balances();
+      lastError = undefined;
+      if (predicate(snapshot)) return snapshot;
+    } catch (err) {
+      // A public RPC rate-limiting the poll is not evidence about the payment.
+      lastError = err;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 3_000));
   }
-  return snapshot;
+  if (snapshot) return snapshot;
+  throw lastError ?? new Error('no balance snapshot was ever read');
 }
 
 function balances(): Promise<BalanceSnapshot> {
@@ -158,7 +169,7 @@ if (missing.length > 0) {
   // eslint-disable-next-line no-console
   console.log(
     `[testnet] skipped — set ${missing.join(' and ')} to run the Base Sepolia smoke test. ` +
-      'It spends real testnet USDC from a dedicated wallet; see docs/testnet.md.',
+      'It spends real testnet USDC from a dedicated wallet.',
   );
 }
 

@@ -1,0 +1,103 @@
+# ---------------------------------------------------------------------------
+# Example: base-mainnet-payai — REAL FUNDS, unauthenticated facilitator
+#
+# The cheapest way to prove the mainnet path works end to end: PayAI's public
+# facilitator serves x402 v2 `exact` on eip155:8453 and takes no credential, so
+# there is no account to open and no SDK to install.
+#
+# That is also its cost. Read `allowUnauthenticatedFacilitator` below before
+# using this for anything but a proving run.
+#
+# Verified 2026-08-23 — https://facilitator.payai.network/supported advertises
+#   {"x402Version":2,"scheme":"exact","network":"eip155:8453"}
+# and answers /verify and /settle without a credential. Check it yourself:
+#   node -e "fetch('https://facilitator.payai.network/supported').then(r=>r.json())
+#     .then(d=>console.log(d.kinds.filter(k=>k.network==='eip155:8453')))"
+#
+# ALLOW_X402_MAINNET=true MERCHANT_WALLET=0x... \
+#   npm run agent-commerce -- validate --config examples/base-mainnet-payai/config.yaml
+# ---------------------------------------------------------------------------
+
+version: 1
+
+merchant:
+  id: base-mainnet-payai-example
+  name: Base Mainnet (PayAI) Example
+  publicBaseUrl: ${GATEWAY_PUBLIC_BASE_URL:-http://localhost:8080}
+
+server:
+  port: ${GATEWAY_PORT:-8080}
+  host: 0.0.0.0
+  allowedOrigins: []
+
+storage:
+  receipts:
+    driver: sqlite
+    path: ${RECEIPT_STORE_PATH:-./data/receipts.sqlite}
+
+protocols:
+  http:
+    enabled: true
+  mcp:
+    enabled: true
+    mountPath: /mcp
+
+resources:
+  premium_report:
+    name: Premium Report
+    description: One paid endpoint, settled in USDC on Base.
+    input:
+      type: object
+      properties: {}
+      additionalProperties: false
+    backend:
+      type: http
+      method: GET
+      url: ${MERCHANT_API_BASE_URL:-http://localhost:3000}/api/report
+      timeoutMs: 10000
+    pricing:
+      type: fixed
+      amount: "0.01"
+      currency: USDC
+    expose: [http, mcp]
+    payments: [x402]
+
+payments:
+  x402:
+    enabled: true
+
+    network: eip155:8453
+    rpcUrl: ${X402_RPC_URL:-https://base.drpc.org}
+
+    # USDC on Base. A mainnet config may name no other asset.
+    asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+    # The EIP-712 domain name the mainnet contract actually reports. Not
+    # "USDC": that deployment predates the rename, and a mismatch is
+    # refused after the buyer has already signed.
+    assetName: "USD Coin"
+    assetVersion: "2"
+    assetDecimals: 6
+
+    # Your wallet. Address only — the gateway never wants a merchant key.
+    payTo: ${MERCHANT_WALLET}
+
+    maxTimeoutSeconds: 600
+
+    # "I meant to use real money."
+    allowMainnet: ${ALLOW_X402_MAINNET}
+
+    # "I accept THIS counterparty, with no account and no terms."
+    #
+    # A separate decision from allowMainnet, and not a smaller one. A
+    # facilitator cannot redirect your money — an EIP-3009 authorisation names
+    # its recipient, amount and chain — but it does see every payment
+    # authorisation you handle, and if it rate-limits or disappears, every paid
+    # call fails closed and earns nothing. There is no SLA here and nobody to
+    # call. Fine for a proving run; think harder before production.
+    allowUnauthenticatedFacilitator: true
+
+    facilitator:
+      mode: remote
+      url: https://facilitator.payai.network
+      auth:
+        type: none
