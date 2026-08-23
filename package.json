@@ -65,6 +65,7 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
+    "test:testnet": "vitest run --config vitest.testnet.config.ts",
     "check:contract": "node scripts/contract-surface.mjs",
     "check:metadata": "node scripts/check-package-metadata.mjs",
     "verify": "npm run check:contract && npm run lint && npm run typecheck && npm test",

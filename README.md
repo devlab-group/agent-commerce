@@ -277,10 +277,13 @@ reachable by anyone else, know the split:
 
 [SECURITY.md](SECURITY.md) states plainly what this does and does not protect.
 
-## Public networks — configurable, not yet exercised
+## Public networks
 
-**Every settlement this release has actually performed was against the local
-deterministic chain** (Anvil + MockUSDC), and that is the path the tests cover.
+**Base Sepolia settlement is demonstrated**, not merely configurable: USDC has
+moved from buyer to merchant through the public facilitator, with the gateway
+holding no key and paying no gas. The transaction is in
+[docs/testnet.md](docs/testnet.md). The deterministic local chain
+(Anvil + MockUSDC) is still what the default test suite covers.
 
 Base Sepolia (`eip155:84532`), Base mainnet (`eip155:8453`) and a remote HTTP
 facilitator can now be configured, with guardrails that refuse the combinations
@@ -290,9 +293,16 @@ canonical USDC for the chain. Those are checked at config load, so
 `agent-commerce validate` catches them and the gateway will not start without
 them.
 
-Configurable is not the same as proven. Settling real value on a public chain
-is **not yet demonstrated** — see [docs/payment-flow.md](docs/payment-flow.md)
-and [docs/configuration.md](docs/configuration.md).
+A ready-to-run testnet config is in
+[`examples/base-sepolia/`](examples/base-sepolia/), and
+`npm run test:testnet` drives the whole flow against Base Sepolia and reads
+the balances and transaction receipt back off the chain to prove it. It needs
+a funded test wallet, skips itself without one, and is deliberately outside
+`npm test` and `npm run test:e2e` — both of those must stay offline.
+
+**Mainnet is a different claim, and it is not made.** `eip155:8453` is
+configurable and guarded, and no payment has been settled on it. See
+[docs/testnet.md](docs/testnet.md).
 
 ## Development
 
@@ -323,6 +333,7 @@ discipline is a release requirement, not a mood.
 | [Payment flow](docs/payment-flow.md)           | the paid round trip, and every way it fails |
 | [Protocols](docs/protocols.md)                 | exactly what is and is not supported        |
 | [Configuration](docs/configuration.md)         | `config.yaml` reference                     |
+| [Base Sepolia](docs/testnet.md)                | running on a public testnet, and proving it |
 | [Security model](docs/security.md)             | trust boundaries, and what we do not defend |
 | [Contracts](docs/contracts.md)                 | the frozen cross-package contract           |
 | [Adapter guide](docs/contributing-adapters.md) | add a protocol or a payment rail            |

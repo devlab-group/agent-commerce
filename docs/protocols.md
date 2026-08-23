@@ -103,11 +103,10 @@ Solana/SVM, the `deferred` scheme, Permit2, per-request signed facilitator
 credentials (a CDP JWT and anything like it — only `none` and `bearer` auth
 exist), multi-asset routing and dynamic pricing.
 
-A remote HTTP facilitator **is** configurable (`facilitator.mode: remote`), and
-so are Base Sepolia and Base mainnet, with the guardrails in
-[configuration.md](configuration.md). What has not happened yet is a settled
-payment on a public chain: every settlement this release has actually
-performed was against the local deterministic chain.
+A remote HTTP facilitator **is** supported (`facilitator.mode: remote`), and
+Base Sepolia settlement is demonstrated on chain — see
+[testnet.md](testnet.md). Base mainnet is configurable and guarded by
+[configuration.md](configuration.md)'s checks, and nothing has settled on it.
 
 ## HTTP surface
 

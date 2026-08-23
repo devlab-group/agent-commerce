@@ -154,10 +154,10 @@ refused on testnet too.
 the gateway runs at startup — the same function, not a second copy of the
 rules.
 
-**Configurable is not the same as exercised.** Public-network settlement is
-represented and guarded here; it has not been run end to end against a public
-chain in this release. The deterministic local path is the one covered by
-tests.
+**Base Sepolia is exercised; mainnet is not.** A real payment has settled on
+Base Sepolia through the public facilitator ([testnet.md](testnet.md)). Nothing
+has settled on `eip155:8453`, and the guardrails above are checks, not
+evidence.
 
 ## Unsupported JSON Schema keywords have a cost
 

@@ -7,6 +7,8 @@ coverage/
 *.log
 .env
 .env.local
+.env.testnet
+.env.*.local
 data/
 *.sqlite
 *.sqlite-journal

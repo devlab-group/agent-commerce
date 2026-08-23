@@ -130,12 +130,11 @@ No public RPC, no public chain, no hosted facilitator, no real money. See
  for the exact SDK behaviour this
 relies on.
 
-## Public networks — configurable, not yet exercised
+## Public networks
 
-Base Sepolia and Base mainnet can now be configured, and so can a remote HTTP
-facilitator; what has not happened is a settled payment on a public chain.
-Every settlement this release has actually performed was against the local
-deterministic chain, and that is the path the tests cover.
+Base Sepolia settlement is demonstrated — see [testnet.md](testnet.md) for the
+transaction. Base mainnet is configurable and guarded, and nothing has settled
+on it. The deterministic local chain remains what the default suite covers.
 
 Three things shape what a public-network config is allowed to look like:
 
@@ -156,3 +155,6 @@ Three things shape what a public-network config is allowed to look like:
 
 There is still no "live mode" toggle. There is configuration, and there are
 checks that refuse the combinations that would lose money.
+
+Running it, and proving a payment settled there:
+[testnet.md](testnet.md).

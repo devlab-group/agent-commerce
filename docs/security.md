@@ -215,9 +215,11 @@ this process holds, which is a hot wallet inside the resource server — the
 arrangement the non-custodial design exists to avoid. With a remote
 facilitator the gateway holds no signing key at all.
 
-No settlement on a public chain has been performed by this release. What is
-described here is what the configuration permits, not what has been
-demonstrated.
+Base Sepolia settlement has been performed and verified on chain
+([testnet.md](testnet.md)). **Mainnet has not**, and nothing here should be
+read as a claim that it has: what this section describes is what the
+configuration permits and refuses, not what has been exercised with real
+funds.
 
 ## Threats we are not addressing in the alpha
 

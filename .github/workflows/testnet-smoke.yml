@@ -1,0 +1,69 @@
+name: Testnet smoke (Base Sepolia)
+
+# Manual only. This workflow spends real testnet USDC and calls a public RPC
+# and a hosted facilitator, so it must never run on a pull request — a fork PR
+# would otherwise be able to drain the test wallet by opening one, and CI's
+# determinism guarantee only holds because nothing on the normal path leaves
+# the runner.
+on:
+  workflow_dispatch:
+    inputs:
+      amount:
+        description: 'USDC to spend per settlement (small; every run spends it)'
+        required: false
+        default: '0.01'
+      facilitator_url:
+        description: 'x402 facilitator endpoint'
+        required: false
+        default: 'https://x402.org/facilitator'
+
+permissions:
+  contents: read
+
+concurrency:
+  # One at a time: two concurrent runs share one buyer wallet, and two
+  # in-flight EIP-3009 authorisations against the same nonce space is exactly
+  # the race the gateway's replay reservation exists to catch. Not something
+  # to trigger from CI on purpose.
+  group: testnet-smoke
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    name: Base Sepolia settlement
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: testnet
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Settle on Base Sepolia
+        env:
+          # Dedicated test wallet. Never a mainnet key, never reused anywhere.
+          X402_TESTNET_BUYER_PRIVATE_KEY: ${{ secrets.X402_TESTNET_BUYER_PRIVATE_KEY }}
+          X402_TESTNET_MERCHANT_ADDRESS: ${{ secrets.X402_TESTNET_MERCHANT_ADDRESS }}
+          X402_TESTNET_RPC_URL: ${{ secrets.X402_TESTNET_RPC_URL }}
+          X402_TESTNET_FACILITATOR_URL: ${{ inputs.facilitator_url }}
+          X402_TESTNET_AMOUNT: ${{ inputs.amount }}
+        run: npm run test:testnet
+
+      # The suite skips itself when its secrets are absent, which would
+      # otherwise look identical to a pass. Fail the run instead, so a
+      # missing secret is never mistaken for a green testnet.
+      - name: Fail if the smoke test skipped
+        if: always()
+        env:
+          BUYER: ${{ secrets.X402_TESTNET_BUYER_PRIVATE_KEY }}
+          MERCHANT: ${{ secrets.X402_TESTNET_MERCHANT_ADDRESS }}
+        run: |
+          if [ -z "$BUYER" ] || [ -z "$MERCHANT" ]; then
+            echo "::error::X402_TESTNET_BUYER_PRIVATE_KEY / X402_TESTNET_MERCHANT_ADDRESS are not set in the 'testnet' environment; the smoke test skipped and proved nothing."
+            exit 1
+          fi
