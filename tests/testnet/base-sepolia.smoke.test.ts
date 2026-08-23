@@ -5,7 +5,9 @@
  * Deliberately NOT part of `npm test` or `npm run test:e2e`: those must stay
  * deterministic and offline. This one spends real testnet USDC, talks to a
  * public RPC and a hosted facilitator, and is run on demand
- * (`npm run test:testnet`) or from the manual GitHub Actions workflow.
+ * (`npm run test:testnet`) from the machine that holds the wallet. Never
+ * triggered by a push or a pull request: there is no workflow for it and there
+ * must not be one, because that would mean a funded key in repository secrets.
  *
  * It skips itself — loudly, naming the variable — when the credentials are
  * absent, so a developer who runs it by accident gets an explanation rather

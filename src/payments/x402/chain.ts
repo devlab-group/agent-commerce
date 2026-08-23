@@ -71,9 +71,17 @@ export function chainIdFromCaip2(network: string): number | undefined {
   return Number.isSafeInteger(chainId) && chainId > 0 ? chainId : undefined;
 }
 
-export function buildLocalChain(rpcUrl: string): Chain {
+/**
+ * `chainId` defaults to the local dev chain because the *facilitator* client
+ * can only ever exist there — a local facilitator is refused on any mainnet.
+ * The read-only health client is different: it is built for whatever network
+ * is configured, including Base, and inherited 84532 on every one of them.
+ * Inert while it only issues raw `getChainId`/`getCode`/`anvil_nodeInfo`, and
+ * wrong the moment anything through it consults `chain.id`.
+ */
+export function buildLocalChain(rpcUrl: string, chainId: number = LOCAL_CHAIN_ID): Chain {
   return {
-    id: LOCAL_CHAIN_ID,
+    id: chainId,
     name: 'agent-commerce-local',
     nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
     rpcUrls: {
@@ -92,9 +100,13 @@ export function buildLocalChain(rpcUrl: string): Chain {
  * only stops *waiting* for the request while the request itself keeps
  * running server-side. Omit it to keep viem's own default (10s).
  */
-export function createLocalPublicClient(rpcUrl: string, timeoutMs?: number): PublicClient {
+export function createLocalPublicClient(
+  rpcUrl: string,
+  timeoutMs?: number,
+  chainId?: number,
+): PublicClient {
   return createPublicClient({
-    chain: buildLocalChain(rpcUrl),
+    chain: buildLocalChain(rpcUrl, chainId),
     transport: http(rpcUrl, timeoutMs !== undefined ? { timeout: timeoutMs } : undefined),
   });
 }

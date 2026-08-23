@@ -308,11 +308,21 @@ describe.skipIf(!existsSync(libEntry))('built library entry', () => {
     const version = load(
       "const s = m.receipts({ path: ':memory:' }); process.stdout.write(s.descriptor.implementationVersion)",
     );
+    const manifestVersion = (
+      JSON.parse(readFileSync(join(pkgRoot, 'package.json'), 'utf8')) as { version: string }
+    ).version;
     expect(version).not.toContain('0.0.0-unknown');
-    expect(version).toBe(
-      (JSON.parse(readFileSync(join(pkgRoot, 'package.json'), 'utf8')) as { version: string })
-        .version,
-    );
+    // The likeliest cause of a mismatch here is a stale `dist/` — the version
+    // is injected by tsup at build time, so a bundle built before a version
+    // change keeps reporting the old one and turns the whole suite red for a
+    // reason that has nothing to do with the source. Say so in the failure,
+    // because the assertion alone reads like a source bug.
+    expect(
+      version,
+      `built bundle reports "${version}" but package.json says "${manifestVersion}". ` +
+        'The version is injected at build time, so `dist/` is almost certainly stale — ' +
+        'run `npm run build` and re-run this test.',
+    ).toBe(manifestVersion);
   });
 });
 

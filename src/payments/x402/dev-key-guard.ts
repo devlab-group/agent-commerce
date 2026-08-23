@@ -65,11 +65,21 @@ function parseHostnameOrThrow(rpcUrl: string): string {
   try {
     return new URL(rpcUrl).hostname;
   } catch (cause) {
-    throw new CommerceError(
-      'CONFIG_INVALID',
-      `x402 provider: rpcUrl "${rpcUrl}" is not a valid URL`,
-      { cause },
-    );
+    // Not the URL itself: every commercial EVM RPC provider embeds an API key
+    // in the path, and these messages reach `validate`, `doctor`, startup
+    // output and CI logs.
+    throw new CommerceError('CONFIG_INVALID', 'x402 provider: rpcUrl is not a valid URL', {
+      cause,
+    });
+  }
+}
+
+/** Host only, for diagnostics. An RPC URL's path routinely carries a key. */
+function describeRpc(rpcUrl: string): string {
+  try {
+    return new URL(rpcUrl).origin;
+  } catch {
+    return '[unparseable rpcUrl]';
   }
 }
 
@@ -101,7 +111,7 @@ export function assertDevKeyIsLocalOnly(rpcUrl: string, signerPrivateKey: string
     throw new CommerceError(
       'CONFIG_INVALID',
       'x402 provider: facilitator.signerPrivateKey is a well-known Anvil development key, but rpcUrl ' +
-        `"${rpcUrl}" does not look like a local/private chain. A public dev key must never sign against ` +
+        `${describeRpc(rpcUrl)} does not look like a local/private chain. A public dev key must never sign against ` +
         'a public network — it is instantly drainable and can grief real settlements via nonce exhaustion. ' +
         'Use a real facilitator key for any non-local RPC, or point rpcUrl at your local/dev chain.',
     );
@@ -130,7 +140,7 @@ export function assertPayToIsNotDevAddress(rpcUrl: string, payTo: string): void 
     throw new CommerceError(
       'CONFIG_INVALID',
       `x402 provider: "payTo" (${payTo}) is a well-known Anvil development address, but rpcUrl ` +
-        `"${rpcUrl}" does not look like a local/private chain. The private key behind that address ` +
+        `${describeRpc(rpcUrl)} does not look like a local/private chain. The private key behind that address ` +
         'is public knowledge, so any revenue settled to it is immediately spendable by anyone. Set ' +
         '"payTo" to your own merchant wallet for any non-local RPC, or point rpcUrl at your ' +
         'local/dev chain.',

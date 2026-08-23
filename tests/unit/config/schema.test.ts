@@ -177,6 +177,104 @@ describe('parseConfig', () => {
     });
   });
 
+  describe('backend.url templating', () => {
+    function withBackendUrl(url: string): Record<string, unknown> {
+      const raw = validRawConfig();
+      const resources = raw['resources'] as Record<string, Record<string, unknown>>;
+      resources['templated'] = {
+        name: 'Templated',
+        input: { type: 'object', properties: { host: { type: 'string' } }, required: ['host'] },
+        backend: { type: 'http', method: 'GET', url },
+        pricing: { type: 'free' },
+        expose: ['http'],
+      };
+      return raw;
+    }
+
+    /**
+     * Every other defence around `{param}` guards the path position, and in the
+     * host position all of them fail open at once: `new URL('http://{host}/api')`
+     * parses so the URL check passes; the runtime containment check is skipped
+     * because its literal prefix (`http://`) does not itself parse as a URL; and
+     * `encodeURIComponent` does not escape dots, so a hostname survives whole.
+     * Caller input would then choose which host the gateway calls — the cloud
+     * metadata service, an internal address, anything.
+     */
+    it.each([
+      ['the whole host', 'http://{host}/api'],
+      ['a host prefix', 'http://{tenant}.api.internal/v1'],
+      ['host and port', 'http://{host}:8080/api'],
+    ])('refuses a parameter that spans %s', (_label, url) => {
+      expectConfigInvalid(() => parseConfig(withBackendUrl(url), {}));
+      try {
+        parseConfig(withBackendUrl(url), {});
+      } catch (error) {
+        if (isCommerceError(error)) {
+          expect(error.message).toContain('before the end of the host');
+        }
+      }
+    });
+
+    it('refuses a parameter in the scheme, via the absolute-URL check', () => {
+      // Refused one check earlier: `{scheme}://…` parses with protocol
+      // `{scheme}:`, which is neither http nor https. Same outcome, different
+      // message, and asserted separately so a change to either is visible.
+      expectConfigInvalid(() => parseConfig(withBackendUrl('{scheme}://backend.local/api'), {}));
+    });
+
+    it.each([
+      ['a path segment', 'http://backend.local/user/{host}'],
+      ['a query value', 'http://backend.local/search?q={host}'],
+      ['the whole path', 'http://backend.local/{host}'],
+    ])('still accepts a parameter in %s', (_label, url) => {
+      expect(() => parseConfig(withBackendUrl(url), {})).not.toThrow();
+    });
+  });
+
+  describe('closed-schema stamping', () => {
+    /**
+     * The stamper's third drift from the validator, after `required` and tuple
+     * `items`. `additionalProperties: {schema}` is the idiomatic "map of typed
+     * objects" shape and the validator applies that subschema recursively — so
+     * without recursion here, every node beneath it stayed open and unknown
+     * keys reached the merchant's backend.
+     */
+    it('closes objects nested under an additionalProperties subschema', () => {
+      const raw = validRawConfig();
+      const resources = raw['resources'] as Record<string, Record<string, unknown>>;
+      resources['mapped'] = {
+        name: 'Mapped',
+        input: {
+          type: 'object',
+          properties: {
+            meta: {
+              type: 'object',
+              additionalProperties: {
+                type: 'object',
+                properties: { name: { type: 'string' } },
+              },
+            },
+          },
+        },
+        backend: { type: 'http', method: 'GET', url: 'http://localhost:3000/x' },
+        pricing: { type: 'free' },
+        expose: ['http'],
+      };
+      const config = parseConfig(raw, {});
+      const schema = config.resources.find((r) => r.id === 'mapped')?.inputSchema as Record<
+        string,
+        unknown
+      >;
+      const meta = (schema['properties'] as Record<string, Record<string, unknown>>)['meta'];
+      const valueSchema = meta?.['additionalProperties'] as Record<string, unknown>;
+      expect(valueSchema['additionalProperties']).toBe(false);
+
+      const validate = compileJsonSchema(schema);
+      expect(validate({ meta: { any: { name: 'ok', SMUGGLED: 'x' } } }).valid).toBe(false);
+      expect(validate({ meta: { any: { name: 'ok' } } }).valid).toBe(true);
+    });
+  });
+
   describe('x402 deployment guardrails', () => {
     const MERCHANT = '0x1111111111111111111111111111111111111111';
     const BASE_USDC = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
@@ -419,7 +517,7 @@ describe('parseConfig', () => {
         messageFor(
           withX402({ payTo: MERCHANT, facilitator: { mode: 'remote', url: 'ftp://x402.invalid' } }),
         ),
-      ).toContain('must be https');
+      ).toContain('must be reached over https');
       expect(
         messageFor(
           withX402({ payTo: MERCHANT, facilitator: { mode: 'remote', url: 'not a url' } }),
@@ -1231,5 +1329,52 @@ describe('parseConfig', () => {
         expect(JSON.stringify(error.details)).not.toContain(secret);
       }
     }
+  });
+});
+
+describe('protocols.mcp.mountPath', () => {
+  function withMountPath(mountPath: unknown): Record<string, unknown> {
+    const raw = validRawConfig();
+    (raw['protocols'] as { mcp: Record<string, unknown> }).mcp['mountPath'] = mountPath;
+    return raw;
+  }
+
+  // A bad mount only fails inside Fastify's route registration, deferred to
+  // server.ready(), which takes the whole gateway down with an opaque FST_ERR_*
+  // instead of degrading the one adapter. These must be CONFIG_INVALID at load.
+  it.each([
+    ['no leading slash', 'mcp'],
+    ['a Fastify parameter', '/mcp/:id'],
+    ['a Fastify wildcard', '/mcp/*'],
+    ['a query marker', '/mcp?x=1'],
+    ['whitespace', '/mcp path'],
+    ['a trailing newline', '/mcp\n'],
+    ['a route the gateway serves', '/health'],
+    ['another route the gateway serves', '/api/receipts'],
+    ['a prefix of a gateway route', '/api'],
+    ['the root path, which is a prefix of everything', '/'],
+  ])('rejects %s', (_label, mountPath) => {
+    expectConfigInvalid(() => parseConfig(withMountPath(mountPath), {}));
+  });
+
+  it('names the offending field in the error', () => {
+    try {
+      parseConfig(withMountPath('/health'), {});
+      expect.unreachable();
+    } catch (error) {
+      if (isCommerceError(error)) {
+        expect(error.message).toContain('mountPath');
+      }
+    }
+  });
+
+  it('control: an ordinary mount path still validates', () => {
+    const config = parseConfig(withMountPath('/mcp'), {});
+    expect(config.protocols.mcp.mountPath).toBe('/mcp');
+  });
+
+  it('control: a nested mount path outside the reserved prefixes still validates', () => {
+    const config = parseConfig(withMountPath('/agents/mcp'), {});
+    expect(config.protocols.mcp.mountPath).toBe('/agents/mcp');
   });
 });

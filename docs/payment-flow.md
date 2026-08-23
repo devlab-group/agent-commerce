@@ -126,9 +126,7 @@ The demo and CI settle for real, on a chain they own:
 - The E2E asserts the buyer's balance falls and the merchant's rises by exactly
   the price, and that the receipt carries a real transaction hash.
 
-No public RPC, no public chain, no hosted facilitator, no real money. See
- for the exact SDK behaviour this
-relies on.
+No public RPC, no public chain, no hosted facilitator, no real money.
 
 ## Public networks
 

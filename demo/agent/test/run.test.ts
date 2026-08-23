@@ -83,6 +83,9 @@ const PAYMENT_REQUIRED_ENVELOPE = {
     accepts: [
       {
         scheme: 'exact',
+        // The buyer pins this before signing: it is what the EIP-712 chain id
+        // is derived from, so a fixture that omits it is a refusal.
+        network: 'eip155:84532',
         payTo: '0x70997970C51812dc3A010C7d01b50e0d17dc79C8',
         asset: '0x5fbdb2315678afecb367f032d93f642f64180aa3',
         amount: '10000',
@@ -384,11 +387,13 @@ describe('the buyer checks the 402 challenge before signing', () => {
     merchant: '0x70997970C51812dc3A010C7d01b50e0d17dc79C8',
     asset: '0x5FbDB2315678afecb367f032d93F642f64180aa3',
     maxValue: MAX_DEMO_PAYMENT_UNITS,
+    network: 'eip155:84532',
   };
   const good = {
     payTo: expected.merchant,
     asset: expected.asset,
     amount: '10000',
+    network: expected.network,
   };
 
   it('accepts the challenge the demo actually expects', () => {
@@ -416,6 +421,10 @@ describe('the buyer checks the 402 challenge before signing', () => {
     ['a zero amount', { amount: '0' }, 'outside the accepted range'],
     ['a non-integer amount', { amount: '1.5' }, 'not an integer'],
     ['a missing recipient', { payTo: undefined }, 'expected merchant'],
+    // The network decides the chain id signed into the EIP-712 domain, so an
+    // unpinned one lets the challenge choose which chain the signature is for.
+    ['a substituted network', { network: 'eip155:1' }, 'expected network'],
+    ['a missing network', { network: undefined }, 'expected network'],
   ])('refuses to sign %s', (_label, override, expectedMessage) => {
     expect(() => assertPaymentIsExpected({ ...good, ...override }, expected)).toThrowError(
       new RegExp(expectedMessage),

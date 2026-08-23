@@ -52,7 +52,11 @@ The gateway makes outbound HTTP calls to URLs it was configured with. For v0.1:
 - backend URLs are **administrator-controlled configuration only**;
 - dynamic, agent- or user-controlled backend URLs are **forbidden** — no code
   path constructs a backend URL from request input beyond `{param}` substitution
-  into a configured template, with each value URL-encoded;
+  into a configured template, with each value URL-encoded. A parameter may only
+  appear once the authority is complete: a template whose `{param}` reaches the
+  scheme, host or port is refused at config load, because caller input would
+  otherwise choose which host the gateway calls and every path-position defence
+  (containment check, `encodeURIComponent`) is inert there;
 - **redirects are not followed** (`redirect: 'manual'`); a 3xx is a
   `BACKEND_ERROR`;
 - every call is bounded by an explicit timeout.
@@ -88,7 +92,7 @@ Validated at the boundary, before anything else happens:
 
 | Input           | Check                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| resource input  | JSON Schema from the resource definition, closed by default at every level: an object schema — root, nested under `properties`, or nested under `items` — that omits `additionalProperties` gets `additionalProperties: false` stamped on recursively at config load, not just at the root; an operator who sets it explicitly (including explicitly to `true`) is respected at whichever level they set it. A resource that declares no `input:` at all gets an empty closed schema, not an always-valid one — declaring nothing means accepting nothing. Unknown properties, including prototype-named keys (`__proto__`, `constructor`, …), are matched by own-property lookup only. |
+| resource input  | JSON Schema from the resource definition, closed by default at every level: an object schema — root, nested under `properties`, nested under `items`, or nested under an `additionalProperties` subschema — that omits `additionalProperties` gets `additionalProperties: false` stamped on recursively at config load, not just at the root. That enumeration was written from the stamper rather than from the validator and drifted three times; it now matches what `compileJsonSchema` actually recurses into; an operator who sets it explicitly (including explicitly to `true`) is respected at whichever level they set it. A resource that declares no `input:` at all gets an empty closed schema, not an always-valid one — declaring nothing means accepting nothing. Unknown properties, including prototype-named keys (`__proto__`, `constructor`, …), are matched by own-property lookup only. |
 | path parameters | URL-encoded on substitution                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | body size       | capped at 256 KB, one number for both surfaces, enforced in two different places: Fastify's `bodyLimit` runs inside a body parser on the HTTP routes; `/mcp` deliberately installs a no-op parser so the MCP transport can read the raw stream, so the mount enforces its own byte count instead. A cap that only protects one of two entry points, or two caps that can silently drift apart, is how `/mcp` ended up with no cap at all in the first place.                                                                                                                                                                                                                            |
 | content type    | JSON enforced on the invoke routes. **Not** on `/mcp`, where a wildcard no-op parser hands the raw stream to the MCP SDK and the SDK does its own enforcement.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
@@ -156,14 +160,13 @@ The backend's **status code** is returned — that is ours to state and useful �
 and the body is logged server-side at debug level only.
 
 The same rule governs health and readiness detail: a fixed vocabulary on the
-wire, raw messages to the log. See
-; the rule generalises to any
-value crossing a trust boundary.
+wire, raw messages to the log; the rule generalises to any value crossing a
+trust boundary.
 
 ## Denial of service
 
-Not a focus of v0.1, but more is in place than this section used to list
-. What exists:
+Not a focus of this release, but more is in place than this section used to
+list. What exists:
 
 - request body-size cap, enforced inside the body parsers
 - a **1 MB cap on the merchant backend's *response*** — `AbortSignal.timeout`
@@ -260,12 +263,17 @@ rejection outcomes assert that balances did not move.
 | **duplicate concurrent request**                                     | settles once, other gets `PAYMENT_REPLAYED`                       | `tests/integration/adversarial-payment.test.ts`   |
 | **replay after a gateway restart**                                   | still refused — the reservation is in SQLite                      | same                                              |
 | expired authorisation (`validBefore` in the past)                    | refused before settlement                                         | `tests/e2e/payment`                               |
+| not-yet-valid authorisation (`validAfter` in the future) | refused before settlement | `tests/e2e/payment` |
+| a `{param}` in the host position of `backend.url` | refused at config load | `tests/unit/config/schema.test.ts` |
+| an unknown key nested under an `additionalProperties` schema | rejected by the closed schema | same |
+| a hostile or unbounded facilitator rejection string | clamped before it reaches buyer, event or ledger | `tests/unit/payments-x402` |
 | facilitator timeout                                                  | `PAYMENT_PROVIDER_UNAVAILABLE`, settlement treated as *uncertain* | `tests/unit/payments-x402`                        |
 | **facilitator 401 / 5xx**                                            | `PAYMENT_PROVIDER_UNAVAILABLE`, never charged to the buyer        | `tests/integration/adversarial-payment.test.ts`   |
 | **malformed facilitator response**                                   | refused; never read as a verdict                                  | same                                              |
 | backend timeout                                                      | `BACKEND_TIMEOUT`                                                 | `tests/unit/core/execution`                       |
 | backend 500 after payment                                            | receipt records paid-and-undelivered; payer told it settled       | `tests/unit/gateway`, `tests/unit/core/execution` |
 | receipt-store failure                                                | `STORAGE_ERROR`, never mislabelled `PAYMENT_REPLAYED`             | `tests/unit/storage-receipts`                     |
+| a local reader racing the ledger's creation | database and sidecars are 0600 from the moment SQLite opens them | `tests/unit/storage-receipts/permissions.test.ts` |
 | RPC unreachable during verify                                        | `PAYMENT_PROVIDER_UNAVAILABLE`, not "bad signature"               | `tests/unit/payments-x402`                        |
 
 Two of those exist because writing them found a bug. The SDK's `exact`/EVM

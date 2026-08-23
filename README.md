@@ -87,7 +87,7 @@ const gateway = await createGateway({
   paymentProviders: [],
   protocolAdapters: [],
 });
-const { url } = await gateway.listen;
+const { url } = await gateway.listen();
 ```
 
 ### Optional peers — install only the rails you use
@@ -352,14 +352,14 @@ spends real USDC on every run.
 ```console
 $ npm run agent-commerce -- doctor --config config-demo.yaml
 
-PASS Config valid — 2 resource(s), merchant "Demo Data Store"
-PASS Gateway healthy and ready at http://127.0.0.1:8080
-PASS Backend 2/2 backend host(s) reachable
-PASS Protocols http=on mcp=on (/mcp)
-PASS Payments x402 v2 (scheme=exact) enabled — LOCAL on Base Sepolia (eip155:84532), destination=0x7099…79C8, facilitator=local
-INFO Payments (MPP) planned — not implemented in v0.1
-PASS Storage sqlite schema v1 writable; receipts=2
-PASS Protocol versions reported by gateway /.well-known/agent-commerce
+PASS  Config               valid — 2 resource(s), merchant "Demo Data Store" (using local chain manifest .deploy/local.json for X402_ASSET, X402_ASSET_NAME, X402_ASSET_VERSION, X402_ASSET_DECIMALS, MERCHANT_WALLET, X402_FACILITATOR_PRIVATE_KEY)
+PASS  Gateway              healthy and ready at http://127.0.0.1:8080
+PASS  Backend              2/2 backend host(s) reachable
+PASS  Protocols            http=on mcp=on (/mcp)
+PASS  Payments             x402 v2 (scheme=exact) enabled — LOCAL dev chain (eip155:84532, chain id shared with Base Sepolia), destination=0x7099…79C8, facilitator=local
+INFO  Payments (MPP)       planned — not implemented in this release
+PASS  Storage              sqlite schema v1 writable; receipts=2
+PASS  Protocol versions    reported by gateway /.well-known/agent-commerce
 
 Score: 7/7 checks passed
 ```

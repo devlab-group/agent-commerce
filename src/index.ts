@@ -13,9 +13,9 @@
  *
  * **The protocol adapter and the payment provider are not here.** They live at
  * `@devlab.group/agent-commerce/mcp` and `@devlab.group/agent-commerce/x402`, because each needs
- * an optional peer dependency the rest of the package does not: importing
- * keeping them here would make `createGateway` drag in a browser wallet stack
- * and 340 packages. See
+ * an optional peer dependency the rest of the package does not. Keeping them
+ * here would make `createGateway` drag the whole EVM signing and RPC stack into
+ * every install, including one serving a single free HTTP resource. See
  * `src/mcp.ts` and `src/x402.ts`. Everything reachable from *this* entry point
  * needs only the package's own `dependencies`.
  */

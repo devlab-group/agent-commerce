@@ -112,13 +112,60 @@ const StorageSchema = z
   })
   .strict();
 
+/**
+ * Every path the gateway registers itself (`src/gateway/routes.ts`). An MCP
+ * mount that equals one of these makes Fastify's `.all()` a duplicate of the
+ * registered route; one that is a path-prefix of them swallows their 404s
+ * through the mount's `${mountPath}/*` wildcard.
+ */
+const RESERVED_GATEWAY_PATHS = [
+  '/health',
+  '/ready',
+  '/.well-known/agent-commerce',
+  '/api/resources',
+  '/api/resources/:id/invoke',
+  '/api/receipts',
+  '/api/events',
+  '/api/events/stream',
+] as const;
+
+/**
+ * `mountPath` reaches Fastify as a route pattern, and a bad one throws inside
+ * route registration — deferred to `server.ready()`, so `createGateway` fails
+ * wholesale with an opaque `FST_ERR_*` instead of the adapter alone degrading.
+ * Catching the shape here turns that into a CONFIG_INVALID naming the value.
+ * Fastify pattern syntax (`:param`, `*`) is rejected rather than supported:
+ * the mount registers its own wildcard, so a pattern here has no meaning.
+ */
+const McpMountPathSchema = z
+  .string()
+  .min(1)
+  .refine((value) => value.startsWith('/'), {
+    message: 'must start with "/" — it is an absolute gateway path, e.g. "/mcp".',
+  })
+  .refine((value) => !/[:*?\s]/.test(value), {
+    message:
+      'must not contain ":", "*", "?" or whitespace — the mount is a literal path prefix, not a Fastify route pattern, and registers its own wildcard.',
+  })
+  .refine(
+    (value) => {
+      const base = value.replace(/\/+$/, '');
+      return !RESERVED_GATEWAY_PATHS.some(
+        (reserved) => reserved === base || reserved.startsWith(`${base}/`),
+      );
+    },
+    {
+      message: `must not collide with a route the gateway already serves (${RESERVED_GATEWAY_PATHS.join(', ')}); pick a dedicated prefix such as "/mcp".`,
+    },
+  );
+
 const ProtocolsSchema = z
   .object({
     http: z.object({ enabled: BooleanOrString }).strict(),
     mcp: z
       .object({
         enabled: BooleanOrString,
-        mountPath: z.string().min(1),
+        mountPath: McpMountPathSchema,
       })
       .strict(),
   })
@@ -730,6 +777,18 @@ function defaultClosedObjectSchema(schema: Record<string, unknown>): Record<stri
     result['items'] = defaultClosedObjectSchema(items);
   }
 
+  // The third place this stamper drifted from the validator, after `required`
+  // and tuple `items`. `additionalProperties: {schema}` is the idiomatic
+  // "map of typed objects" shape, and core's validator applies that subschema
+  // recursively at unbounded depth — so without this branch, every node under
+  // it stayed open and unknown keys reached the merchant backend. Recursion
+  // here is not conditional on `isObjectSchema`: the validator applies the
+  // subschema wherever it finds one.
+  const additional = schema['additionalProperties'];
+  if (isPlainObject(additional)) {
+    result['additionalProperties'] = defaultClosedObjectSchema(additional);
+  }
+
   return result;
 }
 
@@ -862,6 +921,10 @@ function validateResourceSchemaKeywords(
       if (isPlainObject(sub)) validateResourceSchemaKeywords(id, `${path}.properties.${key}`, sub);
     }
   }
+  const additional = schema['additionalProperties'];
+  if (isPlainObject(additional)) {
+    validateResourceSchemaKeywords(id, `${path}.additionalProperties`, additional);
+  }
   const items = schema['items'];
   if (isPlainObject(items)) {
     validateResourceSchemaKeywords(id, `${path}.items`, items);
@@ -954,6 +1017,37 @@ function validatePathParametersDeclared(
 
   const params = extractPathParameterNames(url);
   if (params.length === 0) return;
+
+  // Every defence around `{param}` guards the *path* position, and in the host
+  // position all of them fail open at once: `new URL('http://{host}/api')`
+  // parses (the hostname is literally `{host}`) so the URL check passes; the
+  // runtime containment check is skipped because its literal prefix
+  // (`http://`) does not itself parse as a URL; and `encodeURIComponent` does
+  // not escape dots, so a hostname survives it whole. Caller input then chooses
+  // which host the gateway calls — the metadata service, an internal address,
+  // anything. `http://{region}.api.internal/...` is an ordinary-looking
+  // multi-tenant template, so this is refused here rather than warned about.
+  //
+  // The rule: everything before the first `{` must already be a complete
+  // authority — a parseable origin followed by the path's leading `/`.
+  const firstBrace = url.indexOf('{');
+  if (firstBrace !== -1) {
+    const prefix = url.slice(0, firstBrace);
+    let origin: string | undefined;
+    try {
+      const parsedPrefix = new URL(prefix);
+      origin = parsedPrefix.hostname === '' ? undefined : parsedPrefix.origin;
+    } catch {
+      // Not a URL at all — the parameter starts before the authority is done.
+    }
+    if (origin === undefined || !prefix.startsWith(`${origin}/`)) {
+      throw new CommerceError(
+        'CONFIG_INVALID',
+        `Resource "${id}" has a backend.url parameter before the end of the host ("${url}"). A caller-supplied value would choose which host the gateway calls, which is request forgery with the gateway's own network position. Parameters are supported inside the path and query only`,
+        { details: { path: `resources.${id}.backend.url`, resourceId: id } },
+      );
+    }
+  }
 
   const propertiesRaw = input?.['properties'];
   const properties = isPlainObject(propertiesRaw) ? propertiesRaw : {};

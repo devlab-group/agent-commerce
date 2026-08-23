@@ -148,6 +148,17 @@ export function resolveX402Deployment(input: X402DeploymentInput): X402Deploymen
   // `dev-key-guard` already refuses one against a public *RPC*; this refuses
   // one on any non-local *deployment*, which is the case a remote facilitator
   // creates — there the RPC host says nothing about where settlement lands.
+  // The zero address lived only in the config loader, so a library consumer
+  // calling `createX402PaymentProvider` directly — the path this shared
+  // definition exists to cover — could boot a mainnet provider whose every
+  // payment burns. Round 6's lesson, regressed for one check.
+  if (/^0x0{40}$/i.test(input.payTo)) {
+    throw invalid(
+      'payments.x402: "payTo" is the zero address. Every payment settled there is destroyed.',
+      'payments.x402.payTo',
+    );
+  }
+
   if (mode !== 'local' && isWellKnownDevAddress(input.payTo)) {
     throw invalid(
       `payments.x402: "payTo" (${input.payTo}) is a well-known Anvil development address and this is a ${mode} deployment. Anyone can spend what settles there. Set payTo to your own merchant wallet.`,
@@ -197,24 +208,26 @@ function assertFacilitatorUrlIsSafe(url: string, mode: DeploymentMode): void {
   try {
     parsed = new URL(url);
   } catch (cause) {
-    throw new CommerceError(
-      'CONFIG_INVALID',
-      `payments.x402: facilitator.url "${url}" is not a valid URL`,
-      { cause, details: { path: 'payments.x402.facilitator.url' } },
-    );
+    throw new CommerceError('CONFIG_INVALID', `payments.x402: facilitator.url is not a valid URL`, {
+      cause,
+      details: { path: 'payments.x402.facilitator.url' },
+    });
   }
 
   if (parsed.protocol === 'https:') return;
   if (parsed.protocol !== 'http:') {
     throw invalid(
-      `payments.x402: facilitator.url must be https (or http on a local/private host); got "${parsed.protocol}//"`,
+      `payments.x402: facilitator ${describeOrigin(url)} must be reached over https (or http on a local/private host); got "${parsed.protocol}//"`,
       'payments.x402.facilitator.url',
     );
   }
   if (mode !== 'mainnet' && isLikelyLocalOrPrivateHost(parsed.hostname)) return;
 
+  // The origin, never the whole URL: the path can carry a tenant or an API
+  // key, which is why `/.well-known` withholds this field entirely. A refusal
+  // message goes to `validate`, `doctor`, startup output and CI logs.
   throw invalid(
-    `payments.x402: facilitator.url "${url}" uses plain HTTP. Payment authorisations and settlement results would travel unencrypted. Use https, or point at a local/private host on a non-mainnet deployment.`,
+    `payments.x402: facilitator ${describeOrigin(url)} is reached over plain HTTP. Payment authorisations and settlement results would travel unencrypted. Use https, or point at a local/private host on a non-mainnet deployment.`,
     'payments.x402.facilitator.url',
   );
 }

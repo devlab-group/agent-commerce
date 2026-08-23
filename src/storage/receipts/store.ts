@@ -5,7 +5,15 @@
  * statement; the only thing that varies between calls is parameters.
  */
 import { randomUUID } from 'node:crypto';
-import { accessSync, chmodSync, existsSync, constants as fsConstants, mkdirSync } from 'node:fs';
+import {
+  accessSync,
+  chmodSync,
+  closeSync,
+  existsSync,
+  constants as fsConstants,
+  mkdirSync,
+  openSync,
+} from 'node:fs';
 import { dirname } from 'node:path';
 import Database from 'better-sqlite3';
 import {
@@ -90,8 +98,11 @@ function isUniqueConstraintOn(err: unknown, column: string): boolean {
  * `redact.ts` is recursive), but business metadata all the same.
  *
  * Called *after* `journal_mode = WAL`, because the sidecars do not exist until
- * then. Best-effort by design: a filesystem without POSIX modes must not stop
- * the gateway from starting, so a failure warns rather than throws.
+ * then. Belt-and-braces since the main file is now pre-created at 0600 (see
+ * `createSqliteReceiptStore`): this still tightens a database that already
+ * existed with a looser mode. Best-effort by design: a filesystem without
+ * POSIX modes must not stop the gateway from starting, so a failure warns
+ * rather than throws.
  */
 function restrictDatabasePermissions(path: string, logger: Logger): void {
   for (const file of [path, `${path}-wal`, `${path}-shm`]) {
@@ -141,6 +152,23 @@ export function createSqliteReceiptStore(options: SqliteReceiptStoreOptions): Re
         `Receipt database "${path}" exists but is not writable by this process (uid ${typeof process.getuid === 'function' ? process.getuid() : 'unknown'}). If this is a container that recently changed user, an existing volume may still be owned by the previous one — recreate it (docker compose down -v) or fix its ownership.`,
         { details: { path } },
       );
+    }
+  }
+
+  // Create the file ourselves, at 0600, *before* SQLite can create it at
+  // `0666 & ~umask`. The chmod below only narrows the mode after the fact: a
+  // local co-tenant who opens the file inside that window keeps a readable
+  // descriptor across the chmod and reads every receipt written afterwards.
+  // SQLite copies the main file's mode onto the -wal/-shm sidecars, so this
+  // one call covers all three. `mode` applies on creation only, so an
+  // existing file is untouched here and left to the chmod.
+  if (isFileBacked) {
+    try {
+      closeSync(openSync(path, 'a', 0o600));
+    } catch {
+      // Deliberately silent: whatever stopped us (unwritable directory,
+      // exotic filesystem) is about to be reported by `new Database` with a
+      // better message, or is harmless and covered by the chmod below.
     }
   }
 

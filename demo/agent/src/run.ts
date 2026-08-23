@@ -17,6 +17,7 @@ import {
   isPaymentRequiredEnvelope,
   PAYMENT_INPUT_FIELD,
 } from '../../../src/core/index.js';
+import { LOCAL_NETWORK } from '../../../src/payments/x402/chain.js';
 import {
   type BalanceReader,
   createBalanceReader,
@@ -89,13 +90,24 @@ export function assertPaymentIsExpected(
     payTo?: string | undefined;
     asset?: string | undefined;
     amount?: string | undefined;
+    network?: string | undefined;
   },
-  expected: { merchant: string; asset: string; maxValue: bigint },
+  expected: { merchant: string; asset: string; maxValue: bigint; network: string },
 ): void {
   const step = 'check the payment requirement before signing';
   const same = (a: string | undefined, b: string): boolean =>
     typeof a === 'string' && a.toLowerCase() === b.toLowerCase();
 
+  // The network is what `createPaymentProof` derives the EIP-712 chain id
+  // from, so an unpinned one lets a hostile gateway obtain a signature domained
+  // to a chain of its choosing — bounded by the pinned asset, but a real gap in
+  // a routine every reader is invited to copy.
+  if (accepts.network !== expected.network) {
+    throw new DemoAgentStepError(
+      step,
+      `challenge names network "${String(accepts.network)}" but the expected network is "${expected.network}" — refusing to sign`,
+    );
+  }
   if (!same(accepts.payTo, expected.merchant)) {
     throw new DemoAgentStepError(
       step,
@@ -230,11 +242,12 @@ export async function runDemoAgent(deps: DemoAgentDeps = {}): Promise<number> {
     // intent. Damage here is bounded by a single-use nonce and a local chain,
     // and this demo does trust its own gateway — but demos get copied, and a
     // real buyer that signs an unchecked challenge has no recourse. These
-    // three assertions are what that buyer must do, written out.
+    // assertions are what that buyer must do, written out.
     assertPaymentIsExpected(accepts, {
       merchant: manifest.merchant.address,
       asset: manifest.asset,
       maxValue: BigInt(MAX_DEMO_PAYMENT_UNITS),
+      network: process.env['X402_NETWORK'] ?? LOCAL_NETWORK,
     });
     log.buyer(
       `challenge checked before signing: pays ${accepts.amount} units of ${accepts.asset} to ${accepts.payTo}`,
