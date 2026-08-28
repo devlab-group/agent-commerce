@@ -67,6 +67,27 @@ export interface HttpProtocolAdapter extends ProtocolAdapter {
   /** Path prefix the gateway mounts this adapter at, e.g. '/mcp'. */
   readonly mountPath: string;
   handleHttp(req: IncomingMessage, res: ServerResponse): Promise<void>;
+  /**
+   * Fixed paths this adapter owns *outside* its mount, for protocols whose
+   * specification pins a discovery URL (A2A's `/.well-known/agent-card.json`).
+   * The gateway mounts them with the same guarantees as `mountPath` — same
+   * unconsumed body, same concurrency cap, same failure isolation — so the
+   * gateway needs no per-protocol routing knowledge.
+   *
+   * Omitted by adapters that need none.
+   */
+  readonly additionalHttpRoutes?: readonly AdapterHttpRoute[];
+}
+
+/**
+ * One fixed, method-scoped route owned by an adapter. Unlike `mountPath` it
+ * registers no wildcard: it matches exactly the path given.
+ */
+export interface AdapterHttpRoute {
+  readonly method: 'GET' | 'POST';
+  /** Absolute gateway path, e.g. '/.well-known/agent-card.json'. */
+  readonly path: string;
+  handleHttp(req: IncomingMessage, res: ServerResponse): Promise<void>;
 }
 
 export function isHttpProtocolAdapter(adapter: ProtocolAdapter): adapter is HttpProtocolAdapter {

@@ -614,10 +614,8 @@ function validateMountPaths(protocols: NormalisedProtocols): void {
     ] as const
   ).filter(([, p]) => p.enabled);
 
-  for (let i = 0; i < mounts.length; i += 1) {
-    for (let j = i + 1; j < mounts.length; j += 1) {
-      const [nameA, a] = mounts[i]!;
-      const [nameB, b] = mounts[j]!;
+  for (const [index, [nameA, a]] of mounts.entries()) {
+    for (const [nameB, b] of mounts.slice(index + 1)) {
       const baseA = a.mountPath.replace(/\/+$/, '');
       const baseB = b.mountPath.replace(/\/+$/, '');
       if (baseA === baseB || baseA.startsWith(`${baseB}/`) || baseB.startsWith(`${baseA}/`)) {

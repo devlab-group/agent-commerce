@@ -87,6 +87,7 @@ export type { BackendExecutor, BackendRequest, BackendResponse } from './interfa
 export type { Logger } from './interfaces/logger.js';
 export { NOOP_LOGGER } from './interfaces/logger.js';
 export type {
+  AdapterHttpRoute,
   HttpProtocolAdapter,
   ProtocolAdapter,
   ProtocolAdapterContext,
