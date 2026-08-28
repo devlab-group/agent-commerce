@@ -16,4 +16,6 @@ export {
   A2A_SPEC_VERSION,
 } from './constants.js';
 export { A2A_CAPABILITIES, A2A_UNSUPPORTED } from './descriptor.js';
+export type { A2aInvocation } from './message-mapping.js';
+export { A2A_USER_ROLE, parseInvocation } from './message-mapping.js';
 export type { A2aAgentCard, A2aAgentSkill } from './types.js';
