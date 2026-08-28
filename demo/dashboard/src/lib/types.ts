@@ -70,6 +70,9 @@ export interface WellKnownDocument {
   readonly protocols: {
     readonly http: { readonly enabled: boolean };
     readonly mcp: { readonly enabled: boolean; readonly mountPath: string };
+    // Optional here, not in the gateway config: this mirrors a wire document
+    // that an older gateway may not carry.
+    readonly a2a?: { readonly enabled: boolean; readonly mountPath: string };
   };
   readonly adapters: readonly AdapterWithHealth[];
   readonly paymentProviders: readonly AdapterDescriptor[];

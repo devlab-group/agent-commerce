@@ -85,7 +85,11 @@ describe('runValidate — with an injected loader (isolated branch coverage)', (
     await runValidate({}, io, {
       loadConfig: async () =>
         makeGatewayConfig({
-          protocols: { http: { enabled: false }, mcp: { enabled: false, mountPath: '/mcp' } },
+          protocols: {
+            http: { enabled: false },
+            mcp: { enabled: false, mountPath: '/mcp' },
+            a2a: { enabled: false, mountPath: '/a2a' },
+          },
         }),
     });
     expect(io.out.join('\n')).toContain('protocols: http=off mcp=off');

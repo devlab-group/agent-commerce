@@ -212,7 +212,11 @@ export function makeGatewayConfig(overrides: Partial<GatewayConfig> = {}): Gatew
     merchant: { id: 'demo-store', name: 'Demo Store', publicBaseUrl: 'http://localhost:8080' },
     server: { port: 0, host: '127.0.0.1', allowedOrigins: [] },
     storage: { receipts: { driver: 'sqlite', path: ':memory:' } },
-    protocols: { http: { enabled: true }, mcp: { enabled: true, mountPath: '/mcp' } },
+    protocols: {
+      http: { enabled: true },
+      mcp: { enabled: true, mountPath: '/mcp' },
+      a2a: { enabled: false, mountPath: '/a2a' },
+    },
     resources: [
       {
         id: 'weather_basic',

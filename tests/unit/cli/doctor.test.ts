@@ -700,7 +700,11 @@ describe('runDoctor — additional derivation and error-recovery branches', () =
         fetchImpl: healthyFetch(),
         loadConfig: async () =>
           makeGatewayConfig({
-            protocols: { http: { enabled: true }, mcp: { enabled: false, mountPath: '/mcp' } },
+            protocols: {
+              http: { enabled: true },
+              mcp: { enabled: false, mountPath: '/mcp' },
+              a2a: { enabled: false, mountPath: '/a2a' },
+            },
           }),
         createStore: () => makeFakeReceiptStore(),
       },
