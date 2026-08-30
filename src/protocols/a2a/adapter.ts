@@ -16,14 +16,11 @@ import {
   type AdapterHttpRoute,
   type CanonicalRequest,
   CommerceError,
-  type CommerceErrorCode,
   type CommerceResource,
   type ExecutionOutcome,
   type HttpProtocolAdapter,
   type ProtocolAdapterContext,
   toCommerceError,
-  toDeliverySummary,
-  toPaymentRequiredEnvelope,
 } from '../../core/index.js';
 import { PACKAGE_VERSION } from '../../version.js';
 import { buildAgentCard } from './agent-card.js';
@@ -55,7 +52,13 @@ import {
   extractPaymentSubmission,
   parseInvocation,
 } from './message-mapping.js';
-import type { A2aAgentCard } from './types.js';
+import {
+  completedTask,
+  failedTask,
+  paymentRequiredTask,
+  type TaskIdentity,
+} from './task-mapping.js';
+import type { A2aAgentCard, A2aTask } from './types.js';
 
 /**
  * The gateway mount already destroys a connection whose body passes its cap,
@@ -295,13 +298,19 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
 
     const resource = this.skillsById.get(invocation.resourceId);
     if (resource === undefined) {
-      // Identical message whether the resource does not exist or is scoped to
-      // another protocol: a caller must not be able to probe for resources
-      // this deployment does not expose over A2A.
-      return jsonRpcError(
+      // A commerce outcome, so a failed task rather than a JSON-RPC error —
+      // and identical whether the resource does not exist or is scoped to
+      // another protocol, so a caller cannot probe for what this deployment
+      // does not expose over A2A.
+      return this.taskResult(
         id,
-        JSONRPC_INVALID_PARAMS,
-        `Unknown canonical resource "${invocation.resourceId}".`,
+        failedTask(
+          new CommerceError(
+            'RESOURCE_NOT_FOUND',
+            `Unknown canonical resource "${invocation.resourceId}".`,
+          ),
+          this.taskIdentity(context, context.ids.next('a2a')),
+        ),
       );
     }
 
@@ -314,34 +323,41 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
       receivedAt: context.clock.nowIso(),
       ...(payment !== undefined ? { payment } : {}),
     };
+    const identity = this.taskIdentity(context, request.requestId);
 
     try {
-      return jsonRpcResult(id, this.toResult(await context.pipeline.execute(request)));
+      const outcome: ExecutionOutcome = await context.pipeline.execute(request);
+      return this.taskResult(
+        id,
+        outcome.kind === 'payment-required'
+          ? paymentRequiredTask(outcome, identity)
+          : completedTask(outcome, identity),
+      );
     } catch (err) {
+      // Whatever went wrong downstream is the caller's *answer*, not a broken
+      // frame — `toCommerceError` also strips an arbitrary Error's message, so
+      // nothing internal reaches the artifact.
       const error = toCommerceError(err);
       context.logger.warn(
         { resourceId: invocation.resourceId, requestId: request.requestId, err: error.toInfo() },
         'a2a adapter: execution failed',
       );
-      return jsonRpcError(id, jsonRpcCodeFor(error.code), error.message);
+      return this.taskResult(id, failedTask(error, identity));
     }
   }
 
-  /**
-   * Interim shape: terminal A2A Task mapping arrives with outcome mapping.
-   * Both branches use the canonical envelopes rather than an A2A-specific
-   * invention, so nothing here has to be unlearned then.
-   */
-  private toResult(outcome: ExecutionOutcome): Record<string, unknown> {
-    if (outcome.kind === 'payment-required') {
-      return { ...toPaymentRequiredEnvelope(outcome) };
-    }
+  private taskIdentity(context: ProtocolAdapterContext, requestId: string): TaskIdentity {
     return {
-      kind: 'delivered',
-      resourceId: outcome.resourceId,
-      body: outcome.body,
-      delivery: toDeliverySummary(outcome),
+      taskId: requestId,
+      contextId: context.ids.next('a2a-ctx'),
+      artifactId: context.ids.next('a2a-artifact'),
+      timestamp: context.clock.nowIso(),
     };
+  }
+
+  /** A2A's JSON-RPC result wraps the terminal task. */
+  private taskResult(id: JsonRpcId, task: A2aTask): Record<string, unknown> {
+    return jsonRpcResult(id, { task });
   }
 
   async health(): Promise<AdapterHealth> {
@@ -364,25 +380,6 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
     if (res.headersSent) return;
     res.writeHead(status, { 'content-type': A2A_JSON_MEDIA_TYPE });
     res.end(JSON.stringify(body));
-  }
-}
-
-/**
- * Commerce failures are not transport failures: a rejected payment or a
- * missing resource is the caller's request being answered, not the frame
- * being wrong. Only the two that genuinely describe the request map to a
- * JSON-RPC param error; everything else stays internal until outcome mapping
- * gives it a task state.
- */
-function jsonRpcCodeFor(code: CommerceErrorCode): number {
-  switch (code) {
-    case 'RESOURCE_NOT_FOUND':
-    case 'INPUT_INVALID':
-      return JSONRPC_INVALID_PARAMS;
-    case 'PROTOCOL_UNSUPPORTED':
-      return A2A_ERROR_UNSUPPORTED_OPERATION;
-    default:
-      return JSONRPC_INTERNAL_ERROR;
   }
 }
 

@@ -15,9 +15,12 @@ export {
   A2A_PROTOCOL_BINDING,
   A2A_PROTOCOL_VERSION,
   A2A_SPEC_VERSION,
+  A2A_TASK_STATE_COMPLETED,
+  A2A_TASK_STATE_FAILED,
   A2A_VERSION_HEADER,
 } from './constants.js';
 export { A2A_CAPABILITIES, A2A_UNSUPPORTED } from './descriptor.js';
 export type { A2aInvocation } from './message-mapping.js';
 export { A2A_USER_ROLE, parseInvocation } from './message-mapping.js';
-export type { A2aAgentCard, A2aAgentSkill } from './types.js';
+export { completedTask, failedTask, paymentRequiredTask } from './task-mapping.js';
+export type { A2aAgentCard, A2aAgentSkill, A2aArtifact, A2aTask } from './types.js';

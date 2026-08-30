@@ -60,3 +60,14 @@ export const A2A_UNSUPPORTED_METHODS: readonly string[] = [
   'DeleteTaskPushNotificationConfig',
   'GetExtendedAgentCard',
 ];
+
+/**
+ * Terminal task states. Only these two are ever returned: a synchronous
+ * execution is finished by the time the response is written, and no task
+ * store exists for a caller to poll a non-terminal one against.
+ */
+export const A2A_TASK_STATE_COMPLETED = 'TASK_STATE_COMPLETED';
+export const A2A_TASK_STATE_FAILED = 'TASK_STATE_FAILED';
+
+/** Role an agent-authored message carries, as A2A v1 spells it. */
+export const A2A_AGENT_ROLE = 'ROLE_AGENT';

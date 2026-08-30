@@ -12,7 +12,7 @@ import type { GatewayConfig } from '../../src/config/index.js';
 import type { BackendExecutor } from '../../src/core/index.js';
 import { createGateway, type GatewayInstance } from '../../src/gateway/index.js';
 import { createA2aAdapter } from '../../src/protocols/a2a/index.js';
-import type { A2aAgentCard } from '../../src/protocols/a2a/types.js';
+import type { A2aAgentCard, A2aTask } from '../../src/protocols/a2a/types.js';
 import { createMcpAdapter } from '../../src/protocols/mcp/index.js';
 import { createFakeStore } from '../unit/gateway/helpers.js';
 
@@ -82,7 +82,7 @@ async function startGateway(): Promise<GatewayInstance> {
 interface JsonRpcResponse {
   jsonrpc: string;
   id: string | number | null;
-  result?: unknown;
+  result?: { task?: A2aTask };
   error?: { code: number; message: string };
 }
 
@@ -161,14 +161,28 @@ describe('A2A JSON-RPC transport over the real gateway', () => {
     expect(body.jsonrpc).toBe('2.0');
     expect(body.id).toBe('req-1');
     expect(body.error).toBeUndefined();
-    expect(body.result).toMatchObject({ kind: 'delivered', body: { forecast: 'sunny' } });
+    const task = body.result?.task;
+    expect(task?.status.state).toBe('TASK_STATE_COMPLETED');
+    expect(task?.artifacts[0]?.parts[0]?.data).toEqual({ forecast: 'sunny' });
   });
 
-  it('refuses a resource the config does not expose over a2a', async () => {
+  it('refuses a resource the config does not expose over a2a, as a failed task', async () => {
     const gw = await startGateway();
     const { body } = await rpc(gw, sendMessage({ resource: 'mcp_only', input: {} }));
-    expect(body.error?.code).toBe(-32602);
-    expect(body.error?.message).toContain('Unknown canonical resource');
+
+    // A commerce answer, not a broken frame: the JSON-RPC layer stays clean.
+    expect(body.error).toBeUndefined();
+    expect(body.result?.task?.status.state).toBe('TASK_STATE_FAILED');
+    expect(body.result?.task?.artifacts[0]?.parts[0]?.data['code']).toBe('RESOURCE_NOT_FOUND');
+  });
+
+  it('answers input that fails the resource schema with a failed task', async () => {
+    const gw = await startGateway();
+    const { body } = await rpc(gw, sendMessage({ resource: 'weather_basic', input: { city: 42 } }));
+
+    expect(body.error).toBeUndefined();
+    expect(body.result?.task?.status.state).toBe('TASK_STATE_FAILED');
+    expect(body.result?.task?.artifacts[0]?.parts[0]?.data['code']).toBe('INPUT_INVALID');
   });
 
   it('rejects the legacy message/send method name as unknown', async () => {

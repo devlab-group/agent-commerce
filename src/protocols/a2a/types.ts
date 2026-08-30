@@ -54,3 +54,33 @@ export interface A2aAgentCard {
   readonly defaultOutputModes: readonly string[];
   readonly skills: readonly A2aAgentSkill[];
 }
+
+/** A structured data part — the only part kind this adapter emits. */
+export interface A2aDataPart {
+  readonly data: Record<string, unknown>;
+  readonly mediaType: string;
+}
+
+export interface A2aArtifact {
+  readonly artifactId: string;
+  readonly name?: string;
+  readonly parts: readonly A2aDataPart[];
+  readonly metadata?: Record<string, unknown>;
+}
+
+export interface A2aTaskStatus {
+  readonly state: string;
+  readonly timestamp: string;
+}
+
+/**
+ * A terminal task. No `history`, and no id a caller can fetch later: tasks are
+ * ephemeral representations of a synchronous result, which is why `GetTask` is
+ * unsupported rather than missing.
+ */
+export interface A2aTask {
+  readonly id: string;
+  readonly contextId: string;
+  readonly status: A2aTaskStatus;
+  readonly artifacts: readonly A2aArtifact[];
+}
