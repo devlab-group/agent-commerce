@@ -209,14 +209,14 @@ See [docs/configuration.md](docs/configuration.md).
 
 ## Protocol support
 
-| Protocol              | Status    | Pinned revision                                          |
-| --------------------- | --------- | -------------------------------------------------------- |
-| **MCP**               | Supported | `@modelcontextprotocol/sdk@1.30.0`                       |
-| **x402**              | Supported | x402 v2 (`@x402/core`, `@x402/evm`), scheme `exact`, EVM |
-| **HTTP**              | Supported | native routes                                            |
-| **A2A**               | Experimental | A2A v1.0.0, binding `JSONRPC`, method `SendMessage`   |
-| UCP                   | Planned   | —                                                        |
-| ACP · MPP · AP2       | Planned   | —                                                        |
+| Protocol        | Status       | Pinned revision                                          |
+| --------------- | ------------ | -------------------------------------------------------- |
+| **MCP**         | Supported    | `@modelcontextprotocol/sdk@1.30.0`                       |
+| **x402**        | Supported    | x402 v2 (`@x402/core`, `@x402/evm`), scheme `exact`, EVM |
+| **HTTP**        | Supported    | native routes                                            |
+| **A2A**         | Experimental | A2A v1.0.0, binding `JSONRPC`, method `SendMessage`      |
+| UCP             | Planned      | —                                                        |
+| ACP · MPP · AP2 | Planned      | —                                                        |
 
 "Planned" means **no code ships for it**. "Experimental" means the code ships,
 is tested against the official SDK, and serves a narrow named subset — A2A is
@@ -401,7 +401,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Roadmap
 
-**Now (v1.0.0)** — MCP, x402 v2, settlement on the local chain, Base Sepolia
+**Now (v1.1.0)** — MCP, x402 v2, settlement on the local chain, Base Sepolia
 and Base mainnet, receipts, doctor, deterministic demo, and an experimental
 A2A v1.0.0 adapter.
 
