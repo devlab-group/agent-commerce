@@ -10,14 +10,18 @@ implemented, exactly what is not, and pins the revisions.
 | **MCP**  | Supported | `@modelcontextprotocol/sdk@1.30.0`                                                   | tool discovery, tool invocation, payment-required and error mapping |
 | **x402** | Supported | x402 **v2** (`@x402/core@2.23.0`, `@x402/evm@2.23.0`), scheme `exact`, EVM, EIP-3009 | challenge, verification, settlement, replay binding                 |
 | **HTTP** | Supported | —                                                                                    | native resource routes with `PAYMENT-SIGNATURE`                     |
+| **A2A**  | Experimental | A2A **v1.0.0**, negotiation version `1.0`, binding `JSONRPC`                     | Agent Card discovery, `SendMessage`, terminal tasks, paid flow      |
 | UCP      | Planned   | —                                                                                    | planned, no code ships                                                         |
 | ACP      | Planned   | —                                                                                    | planned, no code ships                                                         |
 | MPP      | Planned   | —                                                                                    | planned, no code ships                                                         |
-| A2A      | Planned   | —                                                                                    | planned, no code ships                                                         |
 | AP2      | Planned   | —                                                                                    | planned, no code ships                                                         |
 
 "Planned" means **no code ships for it**. There is no partial adapter, no
 endpoint and no diagnostic pretending otherwise.
+
+"Experimental" means the opposite of planned and short of supported: the code
+ships, it is tested against the official SDK, and the supported subset is
+narrow and named below. It is off by default.
 
 Every adapter reports itself at runtime through
 `GET /.well-known/agent-commerce` and in `agent-commerce doctor`, with
@@ -85,6 +89,101 @@ server-initiated requests. They are absent, not stubbed. The adapter's
 The adapter contains **no payment logic** and never calls a merchant backend —
 it normalises into `CanonicalRequest` and lets the pipeline decide.
 
+## A2A
+
+**Experimental — A2A v1.0.0.** Off unless `protocols.a2a.enabled` is `true`.
+
+| | |
+| --- | --- |
+| Binding | JSON-RPC 2.0 over HTTPS |
+| JSON-RPC method | `SendMessage` (not the legacy `message/send`) |
+| Protocol negotiation version | `1.0`, required in the `A2A-Version` request header |
+| Agent Card | `GET /.well-known/agent-card.json` (fixed by the specification) |
+| Default mount | `/a2a` |
+| Streaming | unsupported |
+| Task persistence | unsupported |
+| Push notifications | unsupported |
+
+Canonical resources exposed with `expose: [a2a]` become **A2A skills** on the
+Agent Card. Skill id = resource id; a paid skill is tagged `paid` and names its
+price in the description.
+
+### Invoking a resource
+
+> A2A skills are discovery descriptors. A2A v1.0 does not define a standard
+> `skillId` field on `SendMessageRequest`, so Agent Commerce uses the
+> structured-data invocation envelope below to select a canonical resource.
+
+One message, one part, whose `data` names the resource and carries its input:
+
+```json
+{
+  "data": {
+    "resource": "market_report",
+    "input": {
+      "symbol": "ETH"
+    }
+  },
+  "mediaType": "application/json"
+}
+```
+
+Anything richer is refused rather than guessed at: text, file, inline-bytes and
+URL parts, multi-part messages, a role other than `ROLE_USER`, and any task or
+context continuation.
+
+> Core A2A v1.0 `AgentSkill` does not provide an input schema field. Canonical
+> Agent Commerce `inputSchema` is therefore not embedded in the Agent Card in
+> this implementation.
+
+### Payment over A2A
+
+The reserved `_payment` input field, exactly as over MCP — there is no
+A2A-specific payment representation:
+
+```json
+{
+  "data": {
+    "resource": "market_report",
+    "input": { "symbol": "ETH", "_payment": "<base64 x402 proof>" }
+  },
+  "mediaType": "application/json"
+}
+```
+
+### Results
+
+Every outcome is a **terminal task** in the JSON-RPC `result`, carrying one
+artifact whose single data part is an existing canonical envelope:
+
+| Outcome | Task state | Artifact data |
+| --- | --- | --- |
+| delivered | `TASK_STATE_COMPLETED` | the merchant response (a non-object body is wrapped as `{ "value": … }`), with the delivery summary under the artifact's `agent-commerce/delivery` metadata |
+| payment required | `TASK_STATE_FAILED` | `toPaymentRequiredEnvelope` output |
+| domain failure | `TASK_STATE_FAILED` | `toErrorEnvelope` output |
+
+Payment required is terminal, not `input-required`: there is no task store, so
+nothing can be continued. The buyer retries by sending a **new** message
+carrying the proof.
+
+A commerce outcome is never a JSON-RPC error. JSON-RPC errors are reserved for
+requests that are malformed or unsupported as A2A: `-32700` bad JSON, `-32600`
+bad request object, `-32601` unknown method, `-32602` bad params or envelope,
+and `-32004` (`UnsupportedOperationError`) for a real A2A operation this
+deployment declines — including an unsupported `A2A-Version`.
+
+### Not implemented in the A2A adapter
+
+`SendStreamingMessage`, `GetTask`, `ListTasks`, `CancelTask`, `SubscribeToTask`,
+the four push-notification-config methods, `GetExtendedAgentCard`; the
+HTTP+JSON/REST and gRPC bindings; SSE, task persistence and resumption, push
+notifications, multi-turn continuation, authenticated extended agent cards, and
+A2A authentication schemes. The adapter's `descriptor.unsupported` lists them at
+runtime, and `agent-commerce doctor` prints the list in full.
+
+The adapter contains **no payment logic** and never calls a merchant backend.
+`@a2a-js/sdk` is a **test-only** dependency: serving A2A installs no SDK.
+
 ## x402
 
 - Scheme `exact`, EVM family, via EIP-3009 `transferWithAuthorization`.
@@ -121,6 +220,8 @@ one. What guards mainnet is in [configuration.md](configuration.md).
 | `GET /api/receipts`, `GET /api/events` | audit                                                                                                                   |
 | `GET /api/events/stream`               | SSE event feed                                                                                                          |
 | `/mcp`                                 | MCP Streamable HTTP                                                                                                     |
+| `/.well-known/agent-card.json`         | A2A Agent Card (only when A2A is enabled)                                                                               |
+| `/a2a`                                 | A2A JSON-RPC `SendMessage` (only when A2A is enabled)                                                                   |
 
 ## Adding a protocol
 

@@ -15,6 +15,12 @@ import type {
   CommerceEvent,
   CommerceReceipt,
   PaymentAttempt,
+  PaymentContext,
+  PaymentProvider,
+  PaymentRequirement,
+  PaymentResult,
+  PaymentSettlementContext,
+  PaymentVerificationContext,
   ReceiptStore,
 } from '../../../../src/core/index.js';
 import { createGateway, type GatewayInstance } from '../../../../src/gateway/index.js';
@@ -87,11 +93,92 @@ function createFakeStore(): ReceiptStore {
 /** Fixed merchant response, so an assertion about the artifact is about the artifact. */
 export const MERCHANT_BODY = { city: 'Berlin', forecast: 'sunny', celsius: 21 };
 
-const backend: BackendExecutor = {
-  async call() {
-    return { status: 200, body: MERCHANT_BODY, headers: {}, durationMs: 1 };
-  },
+/** The only proof the fake provider accepts. */
+export const VALID_PROOF = 'valid-proof';
+
+/**
+ * Counts merchant calls, because "was this delivered?" is the only question
+ * that matters for a paywall. A console line saying payment succeeded proves
+ * nothing; a backend call count of 0 before payment and 1 after does.
+ */
+function countingBackend(): BackendExecutor & { calls: () => number } {
+  let calls = 0;
+  return {
+    calls: () => calls,
+    async call() {
+      calls += 1;
+      return { status: 200, body: MERCHANT_BODY, headers: {}, durationMs: 1 };
+    },
+  };
+}
+
+const paymentDescriptor: AdapterDescriptor = {
+  name: 'fake-x402',
+  kind: 'payment',
+  implementationVersion: '0.0.0-test',
+  supportedSpec: 'x402/v2',
+  capabilities: [],
+  status: 'experimental',
 };
+
+/**
+ * Verification and settlement live here, not in the adapter — the whole point
+ * of the assertions in the paid suite is that the A2A code never decides
+ * whether a proof is good. `unverifiable` models a provider that cannot reach
+ * its facilitator: a throw, never a rejection, so the payer is not blamed for
+ * our outage.
+ */
+function fakeProvider(): PaymentProvider & { settleCalls: () => number } {
+  let settleCalls = 0;
+  return {
+    name: 'x402',
+    descriptor: paymentDescriptor,
+    settleCalls: () => settleCalls,
+    createRequirement: async (ctx: PaymentContext): Promise<PaymentRequirement> => ({
+      id: 'requirement-1',
+      requestId: ctx.requestId,
+      resourceId: ctx.resource.id,
+      provider: 'x402',
+      amount: ctx.amount,
+      currency: ctx.currency,
+      destination: '0x70997970C51812dc3A010C7d01b50e0d17dc79C8',
+      network: 'eip155:84532',
+      challenge: { provider: 'x402', version: '2', accepts: [{ scheme: 'exact' }] },
+    }),
+    verify: async (ctx: PaymentVerificationContext): Promise<PaymentResult> => {
+      if (ctx.submission.payload === 'unverifiable-proof') {
+        throw new Error('facilitator unreachable');
+      }
+      return ctx.submission.payload === VALID_PROOF
+        ? {
+            status: 'verified',
+            provider: 'x402',
+            amount: '0.01',
+            currency: 'USDC',
+            replayKey: `0xreplay-${settleCalls}`,
+          }
+        : {
+            status: 'rejected',
+            provider: 'x402',
+            amount: '0.01',
+            currency: 'USDC',
+            rejectionReason: 'invalid_payment',
+          };
+    },
+    settle: async (_ctx: PaymentSettlementContext): Promise<PaymentResult> => {
+      settleCalls += 1;
+      return {
+        status: 'settled',
+        provider: 'x402',
+        amount: '0.01',
+        currency: 'USDC',
+        externalReference: '0xTXHASH',
+        replayKey: `0xreplay-${settleCalls}`,
+      };
+    },
+    health: async () => ({ status: 'pass', checkedAt: '2026-01-01T00:00:00.000Z' }),
+  };
+}
 
 function config(publicBaseUrl: string): GatewayConfig {
   return {
@@ -121,6 +208,21 @@ function config(publicBaseUrl: string): GatewayConfig {
         paymentMethods: [],
       },
       {
+        id: 'market_report',
+        name: 'Premium Market Report',
+        description: 'Latest market analysis.',
+        inputSchema: {
+          type: 'object',
+          properties: { symbol: { type: 'string' } },
+          required: ['symbol'],
+          additionalProperties: false,
+        },
+        handler: { type: 'http', method: 'GET', url: 'http://backend.local/report' },
+        pricing: { type: 'fixed', amount: '0.01', currency: 'USDC' },
+        exposedVia: ['a2a'],
+        paymentMethods: ['x402'],
+      },
+      {
         id: 'http_only',
         name: 'HTTP Only',
         inputSchema: { type: 'object', properties: {} },
@@ -138,6 +240,10 @@ export interface RunningGateway {
   readonly gateway: GatewayInstance;
   /** Origin the SDK discovers the card from. */
   readonly url: string;
+  /** Merchant backend calls so far. */
+  backendCalls(): number;
+  /** Successful settlements so far. */
+  settleCalls(): number;
   close(): Promise<void>;
 }
 
@@ -164,10 +270,12 @@ export async function startConformanceGateway(): Promise<RunningGateway> {
     ...config(url),
     server: { port, host: '127.0.0.1', allowedOrigins: [] },
   };
+  const backend = countingBackend();
+  const provider = fakeProvider();
   const gateway = await createGateway({
     config: gatewayConfig,
     store: createFakeStore(),
-    paymentProviders: [],
+    paymentProviders: [provider],
     // Mirrors src/gateway/main.ts's composition exactly: a conformance suite
     // that wired the adapter differently from production would certify a
     // deployment nobody runs.
@@ -184,6 +292,8 @@ export async function startConformanceGateway(): Promise<RunningGateway> {
   return {
     gateway,
     url,
+    backendCalls: backend.calls,
+    settleCalls: provider.settleCalls,
     async close() {
       await gateway.close();
     },

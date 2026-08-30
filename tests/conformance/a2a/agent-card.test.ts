@@ -42,7 +42,8 @@ describe('A2A agent card, resolved by the official SDK', () => {
   it('publishes a2a-exposed resources as skills, and nothing else', async () => {
     const card = await new DefaultAgentCardResolver().resolve(running.url);
 
-    expect(card.skills.map((skill) => skill.id)).toEqual(['weather_basic']);
+    // `http_only` is configured but exposed elsewhere, so it must not appear.
+    expect(card.skills.map((skill) => skill.id)).toEqual(['weather_basic', 'market_report']);
     const [skill] = card.skills;
     expect(skill?.name).toBe('Basic Weather');
     expect(skill?.inputModes).toEqual(['application/json']);

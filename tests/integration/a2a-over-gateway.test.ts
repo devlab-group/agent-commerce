@@ -62,8 +62,10 @@ function config(): GatewayConfig {
 }
 
 /** No merchant is reachable from a test; the adapter must never call one anyway. */
+const backendCalls: unknown[] = [];
 const backend: BackendExecutor = {
-  async call() {
+  async call(_handler, request) {
+    backendCalls.push(request.input);
     return { status: 200, body: { forecast: 'sunny' }, headers: {}, durationMs: 1 };
   },
 };
@@ -367,5 +369,128 @@ describe('A2A in gateway discovery', () => {
       (await gateway.server.inject({ method: 'GET', url: '/.well-known/agent-card.json' }))
         .statusCode,
     ).toBe(404);
+  });
+});
+
+/**
+ * 10.2 — the request body reaches the adapter unconsumed.
+ *
+ * Fastify pre-registers exact-match parsers for `application/json`, so a mount
+ * that does not suppress them hands the adapter an already-drained stream and
+ * every request fails to parse. That regression has shipped before. Driven
+ * through the gateway router, never by calling the adapter directly.
+ */
+describe('A2A request body handoff through the real gateway', () => {
+  it('parses a body the gateway would otherwise have consumed', async () => {
+    const gw = await startGateway();
+    const { body } = await rpc(
+      gw,
+      sendMessage({ resource: 'weather_basic', input: { city: 'Berlin' } }),
+    );
+
+    expect(body.result?.task?.status.state).toBe('TASK_STATE_COMPLETED');
+  });
+
+  it('carries a large body and non-ASCII input through intact', async () => {
+    const gw = await startGateway();
+    // Big enough that the body arrives in several socket chunks, so a handler
+    // that reads only the first one fails here.
+    const city = `Köln-${'ß'.repeat(40_000)}`;
+    const { body } = await rpc(gw, sendMessage({ resource: 'weather_basic', input: { city } }));
+
+    expect(body.error).toBeUndefined();
+    expect(body.result?.task?.status.state).toBe('TASK_STATE_COMPLETED');
+    expect(backendCalls.at(-1)).toEqual({ city });
+  });
+
+  it('reads the body when the client sends no content-type at all', async () => {
+    const gw = await startGateway();
+    const res = await gw.server.inject({
+      method: 'POST',
+      url: '/a2a',
+      headers: { 'a2a-version': '1.0' },
+      payload: JSON.stringify(
+        sendMessage({ resource: 'weather_basic', input: { city: 'Berlin' } }),
+      ),
+    });
+
+    expect(res.json<JsonRpcResponse>().result?.task?.status.state).toBe('TASK_STATE_COMPLETED');
+  });
+});
+
+/**
+ * 10.3 — one adapter's failure is never another's, and never the process's.
+ */
+describe('A2A adapter isolation', () => {
+  it('keeps A2A serving when the MCP adapter fails to start', async () => {
+    const brokenMcp = createMcpAdapter();
+    brokenMcp.start = async () => {
+      throw new Error('mcp could not start');
+    };
+
+    gateway = await createGateway({
+      config: config(),
+      store: createFakeStore(),
+      paymentProviders: [],
+      protocolAdapters: [brokenMcp, createA2aAdapter()],
+      backend,
+    });
+
+    const card = await gateway.server.inject({
+      method: 'GET',
+      url: '/.well-known/agent-card.json',
+    });
+    expect(card.statusCode).toBe(200);
+
+    const { body } = await rpc(
+      gateway,
+      sendMessage({ resource: 'weather_basic', input: { city: 'Berlin' } }),
+    );
+    expect(body.result?.task?.status.state).toBe('TASK_STATE_COMPLETED');
+
+    expect((await gateway.server.inject({ method: 'GET', url: '/mcp' })).statusCode).toBe(404);
+  });
+
+  it('fails one request safely when the A2A handler throws, leaving the gateway alive', async () => {
+    const adapter = createA2aAdapter();
+    const realHandleHttp = adapter.handleHttp.bind(adapter);
+    let explode = true;
+    adapter.handleHttp = async (req, res) => {
+      if (explode) throw new Error('handler exploded: /var/secret/path');
+      return realHandleHttp(req, res);
+    };
+
+    gateway = await createGateway({
+      config: config(),
+      store: createFakeStore(),
+      paymentProviders: [],
+      protocolAdapters: [createMcpAdapter(), adapter],
+      backend,
+    });
+
+    const failed = await gateway.server.inject({
+      method: 'POST',
+      url: '/a2a',
+      headers: { 'content-type': 'application/json', 'a2a-version': '1.0' },
+      payload: JSON.stringify(
+        sendMessage({ resource: 'weather_basic', input: { city: 'Berlin' } }),
+      ),
+    });
+    expect(failed.statusCode).toBe(500);
+    expect(failed.payload).not.toContain('/var/secret/path');
+
+    // The process is fine and every other surface still answers — including
+    // this adapter's own card route and, once it stops throwing, its mount.
+    explode = false;
+    expect(
+      (await gateway.server.inject({ method: 'GET', url: '/.well-known/agent-card.json' }))
+        .statusCode,
+    ).toBe(200);
+    expect((await gateway.server.inject({ method: 'GET', url: '/health' })).statusCode).toBe(200);
+    const { body } = await rpc(
+      gateway,
+      sendMessage({ resource: 'weather_basic', input: { city: 'Berlin' } }),
+    );
+    expect(body.result?.task?.status.state).toBe('TASK_STATE_COMPLETED');
   });
 });
