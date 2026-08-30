@@ -121,6 +121,7 @@
     }
   },
   "devDependencies": {
+    "@a2a-js/sdk": "1.1.0",
     "@biomejs/biome": "2.5.9",
     "@coinbase/x402": "2.1.0",
     "@modelcontextprotocol/sdk": "1.30.0",

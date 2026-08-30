@@ -33,6 +33,7 @@ export function makeGatewayConfig(overrides: Partial<GatewayConfig> = {}): Gatew
     protocols: {
       http: { enabled: true },
       mcp: { enabled: true, mountPath: '/mcp' },
+      a2a: { enabled: false, mountPath: '/a2a' },
     },
     resources: [makeResource()],
     payments: {},

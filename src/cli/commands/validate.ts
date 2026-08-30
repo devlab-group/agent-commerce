@@ -85,7 +85,7 @@ export async function runValidate(
     io.stdout(`      merchant: ${config.merchant.name} (${config.merchant.id})`);
     io.stdout(`      resources: ${config.resources.length}`);
     io.stdout(
-      `      protocols: http=${config.protocols.http.enabled ? 'on' : 'off'} mcp=${config.protocols.mcp.enabled ? 'on' : 'off'}`,
+      `      protocols: http=${config.protocols.http.enabled ? 'on' : 'off'} mcp=${config.protocols.mcp.enabled ? 'on' : 'off'} a2a=${config.protocols.a2a.enabled ? 'on' : 'off'}`,
     );
     io.stdout(`      payments: x402=${config.payments.x402?.enabled === true ? 'on' : 'off'}`);
     return 0;

@@ -965,7 +965,7 @@ describe('parseConfig', () => {
     }
   });
 
-  it('rejects an expose value outside [http, mcp], mentioning UCP is planned', () => {
+  it('rejects an expose value outside [http, mcp, a2a], mentioning UCP is planned', () => {
     const raw = validRawConfig();
     (raw['resources'] as { weather_basic: { expose: string[] } }).weather_basic.expose = [
       'http',
@@ -986,7 +986,7 @@ describe('parseConfig', () => {
     const raw = validRawConfig();
     (raw['resources'] as { weather_basic: { expose: string[] } }).weather_basic.expose = [
       'http',
-      'a2a',
+      'grpc',
     ];
     expectConfigInvalid(() => parseConfig(raw, {}));
     try {
@@ -1376,5 +1376,92 @@ describe('protocols.mcp.mountPath', () => {
   it('control: a nested mount path outside the reserved prefixes still validates', () => {
     const config = parseConfig(withMountPath('/agents/mcp'), {});
     expect(config.protocols.mcp.mountPath).toBe('/agents/mcp');
+  });
+});
+
+describe('protocols.a2a', () => {
+  function withA2a(a2a: unknown): Record<string, unknown> {
+    const raw = validRawConfig();
+    if (a2a === undefined) delete (raw['protocols'] as Record<string, unknown>)['a2a'];
+    else (raw['protocols'] as Record<string, unknown>)['a2a'] = a2a;
+    return raw;
+  }
+
+  it('is disabled on the default mount when the block is absent', () => {
+    const config = parseConfig(withA2a(undefined), {});
+    expect(config.protocols.a2a).toEqual({ enabled: false, mountPath: '/a2a' });
+  });
+
+  it('applies the default mount when the block names no mountPath', () => {
+    const config = parseConfig(withA2a({ enabled: true }), {});
+    expect(config.protocols.a2a).toEqual({ enabled: true, mountPath: '/a2a' });
+  });
+
+  it('accepts a custom mount', () => {
+    const config = parseConfig(withA2a({ enabled: true, mountPath: '/agents/a2a' }), {});
+    expect(config.protocols.a2a.mountPath).toBe('/agents/a2a');
+  });
+
+  it.each([
+    ['no leading slash', 'a2a'],
+    ['a Fastify parameter', '/a2a/:id'],
+    ['whitespace', '/a2a path'],
+    ['a route the gateway serves', '/health'],
+  ])('rejects a malformed mount: %s', (_label, mountPath) => {
+    expectConfigInvalid(() => parseConfig(withA2a({ enabled: true, mountPath }), {}));
+  });
+
+  // The card path is fixed by the A2A spec and served by the adapter itself.
+  it.each([
+    ['the agent card path itself', '/.well-known/agent-card.json'],
+    ['a prefix of it', '/.well-known'],
+  ])('rejects %s as a configurable mount', (_label, mountPath) => {
+    expectConfigInvalid(() => parseConfig(withA2a({ enabled: true, mountPath }), {}));
+    const raw = validRawConfig();
+    (raw['protocols'] as { mcp: Record<string, unknown> }).mcp['mountPath'] = mountPath;
+    expectConfigInvalid(() => parseConfig(raw, {}));
+  });
+
+  it('rejects an unknown key inside the block', () => {
+    expectConfigInvalid(() => parseConfig(withA2a({ enabled: true, streaming: true }), {}));
+  });
+
+  it('accepts expose: [a2a] when enabled', () => {
+    const raw = withA2a({ enabled: true });
+    (raw['resources'] as { weather_basic: { expose: string[] } }).weather_basic.expose = [
+      'http',
+      'a2a',
+    ];
+    const config = parseConfig(raw, {});
+    expect(config.resources.find((r) => r.id === 'weather_basic')?.exposedVia).toEqual([
+      'http',
+      'a2a',
+    ]);
+  });
+
+  it('rejects expose: [a2a] when protocols.a2a.enabled is false', () => {
+    const raw = withA2a({ enabled: false });
+    (raw['resources'] as { weather_basic: { expose: string[] } }).weather_basic.expose = ['a2a'];
+    expectConfigInvalid(() => parseConfig(raw, {}));
+    try {
+      parseConfig(raw, {});
+    } catch (error) {
+      if (isCommerceError(error)) expect(error.message).toContain('a2a');
+    }
+  });
+
+  // Each mount registers a `${mountPath}/*` wildcard, so an overlap means one
+  // adapter answers for the other.
+  it.each([
+    ['an identical mount', '/mcp'],
+    ['a mount nested under the mcp one', '/mcp/a2a'],
+    ['a mount the mcp one nests under', '/'],
+  ])('rejects %s while mcp is enabled', (_label, mountPath) => {
+    expectConfigInvalid(() => parseConfig(withA2a({ enabled: true, mountPath }), {}));
+  });
+
+  it('allows a colliding mount while a2a is disabled, since nothing is mounted', () => {
+    const config = parseConfig(withA2a({ enabled: false, mountPath: '/mcp' }), {});
+    expect(config.protocols.a2a.enabled).toBe(false);
   });
 });

@@ -10,6 +10,7 @@
   <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-strict-3178c6">
   <img alt="MCP" src="https://img.shields.io/badge/MCP-supported-6b4fbb">
   <img alt="x402" src="https://img.shields.io/badge/x402-supported-0052ff">
+  <img alt="A2A" src="https://img.shields.io/badge/A2A-experimental-f0a30a">
 </p>
 
 ## What it is, in ten seconds
@@ -213,10 +214,14 @@ See [docs/configuration.md](docs/configuration.md).
 | **MCP**               | Supported | `@modelcontextprotocol/sdk@1.30.0`                       |
 | **x402**              | Supported | x402 v2 (`@x402/core`, `@x402/evm`), scheme `exact`, EVM |
 | **HTTP**              | Supported | native routes                                            |
+| **A2A**               | Experimental | A2A v1.0.0, binding `JSONRPC`, method `SendMessage`   |
 | UCP                   | Planned   | —                                                        |
-| ACP · MPP · A2A · AP2 | Planned   | —                                                        |
+| ACP · MPP · AP2       | Planned   | —                                                        |
 
-"Planned" means **no code ships for it**. Each adapter reports its own
+"Planned" means **no code ships for it**. "Experimental" means the code ships,
+is tested against the official SDK, and serves a narrow named subset — A2A is
+off by default and documented in full at
+[docs/protocols.md](docs/protocols.md#a2a). Each adapter reports its own
 `supportedSpec`, `capabilities` and `unsupported` list at runtime via
 `GET /.well-known/agent-commerce` and `agent-commerce doctor` — so the claim is
 checkable, not marketing. Detail: [docs/protocols.md](docs/protocols.md).
@@ -349,7 +354,8 @@ $ npm run agent-commerce -- doctor --config config-demo.yaml
 PASS  Config               valid — 2 resource(s), merchant "Demo Data Store" (using local chain manifest .deploy/local.json for X402_ASSET, X402_ASSET_NAME, X402_ASSET_VERSION, X402_ASSET_DECIMALS, MERCHANT_WALLET, X402_FACILITATOR_PRIVATE_KEY)
 PASS  Gateway              healthy and ready at http://127.0.0.1:8080
 PASS  Backend              2/2 backend host(s) reachable
-PASS  Protocols            http=on mcp=on (/mcp)
+PASS  Protocols            http=on mcp=on (/mcp) a2a=off
+INFO  A2A                  disabled
 PASS  Payments             x402 v2 (scheme=exact) enabled — LOCAL dev chain (eip155:84532, chain id shared with Base Sepolia), destination=0x7099…79C8, facilitator=local
 INFO  Payments (MPP)       planned — not implemented in this release
 PASS  Storage              sqlite schema v1 writable; receipts=2
@@ -396,10 +402,11 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 ## Roadmap
 
 **Now (v1.0.0)** — MCP, x402 v2, settlement on the local chain, Base Sepolia
-and Base mainnet, receipts, doctor, deterministic demo.
+and Base mainnet, receipts, doctor, deterministic demo, and an experimental
+A2A v1.0.0 adapter.
 
 **Next** — OpenAPI import · a stronger conformance suite · a `doctor` GitHub
-Action · UCP · MPP · ACP · A2A · AP2 · Shopify and WooCommerce examples ·
+Action · UCP · MPP · ACP · AP2 · Shopify and WooCommerce examples ·
 PostgreSQL · richer observability.
 
 New protocols land only after the adapter model survives real use. Scope

@@ -113,15 +113,19 @@ const StorageSchema = z
   .strict();
 
 /**
- * Every path the gateway registers itself (`src/gateway/routes.ts`). An MCP
- * mount that equals one of these makes Fastify's `.all()` a duplicate of the
- * registered route; one that is a path-prefix of them swallows their 404s
- * through the mount's `${mountPath}/*` wildcard.
+ * Every path the gateway registers itself (`src/gateway/routes.ts`), plus the
+ * fixed discovery paths adapters own. An adapter mount that equals one of
+ * these makes Fastify's `.all()` a duplicate of the registered route; one that
+ * is a path-prefix of them swallows their 404s through the mount's
+ * `${mountPath}/*` wildcard.
  */
 const RESERVED_GATEWAY_PATHS = [
   '/health',
   '/ready',
   '/.well-known/agent-commerce',
+  // Fixed by the A2A specification, so it is the adapter's to serve and never
+  // a configurable mount's to claim.
+  '/.well-known/agent-card.json',
   '/api/resources',
   '/api/resources/:id/invoke',
   '/api/receipts',
@@ -137,7 +141,7 @@ const RESERVED_GATEWAY_PATHS = [
  * Fastify pattern syntax (`:param`, `*`) is rejected rather than supported:
  * the mount registers its own wildcard, so a pattern here has no meaning.
  */
-const McpMountPathSchema = z
+const MountPathSchema = z
   .string()
   .min(1)
   .refine((value) => value.startsWith('/'), {
@@ -165,11 +169,23 @@ const ProtocolsSchema = z
     mcp: z
       .object({
         enabled: BooleanOrString,
-        mountPath: McpMountPathSchema,
+        mountPath: MountPathSchema,
       })
       .strict(),
+    // Optional block: A2A is off unless an operator asks for it, and an
+    // existing config predating the adapter stays valid.
+    a2a: z
+      .object({
+        enabled: BooleanOrString,
+        mountPath: MountPathSchema.optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
+
+/** Applied when `protocols.a2a` is absent or names no mount. */
+const DEFAULT_A2A_MOUNT_PATH = '/a2a';
 
 const BackendMethodSchema = z.enum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
 
@@ -314,6 +330,7 @@ export interface GatewayConfig {
   readonly protocols: {
     readonly http: { readonly enabled: boolean };
     readonly mcp: { readonly enabled: boolean; readonly mountPath: string };
+    readonly a2a: { readonly enabled: boolean; readonly mountPath: string };
   };
   /** Canonical resources, already normalised. */
   readonly resources: readonly CommerceResource[];
@@ -466,7 +483,7 @@ function toBoolean(value: boolean | string, path: string): boolean {
 // Business-rule validation + normalisation into the canonical shape.
 // ---------------------------------------------------------------------------
 
-const SUPPORTED_PROTOCOLS = new Set(['http', 'mcp']);
+const SUPPORTED_PROTOCOLS = new Set(['http', 'mcp', 'a2a']);
 const SUPPORTED_PAYMENT_METHODS = new Set(['x402']);
 
 function normalise(raw: RawConfig): GatewayConfig {
@@ -476,7 +493,12 @@ function normalise(raw: RawConfig): GatewayConfig {
       enabled: toBoolean(raw.protocols.mcp.enabled, 'protocols.mcp.enabled'),
       mountPath: raw.protocols.mcp.mountPath,
     },
+    a2a: {
+      enabled: toBoolean(raw.protocols.a2a?.enabled ?? false, 'protocols.a2a.enabled'),
+      mountPath: raw.protocols.a2a?.mountPath ?? DEFAULT_A2A_MOUNT_PATH,
+    },
   };
+  validateMountPaths(protocols);
 
   const x402Raw = raw.payments.x402;
   const facilitator: X402FacilitatorConfig | undefined =
@@ -576,6 +598,35 @@ function normalise(raw: RawConfig): GatewayConfig {
 interface NormalisedProtocols {
   readonly http: { readonly enabled: boolean };
   readonly mcp: { readonly enabled: boolean; readonly mountPath: string };
+  readonly a2a: { readonly enabled: boolean; readonly mountPath: string };
+}
+
+/**
+ * Two enabled mounts may not overlap: each registers a `${mountPath}/*`
+ * wildcard, so a shared prefix means one adapter silently answers for the
+ * other. Disabled protocols mount nothing and are not compared.
+ */
+function validateMountPaths(protocols: NormalisedProtocols): void {
+  const mounts = (
+    [
+      ['mcp', protocols.mcp],
+      ['a2a', protocols.a2a],
+    ] as const
+  ).filter(([, p]) => p.enabled);
+
+  for (const [index, [nameA, a]] of mounts.entries()) {
+    for (const [nameB, b] of mounts.slice(index + 1)) {
+      const baseA = a.mountPath.replace(/\/+$/, '');
+      const baseB = b.mountPath.replace(/\/+$/, '');
+      if (baseA === baseB || baseA.startsWith(`${baseB}/`) || baseB.startsWith(`${baseA}/`)) {
+        throw new CommerceError(
+          'CONFIG_INVALID',
+          `protocols.${nameA}.mountPath ("${a.mountPath}") collides with protocols.${nameB}.mountPath ("${b.mountPath}") — each mount registers a wildcard, so overlapping prefixes cannot both be served`,
+          { details: { path: `protocols.${nameA}.mountPath` } },
+        );
+      }
+    }
+  }
 }
 
 interface NormalisedX402 {
@@ -614,7 +665,7 @@ function normaliseResource(
       const hint = protocol === 'ucp' ? ' (UCP is planned, not supported in this release)' : '';
       throw new CommerceError(
         'CONFIG_INVALID',
-        `Resource "${id}" exposes unsupported protocol "${protocol}"${hint}. Supported: http, mcp.`,
+        `Resource "${id}" exposes unsupported protocol "${protocol}"${hint}. Supported: http, mcp, a2a.`,
         { details: { path: `resources.${id}.expose`, resourceId: id, protocol } },
       );
     }
@@ -634,6 +685,13 @@ function normaliseResource(
         { details: { path: `resources.${id}`, resourceId: id } },
       );
     }
+  }
+  if (entry.expose.includes('a2a') && !protocols.a2a.enabled) {
+    throw new CommerceError(
+      'CONFIG_INVALID',
+      `Resource "${id}" is exposed via "a2a" but protocols.a2a.enabled is false`,
+      { details: { path: `resources.${id}.expose`, resourceId: id } },
+    );
   }
   if (entry.expose.includes('http') && !protocols.http.enabled) {
     throw new CommerceError(

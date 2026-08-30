@@ -1,12 +1,14 @@
 import * as http from 'node:http';
-import Fastify from 'fastify';
+import Fastify, { type FastifyInstance } from 'fastify';
 import { describe, expect, it, vi } from 'vitest';
 import type {
   Clock,
   EventSink,
   ExecutionPipeline,
+  HttpProtocolAdapter,
   IdGenerator,
   Logger,
+  ProtocolAdapter,
   ProtocolAdapterContext,
   ResourceRegistry,
 } from '../../../src/core/index.js';
@@ -526,5 +528,228 @@ describe('startAndMountAdapters / adapter isolation', () => {
     });
     await stopAdapters([{ adapter: good }, { adapter: bad }], NOOP_LOGGER);
     expect(stopped).toEqual(['good']);
+  });
+});
+
+describe('adapter-owned additional HTTP routes', () => {
+  /** A protocol whose spec pins a discovery URL outside its own mount. */
+  function cardAdapter(overrides: Partial<HttpProtocolAdapter> = {}): HttpProtocolAdapter {
+    return createFakeHttpAdapter({
+      name: 'a2a',
+      mountPath: '/fake',
+      additionalHttpRoutes: [
+        {
+          method: 'GET',
+          path: '/.well-known/fake-card.json',
+          handleHttp: async (_req, res) => {
+            res.writeHead(200, { 'content-type': 'application/json' });
+            res.end('{"card":true}');
+          },
+        },
+      ],
+      ...overrides,
+    });
+  }
+
+  async function mount(adapters: readonly ProtocolAdapter[]): Promise<FastifyInstance> {
+    const server = Fastify({ logger: false });
+    await startAndMountAdapters({
+      server,
+      adapters,
+      context: fakeContext(),
+      logger: NOOP_LOGGER,
+      clock,
+    });
+    await server.ready();
+    return server;
+  }
+
+  it('mounts the primary mount and the fixed route', async () => {
+    const server = await mount([cardAdapter()]);
+
+    expect((await server.inject({ method: 'GET', url: '/fake' })).payload).toBe(
+      'fake-adapter-response',
+    );
+    const card = await server.inject({ method: 'GET', url: '/.well-known/fake-card.json' });
+    expect(card.statusCode).toBe(200);
+    expect(card.payload).toBe('{"card":true}');
+
+    await server.close();
+  });
+
+  it('scopes a fixed route to its declared method', async () => {
+    const server = await mount([cardAdapter()]);
+    const res = await server.inject({ method: 'POST', url: '/.well-known/fake-card.json' });
+    expect(res.statusCode).toBe(404);
+    await server.close();
+  });
+
+  it('hands a POST body to a fixed route unconsumed, like the mount', async () => {
+    const sent = JSON.stringify({ hello: 'world' });
+    let seen = '';
+    const adapter = cardAdapter({
+      additionalHttpRoutes: [
+        {
+          method: 'POST',
+          path: '/.well-known/fake-card.json',
+          handleHttp: async (req, res) => {
+            const chunks: Buffer[] = [];
+            for await (const chunk of req) chunks.push(chunk as Buffer);
+            seen = Buffer.concat(chunks).toString('utf8');
+            res.writeHead(200);
+            res.end();
+          },
+        },
+      ],
+    });
+    const server = await mount([adapter]);
+
+    const res = await server.inject({
+      method: 'POST',
+      url: '/.well-known/fake-card.json',
+      headers: { 'content-type': 'application/json' },
+      payload: sent,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(seen).toBe(sent);
+
+    await server.close();
+  });
+
+  it('isolates a throwing fixed-route handler, leaving the mount serving', async () => {
+    const adapter = cardAdapter({
+      additionalHttpRoutes: [
+        {
+          method: 'GET',
+          path: '/.well-known/fake-card.json',
+          handleHttp: async () => {
+            throw new Error('card generation blew up');
+          },
+        },
+      ],
+    });
+    const server = await mount([adapter]);
+
+    expect(
+      (await server.inject({ method: 'GET', url: '/.well-known/fake-card.json' })).statusCode,
+    ).toBe(500);
+    expect((await server.inject({ method: 'GET', url: '/fake' })).statusCode).toBe(200);
+
+    await server.close();
+  });
+
+  it('mounts no fixed route for an adapter that failed to start', async () => {
+    const server = Fastify({ logger: false });
+    const runtimes = await startAndMountAdapters({
+      server,
+      adapters: [
+        cardAdapter({
+          start: async () => {
+            throw new Error('nope');
+          },
+        }),
+        createFakeHttpAdapter({ name: 'mcp', mountPath: '/mcp' }),
+      ],
+      context: fakeContext(),
+      logger: NOOP_LOGGER,
+      clock,
+    });
+    await server.ready();
+
+    expect(runtimes[0]?.startFailure?.status).toBe('fail');
+    expect(
+      (await server.inject({ method: 'GET', url: '/.well-known/fake-card.json' })).statusCode,
+    ).toBe(404);
+    expect((await server.inject({ method: 'GET', url: '/fake' })).statusCode).toBe(404);
+    // The healthy adapter is untouched by its neighbour's failure.
+    expect((await server.inject({ method: 'GET', url: '/mcp' })).statusCode).toBe(200);
+
+    await server.close();
+  });
+
+  // Fastify would only notice these inside deferred route registration and
+  // fail server.ready() with an FST_ERR_DUPLICATED_ROUTE naming no adapter.
+  it('rejects two adapters claiming the same fixed route, before either starts', async () => {
+    const server = Fastify({ logger: false });
+    const started: string[] = [];
+    const first = cardAdapter({ start: async () => void started.push('a2a') });
+    const second = createFakeHttpAdapter({
+      name: 'mcp',
+      mountPath: '/mcp',
+      start: async () => void started.push('mcp'),
+      additionalHttpRoutes: [
+        {
+          method: 'GET',
+          path: '/.well-known/fake-card.json',
+          handleHttp: async (_req, res) => {
+            res.end();
+          },
+        },
+      ],
+    });
+
+    await expect(
+      startAndMountAdapters({
+        server,
+        adapters: [first, second],
+        context: fakeContext(),
+        logger: NOOP_LOGGER,
+        clock,
+      }),
+    ).rejects.toMatchObject({ code: 'CONFIG_INVALID' });
+    expect(started).toEqual([]);
+
+    await server.close();
+  });
+
+  it('rejects a fixed route swallowed by another adapter mount wildcard', async () => {
+    const server = Fastify({ logger: false });
+    const nested = createFakeHttpAdapter({
+      name: 'mcp',
+      mountPath: '/mcp',
+      additionalHttpRoutes: [
+        {
+          method: 'GET',
+          path: '/fake/card',
+          handleHttp: async (_req, res) => {
+            res.end();
+          },
+        },
+      ],
+    });
+
+    await expect(
+      startAndMountAdapters({
+        server,
+        adapters: [cardAdapter(), nested],
+        context: fakeContext(),
+        logger: NOOP_LOGGER,
+        clock,
+      }),
+    ).rejects.toMatchObject({ code: 'CONFIG_INVALID' });
+
+    await server.close();
+  });
+
+  it('allows an adapter to serve a fixed route under its own mount', async () => {
+    const server = await mount([
+      cardAdapter({
+        additionalHttpRoutes: [
+          {
+            method: 'GET',
+            path: '/fake/card',
+            handleHttp: async (_req, res) => {
+              res.writeHead(200);
+              res.end('own-sub-route');
+            },
+          },
+        ],
+      }),
+    ]);
+
+    expect((await server.inject({ method: 'GET', url: '/fake/card' })).payload).toBe(
+      'own-sub-route',
+    );
+    await server.close();
   });
 });

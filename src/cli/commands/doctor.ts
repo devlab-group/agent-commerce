@@ -7,6 +7,15 @@ import {
   findNetworkProfile,
   resolveDeploymentMode,
 } from '../../payments/x402/networks.js';
+// Narrow modules, not the package barrel: the CLI must pull in no protocol
+// SDK, and these two are plain constants and strings.
+import {
+  A2A_AGENT_CARD_PATH,
+  A2A_PROTOCOL_BINDING,
+  A2A_PROTOCOL_VERSION,
+  A2A_SPEC_VERSION,
+} from '../../protocols/a2a/constants.js';
+import { A2A_UNSUPPORTED } from '../../protocols/a2a/descriptor.js';
 import { createSqliteReceiptStore } from '../../storage/receipts/index.js';
 import { type ConfigLoader, type GatewayConfig, loadConfigDynamic } from '../lib/config-client.js';
 import { type FetchLike, fetchJson } from '../lib/http.js';
@@ -265,10 +274,35 @@ export async function runDoctor(
     checks.push({ name: 'Protocols', status: 'FAIL', detail: 'well-known document unreachable' });
   } else {
     const mcpMountPath = config.protocols.mcp.enabled ? config.protocols.mcp.mountPath : undefined;
+    const a2aMountPath = config.protocols.a2a.enabled ? config.protocols.a2a.mountPath : undefined;
     checks.push({
       name: 'Protocols',
       status: 'PASS',
-      detail: `http=${config.protocols.http.enabled ? 'on' : 'off'} mcp=${config.protocols.mcp.enabled ? `on (${mcpMountPath})` : 'off'}`,
+      detail: `http=${config.protocols.http.enabled ? 'on' : 'off'} mcp=${config.protocols.mcp.enabled ? `on (${mcpMountPath})` : 'off'} a2a=${config.protocols.a2a.enabled ? `on (${a2aMountPath})` : 'off'}`,
+    });
+  }
+
+  // 5b. A2A specifics. Reported from the pins rather than from the live
+  // gateway so the spec revision, the negotiation version and the binding are
+  // three separate, named values an operator can check against a client — the
+  // first two look alike and are routinely conflated.
+  if (config === undefined) {
+    checks.push({ name: 'A2A', status: 'WARN', detail: 'skipped — config invalid' });
+  } else if (!config.protocols.a2a.enabled) {
+    checks.push({ name: 'A2A', status: 'INFO', detail: 'disabled' });
+  } else {
+    checks.push({
+      name: 'A2A',
+      status: 'PASS',
+      detail: `experimental · spec ${A2A_SPEC_VERSION} · protocol ${A2A_PROTOCOL_VERSION} · binding ${A2A_PROTOCOL_BINDING} · mount ${config.protocols.a2a.mountPath} · card ${A2A_AGENT_CARD_PATH}`,
+    });
+    // Listed in full, never summarised as a count: "18 unsupported" tells an
+    // operator nothing about whether the one operation their client needs is
+    // among them.
+    checks.push({
+      name: 'A2A unsupported',
+      status: 'INFO',
+      detail: A2A_UNSUPPORTED.join(', '),
     });
   }
 

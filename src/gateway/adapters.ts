@@ -71,6 +71,12 @@ export interface StartAndMountOptions {
 export async function startAndMountAdapters(
   options: StartAndMountOptions,
 ): Promise<AdapterRuntime[]> {
+  // Before anything starts: two adapters claiming the same path is a
+  // composition-root bug, not a runtime condition. Fastify would only notice
+  // it inside deferred route registration and fail `server.ready()` with an
+  // opaque FST_ERR_DUPLICATED_ROUTE naming neither adapter.
+  assertNoRouteConflicts(options.adapters);
+
   const runtimes: AdapterRuntime[] = [];
 
   for (const adapter of options.adapters) {
@@ -104,6 +110,61 @@ export async function startAndMountAdapters(
   return runtimes;
 }
 
+interface RouteClaim {
+  readonly adapter: string;
+  readonly path: string;
+  /** A mount also owns everything below its path, through its `/*` wildcard. */
+  readonly wildcard: boolean;
+  readonly method: 'ALL' | 'GET' | 'POST';
+}
+
+function routeClaims(adapters: readonly ProtocolAdapter[]): RouteClaim[] {
+  const claims: RouteClaim[] = [];
+  for (const adapter of adapters) {
+    if (!isHttpProtocolAdapter(adapter)) continue;
+    claims.push({
+      adapter: adapter.name,
+      path: adapter.mountPath.replace(/\/+$/, ''),
+      wildcard: true,
+      method: 'ALL',
+    });
+    for (const route of adapter.additionalHttpRoutes ?? []) {
+      claims.push({
+        adapter: adapter.name,
+        path: route.path.replace(/\/+$/, ''),
+        wildcard: false,
+        method: route.method,
+      });
+    }
+  }
+  return claims;
+}
+
+function claimsCollide(a: RouteClaim, b: RouteClaim): boolean {
+  if (a.wildcard && (b.path === a.path || b.path.startsWith(`${a.path}/`))) return true;
+  if (b.wildcard && a.path.startsWith(`${b.path}/`)) return true;
+  return a.path === b.path && (a.method === b.method || a.method === 'ALL' || b.method === 'ALL');
+}
+
+/**
+ * Only *cross-adapter* claims conflict. An adapter serving a fixed route under
+ * its own mount is fine — Fastify prefers a static route over a wildcard — and
+ * is how a protocol that pins a sub-path stays self-contained.
+ */
+function assertNoRouteConflicts(adapters: readonly ProtocolAdapter[]): void {
+  const claims = routeClaims(adapters);
+  for (const [index, a] of claims.entries()) {
+    for (const b of claims.slice(index + 1)) {
+      if (a.adapter === b.adapter || !claimsCollide(a, b)) continue;
+      throw new CommerceError(
+        'CONFIG_INVALID',
+        `Protocol adapters "${a.adapter}" and "${b.adapter}" both claim the HTTP path "${b.path}"; each adapter path must be served by exactly one adapter`,
+        { details: { adapters: [a.adapter, b.adapter], path: b.path } },
+      );
+    }
+  }
+}
+
 /**
  * The body limit and the per-tool-call semaphore
  * (`protocol-mcp`'s MAX_CONCURRENT_TOOL_CALLS) both bound *what happens
@@ -130,6 +191,10 @@ function mountHttpAdapter(
 ): void {
   const mountPath = adapter.mountPath;
   const wildcard = mountPath.endsWith('/') ? `${mountPath}*` : `${mountPath}/*`;
+  const additionalRoutes = adapter.additionalHttpRoutes ?? [];
+  // One counter for the whole adapter, mount and fixed routes alike: the cap
+  // bounds what this adapter can be made to parse concurrently, and a second
+  // door into the same adapter would be a way around it.
   let inFlight = 0;
 
   void server.register(async (instance) => {
@@ -148,52 +213,63 @@ function mountHttpAdapter(
       done(null);
     });
 
-    const handler = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
-      if (inFlight >= MOUNT_MAX_CONCURRENT_REQUESTS) {
-        // Reject before the SDK ever sees the body — the whole point is to
-        // never let a request past this line start the parse that spikes
-        // memory. No body-limit enforcement needed either: nothing here has
-        // read a byte of it yet.
-        const error = new CommerceError(
-          'GATEWAY_BUSY',
-          'Too many requests already parsing on this mount; retry shortly.',
-        );
-        reply
-          .status(error.httpStatus)
-          .header('retry-after', String(MOUNT_BUSY_RETRY_AFTER_SECONDS))
-          .send(toErrorEnvelope(error));
-        return;
-      }
-      inFlight += 1;
-      try {
-        const stopEnforcing = enforceMountBodyLimit(
-          request.raw,
-          reply.raw,
-          MOUNT_BODY_LIMIT_BYTES,
-          logger,
-        );
-        try {
-          await adapter.handleHttp(request.raw, reply.raw);
-        } catch (error) {
-          logger.error({ err: describeError(error) }, 'Protocol adapter request handler threw');
-          if (!reply.raw.headersSent) {
-            reply.raw.statusCode = 500;
-            reply.raw.end();
-          }
+    const makeHandler =
+      (handleHttp: (req: IncomingMessage, res: ServerResponse) => Promise<void>) =>
+      async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
+        if (inFlight >= MOUNT_MAX_CONCURRENT_REQUESTS) {
+          // Reject before the SDK ever sees the body — the whole point is to
+          // never let a request past this line start the parse that spikes
+          // memory. No body-limit enforcement needed either: nothing here has
+          // read a byte of it yet.
+          const error = new CommerceError(
+            'GATEWAY_BUSY',
+            'Too many requests already parsing on this mount; retry shortly.',
+          );
+          reply
+            .status(error.httpStatus)
+            .header('retry-after', String(MOUNT_BUSY_RETRY_AFTER_SECONDS))
+            .send(toErrorEnvelope(error));
+          return;
         }
-        stopEnforcing();
-        reply.hijack();
-      } finally {
-        // Always released, even on a throw above — a stranded count would
-        // shrink the effective cap by one forever and eventually 503 every
-        // request on this mount permanently, which is worse than the
-        // problem this exists to solve.
-        inFlight -= 1;
-      }
-    };
+        inFlight += 1;
+        try {
+          const stopEnforcing = enforceMountBodyLimit(
+            request.raw,
+            reply.raw,
+            MOUNT_BODY_LIMIT_BYTES,
+            logger,
+          );
+          try {
+            await handleHttp(request.raw, reply.raw);
+          } catch (error) {
+            logger.error({ err: describeError(error) }, 'Protocol adapter request handler threw');
+            if (!reply.raw.headersSent) {
+              reply.raw.statusCode = 500;
+              reply.raw.end();
+            }
+          }
+          stopEnforcing();
+          reply.hijack();
+        } finally {
+          // Always released, even on a throw above — a stranded count would
+          // shrink the effective cap by one forever and eventually 503 every
+          // request on this mount permanently, which is worse than the
+          // problem this exists to solve.
+          inFlight -= 1;
+        }
+      };
 
-    instance.all(mountPath, handler);
-    instance.all(wildcard, handler);
+    const mountHandler = makeHandler((req, res) => adapter.handleHttp(req, res));
+    instance.all(mountPath, mountHandler);
+    instance.all(wildcard, mountHandler);
+
+    for (const route of additionalRoutes) {
+      instance.route({
+        method: route.method,
+        url: route.path,
+        handler: makeHandler((req, res) => route.handleHttp(req, res)),
+      });
+    }
   });
 }
 

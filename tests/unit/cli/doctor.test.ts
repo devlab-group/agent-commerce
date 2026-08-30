@@ -700,13 +700,17 @@ describe('runDoctor — additional derivation and error-recovery branches', () =
         fetchImpl: healthyFetch(),
         loadConfig: async () =>
           makeGatewayConfig({
-            protocols: { http: { enabled: true }, mcp: { enabled: false, mountPath: '/mcp' } },
+            protocols: {
+              http: { enabled: true },
+              mcp: { enabled: false, mountPath: '/mcp' },
+              a2a: { enabled: false, mountPath: '/a2a' },
+            },
           }),
         createStore: () => makeFakeReceiptStore(),
       },
     );
     const protocols = report.checks.find((c) => c.name === 'Protocols');
-    expect(protocols?.detail).toBe('http=on mcp=off');
+    expect(protocols?.detail).toBe('http=on mcp=off a2a=off');
   });
 
   it('reports Storage as WARN when the receipt store health check itself warns', async () => {
@@ -964,5 +968,72 @@ describe('runDoctor — Storage check does not create the store it is checking',
     );
     const storage = report.checks.find((c) => c.name === 'Storage');
     expect(storage?.status).toBe('PASS');
+  });
+});
+
+describe('runDoctor — A2A', () => {
+  it('reports A2A as disabled by default', async () => {
+    const report = await runDoctor(
+      { gatewayUrl: GATEWAY },
+      {
+        fetchImpl: healthyFetch(),
+        loadConfig: async () => makeGatewayConfig(),
+        createStore: () => makeFakeReceiptStore(),
+      },
+    );
+    const a2a = report.checks.find((c) => c.name === 'A2A');
+    expect(a2a?.status).toBe('INFO');
+    expect(a2a?.detail).toBe('disabled');
+    expect(report.checks.find((c) => c.name === 'A2A unsupported')).toBeUndefined();
+  });
+
+  it('reports the spec revision, negotiation version, binding, mount and card path', async () => {
+    const base = makeGatewayConfig();
+    const report = await runDoctor(
+      { gatewayUrl: GATEWAY },
+      {
+        fetchImpl: healthyFetch(),
+        loadConfig: async () => ({
+          ...base,
+          protocols: { ...base.protocols, a2a: { enabled: true, mountPath: '/agents/a2a' } },
+        }),
+        createStore: () => makeFakeReceiptStore(),
+      },
+    );
+
+    const a2a = report.checks.find((c) => c.name === 'A2A');
+    expect(a2a?.status).toBe('PASS');
+    // Spec revision and negotiation version are different values that look
+    // alike; both must appear, named.
+    expect(a2a?.detail).toContain('spec 1.0.0');
+    expect(a2a?.detail).toContain('protocol 1.0');
+    expect(a2a?.detail).toContain('binding JSONRPC');
+    expect(a2a?.detail).toContain('mount /agents/a2a');
+    expect(a2a?.detail).toContain('card /.well-known/agent-card.json');
+    expect(a2a?.detail).toContain('experimental');
+
+    const protocols = report.checks.find((c) => c.name === 'Protocols');
+    expect(protocols?.detail).toContain('a2a=on (/agents/a2a)');
+  });
+
+  it('lists every unsupported A2A operation in full', async () => {
+    const base = makeGatewayConfig();
+    const report = await runDoctor(
+      { gatewayUrl: GATEWAY },
+      {
+        fetchImpl: healthyFetch(),
+        loadConfig: async () => ({
+          ...base,
+          protocols: { ...base.protocols, a2a: { enabled: true, mountPath: '/a2a' } },
+        }),
+        createStore: () => makeFakeReceiptStore(),
+      },
+    );
+
+    const unsupported = report.checks.find((c) => c.name === 'A2A unsupported');
+    expect(unsupported?.status).toBe('INFO');
+    for (const operation of ['SendStreamingMessage', 'GetTask', 'CancelTask', 'gRPC binding']) {
+      expect(unsupported?.detail).toContain(operation);
+    }
   });
 });

@@ -15,7 +15,7 @@
 export type JsonSchema = Record<string, unknown>;
 
 /** Protocol surfaces a resource can be exposed through in this release. */
-export type ProtocolName = 'http' | 'mcp';
+export type ProtocolName = 'http' | 'mcp' | 'a2a';
 
 /** Payment methods a resource can accept in this release. */
 export type PaymentMethodName = 'x402';

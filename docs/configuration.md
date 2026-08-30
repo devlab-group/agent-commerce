@@ -201,8 +201,10 @@ told you is ignored.
 unsupported `version` · unresolved `${VAR}` · duplicate resource ids ·
 `pricing.type: dynamic` · a paid resource with no `payments` · a resource naming
 an unconfigured or disabled payment method · `expose` values outside
-`[http, mcp]` (UCP is planned, not supported) · `expose: [mcp]` while
-`protocols.mcp.enabled` is false · an invalid or zero `payTo`/`asset`.
+`[http, mcp, a2a]` (UCP is planned, not supported) · `expose: [mcp]` while
+`protocols.mcp.enabled` is false (likewise `a2a`) · two enabled protocol mounts
+that overlap · a mount that claims a route the gateway already serves,
+including the A2A Agent Card path · an invalid or zero `payTo`/`asset`.
 
 It exits non-zero on any of them.
 
