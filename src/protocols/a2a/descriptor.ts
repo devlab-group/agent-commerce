@@ -7,7 +7,7 @@
  * on purpose rather than by omission.
  */
 import type { AdapterDescriptor } from '../../core/index.js';
-import { A2A_SPEC_VERSION } from './constants.js';
+import { A2A_SPEC_VERSION, A2A_UNSUPPORTED_METHODS } from './constants.js';
 
 /** What this adapter actually implements. */
 export const A2A_CAPABILITIES: readonly string[] = ['agent-card', 'jsonrpc', 'SendMessage'];
@@ -19,17 +19,9 @@ export const A2A_CAPABILITIES: readonly string[] = ['agent-card', 'jsonrpc', 'Se
  * `/.well-known/agent-commerce` surface this verbatim.
  */
 export const A2A_UNSUPPORTED: readonly string[] = [
-  // Methods, named as the protocol names them.
-  'SendStreamingMessage',
-  'GetTask',
-  'ListTasks',
-  'CancelTask',
-  'SubscribeToTask',
-  'CreateTaskPushNotificationConfig',
-  'GetTaskPushNotificationConfig',
-  'ListTaskPushNotificationConfigs',
-  'DeleteTaskPushNotificationConfig',
-  'GetExtendedAgentCard',
+  // Methods, named as the protocol names them. Same list the transport
+  // rejects by name, so the descriptor cannot promise less than it refuses.
+  ...A2A_UNSUPPORTED_METHODS,
   // Transports other than the one binding served.
   'HTTP+JSON/REST binding',
   'gRPC binding',

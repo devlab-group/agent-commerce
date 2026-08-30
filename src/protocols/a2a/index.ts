@@ -11,9 +11,11 @@ export { A2aProtocolAdapter, createA2aAdapter } from './adapter.js';
 export {
   A2A_AGENT_CARD_PATH,
   A2A_DEFAULT_MOUNT_PATH,
+  A2A_METHOD_SEND_MESSAGE,
   A2A_PROTOCOL_BINDING,
   A2A_PROTOCOL_VERSION,
   A2A_SPEC_VERSION,
+  A2A_VERSION_HEADER,
 } from './constants.js';
 export { A2A_CAPABILITIES, A2A_UNSUPPORTED } from './descriptor.js';
 export type { A2aInvocation } from './message-mapping.js';

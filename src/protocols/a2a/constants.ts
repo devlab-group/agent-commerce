@@ -31,3 +31,32 @@ export const A2A_JSON_MEDIA_TYPE = 'application/json';
 
 /** Card identity when the operator names none. Matches the MCP server name. */
 export const A2A_DEFAULT_AGENT_NAME = 'agent-commerce';
+
+/**
+ * Version negotiation header. A2A v1 carries the protocol version out of band,
+ * so a request that omits it is a client speaking an older negotiation
+ * convention — treated as unsupported rather than optimistically accepted.
+ */
+export const A2A_VERSION_HEADER = 'a2a-version';
+
+/** The one JSON-RPC method this adapter serves. Not the legacy `message/send`. */
+export const A2A_METHOD_SEND_MESSAGE = 'SendMessage';
+
+/**
+ * A2A methods that exist and are deliberately not served here. Kept apart from
+ * unknown methods so a caller learns which of the two they hit: a real method
+ * this deployment refuses, or a typo. One list, read by both the descriptor
+ * and the transport — a second copy would drift the moment one gains a method.
+ */
+export const A2A_UNSUPPORTED_METHODS: readonly string[] = [
+  'SendStreamingMessage',
+  'GetTask',
+  'ListTasks',
+  'CancelTask',
+  'SubscribeToTask',
+  'CreateTaskPushNotificationConfig',
+  'GetTaskPushNotificationConfig',
+  'ListTaskPushNotificationConfigs',
+  'DeleteTaskPushNotificationConfig',
+  'GetExtendedAgentCard',
+];
