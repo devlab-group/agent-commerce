@@ -99,9 +99,17 @@ function assertNoContinuation(params: z.infer<typeof ParamsSchema>): void {
   }
 }
 
-/** Names the part kind so a caller learns which of theirs is the problem. */
+/**
+ * Names the part kind so a caller learns which of theirs is the problem.
+ *
+ * A2A v1 gives `Part` a content oneof — `text`, `data`, `raw` (inline bytes)
+ * or `url` — and carries `filename`/`mediaType` beside it, rather than the
+ * nested `file` object v0.3 used. Both spellings are refused: a v0.3-shaped
+ * client reaching this endpoint should be told its part kind is unsupported,
+ * not that its envelope is malformed.
+ */
 function assertSupportedPart(part: Record<string, unknown>): void {
-  if ('file' in part) {
+  if ('file' in part || 'raw' in part || 'url' in part) {
     throw unsupported('File and URL parts are not supported: send a structured data part.');
   }
   if ('text' in part) {

@@ -124,7 +124,6 @@ describe('A2A agent card over the real gateway', () => {
     expect(res.statusCode).toBe(200);
     expect(res.headers['content-type']).toContain('application/json');
     const card = res.json<A2aAgentCard>();
-    expect(card.protocolVersion).toBe('1.0');
     expect(card.supportedInterfaces).toEqual([
       {
         url: 'http://localhost:8080/a2a',

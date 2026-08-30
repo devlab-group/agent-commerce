@@ -66,7 +66,6 @@ export function buildAgentSkill(resource: CommerceResource): A2aAgentSkill {
 
 export function buildAgentCard(options: AgentCardOptions): A2aAgentCard {
   return {
-    protocolVersion: A2A_PROTOCOL_VERSION,
     name: options.name,
     description: options.description,
     version: options.version,

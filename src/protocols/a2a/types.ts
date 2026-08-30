@@ -43,7 +43,6 @@ export interface A2aAgentSkill {
 }
 
 export interface A2aAgentCard {
-  readonly protocolVersion: string;
   readonly name: string;
   readonly description: string;
   /** Version of the agent implementation, not of the protocol. */

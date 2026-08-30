@@ -191,3 +191,18 @@ describe('parseInvocation — legal A2A this adapter does not serve', () => {
     ).toBe('ping');
   });
 });
+
+/**
+ * Part shapes the official SDK actually produces. A2A v1 flattened the v0.3
+ * `file` object into a content oneof, so these are what a conformant client
+ * sends — checked here rather than only in the SDK conformance suite, where a
+ * failure would be one layer removed from the rule it breaks.
+ */
+describe('parseInvocation — A2A v1 part spellings', () => {
+  it.each([
+    ['inline bytes', { raw: 'QUFBQQ==', filename: 'a.bin', mediaType: 'application/octet-stream' }],
+    ['a url part', { url: 'https://example.com/a.pdf', mediaType: 'application/pdf' }],
+  ])('rejects %s', (_label, part) => {
+    expectRejected({ message: { role: 'ROLE_USER', parts: [part] } }, 'PROTOCOL_UNSUPPORTED');
+  });
+});
