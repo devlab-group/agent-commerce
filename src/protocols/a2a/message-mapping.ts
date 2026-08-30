@@ -25,7 +25,12 @@
  * successful, possibly *paid*, call for something they did not ask for.
  */
 import { z } from 'zod';
-import { CommerceError } from '../../core/index.js';
+import {
+  CommerceError,
+  type CommerceResource,
+  PAYMENT_INPUT_FIELD,
+  type PaymentSubmission,
+} from '../../core/index.js';
 import { A2A_JSON_MEDIA_TYPE } from './constants.js';
 
 /** The only role a request message may carry. A2A v1 spells roles this way. */
@@ -171,4 +176,26 @@ export function parseInvocation(rawParams: unknown): A2aInvocation {
     input: rawInput ?? {},
     ...(message.messageId !== undefined ? { messageId: message.messageId } : {}),
   };
+}
+
+/**
+ * Lifts a payment proof out of the reserved input field into the canonical
+ * `PaymentSubmission` the pipeline reads, leaving the rest of the input alone.
+ *
+ * The *convention* is shared with MCP — one reserved field named once in
+ * `core` — but the code is not: a cross-adapter import would make an A2A
+ * deployment's payment retry depend on the MCP SDK being installed. The
+ * adapter decides nothing about the payment here; it only moves it to where
+ * the pipeline looks, and the rail comes from the resource's own declaration.
+ */
+export function extractPaymentSubmission(
+  rawInput: Record<string, unknown>,
+  resource: CommerceResource | undefined,
+): { input: Record<string, unknown>; payment?: PaymentSubmission } {
+  const { [PAYMENT_INPUT_FIELD]: proof, ...input } = rawInput;
+  const method = resource?.paymentMethods[0];
+  if (typeof proof === 'string' && proof.length > 0 && method !== undefined) {
+    return { input, payment: { method, payload: proof } };
+  }
+  return { input };
 }

@@ -14,11 +14,16 @@ import {
   type AdapterDescriptor,
   type AdapterHealth,
   type AdapterHttpRoute,
+  type CanonicalRequest,
   CommerceError,
+  type CommerceErrorCode,
   type CommerceResource,
+  type ExecutionOutcome,
   type HttpProtocolAdapter,
   type ProtocolAdapterContext,
   toCommerceError,
+  toDeliverySummary,
+  toPaymentRequiredEnvelope,
 } from '../../core/index.js';
 import { PACKAGE_VERSION } from '../../version.js';
 import { buildAgentCard } from './agent-card.js';
@@ -42,9 +47,14 @@ import {
   JSONRPC_PARSE_ERROR,
   type JsonRpcId,
   jsonRpcError,
+  jsonRpcResult,
   parseJsonRpcRequest,
 } from './jsonrpc.js';
-import { parseInvocation } from './message-mapping.js';
+import {
+  type A2aInvocation,
+  extractPaymentSubmission,
+  parseInvocation,
+} from './message-mapping.js';
 import type { A2aAgentCard } from './types.js';
 
 /**
@@ -79,6 +89,10 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
   private context: ProtocolAdapterContext | undefined;
   private started = false;
   private skills: readonly CommerceResource[] = [];
+  // Same defence in depth MCP applies: the card only advertises a2a-exposed
+  // resources, but nothing stops a caller naming any id, and the adapter must
+  // not rely on the pipeline alone to refuse one scoped to another protocol.
+  private skillsById: ReadonlyMap<string, CommerceResource> = new Map();
   // Built once at start: resources are fixed at config load, and a card
   // rebuilt per request would let a discovery GET do work a caller controls
   // the cost of.
@@ -115,6 +129,7 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
     }
 
     this.skills = resources;
+    this.skillsById = new Map(resources.map((resource) => [resource.id, resource]));
     this.card = buildAgentCard({
       name: this.agentName,
       description: this.agentDescription,
@@ -265,19 +280,68 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
   }
 
   /**
-   * Replaced by pipeline execution; the transport above is complete and
-   * tested without it, which is the point of the split.
+   * One accepted invocation, one `pipeline.execute()`. Nothing here prices a
+   * resource, inspects a proof or talks to a merchant backend — the adapter
+   * builds a `CanonicalRequest` and reads back what the pipeline decided.
    */
   private async execute(
     id: JsonRpcId,
-    invocation: ReturnType<typeof parseInvocation>,
+    invocation: A2aInvocation,
   ): Promise<Record<string, unknown>> {
-    void invocation;
-    return jsonRpcError(
-      id,
-      JSONRPC_INTERNAL_ERROR,
-      'Resource execution over A2A is not available yet.',
-    );
+    const context = this.context;
+    if (context === undefined) {
+      return jsonRpcError(id, JSONRPC_INTERNAL_ERROR, 'A2A adapter is not running.');
+    }
+
+    const resource = this.skillsById.get(invocation.resourceId);
+    if (resource === undefined) {
+      // Identical message whether the resource does not exist or is scoped to
+      // another protocol: a caller must not be able to probe for resources
+      // this deployment does not expose over A2A.
+      return jsonRpcError(
+        id,
+        JSONRPC_INVALID_PARAMS,
+        `Unknown canonical resource "${invocation.resourceId}".`,
+      );
+    }
+
+    const { input, payment } = extractPaymentSubmission(invocation.input, resource);
+    const request: CanonicalRequest = {
+      requestId: context.ids.next('a2a'),
+      resourceId: invocation.resourceId,
+      input,
+      protocol: 'a2a',
+      receivedAt: context.clock.nowIso(),
+      ...(payment !== undefined ? { payment } : {}),
+    };
+
+    try {
+      return jsonRpcResult(id, this.toResult(await context.pipeline.execute(request)));
+    } catch (err) {
+      const error = toCommerceError(err);
+      context.logger.warn(
+        { resourceId: invocation.resourceId, requestId: request.requestId, err: error.toInfo() },
+        'a2a adapter: execution failed',
+      );
+      return jsonRpcError(id, jsonRpcCodeFor(error.code), error.message);
+    }
+  }
+
+  /**
+   * Interim shape: terminal A2A Task mapping arrives with outcome mapping.
+   * Both branches use the canonical envelopes rather than an A2A-specific
+   * invention, so nothing here has to be unlearned then.
+   */
+  private toResult(outcome: ExecutionOutcome): Record<string, unknown> {
+    if (outcome.kind === 'payment-required') {
+      return { ...toPaymentRequiredEnvelope(outcome) };
+    }
+    return {
+      kind: 'delivered',
+      resourceId: outcome.resourceId,
+      body: outcome.body,
+      delivery: toDeliverySummary(outcome),
+    };
   }
 
   async health(): Promise<AdapterHealth> {
@@ -292,6 +356,7 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
     this.started = false;
     this.card = undefined;
     this.skills = [];
+    this.skillsById = new Map();
     this.context = undefined;
   }
 
@@ -299,6 +364,25 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
     if (res.headersSent) return;
     res.writeHead(status, { 'content-type': A2A_JSON_MEDIA_TYPE });
     res.end(JSON.stringify(body));
+  }
+}
+
+/**
+ * Commerce failures are not transport failures: a rejected payment or a
+ * missing resource is the caller's request being answered, not the frame
+ * being wrong. Only the two that genuinely describe the request map to a
+ * JSON-RPC param error; everything else stays internal until outcome mapping
+ * gives it a task state.
+ */
+function jsonRpcCodeFor(code: CommerceErrorCode): number {
+  switch (code) {
+    case 'RESOURCE_NOT_FOUND':
+    case 'INPUT_INVALID':
+      return JSONRPC_INVALID_PARAMS;
+    case 'PROTOCOL_UNSUPPORTED':
+      return A2A_ERROR_UNSUPPORTED_OPERATION;
+    default:
+      return JSONRPC_INTERNAL_ERROR;
   }
 }
 

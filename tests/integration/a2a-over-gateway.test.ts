@@ -9,6 +9,7 @@
  */
 import { afterEach, describe, expect, it } from 'vitest';
 import type { GatewayConfig } from '../../src/config/index.js';
+import type { BackendExecutor } from '../../src/core/index.js';
 import { createGateway, type GatewayInstance } from '../../src/gateway/index.js';
 import { createA2aAdapter } from '../../src/protocols/a2a/index.js';
 import type { A2aAgentCard } from '../../src/protocols/a2a/types.js';
@@ -60,12 +61,20 @@ function config(): GatewayConfig {
   };
 }
 
+/** No merchant is reachable from a test; the adapter must never call one anyway. */
+const backend: BackendExecutor = {
+  async call() {
+    return { status: 200, body: { forecast: 'sunny' }, headers: {}, durationMs: 1 };
+  },
+};
+
 async function startGateway(): Promise<GatewayInstance> {
   gateway = await createGateway({
     config: config(),
     store: createFakeStore(),
     paymentProviders: [],
     protocolAdapters: [createMcpAdapter(), createA2aAdapter()],
+    backend,
   });
   return gateway;
 }
@@ -141,16 +150,25 @@ describe('A2A agent card over the real gateway', () => {
 });
 
 describe('A2A JSON-RPC transport over the real gateway', () => {
-  it('reaches the adapter with the request body intact and answers as JSON-RPC', async () => {
+  it('carries a call through the gateway, the adapter and the pipeline to a delivery', async () => {
     const gw = await startGateway();
-    const { statusCode, body } = await rpc(gw, sendMessage({ resource: 'weather_basic' }));
+    const { statusCode, body } = await rpc(
+      gw,
+      sendMessage({ resource: 'weather_basic', input: { city: 'Berlin' } }),
+    );
 
     expect(statusCode).toBe(200);
     expect(body.jsonrpc).toBe('2.0');
     expect(body.id).toBe('req-1');
-    // Phase 5 stops at the transport boundary: a well-formed call parses,
-    // then reports that execution is not wired rather than inventing a result.
-    expect(body.error?.code).toBe(-32603);
+    expect(body.error).toBeUndefined();
+    expect(body.result).toMatchObject({ kind: 'delivered', body: { forecast: 'sunny' } });
+  });
+
+  it('refuses a resource the config does not expose over a2a', async () => {
+    const gw = await startGateway();
+    const { body } = await rpc(gw, sendMessage({ resource: 'mcp_only', input: {} }));
+    expect(body.error?.code).toBe(-32602);
+    expect(body.error?.message).toContain('Unknown canonical resource');
   });
 
   it('rejects the legacy message/send method name as unknown', async () => {
