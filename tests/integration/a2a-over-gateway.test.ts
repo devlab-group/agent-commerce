@@ -285,3 +285,88 @@ describe('A2A JSON-RPC transport over the real gateway', () => {
     }
   });
 });
+
+describe('A2A in gateway discovery', () => {
+  it('publishes the A2A descriptor through the existing adapter mechanism', async () => {
+    const gw = await startGateway();
+    const doc = (
+      await gw.server.inject({ method: 'GET', url: '/.well-known/agent-commerce' })
+    ).json<{
+      protocols: Record<string, { enabled: boolean; mountPath?: string }>;
+      adapters: {
+        name: string;
+        status: string;
+        supportedSpec: string;
+        unsupported?: string[];
+        health: { status: string };
+      }[];
+    }>();
+
+    const a2a = doc.adapters.find((adapter) => adapter.name === 'a2a');
+    expect(a2a?.status).toBe('experimental');
+    expect(a2a?.supportedSpec).toBe('1.0.0');
+    expect(a2a?.unsupported).toContain('SendStreamingMessage');
+    expect(a2a?.health.status).toBe('pass');
+    expect(doc.protocols['a2a']).toEqual({ enabled: true, mountPath: '/a2a' });
+
+    // The neighbouring adapter's own entry is untouched.
+    expect(doc.adapters.find((adapter) => adapter.name === 'mcp')?.status).toBe('stable');
+  });
+
+  it('omits the adapter entirely when a2a is not mounted', async () => {
+    gateway = await createGateway({
+      config: {
+        ...config(),
+        protocols: { ...config().protocols, a2a: { enabled: false, mountPath: '/a2a' } },
+      },
+      store: createFakeStore(),
+      paymentProviders: [],
+      protocolAdapters: [createMcpAdapter()],
+      backend,
+    });
+
+    const doc = (
+      await gateway.server.inject({ method: 'GET', url: '/.well-known/agent-commerce' })
+    ).json<{ adapters: { name: string }[] }>();
+    expect(doc.adapters.map((adapter) => adapter.name)).toEqual(['mcp']);
+
+    // Nothing serves the card path when no adapter claims it.
+    const card = await gateway.server.inject({
+      method: 'GET',
+      url: '/.well-known/agent-card.json',
+    });
+    expect(card.statusCode).toBe(404);
+  });
+
+  it('keeps MCP serving when the A2A adapter fails to start', async () => {
+    const broken = createA2aAdapter();
+    broken.start = async () => {
+      throw new Error('a2a could not start');
+    };
+
+    gateway = await createGateway({
+      config: config(),
+      store: createFakeStore(),
+      paymentProviders: [],
+      protocolAdapters: [createMcpAdapter(), broken],
+      backend,
+    });
+
+    const doc = (
+      await gateway.server.inject({ method: 'GET', url: '/.well-known/agent-commerce' })
+    ).json<{ adapters: { name: string; health: { status: string; detail?: string } }[] }>();
+
+    const a2a = doc.adapters.find((adapter) => adapter.name === 'a2a');
+    expect(a2a?.health.status).toBe('fail');
+    // The failure reason is internal; the anonymous route must not carry it.
+    expect(a2a?.health.detail).toBeUndefined();
+    expect(doc.adapters.find((adapter) => adapter.name === 'mcp')?.health.status).toBe('pass');
+
+    // MCP still answers, and no A2A route was mounted.
+    expect((await gateway.server.inject({ method: 'GET', url: '/mcp' })).statusCode).toBe(405);
+    expect(
+      (await gateway.server.inject({ method: 'GET', url: '/.well-known/agent-card.json' }))
+        .statusCode,
+    ).toBe(404);
+  });
+});
