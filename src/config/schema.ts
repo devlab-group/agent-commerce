@@ -189,6 +189,19 @@ const DEFAULT_A2A_MOUNT_PATH = '/a2a';
 
 const BackendMethodSchema = z.enum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
 
+/**
+ * Names the top-level input properties carrying each part of the backend
+ * request. Strict: a typo like `bodyy` must fail at load, not silently mean
+ * "no body binding" and ship a request missing its payload.
+ */
+const BackendInputBindingsSchema = z
+  .object({
+    path: z.string().min(1).optional(),
+    query: z.string().min(1).optional(),
+    body: z.string().min(1).optional(),
+  })
+  .strict();
+
 const BackendHandlerSchema = z
   .object({
     type: z.literal('http'),
@@ -196,6 +209,7 @@ const BackendHandlerSchema = z
     url: z.string().min(1),
     headers: z.record(z.string(), z.string()).optional(),
     timeoutMs: NumberOrString.optional(),
+    inputBindings: BackendInputBindingsSchema.optional(),
   })
   .strict();
 
@@ -702,7 +716,8 @@ function normaliseResource(
   }
 
   validateBackendUrl(id, entry.backend.url);
-  validatePathParametersDeclared(id, entry.backend.url, entry.input);
+  const pathScope = validateInputBindings(id, entry.backend, entry.input);
+  validatePathParametersDeclared(id, entry.backend.url, pathScope.schema, pathScope.where);
 
   if (entry.pricing.type === 'dynamic') {
     throw new CommerceError(
@@ -769,6 +784,9 @@ function normaliseResource(
               min: 1,
             }),
           }
+        : {}),
+      ...(entry.backend.inputBindings !== undefined
+        ? { inputBindings: pickDefined(entry.backend.inputBindings) }
         : {}),
     },
     pricing,
@@ -1040,6 +1058,119 @@ function validatePricingAmount(id: string, amount: string, x402: NormalisedX402 
 }
 
 /**
+ * `backend.inputBindings` names top-level input properties; this is the gate
+ * that makes those names mean something at load time rather than at the first
+ * paid call. Input schemas are closed by default at every depth
+ * (`defaultClosedObjectSchema`), so a binding naming a property the schema
+ * never declares can never be satisfied — the group would be silently empty
+ * on every request, which on a paid resource is payment for a request the
+ * backend receives incomplete.
+ *
+ * Returns the schema node `{param}` declarations must be found in: the path
+ * group in explicit mode, the whole input in legacy mode.
+ */
+function validateInputBindings(
+  id: string,
+  backend: RawResourceEntry['backend'],
+  input: Record<string, unknown> | undefined,
+): { readonly schema: Record<string, unknown> | undefined; readonly where: string } {
+  const legacy = { schema: input, where: 'its input schema' } as const;
+  const bindings = backend.inputBindings;
+  const templated = extractPathParameterNames(backend.url).length > 0;
+  if (bindings === undefined) return legacy;
+
+  const path = `resources.${id}.backend.inputBindings`;
+  const fail = (message: string, details: Record<string, unknown> = {}): never => {
+    throw new CommerceError('CONFIG_INVALID', `Resource "${id}" ${message}`, {
+      details: { path, resourceId: id, ...details },
+    });
+  };
+
+  const entries = Object.entries(bindings).filter(
+    (entry): entry is [string, string] => entry[1] !== undefined,
+  );
+  if (entries.length === 0) {
+    fail('has an empty backend.inputBindings — remove the block to use the default mapping');
+  }
+  if (backend.method === 'GET' || backend.method === 'DELETE') {
+    if (bindings.body !== undefined) {
+      fail(
+        `binds a request body on a ${backend.method}, which sends none — the value would be silently dropped`,
+      );
+    }
+  }
+  if (templated && bindings.path === undefined) {
+    fail(
+      'has backend.url path parameters but no "path" binding — in explicit binding mode nothing else supplies them, so every call would fail to reach the backend',
+    );
+  }
+
+  const seen = new Map<string, string>();
+  const properties = isPlainObject(input?.['properties']) ? input['properties'] : {};
+  const required = new Set(
+    Array.isArray(input?.['required'])
+      ? input['required'].filter((value): value is string => typeof value === 'string')
+      : [],
+  );
+
+  for (const [location, property] of entries) {
+    if (property === PAYMENT_INPUT_FIELD) {
+      fail(
+        `binds "${location}" to "${PAYMENT_INPUT_FIELD}", which is reserved for payment proofs`,
+        { location },
+      );
+    }
+    const other = seen.get(property);
+    if (other !== undefined) {
+      fail(`binds both "${other}" and "${location}" to the input property "${property}"`, {
+        location,
+        property,
+      });
+    }
+    seen.set(property, location);
+
+    if (!Object.hasOwn(properties, property)) {
+      fail(
+        `binds "${location}" to input property "${property}", which the input schema does not declare — the schema is closed, so a caller could never supply it`,
+        { location, property },
+      );
+    }
+    // `body` may legitimately be any JSON value; only the two groups the
+    // executor iterates as key/value pairs have to be objects.
+    const declared = properties[property];
+    if (location !== 'body' && isPlainObject(declared) && !isObjectSchemaNode(declared)) {
+      fail(
+        `binds "${location}" to input property "${property}", which is not an object schema — ${location} parameters are read as an object of name/value pairs`,
+        { location, property },
+      );
+    }
+  }
+
+  if (templated && bindings.path !== undefined && !required.has(bindings.path)) {
+    fail(
+      `binds path parameters to input property "${bindings.path}" without listing it in the input schema's "required" — a caller that omits it cannot supply any path parameter, so the request could never be built`,
+      { property: bindings.path },
+    );
+  }
+
+  if (bindings.path === undefined) return { schema: undefined, where: 'its input schema' };
+  const group = properties[bindings.path];
+  return {
+    schema: isPlainObject(group) ? group : undefined,
+    where: `input.properties.${bindings.path}`,
+  };
+}
+
+/** Strips absent optional keys so the result satisfies `exactOptionalPropertyTypes`. */
+function pickDefined<T extends Record<string, string | undefined>>(
+  value: T,
+): { [K in keyof T]?: string } {
+  return Object.fromEntries(Object.entries(value).filter(([, v]) => v !== undefined)) as {
+    [K in keyof T]?: string;
+  };
+}
+
+/**
  * The root-cause half. `validateBackendRequestShape`
  * (src/core) rejects a missing path parameter at request time — after
  * schema validation but, without this check, on every single call, because
@@ -1058,6 +1189,7 @@ function validatePathParametersDeclared(
   id: string,
   url: string,
   input: Record<string, unknown> | undefined,
+  where: string,
 ): void {
   // Before anything else: a brace token the canonical grammar does not
   // recognise is neither extracted here nor substituted at request time, so it
@@ -1121,14 +1253,14 @@ function validatePathParametersDeclared(
     if (!Object.hasOwn(properties, param)) {
       throw new CommerceError(
         'CONFIG_INVALID',
-        `Resource "${id}" has backend.url path parameter "{${param}}" which is not declared in its input schema — the caller has no way to supply it, so every call would settle payment (if priced) and then fail to reach the backend`,
+        `Resource "${id}" has backend.url path parameter "{${param}}" which is not declared in ${where} — the caller has no way to supply it, so every call would settle payment (if priced) and then fail to reach the backend`,
         { details: { path, resourceId: id, param } },
       );
     }
     if (!required.has(param)) {
       throw new CommerceError(
         'CONFIG_INVALID',
-        `Resource "${id}" has backend.url path parameter "{${param}}" declared in its input schema but not listed in "required" — a caller that omits it hits the same unservable-request problem as an undeclared parameter`,
+        `Resource "${id}" has backend.url path parameter "{${param}}" declared in ${where} but not listed in its "required" — a caller that omits it hits the same unservable-request problem as an undeclared parameter`,
         { details: { path, resourceId: id, param } },
       );
     }
