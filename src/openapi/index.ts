@@ -6,6 +6,8 @@
 export { type DiscoverOptions, type DiscoveryResult, discoverOperations } from './discover.js';
 export { loadOpenApiDocument, MAX_SOURCE_BYTES } from './load.js';
 export { dereference, isRefNode } from './refs.js';
+export { mapRequest, type RequestBindings, type RequestMapping } from './request.js';
+export { convertSchema, isPrimitiveSchema, type SchemaConversion } from './schema.js';
 export type {
   ImportDiagnostic,
   LoadedOpenApiDocument,

@@ -1,0 +1,87 @@
+openapi: 3.0.3
+info:
+  title: Schemas
+  version: 1.0.0
+servers:
+  - url: https://api.example.com
+paths:
+  /noop:
+    get:
+      operationId: noop
+      responses:
+        '200':
+          description: ok
+components:
+  schemas:
+    Primitive:
+      type: string
+      description: A name
+      default: anon
+    NullableString:
+      type: string
+      nullable: true
+    Enum:
+      type: string
+      enum: [draft, sent, paid]
+    Constrained:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+          pattern: '^.+@.+$'
+        age:
+          type: integer
+          minimum: 0
+      required: [email]
+    Nested:
+      type: object
+      properties:
+        owner:
+          $ref: '#/components/schemas/Constrained'
+        tags:
+          type: array
+          items:
+            type: string
+      additionalProperties: false
+    OpenMap:
+      type: object
+      additionalProperties:
+        type: number
+    Base:
+      type: object
+      properties:
+        id:
+          type: string
+      required: [id]
+    Extra:
+      type: object
+      properties:
+        label:
+          type: string
+    MergedAllOf:
+      allOf:
+        - $ref: '#/components/schemas/Base'
+        - $ref: '#/components/schemas/Extra'
+      description: Merged
+    ConflictingAllOf:
+      allOf:
+        - type: object
+          properties:
+            id:
+              type: string
+        - type: object
+          properties:
+            id:
+              type: integer
+    OneOf:
+      oneOf:
+        - type: string
+        - type: integer
+    Cyclic:
+      type: object
+      properties:
+        self:
+          $ref: '#/components/schemas/Cyclic'
+    RequiredOnly:
+      required: [id]
