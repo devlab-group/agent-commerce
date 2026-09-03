@@ -1,0 +1,116 @@
+openapi: 3.1.0
+info:
+  title: Responses
+  version: 1.0.0
+servers:
+  - url: https://api.example.com
+security:
+  - apiKey: []
+paths:
+  /orders/{orderId}:
+    get:
+      operationId: getOrder
+      summary: Get order
+      description: One order by id.
+      x-internal-cost: 12
+      tags: [orders, read]
+      parameters:
+        - name: orderId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '201':
+          description: created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  late:
+                    type: string
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+  /orders:
+    post:
+      operationId: createOrder
+      tags: [orders]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                sku:
+                  type: string
+              required: [sku]
+      responses:
+        '201':
+          description: created
+          content:
+            application/vnd.acme+json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+  /orders/{orderId}/cancel:
+    delete:
+      operationId: cancelOrder
+      tags: [orders, write]
+      parameters:
+        - name: orderId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: no content
+  /pings:
+    get:
+      operationId: ping
+      security:
+        - {}
+      responses:
+        '200':
+          description: ok
+          content:
+            text/plain:
+              schema:
+                type: string
+  /unions:
+    get:
+      operationId: union
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - type: string
+                  - type: integer
+components:
+  schemas:
+    Order:
+      type: object
+      properties:
+        id:
+          type: string
+        total:
+          type: number
+          minimum: 0
+      required: [id]
+  securitySchemes:
+    apiKey:
+      type: apiKey
+      name: X-Api-Key
+      in: header

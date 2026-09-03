@@ -5,7 +5,7 @@
  * `type`/`properties`/`required`/`additionalProperties`/`enum`/`items` and
  * silently ignores everything else, so copying a `pattern` or a `oneOf` into a
  * generated resource would advertise validation to agents that no code
- * performs — and on a paid resource, the request the merchant's backend
+ * performs - and on a paid resource, the request the merchant's backend
  * receives is the one the buyer already paid for. Unenforceable constraints
  * are therefore dropped from the generated schema and reported, never
  * carried along quietly.
@@ -92,7 +92,7 @@ function convertNode(
   dropped: Set<string>,
 ): JsonSchema | undefined {
   // OpenAPI 3.1 allows boolean schemas: `true` accepts anything, `false`
-  // accepts nothing — and nothing is not a request shape we can generate.
+  // accepts nothing - and nothing is not a request shape we can generate.
   if (node === true) return {};
   if (node === false) throw new UnsupportedSchema('schema is `false`, which accepts no value');
 
@@ -109,7 +109,7 @@ function convertNode(
   for (const keyword of ['oneOf', 'anyOf', 'not', 'discriminator']) {
     if (Object.hasOwn(schemaNode, keyword)) {
       throw new UnsupportedSchema(
-        `schema uses "${keyword}", which this gateway cannot enforce — accepting it would advertise validation that never runs`,
+        `schema uses "${keyword}", which this gateway cannot enforce - accepting it would advertise validation that never runs`,
       );
     }
   }
@@ -131,11 +131,12 @@ function convertNode(
       if (child !== undefined) converted[name] = child;
     }
     result['properties'] = converted;
-    if (!Object.hasOwn(schemaNode, 'additionalProperties')) result['additionalProperties'] = false;
   }
 
   // Independent of `properties`: `required` without them is legal, and core's
   // validator enforces it, so dropping it here would be a silent weakening.
+  // Emitted here so every generated object schema orders its keys the same
+  // way - the output is meant to be reviewed in a diff.
   const required = schemaNode['required'];
   if (Array.isArray(required)) {
     const names = required.filter((name): name is string => typeof name === 'string');
@@ -148,6 +149,8 @@ function convertNode(
   } else if (additional !== undefined) {
     const child = convertNode(document, additional, resolved.stack, dropped);
     if (child !== undefined) result['additionalProperties'] = child;
+  } else if (isRecord(properties)) {
+    result['additionalProperties'] = false;
   }
 
   const items = schemaNode['items'];
@@ -209,7 +212,7 @@ function typeList(raw: unknown): string[] | undefined {
 /**
  * A simple `allOf` of object schemas is merged; anything else is refused.
  *
- * Merging is only safe while the branches agree — two branches declaring the
+ * Merging is only safe while the branches agree - two branches declaring the
  * same property differently have a meaning ("both must hold") that this
  * validator cannot express, and picking one would quietly accept requests the
  * API rejects, or reject ones it accepts.

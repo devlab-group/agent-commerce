@@ -99,7 +99,7 @@ export function discoverOperations(
       if (previous !== undefined) {
         throw new CommerceError(
           'CONFIG_INVALID',
-          `Operations "${previous}" and "${where}" both produce the resource id "${resourceId}". Give one of them a distinct operationId — ids are what agents discover, so the importer will not rename either`,
+          `Operations "${previous}" and "${where}" both produce the resource id "${resourceId}". Give one of them a distinct operationId - ids are what agents discover, so the importer will not rename either`,
           { details: { resourceId, operations: [previous, where] } },
         );
       }
@@ -137,6 +137,7 @@ export function discoverOperations(
         path,
         backendUrl,
         ...(operationId !== undefined ? { operationId } : {}),
+        tags: toArray(operation['tags']).filter((tag): tag is string => typeof tag === 'string'),
         name: summary ?? operationId ?? resourceId,
         ...(description !== undefined ? { description } : {}),
         parameters: [
@@ -186,7 +187,7 @@ function normaliseId(value: string): string {
  *
  * A relative server URL (`/v1`, the OpenAPI default of `/`) names no host, and
  * guessing one from the filename or from localhost would silently point a
- * merchant's gateway at the wrong backend — so it is refused and `--base-url`
+ * merchant's gateway at the wrong backend - so it is refused and `--base-url`
  * asked for instead.
  */
 function selectServer(

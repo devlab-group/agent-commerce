@@ -27,7 +27,7 @@ describe('discoverOperations', () => {
 
   it('normalises an operationId that is not a legal resource id', async () => {
     const result = await discover('minimal-3.1.json');
-    // "list things!" — the space and "!" are not in the id character set.
+    // "list things!" - the space and "!" are not in the id character set.
     expect(ids(result)).toEqual(['list_things']);
   });
 

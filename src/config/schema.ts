@@ -5,7 +5,7 @@
  * Two-phase validation:
  * 1. Zod validates *shape* (types, required fields, unknown-key rejection).
  * Numeric/boolean leaves accept either their native type or a string
- * (env substitution always produces a string), and are left as-is here —
+ * (env substitution always produces a string), and are left as-is here -
  * Zod's typed transforms have surprising inference interactions with
  * `.strict()` objects, so numeric/boolean coercion is done explicitly,
  * in plain TypeScript, in the normalisation pass below.
@@ -49,7 +49,7 @@ const ZERO_ADDRESS_PATTERN = /^0x0{40}$/i;
  * A resource `id` doubles as its MCP tool name (protocol-mcp registers one
  * tool per resource, named by id). Value verified against the regex actually
  * shipped in the installed `@modelcontextprotocol/sdk@1.30.0`
- * (`shared/toolNameValidation.js`, SEP-986 "Specify Format for Tool Names") —
+ * (`shared/toolNameValidation.js`, SEP-986 "Specify Format for Tool Names") -
  * not duplicated as an SDK dependency, since config stays protocol-agnostic.
  */
 const MCP_TOOL_NAME_PATTERN = /^[A-Za-z0-9._-]{1,128}$/;
@@ -79,7 +79,7 @@ const ServerSchema = z
     adminToken: z.string().min(1).optional(),
     /** Browser origins allowed to read the dashboard-facing routes. Empty by default: closed. */
     // Entries are matched literally against the browser's
-    // `Origin` header, so `"*"` and a trailing slash match nothing at all —
+    // `Origin` header, so `"*"` and a trailing slash match nothing at all -
     // fail-closed (a lockout, not a bypass), but silently, and a lockout with
     // no explanation is the kind of thing an operator "fixes" by disabling the
     // check. Reject those two shapes with a pointer instead.
@@ -90,11 +90,11 @@ const ServerSchema = z
           .min(1)
           .refine((origin) => origin !== '*', {
             message:
-              'wildcard "*" is not supported — allowedOrigins entries are matched literally against the browser\'s Origin header, so "*" would match nothing. List each scheme://host[:port] explicitly.',
+              'wildcard "*" is not supported - allowedOrigins entries are matched literally against the browser\'s Origin header, so "*" would match nothing. List each scheme://host[:port] explicitly.',
           })
           .refine((origin) => !origin.endsWith('/'), {
             message:
-              'must not end with "/" — a browser Origin header never has a trailing slash, so this entry would match nothing. Use e.g. "http://localhost:5173".',
+              'must not end with "/" - a browser Origin header never has a trailing slash, so this entry would match nothing. Use e.g. "http://localhost:5173".',
           }),
       )
       .optional(),
@@ -135,7 +135,7 @@ const RESERVED_GATEWAY_PATHS = [
 
 /**
  * `mountPath` reaches Fastify as a route pattern, and a bad one throws inside
- * route registration — deferred to `server.ready()`, so `createGateway` fails
+ * route registration - deferred to `server.ready()`, so `createGateway` fails
  * wholesale with an opaque `FST_ERR_*` instead of the adapter alone degrading.
  * Catching the shape here turns that into a CONFIG_INVALID naming the value.
  * Fastify pattern syntax (`:param`, `*`) is rejected rather than supported:
@@ -145,11 +145,11 @@ const MountPathSchema = z
   .string()
   .min(1)
   .refine((value) => value.startsWith('/'), {
-    message: 'must start with "/" — it is an absolute gateway path, e.g. "/mcp".',
+    message: 'must start with "/" - it is an absolute gateway path, e.g. "/mcp".',
   })
   .refine((value) => !/[:*?\s]/.test(value), {
     message:
-      'must not contain ":", "*", "?" or whitespace — the mount is a literal path prefix, not a Fastify route pattern, and registers its own wildcard.',
+      'must not contain ":", "*", "?" or whitespace - the mount is a literal path prefix, not a Fastify route pattern, and registers its own wildcard.',
   })
   .refine(
     (value) => {
@@ -278,7 +278,7 @@ const FacilitatorSchema = z.discriminatedUnion('mode', [
     .object({
       mode: z.literal('remote'),
       url: z.string().min(1),
-      // Absent means "this facilitator takes no credential" — an explicit
+      // Absent means "this facilitator takes no credential" - an explicit
       // statement, normalised to `{ type: 'none' }` below. On a mainnet that
       // combination is refused outright, so the default can never quietly
       // become an unauthenticated production facilitator.
@@ -299,7 +299,7 @@ const X402Schema = z
     payTo: z.string().min(1),
     maxTimeoutSeconds: NumberOrString,
     facilitator: FacilitatorSchema,
-    /** Real funds. Never defaulted — see src/payments/x402/guardrails.ts. */
+    /** Real funds. Never defaulted - see src/payments/x402/guardrails.ts. */
     allowMainnet: BooleanOrString.optional(),
     /** Accepts a mainnet facilitator that takes no credential. Never defaulted. */
     allowUnauthenticatedFacilitator: BooleanOrString.optional(),
@@ -328,7 +328,7 @@ type RawConfig = z.infer<typeof RawConfigSchema>;
 type RawResourceEntry = z.infer<typeof ResourceEntrySchema>;
 
 // ---------------------------------------------------------------------------
-// Public shape (docs/contracts.md — exact).
+// Public shape (docs/contracts.md - exact).
 // ---------------------------------------------------------------------------
 
 export interface GatewayConfig {
@@ -428,7 +428,7 @@ function describeIssue(issue: ZodIssue): { path: string; message: string; code: 
 }
 
 // ---------------------------------------------------------------------------
-// Numeric / boolean coercion (explicit, not via Zod — see file header).
+// Numeric / boolean coercion (explicit, not via Zod - see file header).
 // ---------------------------------------------------------------------------
 
 function toNumber(
@@ -436,7 +436,7 @@ function toNumber(
   path: string,
   bounds: { min?: number; max?: number } = {},
 ): number {
-  // `Number('')` is 0 — finite, integral, and inside
+  // `Number('')` is 0 - finite, integral, and inside
   // `server.port`'s deliberate `min: 0` ("let the OS pick"). So `port: ${PORT:-}`
   // or an exported-but-empty PORT validated PASS and the gateway bound a random
   // port, after which `doctor` derived `http://127.0.0.1:0`, failed to connect,
@@ -635,7 +635,7 @@ function validateMountPaths(protocols: NormalisedProtocols): void {
       if (baseA === baseB || baseA.startsWith(`${baseB}/`) || baseB.startsWith(`${baseA}/`)) {
         throw new CommerceError(
           'CONFIG_INVALID',
-          `protocols.${nameA}.mountPath ("${a.mountPath}") collides with protocols.${nameB}.mountPath ("${b.mountPath}") — each mount registers a wildcard, so overlapping prefixes cannot both be served`,
+          `protocols.${nameA}.mountPath ("${a.mountPath}") collides with protocols.${nameB}.mountPath ("${b.mountPath}") - each mount registers a wildcard, so overlapping prefixes cannot both be served`,
           { details: { path: `protocols.${nameA}.mountPath` } },
         );
       }
@@ -796,22 +796,22 @@ function normaliseResource(
 }
 
 /**
- * `{param}` templates (e.g. `.../weather/{city}`) parse fine as a URL — the
- * WHATWG parser just percent-encodes the braces — so this only rejects
+ * `{param}` templates (e.g. `.../weather/{city}`) parse fine as a URL - the
+ * WHATWG parser just percent-encodes the braces - so this only rejects
  * genuinely malformed strings and non-http(s) schemes, not templating.
  */
 /**
  * Permissive-by-default is the wrong default for a value forwarded to
  * someone else's API: an object schema that
  * omits `additionalProperties` defaults, per JSON Schema itself, to
- * "anything goes" — so default it to `false` here instead, unless the
+ * "anything goes" - so default it to `false` here instead, unless the
  * operator set it explicitly (including explicitly to `true`, which is
  * respected).
  *
  * An earlier fix only stamped the ROOT schema, so
  * `filter: { type: object }` *looked* closed (the top level really was)
  * while every key one level down under `properties.filter` still passed
- * verbatim — `core`'s validator (execution/validation.ts) only enforces
+ * verbatim - `core`'s validator (execution/validation.ts) only enforces
  * `additionalProperties` where the schema states it explicitly, at every
  * level independently. Recurse into `properties` and `items` the same way
  * `validateResourceSchemaKeywords` below already does, so "closed" actually
@@ -819,7 +819,7 @@ function normaliseResource(
  * write `additionalProperties: false` on.
  *
  * `type` can be an array (`["object","null"]`, valid JSON
- * Schema) — a bare `=== 'object'` string comparison missed it, so a schema
+ * Schema) - a bare `=== 'object'` string comparison missed it, so a schema
  * in that shape got stamped as open. `declaresObjectType` below is the same
  * check `core`'s validator now makes (`execution/validation.ts`'s
  * `isObjectSchemaNode`) so the two stay in agreement.
@@ -827,7 +827,7 @@ function normaliseResource(
 function defaultClosedObjectSchema(schema: Record<string, unknown>): Record<string, unknown> {
   // imported, never re-implemented. The local predicate this
   // replaces recognised `type`/`properties` but not `required`, while core's
-  // validator recognised `properties`/`required` — so `input: { required: [q] }`
+  // validator recognised `properties`/`required` - so `input: { required: [q] }`
   // was an object to the validator and not to the stamper, and every unknown
   // key sailed through to the merchant backend. One definition, one drift.
   const isObjectSchema = isObjectSchemaNode(schema);
@@ -856,7 +856,7 @@ function defaultClosedObjectSchema(schema: Record<string, unknown>): Record<stri
   // The third place this stamper drifted from the validator, after `required`
   // and tuple `items`. `additionalProperties: {schema}` is the idiomatic
   // "map of typed objects" shape, and core's validator applies that subschema
-  // recursively at unbounded depth — so without this branch, every node under
+  // recursively at unbounded depth - so without this branch, every node under
   // it stayed open and unknown keys reached the merchant backend. Recursion
   // here is not conditional on `isObjectSchema`: the validator applies the
   // subschema wherever it finds one.
@@ -871,10 +871,10 @@ function defaultClosedObjectSchema(schema: Record<string, unknown>): Record<stri
 /**
  * A resource that declares no `input:` at all got
  * `inputSchema: undefined`, and `compileJsonSchema(undefined)` is an
- * always-valid validator — every caller key was forwarded to the merchant
+ * always-valid validator - every caller key was forwarded to the merchant
  * backend verbatim. The decision: default "declared nothing" to "accepts
  * nothing" (an empty closed object) rather than rejecting the config at load
- * time — a no-argument resource that omits `input:` is a legitimate shape,
+ * time - a no-argument resource that omits `input:` is a legitimate shape,
  * and rejecting it would break every existing config that uses it.
  */
 const EMPTY_CLOSED_OBJECT_SCHEMA: Record<string, unknown> = {
@@ -886,7 +886,7 @@ const EMPTY_CLOSED_OBJECT_SCHEMA: Record<string, unknown> = {
 /**
  * `src/core`'s validator only enforces the subset documented in
  * `execution/validation.ts` (type/properties/required/additionalProperties/
- * enum/items) — everything else (`pattern`, `minLength`, `format`, `oneOf`,
+ * enum/items) - everything else (`pattern`, `minLength`, `format`, `oneOf`,
  * …) is silently ignored at runtime. An operator who writes `pattern` and
  * never sees it enforced has no way to know that from the config alone, so
  * warn at load time instead of letting them find out the hard way.
@@ -918,8 +918,8 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 /** `type` explicitly set to something that rules out "object" (a bare
- * value, or an array not containing "object"). `undefined` — no `type` at
- * all — is deliberately NOT treated as excluding: core's validator treats
+ * value, or an array not containing "object"). `undefined` - no `type` at
+ * all - is deliberately NOT treated as excluding: core's validator treats
  * `properties`/`required` with no `type` as an object schema, so that shape
  * is fine, not another instance of this bug. */
 function excludesObjectType(schema: Record<string, unknown>): boolean {
@@ -939,7 +939,7 @@ function excludesObjectType(schema: Record<string, unknown>): boolean {
  * `type` that actively rules "object" out while `properties`/`required`
  * imply it was meant to be one, e.g. a copy-pasted sibling schema whose
  * `type` was never updated. Rejecting (not just warning) here is the
- * decision — a warning is exactly what let this bug class ship silently in
+ * decision - a warning is exactly what let this bug class ship silently in
  * the first place (`validate`/`doctor` both said PASS).
  */
 function validateResourceSchemaKeywords(
@@ -961,14 +961,14 @@ function validateResourceSchemaKeywords(
   ) {
     throw new CommerceError(
       'CONFIG_INVALID',
-      `Resource "${id}" ${path} declares "properties" and/or "required" but its "type" (${JSON.stringify(schema['type'])}) does not include "object" — the validator will never route a value through either check under that type, so this schema claims to constrain input it does not actually enforce. Remove "properties"/"required", or include "object" in "type".`,
+      `Resource "${id}" ${path} declares "properties" and/or "required" but its "type" (${JSON.stringify(schema['type'])}) does not include "object" - the validator will never route a value through either check under that type, so this schema claims to constrain input it does not actually enforce. Remove "properties"/"required", or include "object" in "type".`,
       { details: { path: `resources.${id}.${path}`, resourceId: id } },
     );
   }
   // the other half. Closing a `required`-only node is
   // correct JSON Schema and quietly unsatisfiable: `required: ["q"]` demands a
   // property that `properties` never declares, so the stamped
-  // `additionalProperties: false` rejects `q` as an unknown key — the schema
+  // `additionalProperties: false` rejects `q` as an unknown key - the schema
   // can never be satisfied by any input at all. Fail-closed, so no money is at
   // risk, but every call would 400 with a config that loaded cleanly. Say so
   // at load instead. Only when the node really will be closed: an explicit
@@ -1007,12 +1007,12 @@ function validateResourceSchemaKeywords(
   } else if (Array.isArray(items)) {
     // tuple-form `items` (an array of per-position
     // schemas) is valid JSON Schema, but `core`'s validator only supports
-    // the single-schema form applied to every element — a tuple silently
+    // the single-schema form applied to every element - a tuple silently
     // enforces nothing, invisibly rather than wrongly, so warn the same way
     // an unsupported keyword does.
     // eslint-disable-next-line no-console
     console.warn(
-      `[agent-commerce] resource "${id}" ${path}.items is a tuple (an array of schemas), which this gateway does not enforce — only a single schema applied to every array element is supported (see src/core/execution/validation.ts). Each position's schema is unenforced; treat it as documentation only.`,
+      `[agent-commerce] resource "${id}" ${path}.items is a tuple (an array of schemas), which this gateway does not enforce - only a single schema applied to every array element is supported (see src/core/execution/validation.ts). Each position's schema is unenforced; treat it as documentation only.`,
     );
   }
 }
@@ -1021,7 +1021,7 @@ function validateResourceSchemaKeywords(
  * `amount: z.string().min(1)` alone let "0,01", "$0.01", "1e-2", "-1" and an
  * over-precise "0.0000001" all pass config + `doctor`, then throw on every
  * purchase. A plain
- * positive decimal only — no currency symbol, no thousands separator, no
+ * positive decimal only - no currency symbol, no thousands separator, no
  * exponent notation.
  */
 const PRICING_AMOUNT_PATTERN = /^\d+(?:\.\d+)?$/;
@@ -1032,16 +1032,16 @@ function validatePricingAmount(id: string, amount: string, x402: NormalisedX402 
   if (!PRICING_AMOUNT_PATTERN.test(amount)) {
     throw new CommerceError(
       'CONFIG_INVALID',
-      `Resource "${id}" has pricing.amount "${amount}", which is not a plain positive decimal (no currency symbol, no thousands separator, no exponent — e.g. "0.01")`,
+      `Resource "${id}" has pricing.amount "${amount}", which is not a plain positive decimal (no currency symbol, no thousands separator, no exponent - e.g. "0.01")`,
       { details: { path, resourceId: id } },
     );
   }
   if (ZERO_AMOUNT_PATTERN.test(amount)) {
     // A zero-priced "paid" resource settles a zero-value transfer, which is
-    // nonsense — if something is free, it should say so.
+    // nonsense - if something is free, it should say so.
     throw new CommerceError(
       'CONFIG_INVALID',
-      `Resource "${id}" has pricing.amount "0" — a paid resource cannot cost zero; use "pricing: { type: free }" instead`,
+      `Resource "${id}" has pricing.amount "0" - a paid resource cannot cost zero; use "pricing: { type: free }" instead`,
       { details: { path, resourceId: id } },
     );
   }
@@ -1062,7 +1062,7 @@ function validatePricingAmount(id: string, amount: string, x402: NormalisedX402 
  * that makes those names mean something at load time rather than at the first
  * paid call. Input schemas are closed by default at every depth
  * (`defaultClosedObjectSchema`), so a binding naming a property the schema
- * never declares can never be satisfied — the group would be silently empty
+ * never declares can never be satisfied - the group would be silently empty
  * on every request, which on a paid resource is payment for a request the
  * backend receives incomplete.
  *
@@ -1090,18 +1090,18 @@ function validateInputBindings(
     (entry): entry is [string, string] => entry[1] !== undefined,
   );
   if (entries.length === 0) {
-    fail('has an empty backend.inputBindings — remove the block to use the default mapping');
+    fail('has an empty backend.inputBindings - remove the block to use the default mapping');
   }
   if (backend.method === 'GET' || backend.method === 'DELETE') {
     if (bindings.body !== undefined) {
       fail(
-        `binds a request body on a ${backend.method}, which sends none — the value would be silently dropped`,
+        `binds a request body on a ${backend.method}, which sends none - the value would be silently dropped`,
       );
     }
   }
   if (templated && bindings.path === undefined) {
     fail(
-      'has backend.url path parameters but no "path" binding — in explicit binding mode nothing else supplies them, so every call would fail to reach the backend',
+      'has backend.url path parameters but no "path" binding - in explicit binding mode nothing else supplies them, so every call would fail to reach the backend',
     );
   }
 
@@ -1131,7 +1131,7 @@ function validateInputBindings(
 
     if (!Object.hasOwn(properties, property)) {
       fail(
-        `binds "${location}" to input property "${property}", which the input schema does not declare — the schema is closed, so a caller could never supply it`,
+        `binds "${location}" to input property "${property}", which the input schema does not declare - the schema is closed, so a caller could never supply it`,
         { location, property },
       );
     }
@@ -1140,7 +1140,7 @@ function validateInputBindings(
     const declared = properties[property];
     if (location !== 'body' && isPlainObject(declared) && !isObjectSchemaNode(declared)) {
       fail(
-        `binds "${location}" to input property "${property}", which is not an object schema — ${location} parameters are read as an object of name/value pairs`,
+        `binds "${location}" to input property "${property}", which is not an object schema - ${location} parameters are read as an object of name/value pairs`,
         { location, property },
       );
     }
@@ -1148,7 +1148,7 @@ function validateInputBindings(
 
   if (templated && bindings.path !== undefined && !required.has(bindings.path)) {
     fail(
-      `binds path parameters to input property "${bindings.path}" without listing it in the input schema's "required" — a caller that omits it cannot supply any path parameter, so the request could never be built`,
+      `binds path parameters to input property "${bindings.path}" without listing it in the input schema's "required" - a caller that omits it cannot supply any path parameter, so the request could never be built`,
       { property: bindings.path },
     );
   }
@@ -1172,13 +1172,13 @@ function pickDefined<T extends Record<string, string | undefined>>(
 
 /**
  * The root-cause half. `validateBackendRequestShape`
- * (src/core) rejects a missing path parameter at request time — after
+ * (src/core) rejects a missing path parameter at request time - after
  * schema validation but, without this check, on every single call, because
  * a schema that never declares `{city}` can never satisfy it. A paid
  * resource in that shape settles the buyer's payment and then always fails
  * to reach the backend: no refund, replay key burned, on every call, not an
  * unlucky one. Every `{param}` in `backend.url` must be BOTH declared in
- * `properties` AND listed in `required` — an optional value hits the exact
+ * `properties` AND listed in `required` - an optional value hits the exact
  * same "caller structurally cannot supply it on every call that omits it"
  * problem as an undeclared one, just less often. This is the config-load
  * gate `agent-commerce validate`/`doctor` catch it at; the runtime
@@ -1214,12 +1214,12 @@ function validatePathParametersDeclared(
   // runtime containment check is skipped because its literal prefix
   // (`http://`) does not itself parse as a URL; and `encodeURIComponent` does
   // not escape dots, so a hostname survives it whole. Caller input then chooses
-  // which host the gateway calls — the metadata service, an internal address,
+  // which host the gateway calls - the metadata service, an internal address,
   // anything. `http://{region}.api.internal/...` is an ordinary-looking
   // multi-tenant template, so this is refused here rather than warned about.
   //
   // The rule: everything before the first `{` must already be a complete
-  // authority — a parseable origin followed by the path's leading `/`.
+  // authority - a parseable origin followed by the path's leading `/`.
   const firstBrace = url.indexOf('{');
   if (firstBrace !== -1) {
     const prefix = url.slice(0, firstBrace);
@@ -1228,7 +1228,7 @@ function validatePathParametersDeclared(
       const parsedPrefix = new URL(prefix);
       origin = parsedPrefix.hostname === '' ? undefined : parsedPrefix.origin;
     } catch {
-      // Not a URL at all — the parameter starts before the authority is done.
+      // Not a URL at all - the parameter starts before the authority is done.
     }
     if (origin === undefined || !prefix.startsWith(`${origin}/`)) {
       throw new CommerceError(
@@ -1253,14 +1253,14 @@ function validatePathParametersDeclared(
     if (!Object.hasOwn(properties, param)) {
       throw new CommerceError(
         'CONFIG_INVALID',
-        `Resource "${id}" has backend.url path parameter "{${param}}" which is not declared in ${where} — the caller has no way to supply it, so every call would settle payment (if priced) and then fail to reach the backend`,
+        `Resource "${id}" has backend.url path parameter "{${param}}" which is not declared in ${where} - the caller has no way to supply it, so every call would settle payment (if priced) and then fail to reach the backend`,
         { details: { path, resourceId: id, param } },
       );
     }
     if (!required.has(param)) {
       throw new CommerceError(
         'CONFIG_INVALID',
-        `Resource "${id}" has backend.url path parameter "{${param}}" declared in ${where} but not listed in its "required" — a caller that omits it hits the same unservable-request problem as an undeclared parameter`,
+        `Resource "${id}" has backend.url path parameter "{${param}}" declared in ${where} but not listed in its "required" - a caller that omits it hits the same unservable-request problem as an undeclared parameter`,
         { details: { path, resourceId: id, param } },
       );
     }

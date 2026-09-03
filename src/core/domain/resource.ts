@@ -30,7 +30,7 @@ export interface BackendHandler {
    * from top-level input and everything left over becomes either the query
    * string (GET/DELETE) or the entire JSON body (POST/PUT/PATCH). That mapping
    * cannot express `POST /users/{userId}/orders?notify=true` with a JSON body
-   * — one perfectly ordinary REST operation with all three parts at once.
+   * - one perfectly ordinary REST operation with all three parts at once.
    *
    * When present, each group is sourced independently and top-level input that
    * no binding names is not forwarded to the backend at all.

@@ -26,7 +26,7 @@ const QUERY_GROUP = 'query';
 const BODY_GROUP = 'body';
 
 /**
- * OpenAPI: parameters named these "SHALL be ignored" — they are transport
+ * OpenAPI: parameters named these "SHALL be ignored" - they are transport
  * concerns, and `Authorization` in particular is operator configuration that
  * must never become an agent-supplied input.
  */
@@ -163,7 +163,7 @@ export function mapRequest(
   if (Object.keys(pathProperties).length > 0) {
     properties[PATH_GROUP] = closedObject(pathProperties, Object.keys(pathProperties));
     // OpenAPI path parameters are always required, and a missing one makes the
-    // request unbuildable — which on a paid resource is payment with no
+    // request unbuildable - which on a paid resource is payment with no
     // delivery, so config rejects the shape at load time too.
     required.push(PATH_GROUP);
     bindings.path = PATH_GROUP;
@@ -285,7 +285,7 @@ function resolveBody(
     return {
       kind: 'unsupported',
       required,
-      reason: `no JSON request body content type (found: ${Object.keys(content).join(', ') || 'none'}). Only application/json and application/*+json are supported — multipart and form data are never serialized as JSON`,
+      reason: `no JSON request body content type (found: ${Object.keys(content).join(', ') || 'none'}). Only application/json and application/*+json are supported - multipart and form data are never serialized as JSON`,
     };
   }
   const media = content[mediaType];
@@ -313,7 +313,7 @@ function resolveBody(
 }
 
 /** Exact `application/json` wins; otherwise the first `+json` in sorted order. */
-function pickJsonMediaType(keys: readonly string[]): string | undefined {
+export function pickJsonMediaType(keys: readonly string[]): string | undefined {
   const normalised = keys.map((key) => ({ key, type: key.split(';')[0]?.trim().toLowerCase() }));
   const exact = normalised.find((entry) => entry.type === 'application/json');
   if (exact !== undefined) return exact.key;

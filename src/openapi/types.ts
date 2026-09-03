@@ -41,9 +41,11 @@ export interface OpenApiOperationCandidate {
   /** Selected server + path, with `{param}` templates preserved literally. */
   readonly backendUrl: string;
   readonly operationId?: string;
+  /** OpenAPI tags, verbatim - the CLI's `--tag` filter reads them. */
+  readonly tags: readonly string[];
   readonly name: string;
   readonly description?: string;
-  /** Path-item parameters first, then operation parameters — unresolved nodes. */
+  /** Path-item parameters first, then operation parameters - unresolved nodes. */
   readonly parameters: readonly unknown[];
   readonly requestBody?: unknown;
   readonly responses?: unknown;

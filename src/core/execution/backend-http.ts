@@ -2,12 +2,12 @@
  * The only outbound HTTP path to a merchant backend.
  *
  * - Uses global `fetch` and always applies a bound timeout via `AbortSignal.timeout`.
- * - `redirect: 'manual'` — a 3xx response is treated as a `BACKEND_ERROR`, never
+ * - `redirect: 'manual'` - a 3xx response is treated as a `BACKEND_ERROR`, never
  * followed (SSRF hardening).
  * - `{param}` segments in `handler.url` are filled from validated input and
  * URL-encoded; whatever remains goes to the query string (GET/DELETE) or a
  * JSON body (POST/PUT/PATCH). `handler.inputBindings` replaces that
- * leftover rule with one that names each group explicitly — see
+ * leftover rule with one that names each group explicitly - see
  * `buildBackendRequestParts`.
  */
 import {
@@ -28,12 +28,12 @@ const MAX_BODY_SNIPPET_LENGTH = 512;
  * REST, and under the previous `[a-zA-Z0-9_]+` class it matched *nothing*. It
  * was therefore invisible to the config gate, survived substitution as a
  * literal, and a paid resource settled the buyer's payment before sending
- * `/report/%7Breport-id%7D` to a backend that 404s — the earlier money bug,
+ * `/report/%7Breport-id%7D` to a backend that 404s - the earlier money bug,
  * reachable again through the character class rather than through the check.
  */
 const PATH_PARAM_PATTERN = /\{([a-zA-Z0-9_.-]+)\}/g;
 /** A hostile or broken backend can otherwise materialise an arbitrarily
- * large response in memory — AbortSignal.timeout bounds it by *time*, not
+ * large response in memory - AbortSignal.timeout bounds it by *time*, not
  * bytes. 1 MB is generous for a JSON API response. */
 const MAX_RESPONSE_BODY_BYTES = 1024 * 1024;
 
@@ -103,7 +103,7 @@ export class HttpBackendExecutor implements BackendExecutor {
     //.set() REPLACES an existing param, so without this check a caller
     // input key with the same name as an operator-baked-in query param
     // (?apikey=SECRET in handler.url) silently overwrites it.
-    // Shared with validateBackendRequestShape() — that copy runs
+    // Shared with validateBackendRequestShape() - that copy runs
     // *before* payment, this one is defence in depth.
     checkQueryCollision(target, parts.query, context);
     for (const [key, value] of Object.entries(parts.query)) {
@@ -191,7 +191,7 @@ export class HttpBackendExecutor implements BackendExecutor {
 
     if (response.status < 200 || response.status >= 300) {
       // The backend status is ours to state; the backend's own response body
-      // is not — a merchant backend in verbose/dev-error mode routinely
+      // is not - a merchant backend in verbose/dev-error mode routinely
       // emits stack traces, hostnames or SQL fragments, and this gateway is
       // not the one who gets to decide those are safe to forward to whoever
       // called the (possibly free, possibly unauthenticated) resource. Log
@@ -223,17 +223,17 @@ export class HttpBackendExecutor implements BackendExecutor {
 
 /**
  * The traversal and query-collision checks below must run before payment,
- * not only inside `call()` — pipeline step 6, which is *after*
+ * not only inside `call()` - pipeline step 6, which is *after*
  * verify -> reserve -> settle.
  * Both throw INPUT_INVALID, which schema validation (step 2) cannot catch
  * (it validates against `resource.inputSchema`, which knows nothing about
  * the URL template a bad value would collide with). Concretely: a paid,
  * path-templated resource called with `{ city: "" }` would settle the buyer's
- * payment on-chain and then never call the backend — payment without
+ * payment on-chain and then never call the backend - payment without
  * delivery, no refund, no release of the reserved authorisation. Both
  * checks are pure functions of `(handler.url, input)` with no I/O, so the
  * pipeline calls this immediately after schema validation, *before* price
- * resolution — before any payment provider is even selected. `call()` keeps
+ * resolution - before any payment provider is even selected. `call()` keeps
  * its own copy as defence in depth (it is a public class; the pipeline is
  * not the only possible caller).
  */
@@ -241,7 +241,7 @@ export class HttpBackendExecutor implements BackendExecutor {
  * `{param}` names in a `backend.url` template, in declaration order.
  * Exported so `src/config`'s `normaliseResource` can
  * cross-check every template parameter against the resource's input schema
- * at config load — the same regex, not a second copy that could silently
+ * at config load - the same regex, not a second copy that could silently
  * drift out of sync with what this file actually treats as a path
  * parameter.
  */
@@ -257,7 +257,7 @@ export function extractPathParameterNames(url: string): string[] {
  * "matches nothing" is precisely the silent-literal shape that costs a buyer
  * money on a paid resource. So the rule is inverted: rather than enumerating
  * what is illegal, anything brace-shaped that is *not* a recognised parameter
- * is refused at config load. Exported so `src/config` applies it — the
+ * is refused at config load. Exported so `src/config` applies it - the
  * grammar and its residue must never live in two files.
  */
 export function findUnparsedBraceToken(url: string): string | undefined {
@@ -276,8 +276,8 @@ export function validateBackendRequestShape(
 ): void {
   const inputRecord = isPlainObject(input) ? input : {};
 
-  // Every shape error — missing or invalid path parameter, a bound group that
-  // is not an object — throws INPUT_INVALID from here, before payment.
+  // Every shape error - missing or invalid path parameter, a bound group that
+  // is not an object - throws INPUT_INVALID from here, before payment.
   const parts = buildBackendRequestParts(handler, inputRecord, context);
 
   let target: URL;
@@ -305,7 +305,7 @@ function acceptsBody(method: BackendMethod): boolean {
 
 /**
  * Split validated input into URL, query and body according to
- * `handler.inputBindings` — the single place either mode is decided, so
+ * `handler.inputBindings` - the single place either mode is decided, so
  * `call()` and the pre-payment `validateBackendRequestShape()` can never
  * disagree about what request the input describes.
  *
@@ -334,7 +334,7 @@ function buildBackendRequestParts(
   // An absent body value sends no body at all rather than `null`: a request
   // body the operation does not require is simply not there. A body the
   // operation *does* require is caught one step earlier, by `required` in the
-  // resource's input schema — also before payment.
+  // resource's input schema - also before payment.
   const bodyValue = bindings.body === undefined ? undefined : input[bindings.body];
   if (bodyValue === undefined || !acceptsBody(handler.method)) return { url, query };
   return { url, query, body: { value: bodyValue } };
@@ -379,7 +379,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-// encodeURIComponent does not escape "." — a raw ".."/"." path-parameter
+// encodeURIComponent does not escape "." - a raw ".."/"." path-parameter
 // value survives it and new URL() then normalises the segment away, letting
 // a caller step outside the template's own directory (bounded traversal:
 // slashes ARE escaped, so only removing segments, never adding them). Reject
@@ -415,7 +415,7 @@ function applyPathTemplate(
   if (missing !== undefined) {
     // Tempting to shrug this off as a config/schema mismatch rather than bad
     // caller input. But a paid, `{param}`-templated resource whose input can
-    // never supply it would reach settle() on every call — the buyer pays, the
+    // never supply it would reach settle() on every call - the buyer pays, the
     // backend is never called, no refund. `normaliseResource` (src/config) is
     // the root-cause fix, rejecting the shape at config load; throwing here
     // stops a hand-built `CommerceResource` from reintroducing the money bug

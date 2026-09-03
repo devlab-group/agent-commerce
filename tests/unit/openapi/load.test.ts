@@ -30,7 +30,7 @@ describe('loadOpenApiDocument', () => {
     const loaded = await loadOpenApiDocument(fixture('petstore-3.0.yaml'));
     expect(loaded.version).toBe('3.0');
     expect(loaded.sourcePath).toContain('petstore-3.0.yaml');
-    // The document is kept verbatim — references are NOT expanded up front.
+    // The document is kept verbatim - references are NOT expanded up front.
     const paths = loaded.document['paths'] as Record<
       string,
       Record<string, { requestBody: { content: Record<string, { schema: unknown }> } }>
@@ -133,7 +133,7 @@ describe('loadOpenApiDocument', () => {
     expect(message).toContain('./common.yaml#/Thing');
   });
 
-  it('accepts a document whose internal references are cyclic — resolution is lazy', async () => {
+  it('accepts a document whose internal references are cyclic - resolution is lazy', async () => {
     const loaded = await loadOpenApiDocument(fixture('cyclic-ref.yaml'));
     expect(loaded.version).toBe('3.1');
   });

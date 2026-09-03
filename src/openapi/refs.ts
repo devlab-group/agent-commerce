@@ -3,7 +3,7 @@
  *
  * The document is deliberately *not* dereferenced up front. A recursive schema
  * (`Node.children[] -> Node`) expands without bound, so a whole-document
- * dereference turns a 30 kB file into an out-of-memory kill — an importer that
+ * dereference turns a 30 kB file into an out-of-memory kill - an importer that
  * a merchant points at their own API must not be a way to do that. Instead
  * each pointer is followed on demand, with the chain that led here carried
  * along so a cycle is a diagnostic rather than a hang.
@@ -31,7 +31,7 @@ export function isRefNode(value: unknown): value is { $ref: string } {
  * Follows a chain of `$ref` nodes to the first value that is not one.
  *
  * Throws `CONFIG_INVALID` for a cycle, an unresolvable pointer, or an external
- * reference — the last is refused at load time too, so reaching it here means
+ * reference - the last is refused at load time too, so reaching it here means
  * a caller built a node the loader never saw.
  */
 export function dereference(

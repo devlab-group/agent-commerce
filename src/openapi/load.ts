@@ -110,7 +110,7 @@ function readVersion(document: Record<string, unknown>, sourcePath: string): Ope
   const details = { sourcePath };
   if (typeof document['swagger'] === 'string') {
     throw invalid(
-      `"${sourcePath}" is a Swagger ${document['swagger']} document. Only OpenAPI 3.0, 3.1 and 3.2 are supported — convert it first`,
+      `"${sourcePath}" is a Swagger ${document['swagger']} document. Only OpenAPI 3.0, 3.1 and 3.2 are supported - convert it first`,
       details,
     );
   }
@@ -131,7 +131,7 @@ function readVersion(document: Record<string, unknown>, sourcePath: string): Ope
 /**
  * An external `$ref` is refused rather than fetched or read from disk. Both
  * would be the importer acting on behalf of a document it was merely asked to
- * read — one as an outbound request from wherever the CLI runs, the other as a
+ * read - one as an outbound request from wherever the CLI runs, the other as a
  * filesystem read outside the source file. Multi-file descriptions are a later
  * feature; until then, saying so beats a silent partial import.
  */

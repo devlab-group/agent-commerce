@@ -164,13 +164,14 @@ describe('mapRequest', () => {
   it('skips an operation whose {param} is never declared as a path parameter', () => {
     // The OpenAPI validator rejects this document shape, so the candidate is
     // built directly: the check exists because a `{param}` nothing can supply
-    // makes every call unservable — and a paid one settles first.
+    // makes every call unservable - and a paid one settles first.
     const result = mapRequest(loaded, {
       resourceId: 'legacy',
       method: 'GET',
       path: '/legacy/{id}',
       backendUrl: 'https://api.example.com/legacy/{id}',
       name: 'legacy',
+      tags: [],
       parameters: [],
       security: [],
     });
@@ -197,6 +198,7 @@ describe('mapRequest', () => {
       path: '/x',
       backendUrl: 'https://api.example.com/x',
       name: 'x',
+      tags: [],
       parameters: [],
       requestBody: {
         required: true,
