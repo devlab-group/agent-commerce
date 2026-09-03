@@ -6,9 +6,15 @@
  * followed (SSRF hardening).
  * - `{param}` segments in `handler.url` are filled from validated input and
  * URL-encoded; whatever remains goes to the query string (GET/DELETE) or a
- * JSON body (POST/PUT/PATCH).
+ * JSON body (POST/PUT/PATCH). `handler.inputBindings` replaces that
+ * leftover rule with one that names each group explicitly — see
+ * `buildBackendRequestParts`.
  */
-import { type BackendHandler, DEFAULT_BACKEND_TIMEOUT_MS } from '../domain/resource.js';
+import {
+  type BackendHandler,
+  type BackendMethod,
+  DEFAULT_BACKEND_TIMEOUT_MS,
+} from '../domain/resource.js';
 import { CommerceError } from '../errors/index.js';
 import type { BackendExecutor, BackendRequest, BackendResponse } from '../interfaces/backend.js';
 import { type Logger, NOOP_LOGGER } from '../interfaces/logger.js';
@@ -51,36 +57,19 @@ export class HttpBackendExecutor implements BackendExecutor {
     const timeoutMs = handler.timeoutMs ?? DEFAULT_BACKEND_TIMEOUT_MS;
     const inputRecord = isPlainObject(request.input) ? request.input : {};
 
+    const context = { requestId: request.requestId, resourceId: request.resourceId };
+    // Throws INPUT_INVALID for every shape problem. The pipeline already ran
+    // the same call pre-payment through validateBackendRequestShape(); this is
+    // defence in depth for a caller that bypasses it, not the normal path.
+    const parts = buildBackendRequestParts(handler, inputRecord, context);
+
     let target: URL;
-    let remaining: Record<string, unknown>;
     try {
-      const templated = applyPathTemplate(handler.url, inputRecord);
-      target = new URL(templated.url);
-      remaining = templated.remaining;
+      target = new URL(parts.url);
     } catch (error) {
-      if (error instanceof Error && error.message.startsWith('invalid-path-parameter:')) {
-        const field = error.message.slice('invalid-path-parameter:'.length);
-        throw new CommerceError('INPUT_INVALID', `Path parameter "${field}" is not a valid value`, {
-          requestId: request.requestId,
-          resourceId: request.resourceId,
-          details: { field },
-        });
-      }
-      // Mirrors validateBackendRequestShape()'s own copy
-      // — the pipeline calls that one first, so this branch is defence in
-      // depth for a caller that bypasses it, not the normal path.
-      if (error instanceof Error && error.message.startsWith('missing-path-parameter:')) {
-        const field = error.message.slice('missing-path-parameter:'.length);
-        throw new CommerceError('INPUT_INVALID', `Path parameter "${field}" was not supplied`, {
-          requestId: request.requestId,
-          resourceId: request.resourceId,
-          details: { field },
-        });
-      }
       throw new CommerceError('BACKEND_ERROR', 'Backend URL could not be constructed from input', {
-        requestId: request.requestId,
-        resourceId: request.resourceId,
-        details: { reason: describeConstructionError(error) },
+        ...context,
+        details: { reason: 'invalid-url' },
         cause: error,
       });
     }
@@ -111,21 +100,19 @@ export class HttpBackendExecutor implements BackendExecutor {
     const headers: Record<string, string> = { ...(handler.headers ?? {}) };
     let body: string | undefined;
 
-    if (handler.method === 'GET' || handler.method === 'DELETE') {
-      //.set() REPLACES an existing param, so without this check a caller
-      // input key with the same name as an operator-baked-in query param
-      // (?apikey=SECRET in handler.url) silently overwrites it.
-      // Shared with validateBackendRequestShape() — that copy runs
-      // *before* payment, this one is defence in depth.
-      checkQueryCollision(target, remaining, {
-        requestId: request.requestId,
-        resourceId: request.resourceId,
-      });
-      for (const [key, value] of Object.entries(remaining)) {
-        target.searchParams.set(key, stringifyPrimitive(value));
-      }
-    } else {
-      body = JSON.stringify(remaining);
+    //.set() REPLACES an existing param, so without this check a caller
+    // input key with the same name as an operator-baked-in query param
+    // (?apikey=SECRET in handler.url) silently overwrites it.
+    // Shared with validateBackendRequestShape() — that copy runs
+    // *before* payment, this one is defence in depth.
+    checkQueryCollision(target, parts.query, context);
+    for (const [key, value] of Object.entries(parts.query)) {
+      target.searchParams.set(key, stringifyPrimitive(value));
+    }
+    if (parts.body !== undefined) {
+      body = JSON.stringify(parts.body.value);
+      // A configured Content-Type stays authoritative: a backend wanting
+      // `application/vnd.x+json` says so in config and we do not override it.
       if (!hasHeader(headers, 'content-type')) {
         headers['content-type'] = 'application/json';
       }
@@ -285,52 +272,90 @@ export function findUnparsedBraceToken(url: string): string | undefined {
 export function validateBackendRequestShape(
   handler: BackendHandler,
   input: unknown,
-  context: { readonly requestId: string; readonly resourceId: string },
+  context: ShapeContext,
 ): void {
   const inputRecord = isPlainObject(input) ? input : {};
 
-  let templated: { url: string; remaining: Record<string, unknown> };
+  // Every shape error — missing or invalid path parameter, a bound group that
+  // is not an object — throws INPUT_INVALID from here, before payment.
+  const parts = buildBackendRequestParts(handler, inputRecord, context);
+
+  let target: URL;
   try {
-    templated = applyPathTemplate(handler.url, inputRecord);
-  } catch (error) {
-    if (error instanceof Error && error.message.startsWith('invalid-path-parameter:')) {
-      const field = error.message.slice('invalid-path-parameter:'.length);
-      throw new CommerceError('INPUT_INVALID', `Path parameter "${field}" is not a valid value`, {
-        requestId: context.requestId,
-        resourceId: context.resourceId,
-        details: { field },
-      });
-    }
-    if (error instanceof Error && error.message.startsWith('missing-path-parameter:')) {
-      // Returning here is tempting: a missing path parameter is a
-      // config/schema mismatch, not caller input, and so arguably not this
-      // function's job. But that lets a paid, `{param}`-templated resource
-      // whose schema can never supply it reach settle() on every call — the buyer pays, the backend is never
-      // called, and there is no refund. The request genuinely cannot be
-      // served, so it throws here, before payment, the same as an invalid
-      // value does two lines up. `normaliseResource` (src/config) is
-      // the root-cause fix — it rejects this shape at config load — but a
-      // hand-built `CommerceResource` or a future adapter must not be able
-      // to reintroduce the money bug just by skipping config validation.
-      const field = error.message.slice('missing-path-parameter:'.length);
-      throw new CommerceError('INPUT_INVALID', `Path parameter "${field}" was not supplied`, {
-        requestId: context.requestId,
-        resourceId: context.resourceId,
-        details: { field },
-      });
-    }
-    return;
+    target = new URL(parts.url);
+  } catch {
+    return; // call() surfaces the real BACKEND_ERROR for an unparseable URL.
+  }
+  checkQueryCollision(target, parts.query, context);
+}
+
+type ShapeContext = { readonly requestId: string; readonly resourceId: string };
+
+/** The path-templated URL plus the query and body values a request carries. */
+interface BackendRequestParts {
+  readonly url: string;
+  readonly query: Record<string, unknown>;
+  /** Present when a JSON body should be sent; `value` is what gets encoded. */
+  readonly body?: { readonly value: unknown };
+}
+
+function acceptsBody(method: BackendMethod): boolean {
+  return method !== 'GET' && method !== 'DELETE';
+}
+
+/**
+ * Split validated input into URL, query and body according to
+ * `handler.inputBindings` — the single place either mode is decided, so
+ * `call()` and the pre-payment `validateBackendRequestShape()` can never
+ * disagree about what request the input describes.
+ *
+ * Throws only `CommerceError('INPUT_INVALID')`, which is what makes it safe to
+ * run before pricing.
+ */
+function buildBackendRequestParts(
+  handler: BackendHandler,
+  input: Record<string, unknown>,
+  context: ShapeContext,
+): BackendRequestParts {
+  const bindings = handler.inputBindings;
+  if (bindings === undefined) {
+    const { url, remaining } = applyPathTemplate(handler.url, input, context);
+    return acceptsBody(handler.method)
+      ? { url, query: {}, body: { value: remaining } }
+      : { url, query: remaining };
   }
 
-  if (handler.method === 'GET' || handler.method === 'DELETE') {
-    let target: URL;
-    try {
-      target = new URL(templated.url);
-    } catch {
-      return; // call() surfaces the real BACKEND_ERROR for an unparseable URL.
-    }
-    checkQueryCollision(target, templated.remaining, context);
+  const pathValues =
+    bindings.path === undefined ? {} : resolveBoundGroup(input, bindings.path, 'path', context);
+  const { url } = applyPathTemplate(handler.url, pathValues, context);
+  const query =
+    bindings.query === undefined ? {} : resolveBoundGroup(input, bindings.query, 'query', context);
+
+  // An absent body value sends no body at all rather than `null`: a request
+  // body the operation does not require is simply not there. A body the
+  // operation *does* require is caught one step earlier, by `required` in the
+  // resource's input schema — also before payment.
+  const bodyValue = bindings.body === undefined ? undefined : input[bindings.body];
+  if (bodyValue === undefined || !acceptsBody(handler.method)) return { url, query };
+  return { url, query, body: { value: bodyValue } };
+}
+
+function resolveBoundGroup(
+  input: Record<string, unknown>,
+  key: string,
+  kind: 'path' | 'query',
+  context: ShapeContext,
+): Record<string, unknown> {
+  const value = input[key];
+  if (value === undefined) return {};
+  if (!isPlainObject(value)) {
+    throw new CommerceError(
+      'INPUT_INVALID',
+      `Input "${key}" must be an object of ${kind} parameters`,
+      { ...context, details: { field: key } },
+    );
   }
+  return value;
 }
 
 function checkQueryCollision(
@@ -364,6 +389,7 @@ const TRAVERSAL_PATH_VALUES = new Set(['', '.', '..']);
 function applyPathTemplate(
   template: string,
   input: Record<string, unknown>,
+  context: ShapeContext,
 ): { url: string; remaining: Record<string, unknown> } {
   const remaining: Record<string, unknown> = { ...input };
   let missing: string | undefined;
@@ -387,19 +413,25 @@ function applyPathTemplate(
     return encodeURIComponent(raw);
   });
   if (missing !== undefined) {
-    throw new Error(`missing-path-parameter:${missing}`);
+    // Tempting to shrug this off as a config/schema mismatch rather than bad
+    // caller input. But a paid, `{param}`-templated resource whose input can
+    // never supply it would reach settle() on every call — the buyer pays, the
+    // backend is never called, no refund. `normaliseResource` (src/config) is
+    // the root-cause fix, rejecting the shape at config load; throwing here
+    // stops a hand-built `CommerceResource` from reintroducing the money bug
+    // by skipping config validation.
+    throw new CommerceError('INPUT_INVALID', `Path parameter "${missing}" was not supplied`, {
+      ...context,
+      details: { field: missing },
+    });
   }
   if (invalid !== undefined) {
-    throw new Error(`invalid-path-parameter:${invalid}`);
+    throw new CommerceError('INPUT_INVALID', `Path parameter "${invalid}" is not a valid value`, {
+      ...context,
+      details: { field: invalid },
+    });
   }
   return { url, remaining };
-}
-
-function describeConstructionError(error: unknown): string {
-  if (error instanceof Error && error.message.startsWith('missing-path-parameter:')) {
-    return error.message;
-  }
-  return 'invalid-url';
 }
 
 function stringifyPrimitive(value: unknown): string {

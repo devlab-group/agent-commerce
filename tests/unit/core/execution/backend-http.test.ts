@@ -569,3 +569,178 @@ describe('HttpBackendExecutor', () => {
     ).not.toThrow();
   });
 });
+
+describe('HttpBackendExecutor explicit inputBindings', () => {
+  function capturingExecutor(): {
+    executor: HttpBackendExecutor;
+    seen: { url?: URL; body?: string; headers: Record<string, string> };
+  } {
+    const seen: { url?: URL; body?: string; headers: Record<string, string> } = { headers: {} };
+    const fetchImpl = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      seen.url = new URL(input as URL);
+      const rawBody = init?.body as string | undefined;
+      if (rawBody !== undefined) seen.body = rawBody;
+      seen.headers = Object.fromEntries(new Headers(init?.headers).entries());
+      return jsonResponse(200, { ok: true });
+    });
+    return {
+      executor: new HttpBackendExecutor({ fetchImpl: fetchImpl as unknown as typeof fetch }),
+      seen,
+    };
+  }
+
+  const postHandler: BackendHandler = {
+    type: 'http',
+    method: 'POST',
+    url: 'http://backend.local/users/{userId}/orders',
+    inputBindings: { path: 'path', query: 'query', body: 'body' },
+  };
+
+  it('sources path, query and body independently on one POST', async () => {
+    const { executor, seen } = capturingExecutor();
+    await executor.call(postHandler, {
+      requestId: 'r',
+      resourceId: 'res',
+      input: {
+        path: { userId: 'u-1' },
+        query: { notify: true },
+        body: { productId: 'abc', quantity: 2 },
+      },
+    });
+
+    expect(seen.url?.pathname).toBe('/users/u-1/orders');
+    expect(seen.url?.searchParams.get('notify')).toBe('true');
+    expect(JSON.parse(seen.body as string)).toEqual({ productId: 'abc', quantity: 2 });
+    expect(seen.headers['content-type']).toBe('application/json');
+  });
+
+  it('does not forward top-level input that no binding names', async () => {
+    const { executor, seen } = capturingExecutor();
+    await executor.call(postHandler, {
+      requestId: 'r',
+      resourceId: 'res',
+      input: {
+        path: { userId: 'u-1' },
+        body: { productId: 'abc' },
+        // deliberately unmapped: an adapter- or agent-supplied extra
+        payment: 'base64-proof',
+        apiKey: 'leaked',
+      },
+    });
+
+    expect(seen.url?.search).toBe('');
+    expect(JSON.parse(seen.body as string)).toEqual({ productId: 'abc' });
+  });
+
+  it('sends path + query with no body when the body binding resolves to nothing', async () => {
+    const { executor, seen } = capturingExecutor();
+    await executor.call(postHandler, {
+      requestId: 'r',
+      resourceId: 'res',
+      input: { path: { userId: 'u-1' }, query: { notify: false } },
+    });
+
+    expect(seen.url?.searchParams.get('notify')).toBe('false');
+    expect(seen.body).toBeUndefined();
+    expect(seen.headers['content-type']).toBeUndefined();
+  });
+
+  it('keeps a configured Content-Type authoritative for an explicit body', async () => {
+    const { executor, seen } = capturingExecutor();
+    await executor.call(
+      { ...postHandler, headers: { 'Content-Type': 'application/vnd.merchant+json' } },
+      {
+        requestId: 'r',
+        resourceId: 'res',
+        input: { path: { userId: 'u-1' }, body: { productId: 'abc' } },
+      },
+    );
+
+    expect(seen.headers['content-type']).toBe('application/vnd.merchant+json');
+  });
+
+  it('appends mapped query parameters on a GET and sends no body', async () => {
+    const { executor, seen } = capturingExecutor();
+    await executor.call(
+      {
+        type: 'http',
+        method: 'GET',
+        url: 'http://backend.local/users/{userId}',
+        inputBindings: { path: 'path', query: 'query', body: 'body' },
+      },
+      {
+        requestId: 'r',
+        resourceId: 'res',
+        input: { path: { userId: 'u-1' }, query: { verbose: 1 }, body: { ignored: true } },
+      },
+    );
+
+    expect(seen.url?.pathname).toBe('/users/u-1');
+    expect(seen.url?.searchParams.get('verbose')).toBe('1');
+    expect(seen.body).toBeUndefined();
+  });
+
+  const shapeContext = { requestId: 'r', resourceId: 'res' };
+
+  function expectInputInvalid(run: () => void): void {
+    try {
+      run();
+      expect.unreachable();
+    } catch (error) {
+      expect(isCommerceError(error) && error.code === 'INPUT_INVALID').toBe(true);
+    }
+  }
+
+  it('rejects a mapped query collision with backend.url before payment', () => {
+    expectInputInvalid(() =>
+      validateBackendRequestShape(
+        {
+          type: 'http',
+          method: 'POST',
+          url: 'http://backend.local/orders?apikey=SECRET',
+          inputBindings: { query: 'query', body: 'body' },
+        },
+        { query: { apikey: 'attacker' }, body: {} },
+        shapeContext,
+      ),
+    );
+  });
+
+  it('rejects a missing path group before payment', () => {
+    expectInputInvalid(() =>
+      validateBackendRequestShape(postHandler, { body: { productId: 'abc' } }, shapeContext),
+    );
+  });
+
+  it('rejects a non-object path group before payment', () => {
+    expectInputInvalid(() =>
+      validateBackendRequestShape(postHandler, { path: 'u-1' }, shapeContext),
+    );
+  });
+
+  it('rejects a non-object query group before payment', () => {
+    expectInputInvalid(() =>
+      validateBackendRequestShape(
+        postHandler,
+        { path: { userId: 'u-1' }, query: 'notify=true' },
+        shapeContext,
+      ),
+    );
+  });
+
+  it('rejects a traversal path value inside the bound group before payment', () => {
+    expectInputInvalid(() =>
+      validateBackendRequestShape(postHandler, { path: { userId: '..' } }, shapeContext),
+    );
+  });
+
+  it('passes a valid path + query + body shape (control)', () => {
+    expect(() =>
+      validateBackendRequestShape(
+        postHandler,
+        { path: { userId: 'u-1' }, query: { notify: true }, body: { productId: 'abc' } },
+        shapeContext,
+      ),
+    ).not.toThrow();
+  });
+});
