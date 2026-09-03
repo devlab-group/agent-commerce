@@ -1,0 +1,10 @@
+{
+  "openapi": "3.1.0",
+  "info": { "title": "Minimal", "version": "1.0.0" },
+  "servers": [{ "url": "https://minimal.example.com" }],
+  "paths": {
+    "/things": {
+      "get": { "operationId": "list things!", "responses": { "200": { "description": "ok" } } }
+    }
+  }
+}

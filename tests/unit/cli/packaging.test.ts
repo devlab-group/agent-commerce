@@ -138,11 +138,24 @@ describe('published package metadata', () => {
     expect(existsSync(resolve(pkgRoot, 'pnpm-lock.yaml'))).toBe(false);
   });
 
-  it('pins zod through npm-native overrides', () => {
-    // two zod majors in one graph break `instanceof` across module
-    // boundaries. The pin moved twice (pnpm-workspace.yaml -> pnpm.overrides
-    // -> overrides) and each move could silently drop it.
-    expect(manifest.overrides?.['zod']).toBe(manifest.dependencies?.['zod']);
+  it('pins zod for the x402 packages, per package rather than repo-wide', () => {
+    // Two zod majors in one graph break `instanceof` across module
+    // boundaries, so every package that shares zod values with ours resolves
+    // to *our* zod. The pin moved three times (pnpm-workspace.yaml ->
+    // pnpm.overrides -> overrides -> per-package overrides) and each move
+    // could silently drop it.
+    //
+    // It is deliberately no longer repo-wide: `@scalar/openapi-parser` (the
+    // OpenAPI importer) needs zod 4 and gets its own nested copy. Nothing
+    // crosses that seam — the importer hands the parser plain JSON and gets
+    // plain JSON back — so the two majors never meet a shared `instanceof`.
+    const overrides = manifest.overrides as Record<string, unknown> | undefined;
+    expect(overrides?.['zod']).toBeUndefined();
+    for (const pkg of ['@x402/core', '@x402/evm', '@coinbase/x402']) {
+      expect((overrides?.[pkg] as Record<string, string> | undefined)?.['zod']).toBe(
+        manifest.dependencies?.['zod'],
+      );
+    }
     expect(manifest.pnpm).toBeUndefined();
   });
 

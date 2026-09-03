@@ -1,0 +1,26 @@
+openapi: 3.1.0
+info:
+  title: Cyclic
+  version: 1.0.0
+servers:
+  - url: https://api.example.com
+paths:
+  /nodes:
+    get:
+      operationId: listNodes
+      responses:
+        '200':
+          description: ok
+components:
+  schemas:
+    Node:
+      $ref: '#/components/schemas/Alias'
+    Alias:
+      $ref: '#/components/schemas/Node'
+    Tree:
+      type: object
+      properties:
+        children:
+          type: array
+          items:
+            $ref: '#/components/schemas/Tree'

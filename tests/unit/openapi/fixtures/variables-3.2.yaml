@@ -1,0 +1,33 @@
+openapi: 3.2.0
+info:
+  title: Variables
+  version: 1.0.0
+servers:
+  - url: https://{region}.api.example.com/{stage}
+    variables:
+      region:
+        default: eu
+      stage:
+        default: v1
+paths:
+  /reports:
+    servers:
+      - url: https://reports.example.com
+    get:
+      operationId: listReports
+      responses:
+        '200':
+          description: ok
+    post:
+      operationId: createReport
+      servers:
+        - url: https://write.example.com
+      responses:
+        '201':
+          description: ok
+  /health:
+    get:
+      operationId: health
+      responses:
+        '200':
+          description: ok

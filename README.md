@@ -69,8 +69,10 @@ agent-commerce doctor
 
 Requires **Node >= 22**. One package ships two things: the `agent-commerce`
 CLI (`init`, `validate`, `doctor`, `demo`) and a library for embedding the
-gateway in your own process. A default install is ~49 MB and pulls no
-blockchain or wallet dependencies at all.
+gateway in your own process. A default install is ~65 MB and pulls no
+blockchain or wallet dependencies at all — ~17 MB of that is the OpenAPI
+parser behind `import openapi`, which is a normal dependency because
+onboarding an existing API is the CLI's main job.
 
 ```ts
 import { createGateway, loadConfig, receipts } from '@devlab.group/agent-commerce';
