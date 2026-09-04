@@ -19,7 +19,8 @@ You already have an HTTP API. AI agents want to **discover** it, **call** it and
 **pay** for it - over protocols you did not write and do not want to maintain.
 
 Agent Commerce Gateway sits in front of your existing API, in **your**
-infrastructure, and does that for you. You describe an endpoint in a YAML file;
+infrastructure, and does that for you. You describe an endpoint in a YAML file -
+or generate that description from an OpenAPI document you already have - and
 agents get an MCP tool and an x402 paywall. The money goes straight to your
 wallet - the gateway never holds it, and never holds your keys.
 
@@ -206,6 +207,20 @@ That is the integration. No SDK in your backend, no rewrite.
 npm run agent-commerce -- init # generate a config interactively
 npm run agent-commerce -- validate # fails loudly, exits non-zero
 ```
+
+Already have an OpenAPI description? Generate the resources from it
+(**experimental**):
+
+```bash
+agent-commerce import openapi ./openapi.yaml
+```
+
+It writes a reviewable `resources:` fragment - path, query and JSON body
+mapped, schemas converted to what the gateway actually enforces - and
+deliberately leaves `pricing` and `expose` out, because an OpenAPI document has
+no opinion on what an operation costs or who may see it. Credentials are never
+imported. See [docs/openapi-import.md](docs/openapi-import.md) for the exact
+supported subset.
 
 See [docs/configuration.md](docs/configuration.md).
 
@@ -404,12 +419,12 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 ## Roadmap
 
 **Now (v1.1.0)** - MCP, x402 v2, settlement on the local chain, Base Sepolia
-and Base mainnet, receipts, doctor, deterministic demo, and an experimental
-A2A v1.0.0 adapter.
+and Base mainnet, receipts, doctor, deterministic demo, an experimental
+A2A v1.0.0 adapter, and experimental OpenAPI import.
 
-**Next** - OpenAPI import · a stronger conformance suite · a `doctor` GitHub
-Action · UCP · MPP · ACP · AP2 · Shopify and WooCommerce examples ·
-PostgreSQL · richer observability.
+**Next** - a stronger conformance suite · a `doctor` GitHub Action · UCP ·
+MPP · ACP · AP2 · Shopify and WooCommerce examples · PostgreSQL · richer
+observability · multi-file and remote OpenAPI sources.
 
 New protocols land only after the adapter model survives real use. Scope
 discipline is a release requirement, not a mood.
@@ -422,6 +437,7 @@ discipline is a release requirement, not a mood.
 | [Payment flow](docs/payment-flow.md)           | the paid round trip, and every way it fails |
 | [Protocols](docs/protocols.md)                 | exactly what is and is not supported        |
 | [Configuration](docs/configuration.md)         | `config.yaml` reference                     |
+| [OpenAPI import](docs/openapi-import.md)       | generate resources from an existing API     |
 | [Security model](docs/security.md)             | trust boundaries, and what we do not defend |
 | [Contracts](docs/contracts.md)                 | the frozen cross-package contract           |
 | [Adapter guide](docs/contributing-adapters.md) | add a protocol or a payment rail            |
