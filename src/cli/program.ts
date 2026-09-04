@@ -1,7 +1,9 @@
 import { Command } from 'commander';
 import { DEFAULT_CONFIG_FILENAME } from '../config/filename.js';
+import { PROTOCOL_NAMES } from '../core/index.js';
 import { runDemo } from './commands/demo.js';
 import { printDoctorReport, runDoctor } from './commands/doctor.js';
+import { runImportOpenApi } from './commands/import-openapi.js';
 import { runInit } from './commands/init.js';
 import { runValidate } from './commands/validate.js';
 import { runVersion } from './commands/version.js';
@@ -21,7 +23,7 @@ export function buildProgram(io: Io = processIo): Command {
 
   program
     .name('agent-commerce')
-    .description('CLI for the Agent Commerce Gateway: init, validate, doctor, demo.')
+    .description('CLI for the Agent Commerce Gateway: init, import, validate, doctor, demo.')
     // `--version` is required of the published binary. The `version`
     // subcommand stays: it additionally prints the pinned protocol/SDK
     // versions, which is what `doctor` and the support matrix are checked
@@ -81,6 +83,63 @@ export function buildProgram(io: Io = processIo): Command {
       process.exitCode = code;
     });
 
+  // `import` is a group so a future `import postman`/`import graphql` is a
+  // sibling rather than a rename of an established command.
+  const importCommand = program
+    .command('import')
+    .description('Generate Agent Commerce resource drafts from an API description.');
+
+  importCommand
+    .command('openapi')
+    .description('Convert a local OpenAPI 3.0/3.1/3.2 document into resource drafts.')
+    .argument('<source>', 'path to a local .yaml, .yml or .json OpenAPI document')
+    .option('--output <path>', 'output path (default: <source>.agent-commerce.yaml)')
+    .option('--force', 'overwrite an existing output file', false)
+    .option('--base-url <url>', 'backend base URL, overriding the document servers')
+    .option(
+      '--operation <operationId>',
+      'import only this operation (repeatable)',
+      collect,
+      undefined,
+    )
+    .option('--tag <tag>', 'import only operations with this tag (repeatable, OR-ed)', collect)
+    .option('--free', 'mark generated resources as pricing.type free', false)
+    .option('--expose <protocols>', `comma-separated: ${PROTOCOL_NAMES.join(',')}`)
+    .option('--strict', 'exit non-zero when the import produced warnings', false)
+    .option('--json', 'emit a machine-readable summary instead of a report', false)
+    .action(
+      async (
+        source: string,
+        opts: {
+          output?: string;
+          force: boolean;
+          baseUrl?: string;
+          operation?: string[];
+          tag?: string[];
+          free: boolean;
+          expose?: string;
+          strict: boolean;
+          json: boolean;
+        },
+      ) => {
+        process.exitCode = await runImportOpenApi(
+          {
+            source,
+            ...(opts.output !== undefined ? { output: opts.output } : {}),
+            force: opts.force,
+            ...(opts.baseUrl !== undefined ? { baseUrl: opts.baseUrl } : {}),
+            ...(opts.operation !== undefined ? { operations: opts.operation } : {}),
+            ...(opts.tag !== undefined ? { tags: opts.tag } : {}),
+            free: opts.free,
+            ...(opts.expose !== undefined ? { expose: opts.expose } : {}),
+            strict: opts.strict,
+            json: opts.json,
+          },
+          io,
+        );
+      },
+    );
+
   program
     .command('demo')
     .description(
@@ -91,4 +150,9 @@ export function buildProgram(io: Io = processIo): Command {
     });
 
   return program;
+}
+
+/** Commander's repeatable-option collector. */
+function collect(value: string, previous: string[] | undefined): string[] {
+  return [...(previous ?? []), value];
 }

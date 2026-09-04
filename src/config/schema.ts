@@ -34,6 +34,7 @@ import {
   CommerceError,
   type CommerceResource,
   PAYMENT_INPUT_FIELD,
+  PROTOCOL_NAMES,
   type Pricing,
 } from '../core/index.js';
 import { resolveX402Deployment, type X402FacilitatorConfig } from '../payments/x402/guardrails.js';
@@ -497,7 +498,7 @@ function toBoolean(value: boolean | string, path: string): boolean {
 // Business-rule validation + normalisation into the canonical shape.
 // ---------------------------------------------------------------------------
 
-const SUPPORTED_PROTOCOLS = new Set(['http', 'mcp', 'a2a']);
+const SUPPORTED_PROTOCOLS: ReadonlySet<string> = new Set(PROTOCOL_NAMES);
 const SUPPORTED_PAYMENT_METHODS = new Set(['x402']);
 
 function normalise(raw: RawConfig): GatewayConfig {

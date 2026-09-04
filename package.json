@@ -83,7 +83,7 @@
     "demo:agent": "tsx demo/agent/src/main.ts",
     "demo:up": "docker compose up --build",
     "demo:down": "docker compose down -v",
-    "test:cli:dist": "node dist/cli/index.js --help && node dist/cli/index.js --version && node dist/cli/index.js version | grep -q '@x402/core' && node dist/cli/index.js version | head -1 >/dev/null",
+    "test:cli:dist": "node dist/cli/index.js --help && node dist/cli/index.js --version && node dist/cli/index.js version | grep -q '@x402/core' && node dist/cli/index.js version | head -1 >/dev/null && node dist/cli/index.js import openapi --help >/dev/null",
     "pack:dry": "npm pack --dry-run"
   },
   "dependencies": {

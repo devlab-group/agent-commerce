@@ -249,9 +249,19 @@ describe.skipIf(!built)('built executable', () => {
 
   it('offers every documented command', () => {
     const help = run('--help');
-    for (const command of ['init', 'validate', 'doctor', 'demo', 'version']) {
+    for (const command of ['init', 'import', 'validate', 'doctor', 'demo', 'version']) {
       expect(help).toContain(command);
     }
+  });
+
+  it('runs the openapi importer from the built binary', () => {
+    // The importer is the one command with a non-peer runtime dependency of
+    // its own (@scalar/openapi-parser). A bundling mistake there shows up
+    // only here: the source tests import the module directly and would stay
+    // green while the published binary failed to resolve it.
+    const help = run('import', 'openapi', '--help');
+    expect(help).toContain('--expose');
+    expect(help).toContain('--base-url');
   });
 
   it('imports nothing from the repo source tree', () => {
