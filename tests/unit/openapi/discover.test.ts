@@ -106,6 +106,17 @@ describe('discoverOperations', () => {
     await expect(discover('petstore-3.0.yaml', { baseUrl: '/v1' })).rejects.toThrowError();
   });
 
+  it('rejects a --base-url carrying a query string or fragment', async () => {
+    // Concatenation puts the operation path AFTER the query, so the resulting
+    // URL parses and calls the wrong endpoint.
+    await expect(
+      discover('petstore-3.0.yaml', { baseUrl: 'https://api.example.com/v1?apikey=SECRET' }),
+    ).rejects.toThrowError();
+    await expect(
+      discover('petstore-3.0.yaml', { baseUrl: 'https://api.example.com/v1#frag' }),
+    ).rejects.toThrowError();
+  });
+
   it('skips an operation whose only server URL is relative, and says to pass --base-url', async () => {
     const result = await discover('relative-server.yaml');
     expect(result.operations).toHaveLength(0);

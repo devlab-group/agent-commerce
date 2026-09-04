@@ -1,0 +1,182 @@
+openapi: 3.1.0
+info:
+  title: Demo Merchant API
+  version: 1.0.0
+servers:
+  - url: https://api.merchant.example/v1
+security:
+  - apiKey: []
+paths:
+  /users/{userId}/orders:
+    parameters:
+      - name: userId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: listOrders
+      summary: List orders
+      security: []
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  orders:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Order'
+    post:
+      operationId: createOrder
+      summary: Create an order
+      security: []
+      parameters:
+        - name: notify
+          in: query
+          required: true
+          schema:
+            type: boolean
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NewOrder'
+      responses:
+        '201':
+          description: created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+  /reports/{reportId}:
+    get:
+      operationId: getReport
+      summary: Premium report
+      security: []
+      parameters:
+        - name: reportId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  report:
+                    type: string
+  /search:
+    get:
+      operationId: search
+      summary: Search
+      security: []
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: tags
+          in: query
+          schema:
+            type: array
+            items:
+              type: string
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  hits:
+                    type: integer
+  /uploads:
+    post:
+      operationId: upload
+      summary: Upload a file
+      security: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+      responses:
+        '201':
+          description: created
+  /tenant-report:
+    get:
+      operationId: tenantReport
+      summary: Per-tenant report
+      security: []
+      parameters:
+        - name: X-Tenant
+          in: header
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tenant:
+                    type: string
+  /audit:
+    get:
+      operationId: audit
+      summary: Audit log
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  entries:
+                    type: integer
+components:
+  securitySchemes:
+    apiKey:
+      type: apiKey
+      name: X-Api-Key
+      in: header
+  schemas:
+    NewOrder:
+      type: object
+      properties:
+        productId:
+          type: string
+        quantity:
+          type: integer
+      required: [productId]
+    Order:
+      type: object
+      properties:
+        id:
+          type: string
+        productId:
+          type: string

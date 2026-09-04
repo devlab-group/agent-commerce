@@ -269,10 +269,17 @@ function substituteServerVariables(
   return substituted;
 }
 
+/**
+ * An absolute http(s) origin plus path, and nothing after it. A query or
+ * fragment on the base would land *before* the operation path once the two
+ * are concatenated (`.../api?key=x` + `/users/{id}`), producing a URL that
+ * parses fine and calls the wrong endpoint.
+ */
 function isAbsoluteHttpUrl(value: string): boolean {
   try {
     const parsed = new URL(value);
-    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+    return parsed.search === '' && parsed.hash === '';
   } catch {
     return false;
   }
@@ -282,7 +289,7 @@ function assertAbsoluteHttpUrl(value: string, label: string): void {
   if (!isAbsoluteHttpUrl(value)) {
     throw new CommerceError(
       'CONFIG_INVALID',
-      `${label} "${value}" must be an absolute http:// or https:// URL`,
+      `${label} "${value}" must be an absolute http:// or https:// URL with no query string or fragment`,
       { details: { value } },
     );
   }
