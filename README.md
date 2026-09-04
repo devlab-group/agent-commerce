@@ -418,7 +418,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Roadmap
 
-**Now (v1.1.0)** - MCP, x402 v2, settlement on the local chain, Base Sepolia
+**Now (v1.2.0)** - MCP, x402 v2, settlement on the local chain, Base Sepolia
 and Base mainnet, receipts, doctor, deterministic demo, an experimental
 A2A v1.0.0 adapter, and experimental OpenAPI import.
 
