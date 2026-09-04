@@ -1,0 +1,54 @@
+openapi: 3.0.3
+info:
+  title: Pet Store
+  version: 1.0.0
+servers:
+  - url: https://api.example.com/v1
+paths:
+  /pets:
+    get:
+      operationId: listPets
+      summary: List pets
+      description: Every pet, paged.
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: ok
+    post:
+      summary: Create a pet
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Pet'
+      responses:
+        '201':
+          description: created
+  /pets/{petId}:
+    parameters:
+      - name: petId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: getPet
+      responses:
+        '200':
+          description: ok
+    head:
+      responses:
+        '200':
+          description: ok
+components:
+  schemas:
+    Pet:
+      type: object
+      properties:
+        name:
+          type: string

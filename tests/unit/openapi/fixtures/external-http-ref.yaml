@@ -1,0 +1,15 @@
+openapi: 3.1.0
+info:
+  title: External
+  version: 1.0.0
+servers:
+  - url: https://api.example.com
+paths:
+  /a:
+    get:
+      operationId: a
+      parameters:
+        - $ref: 'https://example.com/common.yaml#/components/parameters/Limit'
+      responses:
+        '200':
+          description: ok

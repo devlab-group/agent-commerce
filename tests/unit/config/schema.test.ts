@@ -197,7 +197,7 @@ describe('parseConfig', () => {
      * parses so the URL check passes; the runtime containment check is skipped
      * because its literal prefix (`http://`) does not itself parse as a URL; and
      * `encodeURIComponent` does not escape dots, so a hostname survives whole.
-     * Caller input would then choose which host the gateway calls — the cloud
+     * Caller input would then choose which host the gateway calls - the cloud
      * metadata service, an internal address, anything.
      */
     it.each([
@@ -235,7 +235,7 @@ describe('parseConfig', () => {
     /**
      * The stamper's third drift from the validator, after `required` and tuple
      * `items`. `additionalProperties: {schema}` is the idiomatic "map of typed
-     * objects" shape and the validator applies that subschema recursively — so
+     * objects" shape and the validator applies that subschema recursively - so
      * without recursion here, every node beneath it stayed open and unknown
      * keys reached the merchant's backend.
      */
@@ -339,7 +339,7 @@ describe('parseConfig', () => {
     });
 
     it('rejects a mainnet served by the in-process facilitator', () => {
-      // The local facilitator signs with a key this process holds — a hot
+      // The local facilitator signs with a key this process holds - a hot
       // wallet inside the resource server, which is the arrangement this
       // project exists to avoid.
       const message = messageFor(
@@ -378,7 +378,7 @@ describe('parseConfig', () => {
       const message = messageFor(withX402(unauthenticated));
       expect(message).toContain('allowUnauthenticatedFacilitator');
       // The origin, so an operator can see *which* counterparty they are being
-      // asked about — but never the path, which can carry a tenant or a key.
+      // asked about - but never the path, which can carry a tenant or a key.
       expect(message).toContain('https://facilitator.example.com');
       expect(message).not.toContain('/v2/x402');
 
@@ -430,7 +430,7 @@ describe('parseConfig', () => {
     });
 
     it('allows a plain-HTTP facilitator on a private host below mainnet', () => {
-      // A dot-free host is a compose/k8s service name — the traffic never
+      // A dot-free host is a compose/k8s service name - the traffic never
       // leaves the deployment, so requiring TLS there would only block the
       // normal self-hosted arrangement.
       expect(() =>
@@ -445,7 +445,7 @@ describe('parseConfig', () => {
     });
 
     it('rejects a well-known development payTo on a non-local deployment', () => {
-      // The fixture's payTo is Anvil account #1 — fine locally, catastrophic
+      // The fixture's payTo is Anvil account #1 - fine locally, catastrophic
       // anywhere the money is real, because its private key is public.
       const message = messageFor(
         withX402({ facilitator: { mode: 'remote', url: 'https://facilitator.example.com' } }),
@@ -689,7 +689,7 @@ describe('parseConfig', () => {
     expectConfigInvalid(() => parseConfig(raw, {}));
   });
 
-  it('rejects a paid, {param}-templated resource whose input: is missing entirely — the caller could never supply it, so every call would settle payment and never reach the backend', () => {
+  it('rejects a paid, {param}-templated resource whose input: is missing entirely - the caller could never supply it, so every call would settle payment and never reach the backend', () => {
     const raw = validRawConfig();
     const resources = raw['resources'] as Record<string, Record<string, unknown>>;
     const weather = resources['weather_basic'] as Record<string, unknown>;
@@ -707,7 +707,7 @@ describe('parseConfig', () => {
     }
   });
 
-  it('rejects the same resource when {city} is declared but not required (optional) — a caller that omits it hits the identical bug', () => {
+  it('rejects the same resource when {city} is declared but not required (optional) - a caller that omits it hits the identical bug', () => {
     const raw = validRawConfig();
     const resources = raw['resources'] as Record<string, Record<string, unknown>>;
     const weather = resources['weather_basic'] as Record<string, unknown>;
@@ -715,7 +715,7 @@ describe('parseConfig', () => {
       type: 'object',
       properties: { city: { type: 'string' } },
       additionalProperties: false,
-      // no `required` — this is the trap: declared, but still unenforceable.
+      // no `required` - this is the trap: declared, but still unenforceable.
     };
     weather['pricing'] = { type: 'fixed', amount: '0.01', currency: 'USDC' };
     weather['payments'] = ['x402'];
@@ -734,7 +734,7 @@ describe('parseConfig', () => {
     ['a wildcard', '*'],
     ['a trailing slash', 'http://localhost:5173/'],
   ])(
-    'rejects an allowedOrigins entry with %s — it is matched literally and would never match',
+    'rejects an allowedOrigins entry with %s - it is matched literally and would never match',
     (_label, origin) => {
       // Fail-closed (a lockout, not a bypass) but silent, and a lockout with
       // no explanation is what an operator "fixes" by disabling the check.
@@ -757,7 +757,7 @@ describe('parseConfig', () => {
     ['whitespace only', '   '],
     ['hex notation', '0x50'],
     ['exponent notation', '1e3'],
-  ])('rejects server.port given as %s — Number() would coerce it silently', (_label, port) => {
+  ])('rejects server.port given as %s - Number() would coerce it silently', (_label, port) => {
     // `Number('')` is 0: finite, integral, and inside port's deliberate
     // `min: 0` ("let the OS pick"). So `port: ${PORT:-}` validated PASS, the
     // gateway bound a random port, and `doctor` then derived
@@ -767,7 +767,7 @@ describe('parseConfig', () => {
     expectConfigInvalid(() => parseConfig(raw, {}));
   });
 
-  it('control: decimal digits, as a string or a number, still work — including 0 meaning "let the OS pick"', () => {
+  it('control: decimal digits, as a string or a number, still work - including 0 meaning "let the OS pick"', () => {
     for (const port of ['8080', 8080, '0', 0]) {
       const raw = validRawConfig();
       (raw['server'] as Record<string, unknown>)['port'] = port;
@@ -775,12 +775,12 @@ describe('parseConfig', () => {
     }
   });
 
-  it('stamps additionalProperties:false on a node that declares only "required" — core treats it as an object, so config must too', () => {
+  it('stamps additionalProperties:false on a node that declares only "required" - core treats it as an object, so config must too', () => {
     // The two definitions of "this is an object schema" were one keyword
     // apart: config looked at type/properties, core at properties/required.
     // `input: { required: ['q'] }` was an object to the validator and not to
     // the stamper, so it normalised to exactly {"required":["q"]} and every
-    // unknown caller key was forwarded verbatim to the merchant's backend —
+    // unknown caller key was forwarded verbatim to the merchant's backend -
     // while docs/security.md promised closed-by-default at every level.
     const raw = validRawConfig();
     const resources = raw['resources'] as Record<string, Record<string, unknown>>;
@@ -798,7 +798,7 @@ describe('parseConfig', () => {
     expect(validate({ q: 'ok', evil: 'extra-key' }).valid).toBe(false);
   });
 
-  it('rejects a "required" name that "properties" never declares — closing it makes the schema unsatisfiable by any input', () => {
+  it('rejects a "required" name that "properties" never declares - closing it makes the schema unsatisfiable by any input', () => {
     const raw = validRawConfig();
     const resources = raw['resources'] as Record<string, Record<string, unknown>>;
     const weather = resources['weather_basic'] as Record<string, unknown>;
@@ -815,7 +815,7 @@ describe('parseConfig', () => {
     }
   });
 
-  it('control: an explicit additionalProperties:true is left open — the operator opted in', () => {
+  it('control: an explicit additionalProperties:true is left open - the operator opted in', () => {
     const raw = validRawConfig();
     const resources = raw['resources'] as Record<string, Record<string, unknown>>;
     const weather = resources['weather_basic'] as Record<string, unknown>;
@@ -829,7 +829,7 @@ describe('parseConfig', () => {
     ).toBe(true);
   });
 
-  it('rejects a paid resource whose {param} uses a kebab name — it matched no grammar, so the gate saw zero parameters and passed', () => {
+  it('rejects a paid resource whose {param} uses a kebab name - it matched no grammar, so the gate saw zero parameters and passed', () => {
     // The regression that reopened the earlier money bug through the character
     // class rather than through the check. `{report-id}` is ordinary REST.
     // Under `[a-zA-Z0-9_]+` it matched nothing: the gate found no parameters
@@ -859,7 +859,7 @@ describe('parseConfig', () => {
     ['nothing at all', 'http://localhost:3000/api/report/{}'],
     ['an unbalanced brace', 'http://localhost:3000/api/report/{oops'],
   ])(
-    'rejects a brace token containing %s — widening the grammar cannot cover every spelling, so anything brace-shaped that is not a parameter is refused',
+    'rejects a brace token containing %s - widening the grammar cannot cover every spelling, so anything brace-shaped that is not a parameter is refused',
     (_label, url) => {
       const raw = validRawConfig();
       const resources = raw['resources'] as Record<string, Record<string, unknown>>;
@@ -876,7 +876,7 @@ describe('parseConfig', () => {
     },
   );
 
-  it('control: a kebab {param} that IS declared and required loads and stays servable — the fix must not reject ordinary REST', () => {
+  it('control: a kebab {param} that IS declared and required loads and stays servable - the fix must not reject ordinary REST', () => {
     const raw = validRawConfig();
     const resources = raw['resources'] as Record<string, Record<string, unknown>>;
     const report = resources['market_report'] as Record<string, unknown>;
@@ -907,11 +907,11 @@ describe('parseConfig', () => {
     expect(() => parseConfig(raw, {})).not.toThrow();
   });
 
-  it('control: a paid, {param}-templated resource with city correctly required still loads — do not over-reject', () => {
+  it('control: a paid, {param}-templated resource with city correctly required still loads - do not over-reject', () => {
     const raw = validRawConfig();
     const resources = raw['resources'] as Record<string, Record<string, unknown>>;
     const weather = resources['weather_basic'] as Record<string, unknown>;
-    // fixtures.ts's weather_basic already declares `required: [city]` — only
+    // fixtures.ts's weather_basic already declares `required: [city]` - only
     // switch it to paid, which is the shape the money bug actually needs.
     weather['pricing'] = { type: 'fixed', amount: '0.01', currency: 'USDC' };
     weather['payments'] = ['x402'];
@@ -1091,7 +1091,7 @@ describe('parseConfig', () => {
     });
   });
 
-  it('rejects a schema declaring properties/required whose type excludes "object" — the validator would never enforce either', () => {
+  it('rejects a schema declaring properties/required whose type excludes "object" - the validator would never enforce either', () => {
     const raw = validRawConfig();
     (
       raw['resources'] as { market_report: { input: Record<string, unknown> } }
@@ -1110,7 +1110,7 @@ describe('parseConfig', () => {
     }
   });
 
-  it('control: properties/required with NO type at all still loads — the validator treats that as an object schema now', () => {
+  it('control: properties/required with NO type at all still loads - the validator treats that as an object schema now', () => {
     const raw = validRawConfig();
     (
       raw['resources'] as { market_report: { input: Record<string, unknown> } }
@@ -1171,7 +1171,7 @@ describe('parseConfig', () => {
         filter: {
           type: 'object',
           properties: { anything: { type: 'string' } },
-          // no additionalProperties here — this is the bug: the root gets
+          // no additionalProperties here - this is the bug: the root gets
           // closed, this level did not.
         },
       },
@@ -1463,5 +1463,218 @@ describe('protocols.a2a', () => {
   it('allows a colliding mount while a2a is disabled, since nothing is mounted', () => {
     const config = parseConfig(withA2a({ enabled: false, mountPath: '/mcp' }), {});
     expect(config.protocols.a2a.enabled).toBe(false);
+  });
+});
+
+describe('parseConfig backend.inputBindings', () => {
+  /** A config whose one resource is an OpenAPI-shaped path + query + body POST. */
+  function bindingConfig(
+    overrides: {
+      readonly bindings?: unknown;
+      readonly method?: string;
+      readonly url?: string;
+      readonly input?: unknown;
+    } = {},
+  ): Record<string, unknown> {
+    const raw = validRawConfig();
+    const resources = raw['resources'] as Record<string, unknown>;
+    raw['resources'] = {
+      create_order: {
+        name: 'Create Order',
+        input: overrides.input ?? {
+          type: 'object',
+          properties: {
+            path: {
+              type: 'object',
+              properties: { userId: { type: 'string' } },
+              required: ['userId'],
+            },
+            query: { type: 'object', properties: { notify: { type: 'boolean' } } },
+            body: { type: 'object', properties: { productId: { type: 'string' } } },
+          },
+          required: ['path'],
+          additionalProperties: false,
+        },
+        backend: {
+          type: 'http',
+          method: overrides.method ?? 'POST',
+          url: overrides.url ?? 'http://localhost:3000/users/{userId}/orders',
+          ...(overrides.bindings !== undefined ? { inputBindings: overrides.bindings } : {}),
+        },
+        pricing: { type: 'free' },
+        expose: ['http'],
+      },
+      market_report: resources['market_report'],
+    };
+    return raw;
+  }
+
+  const bindings = { path: 'path', query: 'query', body: 'body' };
+
+  it('parses the block and normalises it onto the canonical handler', () => {
+    const config = parseConfig(bindingConfig({ bindings }), {});
+    const resource = config.resources.find((r) => r.id === 'create_order');
+    expect(resource?.handler.inputBindings).toEqual(bindings);
+  });
+
+  it('leaves the handler unbound when the block is absent (existing configs)', () => {
+    const config = parseConfig(validRawConfig(), {});
+    for (const resource of config.resources) {
+      expect(resource.handler.inputBindings).toBeUndefined();
+    }
+  });
+
+  it('omits absent binding keys rather than setting them undefined', () => {
+    const config = parseConfig(bindingConfig({ bindings: { path: 'path' } }), {});
+    const resource = config.resources.find((r) => r.id === 'create_order');
+    expect(Object.keys(resource?.handler.inputBindings ?? {})).toEqual(['path']);
+  });
+
+  it('rejects an unknown binding location (typo)', () => {
+    expectConfigInvalid(() =>
+      parseConfig(bindingConfig({ bindings: { ...bindings, bodyy: 'body' } }), {}),
+    );
+  });
+
+  it('rejects an empty binding block', () => {
+    expectConfigInvalid(() => parseConfig(bindingConfig({ bindings: {} }), {}));
+  });
+
+  it('rejects a binding to a property the input schema never declares', () => {
+    expectConfigInvalid(() =>
+      parseConfig(bindingConfig({ bindings: { ...bindings, query: 'filters' } }), {}),
+    );
+  });
+
+  it('rejects a path or query binding pointing at a non-object schema', () => {
+    expectConfigInvalid(() =>
+      parseConfig(
+        bindingConfig({
+          bindings,
+          input: {
+            type: 'object',
+            properties: {
+              path: { type: 'object', properties: { userId: { type: 'string' } } },
+              query: { type: 'string' },
+              body: { type: 'object' },
+            },
+            required: ['path'],
+          },
+        }),
+        {},
+      ),
+    );
+  });
+
+  it('rejects two locations bound to the same input property', () => {
+    expectConfigInvalid(() =>
+      parseConfig(bindingConfig({ bindings: { path: 'path', query: 'path' } }), {}),
+    );
+  });
+
+  it('rejects a binding to the reserved payment input field', () => {
+    expectConfigInvalid(() =>
+      parseConfig(bindingConfig({ bindings: { ...bindings, body: PAYMENT_INPUT_FIELD } }), {}),
+    );
+  });
+
+  it('rejects a body binding on a method that sends no body', () => {
+    expectConfigInvalid(() =>
+      parseConfig(
+        bindingConfig({
+          bindings,
+          method: 'GET',
+          url: 'http://localhost:3000/users/{userId}',
+        }),
+        {},
+      ),
+    );
+  });
+
+  it('rejects explicit bindings that omit "path" while backend.url is templated', () => {
+    expectConfigInvalid(() =>
+      parseConfig(bindingConfig({ bindings: { query: 'query', body: 'body' } }), {}),
+    );
+  });
+
+  it('rejects a path group that is not itself required', () => {
+    expectConfigInvalid(() =>
+      parseConfig(
+        bindingConfig({
+          bindings,
+          input: {
+            type: 'object',
+            properties: {
+              path: {
+                type: 'object',
+                properties: { userId: { type: 'string' } },
+                required: ['userId'],
+              },
+              query: { type: 'object' },
+              body: { type: 'object' },
+            },
+            required: [],
+          },
+        }),
+        {},
+      ),
+    );
+  });
+
+  it('rejects a {param} that is not declared inside the bound path group', () => {
+    expectConfigInvalid(() =>
+      parseConfig(
+        bindingConfig({
+          bindings,
+          // userId declared at the top level, not under the path group - the
+          // pre-bindings shape, which explicit mode no longer reads from.
+          input: {
+            type: 'object',
+            properties: {
+              userId: { type: 'string' },
+              path: { type: 'object', properties: {}, required: [] },
+              query: { type: 'object' },
+              body: { type: 'object' },
+            },
+            required: ['path', 'userId'],
+          },
+        }),
+        {},
+      ),
+    );
+  });
+
+  it('rejects a nested {param} that is declared but not required', () => {
+    expectConfigInvalid(() =>
+      parseConfig(
+        bindingConfig({
+          bindings,
+          input: {
+            type: 'object',
+            properties: {
+              path: { type: 'object', properties: { userId: { type: 'string' } }, required: [] },
+              query: { type: 'object' },
+              body: { type: 'object' },
+            },
+            required: ['path'],
+          },
+        }),
+        {},
+      ),
+    );
+  });
+
+  it('accepts the normalised handler as input to the pre-payment shape check', () => {
+    const config = parseConfig(bindingConfig({ bindings }), {});
+    const resource = config.resources.find((r) => r.id === 'create_order');
+    expect(resource).toBeDefined();
+    if (!resource) return;
+    expect(() =>
+      validateBackendRequestShape(
+        resource.handler,
+        { path: { userId: 'u-1' }, query: { notify: true }, body: { productId: 'abc' } },
+        { requestId: 'r', resourceId: resource.id },
+      ),
+    ).not.toThrow();
   });
 });

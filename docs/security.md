@@ -19,7 +19,7 @@ deliberately do not defend.
 ```
 
 Everything from an agent is untrusted and validated. Configuration is trusted
-input supplied by whoever runs the gateway — which is why backend URLs may only
+input supplied by whoever runs the gateway - which is why backend URLs may only
 come from configuration.
 
 ## Secret handling
@@ -38,19 +38,19 @@ receipt store.
 **The logger's depth limit is real.** `fast-redact` wildcards match a single
 level, so `REDACT_PATHS` covers `privateKey` and `wallet.privateKey` but not
 `a.b.privateKey`. Nothing leaks today because every call site funnels caught
-errors through `describeError`, which extracts only `{message, name}` — but
+errors through `describeError`, which extracts only `{message, name}` - but
 that is a property of the call sites, not of the redaction config. Do not log a
 raw object that may carry a secret at depth ≥ 2. The **receipt store's**
 redaction (`src/storage/receipts/redact.ts`) has no such limit: it is a
 recursive key-pattern strip at every depth. Both have tests. Resolved `${VAR}` values are never printed, even
-in configuration error messages — errors name the *variable*, not the value.
+in configuration error messages - errors name the *variable*, not the value.
 
 ## SSRF
 
 The gateway makes outbound HTTP calls to URLs it was configured with:
 
 - backend URLs are **administrator-controlled configuration only**;
-- dynamic, agent- or user-controlled backend URLs are **forbidden** — no code
+- dynamic, agent- or user-controlled backend URLs are **forbidden** - no code
   path constructs a backend URL from request input beyond `{param}` substitution
   into a configured template, with each value URL-encoded. A parameter may only
   appear once the authority is complete: a template whose `{param}` reaches the
@@ -64,24 +64,31 @@ The gateway makes outbound HTTP calls to URLs it was configured with:
 Path parameters are additionally checked for dot segments: `.` and `..` are
 rejected as `INPUT_INVALID` rather than URL-encoded, because
 `encodeURIComponent` does not escape `.` and the WHATWG URL parser then
-normalises `..` away — which would let a caller *remove* path segments and reach
+normalises `..` away - which would let a caller *remove* path segments and reach
 a parent endpoint the operator never exposed. After substitution the constructed
 path is asserted to still begin with the template's literal prefix.
 
 Caller input can never override a query parameter the operator baked into
-`backend.url`. A collision is rejected, not silently applied — otherwise an
+`backend.url`. A collision is rejected, not silently applied - otherwise an
 input key named after an embedded `?apikey=…` would replace it.
 
 Not implemented: an IP/CIDR allowlist or a private-address blocklist. If
 you configure `http://169.254.169.254/…`, the gateway will call it. Treat
 configuration as privileged.
 
+A backend URL produced by [`agent-commerce import openapi`](openapi-import.md)
+is configuration too: it comes from the document's `servers` or from
+`--base-url`, both supplied by the operator at import time, and it lands in a
+file a human reviews before it is merged. A relative or unresolvable server URL
+is refused rather than guessed at. The importer makes no network requests of
+its own.
+
 ### Backend response relay
 
 On a non-2xx backend response, the gateway states the **status code** to the
 caller (ours to say) but does not forward the backend's **response body**. A
 merchant backend in verbose/dev-error mode routinely emits stack traces,
-internal hostnames or SQL fragments — a free, often-unauthenticated resource
+internal hostnames or SQL fragments - a free, often-unauthenticated resource
 call is not a safe place to relay that. The body is truncated (512 chars) and
 logged at `debug` for the operator only; it never reaches a client-visible
 field. A merchant that wants pass-through is a per-resource opt-in, post-alpha.
@@ -92,7 +99,7 @@ Validated at the boundary, before anything else happens:
 
 | Input           | Check                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| resource input  | JSON Schema from the resource definition, closed by default at every level: an object schema — root, nested under `properties`, nested under `items`, or nested under an `additionalProperties` subschema — that omits `additionalProperties` gets `additionalProperties: false` stamped on recursively at config load, not just at the root. That enumeration was written from the stamper rather than from the validator and drifted three times; it now matches what `compileJsonSchema` actually recurses into; an operator who sets it explicitly (including explicitly to `true`) is respected at whichever level they set it. A resource that declares no `input:` at all gets an empty closed schema, not an always-valid one — declaring nothing means accepting nothing. Unknown properties, including prototype-named keys (`__proto__`, `constructor`, …), are matched by own-property lookup only. |
+| resource input  | JSON Schema from the resource definition, closed by default at every level: an object schema - root, nested under `properties`, nested under `items`, or nested under an `additionalProperties` subschema - that omits `additionalProperties` gets `additionalProperties: false` stamped on recursively at config load, not just at the root. That enumeration was written from the stamper rather than from the validator and drifted three times; it now matches what `compileJsonSchema` actually recurses into; an operator who sets it explicitly (including explicitly to `true`) is respected at whichever level they set it. A resource that declares no `input:` at all gets an empty closed schema, not an always-valid one - declaring nothing means accepting nothing. Unknown properties, including prototype-named keys (`__proto__`, `constructor`, …), are matched by own-property lookup only. |
 | path parameters | URL-encoded on substitution                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | body size       | capped at 256 KB, one number for both surfaces, enforced in two different places: Fastify's `bodyLimit` runs inside a body parser on the HTTP routes; `/mcp` deliberately installs a no-op parser so the MCP transport can read the raw stream, so the mount enforces its own byte count instead. A cap that only protects one of two entry points, or two caps that can silently drift apart, is how `/mcp` ended up with no cap at all in the first place.                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | content type    | JSON enforced on the invoke routes. **Not** on `/mcp`, where a wildcard no-op parser hands the raw stream to the MCP SDK and the SDK does its own enforcement.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
@@ -106,7 +113,7 @@ validation, so it can never collide with a resource's own properties.
 
 Covered in detail in [payment-flow.md](payment-flow.md). The invariants:
 
-1. Paid resources **fail closed** — thirteen distinct failure conditions, each
+1. Paid resources **fail closed** - thirteen distinct failure conditions, each
    with a test, none of which delivers the resource.
 2. `verify` has no fund-moving side effects; only `settle` does.
 3. Replay is defended twice: on-chain via EIP-3009 `authorizationState`, and in
@@ -127,12 +134,12 @@ The surface splits by audience, and the split is enforced, not advisory:
 | -------------------------------------------------------------- | ------------- | -------------------------------------------------------- |
 | `POST /api/resources/:id/invoke`                               | agents        | payment, not authentication                              |
 | `/mcp`                                                         | agents        | payment, not authentication                              |
-| `GET /api/resources`, `/health`, `/.well-known/agent-commerce` | anyone        | none — public by design                                  |
+| `GET /api/resources`, `/health`, `/.well-known/agent-commerce` | anyone        | none - public by design                                  |
 | `GET /ready`                                                   | operators     | none, but detail is a fixed vocabulary, never raw errors |
 | `GET /api/receipts`, `/api/events`, `/api/events/stream`       | **operators** | `server.adminToken`, compared in constant time           |
 
 The operator routes carry the merchant's commerce ledger. With no
-`server.adminToken` configured they return **404**, not open data — a missing
+`server.adminToken` configured they return **404**, not open data - a missing
 control must not read as an absent restriction.
 
 Browser access uses `server.allowedOrigins`, an explicit allowlist defaulting to
@@ -142,7 +149,7 @@ which is the same thing as having no policy. Agent traffic gets no CORS headers
 at all, because it is not browser traffic.
 
 `Origin` and `Host` are validated in one place, the gateway's `onRequest` hook,
-so the MCP mount is covered by the same rule as the HTTP routes — including
+so the MCP mount is covered by the same rule as the HTTP routes - including
 against DNS rebinding at a hostname resolving to `127.0.0.1`.
 
 Every published port in `docker-compose.yml` binds `127.0.0.1`. Port 8545 in
@@ -156,7 +163,7 @@ The gateway does not forward the merchant backend's own error body to callers.
 A backend in verbose or development error mode routinely emits stack traces,
 internal hostnames and SQL fragments; relaying them would make the gateway a
 pass-through for someone else's internals to whoever called a free resource.
-The backend's **status code** is returned — that is ours to state and useful —
+The backend's **status code** is returned - that is ours to state and useful -
 and the body is logged server-side at debug level only.
 
 The same rule governs health and readiness detail: a fixed vocabulary on the
@@ -169,13 +176,13 @@ Not a focus of this release, but more is in place than this section used to
 list. What exists:
 
 - request body-size cap, enforced inside the body parsers
-- a **1 MB cap on the merchant backend's *response*** — `AbortSignal.timeout`
+- a **1 MB cap on the merchant backend's *response*** - `AbortSignal.timeout`
   bounds a backend call by time, not by bytes
 - explicit backend timeouts on every outbound call
 - a bounded list limit on every receipts/events query, applied in the store
 - a cap on concurrent SSE subscribers
 - on `/mcp`: a counting semaphore bounding concurrent tool calls (8) plus a
-  bounded queue (64) — over that, `GATEWAY_BUSY` rather than unbounded growth
+  bounded queue (64) - over that, `GATEWAY_BUSY` rather than unbounded growth
 - readiness memoisation and single-flight, so `/ready` polling cannot amplify
   into one upstream RPC call per request
 - `X-Request-Id` accepted only as `[A-Za-z0-9._:-]{1,64}`, so a caller cannot
@@ -198,12 +205,12 @@ What a consumer actually installs, audited against the published tarball:
 | ------------------------------------------------------------------- | ---------------------- |
 | the package alone                                                   | **0 vulnerabilities**  |
 | plus `@modelcontextprotocol/sdk`, `@x402/core`, `@x402/evm`, `viem` | **0 vulnerabilities**  |
-| plus `@coinbase/x402` (only for `auth.type: cdp`)                   | 2 — 1 high, 1 moderate |
+| plus `@coinbase/x402` (only for `auth.type: cdp`)                   | 2 - 1 high, 1 moderate |
 
 The whole delta is CDP: `@coinbase/x402` → `@coinbase/cdp-sdk` → `axios`, which
 carries a set of high-severity advisories, plus a Solana client tree this
 project has no use for. It is an optional peer, imported dynamically only when
-that auth type is configured, so nobody else pays for it — and `auth.type:
+that auth type is configured, so nobody else pays for it - and `auth.type:
 bearer` covers any facilitator with a static token and installs nothing. This
 is stated rather than buried because the affected path is the one handling real
 money.
@@ -218,7 +225,7 @@ those addresses, and never reuse them anywhere else.
 Two independent checks refuse them where it would matter: a dev *key* may not
 sign against an RPC that does not look local or private, and a dev *address*
 may not be the settlement destination on any non-local deployment. The second
-is the consequential one — a wrong key merely fails to sign, a wrong `payTo`
+is the consequential one - a wrong key merely fails to sign, a wrong `payTo`
 succeeds and gives the money away.
 
 ## Mainnet
@@ -231,14 +238,14 @@ including the EIP-712 domain name it reports. All of it is checked at config
 load, so the gateway does not start otherwise and `agent-commerce validate`
 reports it without starting anything.
 
-A facilitator cannot redirect your money — an EIP-3009 authorisation names its
+A facilitator cannot redirect your money - an EIP-3009 authorisation names its
 recipient, its amount and its chain, so it can broadcast exactly that transfer
 or nothing. What it can do is see every authorisation you handle, and stop
 answering. That is why an unauthenticated one is a separate, explicit
 acknowledgement rather than a warning.
 
 The in-process facilitator is never allowed on a mainnet. To be precise about
-why: it is not a custody problem — the facilitator signer never holds buyer or
+why: it is not a custody problem - the facilitator signer never holds buyer or
 merchant funds, it pays gas and broadcasts `transferWithAuthorization`, and the
 money moves buyer to merchant directly on-chain. It is a *funded key inside the
 resource server*, so compromising that process means draining the gas wallet
@@ -261,7 +268,7 @@ rejection outcomes assert that balances did not move.
 | amount manipulation (below the price)                                | `wrong_amount` before settlement                                  | `tests/e2e/payment`                               |
 | replay, sequentially                                                 | refused, no second transfer                                       | `tests/e2e/payment`, mainnet suite                |
 | **duplicate concurrent request**                                     | settles once, other gets `PAYMENT_REPLAYED`                       | `tests/integration/adversarial-payment.test.ts`   |
-| **replay after a gateway restart**                                   | still refused — the reservation is in SQLite                      | same                                              |
+| **replay after a gateway restart**                                   | still refused - the reservation is in SQLite                      | same                                              |
 | expired authorisation (`validBefore` in the past)                    | refused before settlement                                         | `tests/e2e/payment`                               |
 | not-yet-valid authorisation (`validAfter` in the future)             | refused before settlement                                         | `tests/e2e/payment`                               |
 | a `{param}` in the host position of `backend.url`                    | refused at config load                                            | `tests/unit/config/schema.test.ts`                |
@@ -275,14 +282,56 @@ rejection outcomes assert that balances did not move.
 | receipt-store failure                                                | `STORAGE_ERROR`, never mislabelled `PAYMENT_REPLAYED`             | `tests/unit/storage-receipts`                     |
 | a local reader racing the ledger's creation                          | database and sidecars are 0600 from the moment SQLite opens them  | `tests/unit/storage-receipts/permissions.test.ts` |
 | RPC unreachable during verify                                        | `PAYMENT_PROVIDER_UNAVAILABLE`, not "bad signature"               | `tests/unit/payments-x402`                        |
+| **an external `$ref` in an imported document**                        | refused; zero outbound requests                                   | `tests/unit/openapi/load.test.ts`                 |
+| **an imported path value naming another host**                        | percent-encoded into one segment of the configured origin         | `tests/integration/openapi-import.test.ts`        |
+| **an imported query group colliding with a pinned backend query**     | `INPUT_INVALID` before payment; nothing settled                   | same                                              |
+| **an imported operation with an unsupported required parameter**      | never becomes a resource at all                                   | same                                              |
 
 Two of those exist because writing them found a bug. The SDK's `exact`/EVM
 scheme reports an unreachable node as `invalid_exact_evm_signature`, and its
-HTTP facilitator client throws a bare `Error` for a 401 or 5xx — both would
+HTTP facilitator client throws a bare `Error` for a 401 or 5xx - both would
 have recorded a failure of ours as the payer's fault, and burned an
 authorisation nothing had checked. The provider now treats *any* throw out of a
 facilitator call as "no verdict obtained", because a verdict arrives as a
 returned value.
+
+## OpenAPI import
+
+The importer reads a **local, operator-supplied** document and writes a file
+for review. It is not on the request path, and after import nothing reads the
+document again.
+
+- **No network, no filesystem walk.** There is no remote source option, and
+  every `$ref` is checked before the validator sees the document: an external
+  reference (`https://…`, `./types.yaml`, `file:///…`) is refused by name. A
+  document that names one cannot cause a single outbound request. Asserted with
+  a stubbed `fetch` in `tests/unit/openapi/load.test.ts` and again end to end
+  in `tests/integration/openapi-import.test.ts`.
+- **Bounded work.** A source over 10 MiB is refused before parsing. Internal
+  references are resolved lazily with cycle detection and a depth bound, so a
+  recursive schema is a diagnostic rather than an out-of-memory kill.
+- **No credential is ever imported.** An operation declaring OpenAPI security
+  produces a warning and a review comment pointing at
+  `backend.headers: { Authorization: Bearer ${BACKEND_TOKEN} }`; the scheme
+  name, header name and any example value stay out of the generated file. A
+  security scheme never becomes agent-supplied input, and `Accept`,
+  `Content-Type` and `Authorization` header parameters are ignored per the
+  specification.
+- **The document is data.** Descriptions, examples and vendor `x-` extensions
+  are serialised into YAML or dropped. Nothing in a document is executed, and
+  no `x-` extension can alter pricing, payments, the backend URL or protocol
+  exposure - the generator reads only the fields it knows.
+- **Nothing is overwritten.** An existing output file stops the run unless
+  `--force` is passed, a failed run writes nothing at all, and the write is a
+  temp sibling plus rename so a crash cannot leave a partial file.
+- **Commerce policy is never inferred.** Without `--free` / `--expose` the
+  generated fragment has no `pricing` or `expose` and will not load, so no
+  operation becomes purchasable or agent-visible without a human deciding so.
+- **Imported resources are not privileged.** They are ordinary
+  `CommerceResource` entries: same config validation, same execution pipeline,
+  same pre-payment request-shape checks. `tests/integration/openapi-import.test.ts`
+  drives one over HTTP, MCP and A2A and asserts all three produce the identical
+  merchant request.
 
 ## Threats we are not addressing
 

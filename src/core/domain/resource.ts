@@ -23,6 +23,23 @@ export interface BackendHandler {
   readonly headers?: Readonly<Record<string, string>>;
   /** Hard upper bound on the backend call. Defaults to DEFAULT_BACKEND_TIMEOUT_MS. */
   readonly timeoutMs?: number;
+  /**
+   * Names the top-level input properties carrying each part of the request.
+   *
+   * Absent (the default) keeps the original mapping: `{param}` values are read
+   * from top-level input and everything left over becomes either the query
+   * string (GET/DELETE) or the entire JSON body (POST/PUT/PATCH). That mapping
+   * cannot express `POST /users/{userId}/orders?notify=true` with a JSON body
+   * - one perfectly ordinary REST operation with all three parts at once.
+   *
+   * When present, each group is sourced independently and top-level input that
+   * no binding names is not forwarded to the backend at all.
+   */
+  readonly inputBindings?: {
+    readonly path?: string;
+    readonly query?: string;
+    readonly body?: string;
+  };
 }
 
 /** Default backend timeout when a resource does not specify one. */

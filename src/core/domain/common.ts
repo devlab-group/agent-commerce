@@ -14,8 +14,23 @@
  */
 export type JsonSchema = Record<string, unknown>;
 
-/** Protocol surfaces a resource can be exposed through in this release. */
+/**
+ * Protocol surfaces a resource can be exposed through in this release.
+ *
+ * The runtime list is the definition and the type is derived from it, so a
+ * caller that has to *check* a name (config validation, the OpenAPI
+ * importer's `--expose`) reads the same three strings the type is built from
+ * rather than keeping a second copy that can drift.
+ */
 export type ProtocolName = 'http' | 'mcp' | 'a2a';
+
+/**
+ * The same three names as a value, for code that has to *check* one at
+ * runtime - config validation, the OpenAPI importer's `--expose`. Typed
+ * against `ProtocolName` so an unsupported name cannot enter the list, which
+ * is what keeps this from becoming a second definition that drifts.
+ */
+export const PROTOCOL_NAMES: readonly ProtocolName[] = ['http', 'mcp', 'a2a'];
 
 /** Payment methods a resource can accept in this release. */
 export type PaymentMethodName = 'x402';

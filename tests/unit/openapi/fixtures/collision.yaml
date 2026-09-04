@@ -1,0 +1,19 @@
+openapi: 3.1.0
+info:
+  title: Collision
+  version: 1.0.0
+servers:
+  - url: https://api.example.com
+paths:
+  /a/b:
+    get:
+      operationId: 'get a/b'
+      responses:
+        '200':
+          description: ok
+  /a-b:
+    get:
+      operationId: 'get a b'
+      responses:
+        '200':
+          description: ok

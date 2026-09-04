@@ -1,0 +1,208 @@
+openapi: 3.1.0
+info:
+  title: Request shapes
+  version: 1.0.0
+servers:
+  - url: https://api.example.com
+paths:
+  /users/{userId}/orders:
+    parameters:
+      - name: userId
+        in: path
+        required: true
+        schema:
+          type: string
+          description: from the path item
+      - name: trace
+        in: query
+        schema:
+          type: string
+    post:
+      operationId: createOrder
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+            description: overridden by the operation
+        - name: notify
+          in: query
+          required: true
+          schema:
+            type: boolean
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                productId:
+                  type: string
+                quantity:
+                  type: integer
+              required: [productId]
+      responses:
+        '201':
+          description: ok
+    get:
+      operationId: listOrders
+      responses:
+        '200':
+          description: ok
+  /items/{itemId}:
+    get:
+      operationId: getItem
+      parameters:
+        - name: itemId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: ok
+  /search:
+    get:
+      operationId: search
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: page
+          in: query
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: ok
+  /reports:
+    post:
+      operationId: createReport
+      requestBody:
+        content:
+          application/vnd.acme.report+json:
+            schema:
+              type: object
+              properties:
+                title:
+                  type: string
+          application/xml:
+            schema:
+              type: object
+      responses:
+        '201':
+          description: ok
+  /uploads:
+    post:
+      operationId: upload
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '201':
+          description: ok
+  /avatars:
+    post:
+      operationId: optionalUpload
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+      responses:
+        '201':
+          description: ok
+  /tenants:
+    get:
+      operationId: listTenants
+      parameters:
+        - name: X-Tenant
+          in: header
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: ok
+  /profile:
+    get:
+      operationId: getProfile
+      parameters:
+        - name: X-Trace
+          in: header
+          schema:
+            type: string
+        - name: session
+          in: cookie
+          schema:
+            type: string
+        - name: Authorization
+          in: header
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: ok
+  /filters:
+    get:
+      operationId: listFilters
+      parameters:
+        - name: filter
+          in: query
+          required: true
+          style: deepObject
+          explode: true
+          schema:
+            type: object
+      responses:
+        '200':
+          description: ok
+  /optional-filters:
+    get:
+      operationId: listOptionalFilters
+      parameters:
+        - name: tags
+          in: query
+          schema:
+            type: array
+            items:
+              type: string
+      responses:
+        '200':
+          description: ok
+  /matrix/{id}:
+    get:
+      operationId: matrix
+      parameters:
+        - name: id
+          in: path
+          required: true
+          style: matrix
+          schema:
+            type: string
+      responses:
+        '200':
+          description: ok
+  /exports:
+    delete:
+      operationId: deleteExport
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '204':
+          description: ok

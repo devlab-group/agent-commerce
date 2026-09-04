@@ -2,7 +2,7 @@
  * Packaging surface tests.
  *
  * The published npm artifact is the only thing an end user ever sees, and it
- * is built by a different path than everything else in the repo — so it can
+ * is built by a different path than everything else in the repo - so it can
  * break while every other test stays green. These assert the properties the
  * packaging spec requires, against the real built `dist/`.
  *
@@ -78,7 +78,7 @@ const bareImportsOf = (file: string): string[] => {
   // follow relative imports. tsup builds the three library
   // entries with `splitting: true`, so shared code lives in `dist/chunk-*.js`.
   // Scanning only the entry file meant a peer import that migrated into a
-  // shared chunk would pass this test while breaking a bare consumer install —
+  // shared chunk would pass this test while breaking a bare consumer install -
   // false confidence about the one invariant calls
   // non-negotiable.
   const visit = (path: string): void => {
@@ -108,7 +108,7 @@ const run = (...args: string[]): string =>
   execFileSync(process.execPath, [distEntry, ...args], { encoding: 'utf8' });
 
 describe('published package metadata', () => {
-  it('is publishable — not marked private', () => {
+  it('is publishable - not marked private', () => {
     expect(manifest.private).toBeUndefined();
   });
 
@@ -138,11 +138,24 @@ describe('published package metadata', () => {
     expect(existsSync(resolve(pkgRoot, 'pnpm-lock.yaml'))).toBe(false);
   });
 
-  it('pins zod through npm-native overrides', () => {
-    // two zod majors in one graph break `instanceof` across module
-    // boundaries. The pin moved twice (pnpm-workspace.yaml -> pnpm.overrides
-    // -> overrides) and each move could silently drop it.
-    expect(manifest.overrides?.['zod']).toBe(manifest.dependencies?.['zod']);
+  it('pins zod for the x402 packages, per package rather than repo-wide', () => {
+    // Two zod majors in one graph break `instanceof` across module
+    // boundaries, so every package that shares zod values with ours resolves
+    // to *our* zod. The pin moved three times (pnpm-workspace.yaml ->
+    // pnpm.overrides -> overrides -> per-package overrides) and each move
+    // could silently drop it.
+    //
+    // It is deliberately no longer repo-wide: `@scalar/openapi-parser` (the
+    // OpenAPI importer) needs zod 4 and gets its own nested copy. Nothing
+    // crosses that seam - the importer hands the parser plain JSON and gets
+    // plain JSON back - so the two majors never meet a shared `instanceof`.
+    const overrides = manifest.overrides as Record<string, unknown> | undefined;
+    expect(overrides?.['zod']).toBeUndefined();
+    for (const pkg of ['@x402/core', '@x402/evm', '@coinbase/x402']) {
+      expect((overrides?.[pkg] as Record<string, string> | undefined)?.['zod']).toBe(
+        manifest.dependencies?.['zod'],
+      );
+    }
     expect(manifest.pnpm).toBeUndefined();
   });
 
@@ -168,7 +181,7 @@ describe('published package metadata', () => {
     ]) {
       expect(manifest.peerDependencies?.[peer]).toBeDefined();
       expect(manifest.peerDependenciesMeta?.[peer]?.optional).toBe(true);
-      // In `dependencies` too would defeat the point — npm installs those.
+      // In `dependencies` too would defeat the point - npm installs those.
       expect(manifest.dependencies?.[peer]).toBeUndefined();
       //...but the repo itself still builds and tests against them.
       expect(manifest.devDependencies?.[peer]).toBe(manifest.peerDependencies?.[peer]);
@@ -177,7 +190,7 @@ describe('published package metadata', () => {
 
   it('declares no workspace:* runtime dependency', () => {
     // Internal packages are bundled at build time, so they must not appear as
-    // runtime dependencies — they are not published and npm could not resolve
+    // runtime dependencies - they are not published and npm could not resolve
     // them.
     const leaked = Object.entries(manifest.dependencies ?? {}).filter(([, v]) =>
       v.includes('workspace:'),
@@ -188,7 +201,7 @@ describe('published package metadata', () => {
   it('publishes under the @devlab.group scope, explicitly public', () => {
     // A scoped package defaults to `restricted`. Without publishConfig.access
     // a `npm publish` either fails on a free account or silently publishes a
-    // private package — the failure mode that looks like success.
+    // private package - the failure mode that looks like success.
     expect(manifest.name).toBe('@devlab.group/agent-commerce');
     expect(manifest.publishConfig?.access).toBe('public');
   });
@@ -236,9 +249,19 @@ describe.skipIf(!built)('built executable', () => {
 
   it('offers every documented command', () => {
     const help = run('--help');
-    for (const command of ['init', 'validate', 'doctor', 'demo', 'version']) {
+    for (const command of ['init', 'import', 'validate', 'doctor', 'demo', 'version']) {
       expect(help).toContain(command);
     }
+  });
+
+  it('runs the openapi importer from the built binary', () => {
+    // The importer is the one command with a non-peer runtime dependency of
+    // its own (@scalar/openapi-parser). A bundling mistake there shows up
+    // only here: the source tests import the module directly and would stay
+    // green while the published binary failed to resolve it.
+    const help = run('import', 'openapi', '--help');
+    expect(help).toContain('--expose');
+    expect(help).toContain('--base-url');
   });
 
   it('imports nothing from the repo source tree', () => {
@@ -261,7 +284,7 @@ describe.skipIf(!built)('built executable', () => {
   });
 
   it('leaves only npm-resolvable modules as imports', () => {
-    // `dependencies` only — not the optional peers. The binary must run on a
+    // `dependencies` only - not the optional peers. The binary must run on a
     // default `npm i @devlab.group/agent-commerce`, with nothing else installed.
     const declared = new Set(Object.keys(manifest.dependencies ?? {}));
     for (const pkg of bareImportsOf(distEntry)) {
@@ -292,7 +315,7 @@ describe.skipIf(!existsSync(libEntry))('built library entry', () => {
   it('does not re-export the optional-peer adapters', () => {
     // They moved to `@devlab.group/agent-commerce/mcp` and `/x402`. Re-exporting them
     // here would statically import x402 and the MCP SDK from the main entry,
-    // which is precisely what makes the peers non-optional again — a bare
+    // which is precisely what makes the peers non-optional again - a bare
     // install would fail on `import { createGateway }`.
     const out = load(
       "process.stdout.write(['mcp','x402','createMcpAdapter','createX402PaymentProvider'].filter((k) => m[k] !== undefined).join(','))",
@@ -312,7 +335,7 @@ describe.skipIf(!existsSync(libEntry))('built library entry', () => {
       JSON.parse(readFileSync(join(pkgRoot, 'package.json'), 'utf8')) as { version: string }
     ).version;
     expect(version).not.toContain('0.0.0-unknown');
-    // The likeliest cause of a mismatch here is a stale `dist/` — the version
+    // The likeliest cause of a mismatch here is a stale `dist/` - the version
     // is injected by tsup at build time, so a bundle built before a version
     // change keeps reporting the old one and turns the whole suite red for a
     // reason that has nothing to do with the source. Say so in the failure,
@@ -320,7 +343,7 @@ describe.skipIf(!existsSync(libEntry))('built library entry', () => {
     expect(
       version,
       `built bundle reports "${version}" but package.json says "${manifestVersion}". ` +
-        'The version is injected at build time, so `dist/` is almost certainly stale — ' +
+        'The version is injected at build time, so `dist/` is almost certainly stale - ' +
         'run `npm run build` and re-run this test.',
     ).toBe(manifestVersion);
   });
@@ -367,7 +390,7 @@ describe.skipIf(!existsSync(libEntry))('optional-peer subpaths', () => {
 
   it('shares one CommerceError class with the main entry', () => {
     // Built as independent bundles each entry carries its own copy, and
-    // `catch (e) { e instanceof CommerceError }` is false across the seam —
+    // `catch (e) { e instanceof CommerceError }` is false across the seam -
     // verified: flipping tsup's `splitting` off makes this assertion fail.
     // Same class of defect described for two zod majors.
     const out = execFileSync(
