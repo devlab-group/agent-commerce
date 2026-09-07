@@ -20,17 +20,22 @@ import {
   type AdapterHealth,
   type AdapterHttpRoute,
   CommerceError,
+  type CommerceResource,
+  type ExecutionOutcome,
   type HttpProtocolAdapter,
   type ProtocolAdapterContext,
   toCommerceError,
 } from '../../core/index.js';
 import { PACKAGE_VERSION } from '../../version.js';
+import { toCanonicalRequest } from './checkout-mapping.js';
 import {
+  ACP_CHECKOUT_OPERATIONS,
   ACP_IDEMPOTENCY_KEY_HEADER,
   ACP_IDEMPOTENT_REPLAYED_HEADER,
   ACP_IN_FLIGHT_RETRY_AFTER_SECONDS,
   ACP_REQUEST_ID_HEADER,
   ACP_WELL_KNOWN_PATH,
+  type AcpCheckoutOperation,
 } from './constants.js';
 import { buildDescriptor } from './descriptor.js';
 import { type AcpDiscoveryMetadata, buildAcpDiscoveryDocument } from './discovery.js';
@@ -51,6 +56,8 @@ export interface AcpAdapterOptions {
   readonly mountPath: string;
   /** The configured bearer token. Never logged, never echoed, never published. */
   readonly token: string;
+  /** Which canonical resource implements each ACP checkout operation. */
+  readonly operations: Readonly<Record<AcpCheckoutOperation, string>>;
   /** Where checkout idempotency records live, and how long they are kept. */
   readonly idempotency: { readonly path: string; readonly retentionHours: number };
   readonly discovery?: AcpDiscoveryMetadata;
@@ -71,11 +78,13 @@ export class AcpProtocolAdapter implements HttpProtocolAdapter {
   readonly additionalHttpRoutes: readonly AdapterHttpRoute[];
 
   private readonly token: string;
+  private readonly operations: Readonly<Record<AcpCheckoutOperation, string>>;
   private readonly idempotencyOptions: AcpAdapterOptions['idempotency'];
   /** Derived once: the token is fixed, and only its digest may be persisted. */
   private readonly identityHash: string;
   private readonly discoveryMetadata: AcpDiscoveryMetadata | undefined;
   private idempotency: AcpIdempotencyStore | undefined;
+  private resources: ReadonlyMap<AcpCheckoutOperation, CommerceResource> = new Map();
 
   private context: ProtocolAdapterContext | undefined;
   private started = false;
@@ -87,6 +96,7 @@ export class AcpProtocolAdapter implements HttpProtocolAdapter {
   constructor(options: AcpAdapterOptions) {
     this.mountPath = options.mountPath;
     this.token = options.token;
+    this.operations = options.operations;
     this.idempotencyOptions = options.idempotency;
     this.identityHash = identityHash(options.token);
     this.discoveryMetadata = options.discovery;
@@ -122,6 +132,28 @@ export class AcpProtocolAdapter implements HttpProtocolAdapter {
         { details: { path: invalid.path ?? '$', code: invalid.code } },
       );
     }
+
+    // The same defence in depth MCP and A2A apply: config already refuses a
+    // mapping to a resource that is not acp-exposed, but the adapter must not
+    // rely on that alone to keep a resource scoped to another protocol out of
+    // an ACP checkout.
+    const exposed = new Map(
+      context.resources.listExposedVia('acp').map((resource) => [resource.id, resource]),
+    );
+    const resolved = new Map<AcpCheckoutOperation, CommerceResource>();
+    for (const operation of ACP_CHECKOUT_OPERATIONS) {
+      const resourceId = this.operations[operation];
+      const resource = exposed.get(resourceId);
+      if (resource === undefined) {
+        throw new CommerceError(
+          'CONFIG_INVALID',
+          `ACP operation "${operation}" is mapped to resource "${resourceId}", which is not exposed via acp`,
+          { details: { operation, resourceId } },
+        );
+      }
+      resolved.set(operation, resource);
+    }
+    this.resources = resolved;
 
     this.idempotency = createAcpIdempotencyStore({
       path: this.idempotencyOptions.path,
@@ -273,18 +305,72 @@ export class AcpProtocolAdapter implements HttpProtocolAdapter {
   }
 
   /**
-   * Everything above this line has held. Execution is not wired yet, and the
-   * answer says so instead of inventing a checkout session.
+   * One accepted request, one `pipeline.execute()`.
+   *
+   * Nothing here prices a resource, inspects a payment proof or calls a
+   * merchant backend: the adapter builds a canonical request and reads back
+   * what the pipeline decided.
    */
   private async runCheckout(request: AcpGuardedRequest): Promise<AcpResponse> {
-    return this.asResponse(
-      acpFailure(
-        501,
-        'processing_error',
-        'not_implemented',
-        `ACP operation "${request.route.operation}" is not available in this build.`,
-      ),
-    );
+    const context = this.context;
+    const resource = this.resources.get(request.route.operation);
+    if (context === undefined || resource === undefined) {
+      return this.asResponse(
+        acpFailure(
+          503,
+          'service_unavailable',
+          'service_unavailable',
+          'The ACP adapter is not running.',
+        ),
+      );
+    }
+
+    const canonical = toCanonicalRequest({
+      request,
+      resourceId: resource.id,
+      requestId: context.ids.next('acp'),
+      receivedAt: context.clock.nowIso(),
+    });
+
+    try {
+      const outcome: ExecutionOutcome = await context.pipeline.execute(canonical);
+      if (outcome.kind === 'payment-required') {
+        // ACP has no wire representation for a gateway payment challenge, and
+        // config refuses a paid checkout resource - so reaching this is a
+        // broken deployment, not something the caller can act on. Nothing about
+        // the challenge is disclosed.
+        context.logger.error(
+          { resourceId: resource.id, requestId: canonical.requestId },
+          'acp adapter: mapped checkout resource returned payment-required - it must be priced free',
+        );
+        return this.asResponse(
+          acpFailure(
+            500,
+            'processing_error',
+            'processing_error',
+            'The server could not process this checkout operation.',
+          ),
+        );
+      }
+      // Route-specific success statuses and outbound ACP validation of the
+      // backend document are the next step; today the delivered body is
+      // returned as-is.
+      return { status: 200, body: outcome.body };
+    } catch (err) {
+      const error = toCommerceError(err);
+      context.logger.warn(
+        { resourceId: resource.id, requestId: canonical.requestId, err: error.toInfo() },
+        'acp adapter: checkout execution failed',
+      );
+      return this.asResponse(
+        acpFailure(
+          500,
+          'processing_error',
+          'processing_error',
+          'The server could not process this checkout operation.',
+        ),
+      );
+    }
   }
 
   private asResponse(failure: AcpFailure): AcpResponse {
@@ -337,6 +423,7 @@ export class AcpProtocolAdapter implements HttpProtocolAdapter {
   async stop(): Promise<void> {
     this.started = false;
     this.discovery = undefined;
+    this.resources = new Map();
     this.idempotency?.close();
     this.idempotency = undefined;
     this.context = undefined;

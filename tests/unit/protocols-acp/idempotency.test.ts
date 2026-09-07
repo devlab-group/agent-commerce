@@ -11,16 +11,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
-import { createResourceRegistry } from '../../../src/core/execution/index.js';
-import type {
-  Clock,
-  EventSink,
-  ExecutionPipeline,
-  IdGenerator,
-  Logger,
-  ProtocolAdapterContext,
-  ResourceRegistry,
-} from '../../../src/core/index.js';
 import { createAcpAdapter } from '../../../src/protocols/acp/adapter.js';
 import { ACP_SPEC_VERSION } from '../../../src/protocols/acp/constants.js';
 import {
@@ -31,6 +21,7 @@ import {
   type AcpIdempotencyScope,
   createAcpIdempotencyStore,
 } from '../../../src/protocols/acp/idempotency/store.js';
+import { adapterOptions, delivered, setup } from './fixtures.js';
 
 const IDENTITY = identityHash('acp-secret-token');
 const SCOPE: AcpIdempotencyScope = {
@@ -170,34 +161,6 @@ describe('ACP request fingerprints', () => {
 });
 
 describe('ACP idempotency over the adapter', () => {
-  const NOOP_LOGGER: Logger = {
-    debug: () => {},
-    info: () => {},
-    warn: () => {},
-    error: () => {},
-    child: () => NOOP_LOGGER,
-  };
-
-  function context(): ProtocolAdapterContext {
-    return {
-      pipeline: {
-        execute: async () => {
-          throw new Error('the pipeline must not be reached');
-        },
-      } as unknown as ExecutionPipeline,
-      resources: createResourceRegistry([]) as ResourceRegistry,
-      events: { emit: async () => {} } as EventSink,
-      logger: NOOP_LOGGER,
-      clock: {
-        now: () => new Date('2026-01-01T00:00:00.000Z'),
-        nowIso: () => '2026-01-01T00:00:00.000Z',
-        monotonicMs: () => 0,
-      } as Clock,
-      ids: { next: (prefix?: string) => `${prefix ?? 'id'}-1` } as IdGenerator,
-      publicBaseUrl: 'https://merchant.example.com',
-    };
-  }
-
   async function post(
     adapter: ReturnType<typeof createAcpAdapter>,
     key: string,
@@ -239,16 +202,42 @@ describe('ACP idempotency over the adapter', () => {
   const CREATE = { line_items: [{ id: 'item_123' }], currency: 'usd', capabilities: {} };
 
   it('echoes the Idempotency-Key it accepted', async () => {
-    const adapter = createAcpAdapter({
-      mountPath: '/acp',
-      token: 'acp-secret-token',
-      idempotency: { path: ':memory:', retentionHours: 24 },
-    });
-    await adapter.start(context());
+    const adapter = createAcpAdapter(adapterOptions());
+    await adapter.start(setup(delivered({ id: 'cs_1' })).context);
 
     const result = await post(adapter, 'idem-echo', CREATE);
     expect(result.headers['idempotency-key']).toBe('idem-echo');
     expect(result.headers['idempotent-replayed']).toBeUndefined();
+    await adapter.stop();
+  });
+
+  it('replays the first answer for a repeat of the same request', async () => {
+    const { context, execute } = setup(delivered({ id: 'cs_1', status: 'ready_for_payment' }));
+    const adapter = createAcpAdapter(adapterOptions());
+    await adapter.start(context);
+
+    const first = await post(adapter, 'idem-replay', CREATE);
+    const second = await post(adapter, 'idem-replay', CREATE);
+
+    expect(first.status).toBe(200);
+    expect(first.headers['idempotent-replayed']).toBeUndefined();
+    expect(second.status).toBe(200);
+    expect(second.headers['idempotent-replayed']).toBe('true');
+    // The whole point: the merchant backend was called once, not twice.
+    expect(execute).toHaveBeenCalledTimes(1);
+    await adapter.stop();
+  });
+
+  it('refuses a key reused for a different body, without executing again', async () => {
+    const { context, execute } = setup(delivered({ id: 'cs_1' }));
+    const adapter = createAcpAdapter(adapterOptions());
+    await adapter.start(context);
+
+    await post(adapter, 'idem-conflict', CREATE);
+    const conflict = await post(adapter, 'idem-conflict', { ...CREATE, currency: 'eur' });
+
+    expect(conflict.status).toBe(422);
+    expect(execute).toHaveBeenCalledTimes(1);
     await adapter.stop();
   });
 
@@ -257,19 +246,15 @@ describe('ACP idempotency over the adapter', () => {
   it('does not cache a 5xx answer', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'oac-acp-adapter-'));
     const path = join(dir, 'idem.sqlite');
-    const adapter = createAcpAdapter({
-      mountPath: '/acp',
-      token: 'acp-secret-token',
-      idempotency: { path, retentionHours: 24 },
-    });
-    await adapter.start(context());
+    const adapter = createAcpAdapter(adapterOptions({ idempotency: { path, retentionHours: 24 } }));
+    await adapter.start(setup(new Error('backend exploded')).context);
 
-    // Execution is not wired yet, so every answer here is a 501.
+    // The pipeline throws for this context, so both attempts answer 500.
     const first = await post(adapter, 'idem-5xx', CREATE);
     const second = await post(adapter, 'idem-5xx', CREATE);
 
-    expect(first.status).toBe(501);
-    expect(second.status).toBe(501);
+    expect(first.status).toBe(500);
+    expect(second.status).toBe(500);
     expect(second.headers['idempotent-replayed']).toBeUndefined();
 
     // The store really is in the request path, and the released claim left

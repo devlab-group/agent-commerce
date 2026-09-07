@@ -70,9 +70,9 @@ function acpValidators(): ReadonlyMap<AcpDefinition, ValidateFunction> {
   });
   addFormats(ajv);
 
-  const document = schemaDocument as unknown as { readonly $id?: unknown };
-  const schemaId = typeof document.$id === 'string' ? document.$id : '';
-  ajv.addSchema(schemaDocument);
+  const document = relaxExtensibleEnums(structuredClone(schemaDocument)) as Record<string, unknown>;
+  const schemaId = typeof document['$id'] === 'string' ? document['$id'] : '';
+  ajv.addSchema(document as Parameters<typeof ajv.addSchema>[0]);
 
   const compiled = new Map<AcpDefinition, ValidateFunction>();
   for (const [name, definition] of Object.entries(ACP_DEFINITIONS)) {
@@ -89,6 +89,36 @@ function acpValidators(): ReadonlyMap<AcpDefinition, ValidateFunction> {
 
   validators = compiled;
   return compiled;
+}
+
+/**
+ * Drops the `enum` constraint from the few fields the snapshot itself marks as
+ * extensible ("servers SHOULD accept unrecognized values and treat them as
+ * 'other'", and "validators SHOULD be configured for lenient enum handling").
+ *
+ * Only fields carrying that wording are relaxed. The enums ACP calls closed
+ * per API version stay closed - the point is not to be permissive, it is to
+ * avoid refusing, say, a cancel because of an analytics reason code the buyer's
+ * agent knows about and this snapshot does not.
+ */
+function relaxExtensibleEnums(node: unknown): unknown {
+  if (Array.isArray(node)) {
+    for (const entry of node) relaxExtensibleEnums(entry);
+    return node;
+  }
+  if (node === null || typeof node !== 'object') return node;
+
+  const record = node as Record<string, unknown>;
+  const description = record['description'];
+  if (
+    Array.isArray(record['enum']) &&
+    typeof description === 'string' &&
+    /enum is extensible/i.test(description)
+  ) {
+    delete record['enum'];
+  }
+  for (const value of Object.values(record)) relaxExtensibleEnums(value);
+  return node;
 }
 
 /**

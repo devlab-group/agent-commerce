@@ -9,6 +9,7 @@
 
 export type { AcpAdapterOptions } from './adapter.js';
 export { AcpProtocolAdapter, createAcpAdapter } from './adapter.js';
+export { toCanonicalRequest } from './checkout-mapping.js';
 export {
   ACP_API_VERSION,
   ACP_API_VERSION_HEADER,

@@ -5,57 +5,14 @@
  * for the pipeline never having been called. "Fails closed" is only a claim
  * until the second half is checked.
  */
-import { describe, expect, it, vi } from 'vitest';
-import { createResourceRegistry } from '../../../src/core/execution/index.js';
-import type {
-  CanonicalRequest,
-  Clock,
-  EventSink,
-  ExecutionOutcome,
-  ExecutionPipeline,
-  IdGenerator,
-  Logger,
-  ProtocolAdapterContext,
-  ResourceRegistry,
-} from '../../../src/core/index.js';
+import { describe, expect, it } from 'vitest';
+import type { ProtocolAdapterContext } from '../../../src/core/index.js';
 import { createAcpAdapter } from '../../../src/protocols/acp/adapter.js';
 import { ACP_SPEC_VERSION, ACP_WELL_KNOWN_PATH } from '../../../src/protocols/acp/constants.js';
 import { guardAcpRequest } from '../../../src/protocols/acp/request-guards.js';
 import { matchAcpRoute } from '../../../src/protocols/acp/router.js';
 import { validateAcpDocument } from '../../../src/protocols/acp/validation.js';
-
-const TOKEN = 'acp-secret-token';
-const MOUNT = '/acp';
-
-const NOOP_LOGGER: Logger = {
-  debug: () => {},
-  info: () => {},
-  warn: () => {},
-  error: () => {},
-  child: () => NOOP_LOGGER,
-};
-
-const clock: Clock = {
-  now: () => new Date('2026-01-01T00:00:00.000Z'),
-  nowIso: () => '2026-01-01T00:00:00.000Z',
-  monotonicMs: () => 0,
-};
-
-function setup() {
-  const execute = vi.fn(async (_request: CanonicalRequest): Promise<ExecutionOutcome> => {
-    throw new Error('the pipeline must not be reached');
-  });
-  const context: ProtocolAdapterContext = {
-    pipeline: { execute } as ExecutionPipeline,
-    resources: createResourceRegistry([]) as ResourceRegistry,
-    events: { emit: async () => {} } as EventSink,
-    logger: NOOP_LOGGER,
-    clock,
-    ids: { next: (prefix?: string) => `${prefix ?? 'id'}-1` } as IdGenerator,
-    publicBaseUrl: 'https://merchant.example.com',
-  };
-  return { execute, context };
-}
+import { adapterOptions, delivered, MOUNT, setup, TOKEN } from './fixtures.js';
 
 interface HttpResult {
   status: number;
@@ -123,12 +80,9 @@ const VALID_CREATE = JSON.stringify({
 });
 
 async function startedAdapter(context: ProtocolAdapterContext, discovery?: unknown) {
-  const adapter = createAcpAdapter({
-    mountPath: MOUNT,
-    token: TOKEN,
-    idempotency: { path: ':memory:', retentionHours: 24 },
-    ...(discovery !== undefined ? { discovery: discovery as never } : {}),
-  });
+  const adapter = createAcpAdapter(
+    adapterOptions(discovery !== undefined ? { discovery: discovery as never } : {}),
+  );
   await adapter.start(context);
   return adapter;
 }
@@ -219,12 +173,9 @@ describe('ACP discovery', () => {
   // rejects would be exactly the blanket claim this project refuses to make.
   it('refuses to start when configured metadata would break the document', async () => {
     const { context } = setup();
-    const adapter = createAcpAdapter({
-      mountPath: MOUNT,
-      token: TOKEN,
-      idempotency: { path: ':memory:', retentionHours: 24 },
-      discovery: { supportedCurrencies: ['US Dollars'] },
-    });
+    const adapter = createAcpAdapter(
+      adapterOptions({ discovery: { supportedCurrencies: ['US Dollars'] } }),
+    );
     await expect(adapter.start(context)).rejects.toThrow(/discovery document/i);
     expect((await adapter.health()).status).toBe('fail');
   });
@@ -238,11 +189,7 @@ describe('ACP discovery', () => {
   });
 
   it('serves nothing before start and reports its own health', async () => {
-    const adapter = createAcpAdapter({
-      mountPath: MOUNT,
-      token: TOKEN,
-      idempotency: { path: ':memory:', retentionHours: 24 },
-    });
+    const adapter = createAcpAdapter(adapterOptions());
     const { req, res, result } = fakeExchange({ method: 'GET', url: ACP_WELL_KNOWN_PATH });
     await adapter.handleDiscovery(req as never, res as never);
 
@@ -378,18 +325,16 @@ describe('ACP request guards', () => {
     }
   });
 
-  it('accepts a well-formed request and reaches the checkout handler', async () => {
-    const { context } = setup();
+  it('accepts a well-formed request and executes it exactly once', async () => {
+    const { context, execute } = setup(delivered({ id: 'cs_1' }));
     const result = await checkout(context, { headers: goodHeaders(), body: VALID_CREATE });
 
-    // Guards passed; execution is not wired yet.
-    expect(result.status).toBe(501);
-    expect(result.body['code']).toBe('not_implemented');
-    expect(validateAcpDocument('error', result.body)).toBeUndefined();
+    expect(result.status).toBe(200);
+    expect(execute).toHaveBeenCalledTimes(1);
   });
 
   it('accepts a cancel with no body at all', async () => {
-    const { context } = setup();
+    const { context, execute } = setup(delivered({ id: 'cs_1', status: 'canceled' }));
     const headers = goodHeaders();
     delete headers['content-type'];
     const result = await checkout(context, {
@@ -397,11 +342,12 @@ describe('ACP request guards', () => {
       headers,
     });
 
-    expect(result.status).toBe(501);
+    expect(result.status).toBe(200);
+    expect(execute).toHaveBeenCalledTimes(1);
   });
 
   it('accepts a GET with no body and no content type', async () => {
-    const { context } = setup();
+    const { context, execute } = setup(delivered({ id: 'cs_123' }));
     const headers = goodHeaders();
     delete headers['content-type'];
     const result = await checkout(context, {
@@ -410,11 +356,12 @@ describe('ACP request guards', () => {
       headers,
     });
 
-    expect(result.status).toBe(501);
+    expect(result.status).toBe(200);
+    expect(execute).toHaveBeenCalledTimes(1);
   });
 
   it('echoes a usable Request-Id and drops one carrying control characters', async () => {
-    const { context } = setup();
+    const { context } = setup(delivered({ id: 'cs_1' }));
     const echoed = await checkout(context, {
       headers: goodHeaders({ 'request-id': 'req_abc-123' }),
       body: VALID_CREATE,

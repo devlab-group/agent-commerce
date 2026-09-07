@@ -149,6 +149,29 @@ describe('validateAcpDocument - rejections', () => {
     expect(failure?.path).toBeUndefined();
   });
 
+  // The snapshot marks this one enum extensible and asks validators to be
+  // lenient with it - an agent must not be refused a cancel over an analytics
+  // reason code this snapshot has not heard of.
+  it('accepts an unrecognized value in an enum the snapshot marks extensible', () => {
+    expect(
+      validateAcpDocument('cancelRequest', {
+        intent_trace: { reason_code: 'found_it_cheaper_elsewhere' },
+      }),
+    ).toBeUndefined();
+  });
+
+  // Enums ACP calls closed per API version stay closed.
+  it('still rejects a value outside a closed enum', () => {
+    const failure = validateAcpDocument('discoveryResponse', {
+      protocol: { name: 'acp', version: '2026-04-17', supported_versions: ['2026-04-17'] },
+      api_base_url: 'https://merchant.example.com/acp',
+      transports: ['rest'],
+      capabilities: { services: ['checkout', 'teleportation'] },
+    });
+    expect(failure?.code).toBe('enum');
+    expect(failure?.path).toBe('$.capabilities.services[1]');
+  });
+
   // Ajv messages describe our compiled schema; only the failing keyword and a
   // pointer into the caller's own document may cross the adapter boundary.
   it('reports nothing beyond a keyword and a path', () => {
