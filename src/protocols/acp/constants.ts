@@ -52,3 +52,22 @@ export const ACP_OPERATION_INPUT_KEYS: Readonly<
   completeCheckoutSession: ['path', 'body'],
   cancelCheckoutSession: ['path'],
 };
+
+/** Media type for every ACP request and response body. */
+export const ACP_JSON_MEDIA_TYPE = 'application/json';
+
+/**
+ * Protocol headers, lowercased as Node delivers them.
+ *
+ * `API-Version` is mandatory on checkout requests and is never defaulted:
+ * answering an unversioned request as if it named the pinned snapshot would be
+ * guessing on the caller's behalf about a contract that changes.
+ */
+export const ACP_API_VERSION_HEADER = 'api-version';
+export const ACP_REQUEST_ID_HEADER = 'request-id';
+
+/**
+ * Longest `Request-Id` echoed back. The value is the caller's, so it is
+ * bounded and filtered before it is ever written into a response header.
+ */
+export const ACP_MAX_REQUEST_ID_LENGTH = 128;
