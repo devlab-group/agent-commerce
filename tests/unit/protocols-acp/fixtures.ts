@@ -1,4 +1,5 @@
 /** Shared ACP adapter fixtures: the five mapped resources and a spied context. */
+import { readFileSync } from 'node:fs';
 import { vi } from 'vitest';
 import { createResourceRegistry } from '../../../src/core/execution/index.js';
 import type {
@@ -16,6 +17,7 @@ import type {
 } from '../../../src/core/index.js';
 import type { AcpAdapterOptions } from '../../../src/protocols/acp/adapter.js';
 import type { AcpCheckoutOperation } from '../../../src/protocols/acp/constants.js';
+import { ACP_SUCCESS_STATUS } from '../../../src/protocols/acp/response-mapping.js';
 
 export const TOKEN = 'acp-secret-token';
 export const MOUNT = '/acp';
@@ -67,17 +69,39 @@ const receipt: CommerceReceipt = {
   durationMs: 3,
 };
 
+/**
+ * The official examples, vendored from the same upstream commit as the schema.
+ * Merchant answers in these tests are ACP's own documents, not ones we wrote to
+ * match our reading of it.
+ */
+export const ACP_EXAMPLES = JSON.parse(
+  readFileSync('tests/fixtures/acp/2026-04-17/examples.agentic_checkout.json', 'utf8'),
+) as Record<string, Record<string, unknown>>;
+
+export function sessionDocument(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return { ...ACP_EXAMPLES['get_checkout_session_response'], ...overrides };
+}
+
 /** A delivered outcome carrying `body` as the merchant backend's document. */
-export function delivered(body: unknown): ExecutionOutcome {
+export function delivered(body: unknown, backendStatus = 200): ExecutionOutcome {
   return {
     kind: 'delivered',
     requestId: 'acp-1',
     resourceId: 'acp_checkout_create',
-    backendStatus: 200,
+    backendStatus,
     body,
     receipt,
     durationMs: 3,
   };
+}
+
+/** What a conformant merchant backend returns for `operation`. */
+export function deliveredFor(operation: AcpCheckoutOperation): ExecutionOutcome {
+  const body =
+    operation === 'completeCheckoutSession'
+      ? ACP_EXAMPLES['complete_checkout_session_response']
+      : sessionDocument();
+  return delivered(body, ACP_SUCCESS_STATUS[operation]);
 }
 
 export const paymentRequired: ExecutionOutcome = {

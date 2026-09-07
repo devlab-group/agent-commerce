@@ -21,7 +21,7 @@ import {
   type AcpIdempotencyScope,
   createAcpIdempotencyStore,
 } from '../../../src/protocols/acp/idempotency/store.js';
-import { adapterOptions, delivered, setup } from './fixtures.js';
+import { adapterOptions, deliveredFor, setup } from './fixtures.js';
 
 const IDENTITY = identityHash('acp-secret-token');
 const SCOPE: AcpIdempotencyScope = {
@@ -203,7 +203,7 @@ describe('ACP idempotency over the adapter', () => {
 
   it('echoes the Idempotency-Key it accepted', async () => {
     const adapter = createAcpAdapter(adapterOptions());
-    await adapter.start(setup(delivered({ id: 'cs_1' })).context);
+    await adapter.start(setup(deliveredFor('createCheckoutSession')).context);
 
     const result = await post(adapter, 'idem-echo', CREATE);
     expect(result.headers['idempotency-key']).toBe('idem-echo');
@@ -212,16 +212,16 @@ describe('ACP idempotency over the adapter', () => {
   });
 
   it('replays the first answer for a repeat of the same request', async () => {
-    const { context, execute } = setup(delivered({ id: 'cs_1', status: 'ready_for_payment' }));
+    const { context, execute } = setup(deliveredFor('createCheckoutSession'));
     const adapter = createAcpAdapter(adapterOptions());
     await adapter.start(context);
 
     const first = await post(adapter, 'idem-replay', CREATE);
     const second = await post(adapter, 'idem-replay', CREATE);
 
-    expect(first.status).toBe(200);
+    expect(first.status).toBe(201);
     expect(first.headers['idempotent-replayed']).toBeUndefined();
-    expect(second.status).toBe(200);
+    expect(second.status).toBe(201);
     expect(second.headers['idempotent-replayed']).toBe('true');
     // The whole point: the merchant backend was called once, not twice.
     expect(execute).toHaveBeenCalledTimes(1);
@@ -229,7 +229,7 @@ describe('ACP idempotency over the adapter', () => {
   });
 
   it('refuses a key reused for a different body, without executing again', async () => {
-    const { context, execute } = setup(delivered({ id: 'cs_1' }));
+    const { context, execute } = setup(deliveredFor('createCheckoutSession'));
     const adapter = createAcpAdapter(adapterOptions());
     await adapter.start(context);
 

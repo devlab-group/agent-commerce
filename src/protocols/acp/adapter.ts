@@ -21,7 +21,7 @@ import {
   type AdapterHttpRoute,
   CommerceError,
   type CommerceResource,
-  type ExecutionOutcome,
+  type DeliveredOutcome,
   type HttpProtocolAdapter,
   type ProtocolAdapterContext,
   toCommerceError,
@@ -39,7 +39,7 @@ import {
 } from './constants.js';
 import { buildDescriptor } from './descriptor.js';
 import { type AcpDiscoveryMetadata, buildAcpDiscoveryDocument } from './discovery.js';
-import { type AcpFailure, acpFailure, writeAcpFailure, writeAcpJson } from './errors.js';
+import { acpFailure, writeAcpFailure, writeAcpJson } from './errors.js';
 import { identityHash, requestFingerprint } from './idempotency/fingerprint.js';
 import {
   type AcpIdempotencyScope,
@@ -47,6 +47,12 @@ import {
   createAcpIdempotencyStore,
 } from './idempotency/store.js';
 import { type AcpGuardedRequest, guardAcpRequest } from './request-guards.js';
+import {
+  type AcpResponse,
+  asResponse,
+  mapCommerceErrorToAcp,
+  toAcpResponse,
+} from './response-mapping.js';
 import { validateAcpDocument } from './validation.js';
 
 /** Discovery is stable for the life of the process, so it is safe to cache at the edge. */
@@ -61,14 +67,6 @@ export interface AcpAdapterOptions {
   /** Where checkout idempotency records live, and how long they are kept. */
   readonly idempotency: { readonly path: string; readonly retentionHours: number };
   readonly discovery?: AcpDiscoveryMetadata;
-}
-
-/** One ACP answer, as a value: it may have to be stored before it is written. */
-interface AcpResponse {
-  readonly status: number;
-  readonly body: unknown;
-  /** True when this answer came from the idempotency store rather than from work done now. */
-  readonly replayed?: boolean;
 }
 
 export class AcpProtocolAdapter implements HttpProtocolAdapter {
@@ -263,7 +261,7 @@ export class AcpProtocolAdapter implements HttpProtocolAdapter {
 
     switch (claim.kind) {
       case 'in-flight':
-        return this.asResponse(
+        return asResponse(
           acpFailure(
             409,
             'invalid_request',
@@ -272,7 +270,7 @@ export class AcpProtocolAdapter implements HttpProtocolAdapter {
           ),
         );
       case 'conflict':
-        return this.asResponse(
+        return asResponse(
           acpFailure(
             422,
             'invalid_request',
@@ -315,7 +313,7 @@ export class AcpProtocolAdapter implements HttpProtocolAdapter {
     const context = this.context;
     const resource = this.resources.get(request.route.operation);
     if (context === undefined || resource === undefined) {
-      return this.asResponse(
+      return asResponse(
         acpFailure(
           503,
           'service_unavailable',
@@ -333,7 +331,7 @@ export class AcpProtocolAdapter implements HttpProtocolAdapter {
     });
 
     try {
-      const outcome: ExecutionOutcome = await context.pipeline.execute(canonical);
+      const outcome = await context.pipeline.execute(canonical);
       if (outcome.kind === 'payment-required') {
         // ACP has no wire representation for a gateway payment challenge, and
         // config refuses a paid checkout resource - so reaching this is a
@@ -343,7 +341,7 @@ export class AcpProtocolAdapter implements HttpProtocolAdapter {
           { resourceId: resource.id, requestId: canonical.requestId },
           'acp adapter: mapped checkout resource returned payment-required - it must be priced free',
         );
-        return this.asResponse(
+        return asResponse(
           acpFailure(
             500,
             'processing_error',
@@ -352,29 +350,24 @@ export class AcpProtocolAdapter implements HttpProtocolAdapter {
           ),
         );
       }
-      // Route-specific success statuses and outbound ACP validation of the
-      // backend document are the next step; today the delivered body is
-      // returned as-is.
-      return { status: 200, body: outcome.body };
+      const mapped = toAcpResponse(request.route.operation, outcome as DeliveredOutcome);
+      if (mapped.logDetail !== undefined) {
+        // The merchant answered, but not with ACP. Everything needed to fix it
+        // goes to the log; the caller gets the safe refusal in `response`.
+        context.logger.error(
+          { resourceId: resource.id, requestId: canonical.requestId, ...mapped.logDetail },
+          'acp adapter: refusing to forward a non-conformant merchant response',
+        );
+      }
+      return mapped.response;
     } catch (err) {
       const error = toCommerceError(err);
       context.logger.warn(
         { resourceId: resource.id, requestId: canonical.requestId, err: error.toInfo() },
         'acp adapter: checkout execution failed',
       );
-      return this.asResponse(
-        acpFailure(
-          500,
-          'processing_error',
-          'processing_error',
-          'The server could not process this checkout operation.',
-        ),
-      );
+      return asResponse(mapCommerceErrorToAcp(error, request.route.operation));
     }
-  }
-
-  private asResponse(failure: AcpFailure): AcpResponse {
-    return { status: failure.status, body: failure.error };
   }
 
   /**

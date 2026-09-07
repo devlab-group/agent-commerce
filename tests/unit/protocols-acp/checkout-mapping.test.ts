@@ -12,7 +12,7 @@ import { ACP_SPEC_VERSION } from '../../../src/protocols/acp/constants.js';
 import {
   ACP_OPERATIONS,
   adapterOptions,
-  delivered,
+  deliveredFor,
   firstRequest,
   MOUNT,
   paymentRequired,
@@ -74,7 +74,7 @@ const CREATE_BODY = {
 
 describe('ACP checkout mapping', () => {
   it('maps create to the configured resource, with the body as the only input', async () => {
-    const { context, execute } = setup(delivered({ id: 'cs_1' }));
+    const { context, execute } = setup(deliveredFor('createCheckoutSession'));
     await send(context, { url: `${MOUNT}/checkout_sessions`, body: CREATE_BODY });
 
     const canonical = firstRequest(execute);
@@ -85,7 +85,7 @@ describe('ACP checkout mapping', () => {
   });
 
   it('maps update to path plus body', async () => {
-    const { context, execute } = setup(delivered({ id: 'cs_9' }));
+    const { context, execute } = setup(deliveredFor('updateCheckoutSession'));
     await send(context, {
       url: `${MOUNT}/checkout_sessions/cs_9`,
       body: { line_items: [{ id: 'item_1' }] },
@@ -100,7 +100,7 @@ describe('ACP checkout mapping', () => {
   });
 
   it('maps retrieve to the path alone, with no body key at all', async () => {
-    const { context, execute } = setup(delivered({ id: 'cs_9' }));
+    const { context, execute } = setup(deliveredFor('getCheckoutSession'));
     await send(context, { method: 'GET', url: `${MOUNT}/checkout_sessions/cs_9` });
 
     const canonical = firstRequest(execute);
@@ -111,7 +111,7 @@ describe('ACP checkout mapping', () => {
   // The merchant's own purchase payment. It is business input on its way to the
   // merchant backend, and must not become a gateway payment proof.
   it('carries payment_data through completion as ordinary business input', async () => {
-    const { context, execute } = setup(delivered({ id: 'cs_9', order: { id: 'ord_1' } }));
+    const { context, execute } = setup(deliveredFor('completeCheckoutSession'));
     const body = {
       payment_data: {
         handler_id: 'handler_1',
@@ -128,11 +128,11 @@ describe('ACP checkout mapping', () => {
   });
 
   it('maps cancel to the path, and forwards a body only when one was sent', async () => {
-    const bare = setup(delivered({ id: 'cs_9', status: 'canceled' }));
+    const bare = setup(deliveredFor('cancelCheckoutSession'));
     await send(bare.context, { url: `${MOUNT}/checkout_sessions/cs_9/cancel` });
     expect(firstRequest(bare.execute).input).toEqual({ path: { checkout_session_id: 'cs_9' } });
 
-    const withBody = setup(delivered({ id: 'cs_9', status: 'canceled' }));
+    const withBody = setup(deliveredFor('cancelCheckoutSession'));
     await send(withBody.context, {
       url: `${MOUNT}/checkout_sessions/cs_9/cancel`,
       body: { intent_trace: { reason_code: 'buyer_cancelled' } },
@@ -144,7 +144,7 @@ describe('ACP checkout mapping', () => {
   });
 
   it('generates its own request id rather than trusting the caller', async () => {
-    const { context, execute } = setup(delivered({ id: 'cs_1' }));
+    const { context, execute } = setup(deliveredFor('createCheckoutSession'));
     await send(context, { url: `${MOUNT}/checkout_sessions`, body: CREATE_BODY });
 
     expect(firstRequest(execute).requestId).toMatch(/^acp-/);

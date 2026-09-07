@@ -37,6 +37,12 @@ export {
 } from './idempotency/store.js';
 export type { AcpGuardedRequest, AcpGuardResult } from './request-guards.js';
 export { guardAcpRequest } from './request-guards.js';
+export {
+  ACP_SUCCESS_STATUS,
+  type AcpResponse,
+  mapCommerceErrorToAcp,
+  toAcpResponse,
+} from './response-mapping.js';
 export type { AcpRouteMatch, AcpRouteResult } from './router.js';
 export { matchAcpRoute } from './router.js';
 export {

@@ -12,7 +12,7 @@ import { ACP_SPEC_VERSION, ACP_WELL_KNOWN_PATH } from '../../../src/protocols/ac
 import { guardAcpRequest } from '../../../src/protocols/acp/request-guards.js';
 import { matchAcpRoute } from '../../../src/protocols/acp/router.js';
 import { validateAcpDocument } from '../../../src/protocols/acp/validation.js';
-import { adapterOptions, delivered, MOUNT, setup, TOKEN } from './fixtures.js';
+import { adapterOptions, deliveredFor, MOUNT, setup, TOKEN } from './fixtures.js';
 
 interface HttpResult {
   status: number;
@@ -326,15 +326,15 @@ describe('ACP request guards', () => {
   });
 
   it('accepts a well-formed request and executes it exactly once', async () => {
-    const { context, execute } = setup(delivered({ id: 'cs_1' }));
+    const { context, execute } = setup(deliveredFor('createCheckoutSession'));
     const result = await checkout(context, { headers: goodHeaders(), body: VALID_CREATE });
 
-    expect(result.status).toBe(200);
+    expect(result.status).toBe(201);
     expect(execute).toHaveBeenCalledTimes(1);
   });
 
   it('accepts a cancel with no body at all', async () => {
-    const { context, execute } = setup(delivered({ id: 'cs_1', status: 'canceled' }));
+    const { context, execute } = setup(deliveredFor('cancelCheckoutSession'));
     const headers = goodHeaders();
     delete headers['content-type'];
     const result = await checkout(context, {
@@ -347,7 +347,7 @@ describe('ACP request guards', () => {
   });
 
   it('accepts a GET with no body and no content type', async () => {
-    const { context, execute } = setup(delivered({ id: 'cs_123' }));
+    const { context, execute } = setup(deliveredFor('getCheckoutSession'));
     const headers = goodHeaders();
     delete headers['content-type'];
     const result = await checkout(context, {
@@ -361,7 +361,7 @@ describe('ACP request guards', () => {
   });
 
   it('echoes a usable Request-Id and drops one carrying control characters', async () => {
-    const { context } = setup(delivered({ id: 'cs_1' }));
+    const { context } = setup(deliveredFor('createCheckoutSession'));
     const echoed = await checkout(context, {
       headers: goodHeaders({ 'request-id': 'req_abc-123' }),
       body: VALID_CREATE,
