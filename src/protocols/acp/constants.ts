@@ -5,6 +5,18 @@
  * anything imported here would become a config-load dependency too.
  */
 
+/**
+ * The ACP stable snapshot this adapter implements, and the only value accepted
+ * in the `API-Version` request header. Both name the same released snapshot;
+ * they are separate constants because ACP versions the wire contract and the
+ * header independently, and a future snapshot may accept more than one.
+ *
+ * Changing either means vendoring a new schema directory beside
+ * `spec/2026-04-17/` - never editing the vendored one in place.
+ */
+export const ACP_SPEC_VERSION = '2026-04-17';
+export const ACP_API_VERSION = '2026-04-17';
+
 /** Discovery path fixed by the ACP specification - never a configurable mount. */
 export const ACP_WELL_KNOWN_PATH = '/.well-known/acp.json';
 

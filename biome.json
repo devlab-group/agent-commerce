@@ -17,10 +17,8 @@
       "!contracts/out",
       "!contracts/lib",
       "!package-lock.json",
-      "!.claude",
-      "!**/.claude",
-      "!graphify-out",
-      "!**/graphify-out"
+      "!src/protocols/acp/spec",
+      "!tests/fixtures/acp"
     ]
   },
   "formatter": {
