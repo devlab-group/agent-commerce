@@ -4,7 +4,8 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { printDoctorReport, runDoctor } from '../../../src/cli/commands/doctor.js';
 import { createCapturingIo } from '../../../src/cli/lib/io.js';
-import { CommerceError } from '../../../src/core/index.js';
+import type { GatewayConfig } from '../../../src/config/index.js';
+import { CommerceError, type CommerceResource } from '../../../src/core/index.js';
 import {
   createFakeFetch,
   jsonResponse,
@@ -711,7 +712,7 @@ describe('runDoctor — additional derivation and error-recovery branches', () =
       },
     );
     const protocols = report.checks.find((c) => c.name === 'Protocols');
-    expect(protocols?.detail).toBe('http=on mcp=off a2a=off');
+    expect(protocols?.detail).toBe('http=on mcp=off a2a=off acp=off');
   });
 
   it('reports Storage as WARN when the receipt store health check itself warns', async () => {
@@ -1035,6 +1036,170 @@ describe('runDoctor — A2A', () => {
     expect(unsupported?.status).toBe('INFO');
     for (const operation of ['SendStreamingMessage', 'GetTask', 'CancelTask', 'gRPC binding']) {
       expect(unsupported?.detail).toContain(operation);
+    }
+  });
+});
+
+describe('runDoctor - ACP', () => {
+  const OPERATIONS = {
+    createCheckoutSession: 'acp_create',
+    updateCheckoutSession: 'acp_update',
+    getCheckoutSession: 'acp_get',
+    completeCheckoutSession: 'acp_complete',
+    cancelCheckoutSession: 'acp_cancel',
+  };
+
+  function checkoutResource(id: string): CommerceResource {
+    return {
+      id,
+      name: id,
+      handler: { type: 'http', method: 'POST', url: `http://backend.local/${id}` },
+      pricing: { type: 'free' },
+      exposedVia: ['acp'],
+      paymentMethods: [],
+    };
+  }
+
+  async function acpReport(
+    acp: unknown,
+    resources?: readonly CommerceResource[],
+  ): Promise<Awaited<ReturnType<typeof runDoctor>>> {
+    const base = makeGatewayConfig();
+    return runDoctor(
+      { gatewayUrl: GATEWAY },
+      {
+        fetchImpl: healthyFetch(),
+        loadConfig: async () => ({
+          ...base,
+          protocols: { ...base.protocols, acp: acp as GatewayConfig['protocols']['acp'] },
+          resources: resources ?? Object.values(OPERATIONS).map(checkoutResource),
+        }),
+        createStore: () => makeFakeReceiptStore(),
+      },
+    );
+  }
+
+  function enabledAcp(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      enabled: true,
+      mountPath: '/acp',
+      auth: { type: 'bearer', token: 'super-secret-acp-token' },
+      idempotency: { path: ':memory:', retentionHours: 24 },
+      checkout: { operations: OPERATIONS },
+      ...overrides,
+    };
+  }
+
+  it('reports ACP as disabled without any further ACP checks', async () => {
+    const report = await acpReport({ enabled: false, mountPath: '/acp' }, []);
+
+    expect(report.checks.find((c) => c.name === 'ACP')?.detail).toBe('disabled');
+    for (const name of ['ACP auth', 'ACP idempotency', 'ACP checkout mapping', 'ACP unsupported']) {
+      expect(report.checks.find((c) => c.name === name)).toBeUndefined();
+    }
+  });
+
+  it('reports the pinned snapshot, the API version, the mount and the discovery path', async () => {
+    const report = await acpReport(enabledAcp({ mountPath: '/agents/acp' }));
+
+    const acp = report.checks.find((c) => c.name === 'ACP');
+    expect(acp?.status).toBe('PASS');
+    expect(acp?.detail).toContain('experimental');
+    expect(acp?.detail).toContain('spec 2026-04-17');
+    expect(acp?.detail).toContain('API-Version 2026-04-17');
+    expect(acp?.detail).toContain('service checkout');
+    expect(acp?.detail).toContain('mount /agents/acp');
+    expect(acp?.detail).toContain('/.well-known/acp.json');
+    expect(report.checks.find((c) => c.name === 'Protocols')?.detail).toContain(
+      'acp=on (/agents/acp)',
+    );
+  });
+
+  // The one thing this report must never print.
+  it('states that a bearer token is configured without printing it', async () => {
+    const report = await acpReport(enabledAcp());
+
+    const auth = report.checks.find((c) => c.name === 'ACP auth');
+    expect(auth?.status).toBe('PASS');
+    expect(auth?.detail).toContain('bearer');
+    expect(JSON.stringify(report)).not.toContain('super-secret-acp-token');
+  });
+
+  it('warns that an in-memory idempotency store loses replay protection', async () => {
+    const report = await acpReport(enabledAcp());
+
+    const idempotency = report.checks.find((c) => c.name === 'ACP idempotency');
+    expect(idempotency?.status).toBe('WARN');
+    expect(idempotency?.detail).toContain('retention 24h');
+  });
+
+  it('fails when the retention window is below the ACP minimum', async () => {
+    const report = await acpReport(
+      enabledAcp({ idempotency: { path: ':memory:', retentionHours: 12 } }),
+    );
+
+    const idempotency = report.checks.find((c) => c.name === 'ACP idempotency');
+    expect(idempotency?.status).toBe('FAIL');
+    expect(idempotency?.detail).toContain('24h');
+  });
+
+  it('passes the mapping check when all five resources are free and acp-exposed', async () => {
+    const report = await acpReport(enabledAcp());
+
+    const mapping = report.checks.find((c) => c.name === 'ACP checkout mapping');
+    expect(mapping?.status).toBe('PASS');
+    expect(mapping?.detail).toContain('acp_complete');
+  });
+
+  it.each([
+    [
+      'a resource that does not exist',
+      Object.values(OPERATIONS).slice(1).map(checkoutResource),
+      'does not exist',
+    ],
+    [
+      'a resource that is not exposed via acp',
+      Object.values(OPERATIONS).map((id) =>
+        id === 'acp_get'
+          ? { ...checkoutResource(id), exposedVia: ['http' as const] }
+          : checkoutResource(id),
+      ),
+      'not exposed via acp',
+    ],
+    [
+      'a resource that is not free to invoke',
+      Object.values(OPERATIONS).map((id) =>
+        id === 'acp_complete'
+          ? {
+              ...checkoutResource(id),
+              pricing: { type: 'fixed' as const, amount: '0.01', currency: 'USDC' },
+              paymentMethods: ['x402' as const],
+            }
+          : checkoutResource(id),
+      ),
+      'not free to invoke',
+    ],
+  ])('fails the mapping check for %s', async (_label, resources, expected) => {
+    const report = await acpReport(enabledAcp(), resources);
+
+    const mapping = report.checks.find((c) => c.name === 'ACP checkout mapping');
+    expect(mapping?.status).toBe('FAIL');
+    expect(mapping?.detail).toContain(expected);
+  });
+
+  it('lists every unsupported ACP capability in full', async () => {
+    const report = await acpReport(enabledAcp());
+
+    const unsupported = report.checks.find((c) => c.name === 'ACP unsupported');
+    expect(unsupported?.status).toBe('INFO');
+    for (const capability of [
+      'carts service',
+      'feed service',
+      'delegate_payment',
+      'webhooks',
+      'ACP MCP transport binding',
+    ]) {
+      expect(unsupported?.detail).toContain(capability);
     }
   });
 });

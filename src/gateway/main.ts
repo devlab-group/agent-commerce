@@ -22,6 +22,7 @@ import type { PaymentProvider, ProtocolAdapter, ReceiptStore } from '../core/ind
 import { CommerceError, isCommerceError } from '../core/index.js';
 import { createX402PaymentProvider } from '../payments/x402/index.js';
 import { createA2aAdapter } from '../protocols/a2a/index.js';
+import { createAcpAdapter } from '../protocols/acp/index.js';
 import { createMcpAdapter } from '../protocols/mcp/index.js';
 import { createSqliteReceiptStore } from '../storage/receipts/index.js';
 
@@ -101,6 +102,19 @@ async function main(): Promise<void> {
         // The Agent Card names the merchant, not the software: a client
         // picking between agents is choosing whose resources to buy.
         agentName: config.merchant.name,
+      }),
+    );
+  }
+
+  const acp = config.protocols.acp;
+  if (acp.enabled) {
+    protocolAdapters.push(
+      createAcpAdapter({
+        mountPath: acp.mountPath,
+        token: acp.auth.token,
+        operations: acp.checkout.operations,
+        idempotency: acp.idempotency,
+        ...(acp.discovery !== undefined ? { discovery: acp.discovery } : {}),
       }),
     );
   }
