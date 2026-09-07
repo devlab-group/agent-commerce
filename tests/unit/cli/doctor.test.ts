@@ -704,6 +704,7 @@ describe('runDoctor — additional derivation and error-recovery branches', () =
               http: { enabled: true },
               mcp: { enabled: false, mountPath: '/mcp' },
               a2a: { enabled: false, mountPath: '/a2a' },
+              acp: { enabled: false, mountPath: '/acp' },
             },
           }),
         createStore: () => makeFakeReceiptStore(),

@@ -19,18 +19,18 @@ export type JsonSchema = Record<string, unknown>;
  *
  * The runtime list is the definition and the type is derived from it, so a
  * caller that has to *check* a name (config validation, the OpenAPI
- * importer's `--expose`) reads the same three strings the type is built from
+ * importer's `--expose`) reads the same strings the type is built from
  * rather than keeping a second copy that can drift.
  */
-export type ProtocolName = 'http' | 'mcp' | 'a2a';
+export type ProtocolName = 'http' | 'mcp' | 'a2a' | 'acp';
 
 /**
- * The same three names as a value, for code that has to *check* one at
+ * The same names as a value, for code that has to *check* one at
  * runtime - config validation, the OpenAPI importer's `--expose`. Typed
  * against `ProtocolName` so an unsupported name cannot enter the list, which
  * is what keeps this from becoming a second definition that drifts.
  */
-export const PROTOCOL_NAMES: readonly ProtocolName[] = ['http', 'mcp', 'a2a'];
+export const PROTOCOL_NAMES: readonly ProtocolName[] = ['http', 'mcp', 'a2a', 'acp'];
 
 /** Payment methods a resource can accept in this release. */
 export type PaymentMethodName = 'x402';

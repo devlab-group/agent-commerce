@@ -126,6 +126,7 @@ describe('MCP over the real gateway (Fastify body-parsing regression)', () => {
           http: { enabled: true },
           mcp: { enabled: true, mountPath: '/mcp' },
           a2a: { enabled: false, mountPath: '/a2a' },
+          acp: { enabled: false, mountPath: '/acp' },
         },
         resources: [
           {
@@ -189,6 +190,7 @@ describe('MCP over the real gateway (Fastify body-parsing regression)', () => {
           http: { enabled: true },
           mcp: { enabled: true, mountPath: '/mcp' },
           a2a: { enabled: false, mountPath: '/a2a' },
+          acp: { enabled: false, mountPath: '/acp' },
         },
         resources: [],
         payments: {},
