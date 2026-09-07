@@ -16,6 +16,13 @@ const COLLECTION = 'checkout_sessions';
 
 export interface AcpRouteMatch {
   readonly operation: AcpCheckoutOperation;
+  /**
+   * The concrete endpoint path, rebuilt from the matched segments rather than
+   * taken from the raw URL: it scopes idempotency keys, so it must be one
+   * canonical string per endpoint and never carry a query string or an
+   * alternative encoding of the same path.
+   */
+  readonly path: string;
   /** Absent only for `createCheckoutSession`. */
   readonly sessionId?: string;
   /** POST routes carry an ACP request document; the GET route carries none. */
@@ -46,7 +53,14 @@ export function matchAcpRoute(
   // POST /checkout_sessions
   if (segments.length === 1) {
     if (verb !== 'POST') return { kind: 'method-not-allowed', allow: ['POST'] };
-    return { kind: 'match', route: { operation: 'createCheckoutSession', acceptsBody: true } };
+    return {
+      kind: 'match',
+      route: {
+        operation: 'createCheckoutSession',
+        path: endpointPath(mountPath, segments),
+        acceptsBody: true,
+      },
+    };
   }
 
   const sessionId = segments[1];
@@ -57,13 +71,23 @@ export function matchAcpRoute(
     if (verb === 'GET') {
       return {
         kind: 'match',
-        route: { operation: 'getCheckoutSession', sessionId, acceptsBody: false },
+        route: {
+          operation: 'getCheckoutSession',
+          path: endpointPath(mountPath, segments),
+          sessionId,
+          acceptsBody: false,
+        },
       };
     }
     if (verb === 'POST') {
       return {
         kind: 'match',
-        route: { operation: 'updateCheckoutSession', sessionId, acceptsBody: true },
+        route: {
+          operation: 'updateCheckoutSession',
+          path: endpointPath(mountPath, segments),
+          sessionId,
+          acceptsBody: true,
+        },
       };
     }
     return { kind: 'method-not-allowed', allow: ['GET', 'POST'] };
@@ -79,10 +103,17 @@ export function matchAcpRoute(
           : undefined;
     if (operation === undefined) return { kind: 'not-found' };
     if (verb !== 'POST') return { kind: 'method-not-allowed', allow: ['POST'] };
-    return { kind: 'match', route: { operation, sessionId, acceptsBody: true } };
+    return {
+      kind: 'match',
+      route: { operation, path: endpointPath(mountPath, segments), sessionId, acceptsBody: true },
+    };
   }
 
   return { kind: 'not-found' };
+}
+
+function endpointPath(mountPath: string, segments: readonly string[]): string {
+  return `${mountPath.replace(/\/+$/, '')}/${segments.join('/')}`;
 }
 
 /**

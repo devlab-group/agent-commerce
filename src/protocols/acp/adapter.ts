@@ -25,10 +25,22 @@ import {
   toCommerceError,
 } from '../../core/index.js';
 import { PACKAGE_VERSION } from '../../version.js';
-import { ACP_REQUEST_ID_HEADER, ACP_WELL_KNOWN_PATH } from './constants.js';
+import {
+  ACP_IDEMPOTENCY_KEY_HEADER,
+  ACP_IDEMPOTENT_REPLAYED_HEADER,
+  ACP_IN_FLIGHT_RETRY_AFTER_SECONDS,
+  ACP_REQUEST_ID_HEADER,
+  ACP_WELL_KNOWN_PATH,
+} from './constants.js';
 import { buildDescriptor } from './descriptor.js';
 import { type AcpDiscoveryMetadata, buildAcpDiscoveryDocument } from './discovery.js';
-import { acpFailure, writeAcpFailure, writeAcpJson } from './errors.js';
+import { type AcpFailure, acpFailure, writeAcpFailure, writeAcpJson } from './errors.js';
+import { identityHash, requestFingerprint } from './idempotency/fingerprint.js';
+import {
+  type AcpIdempotencyScope,
+  type AcpIdempotencyStore,
+  createAcpIdempotencyStore,
+} from './idempotency/store.js';
 import { type AcpGuardedRequest, guardAcpRequest } from './request-guards.js';
 import { validateAcpDocument } from './validation.js';
 
@@ -39,7 +51,17 @@ export interface AcpAdapterOptions {
   readonly mountPath: string;
   /** The configured bearer token. Never logged, never echoed, never published. */
   readonly token: string;
+  /** Where checkout idempotency records live, and how long they are kept. */
+  readonly idempotency: { readonly path: string; readonly retentionHours: number };
   readonly discovery?: AcpDiscoveryMetadata;
+}
+
+/** One ACP answer, as a value: it may have to be stored before it is written. */
+interface AcpResponse {
+  readonly status: number;
+  readonly body: unknown;
+  /** True when this answer came from the idempotency store rather than from work done now. */
+  readonly replayed?: boolean;
 }
 
 export class AcpProtocolAdapter implements HttpProtocolAdapter {
@@ -49,7 +71,11 @@ export class AcpProtocolAdapter implements HttpProtocolAdapter {
   readonly additionalHttpRoutes: readonly AdapterHttpRoute[];
 
   private readonly token: string;
+  private readonly idempotencyOptions: AcpAdapterOptions['idempotency'];
+  /** Derived once: the token is fixed, and only its digest may be persisted. */
+  private readonly identityHash: string;
   private readonly discoveryMetadata: AcpDiscoveryMetadata | undefined;
+  private idempotency: AcpIdempotencyStore | undefined;
 
   private context: ProtocolAdapterContext | undefined;
   private started = false;
@@ -61,6 +87,8 @@ export class AcpProtocolAdapter implements HttpProtocolAdapter {
   constructor(options: AcpAdapterOptions) {
     this.mountPath = options.mountPath;
     this.token = options.token;
+    this.idempotencyOptions = options.idempotency;
+    this.identityHash = identityHash(options.token);
     this.discoveryMetadata = options.discovery;
     this.descriptor = buildDescriptor(PACKAGE_VERSION);
     this.additionalHttpRoutes = [
@@ -95,10 +123,20 @@ export class AcpProtocolAdapter implements HttpProtocolAdapter {
       );
     }
 
+    this.idempotency = createAcpIdempotencyStore({
+      path: this.idempotencyOptions.path,
+      retentionHours: this.idempotencyOptions.retentionHours,
+      logger: context.logger,
+    });
+
     this.discovery = document;
     this.started = true;
     context.logger.info(
-      { mountPath: this.mountPath, discoveryPath: ACP_WELL_KNOWN_PATH },
+      {
+        mountPath: this.mountPath,
+        discoveryPath: ACP_WELL_KNOWN_PATH,
+        idempotencyRetentionHours: this.idempotencyOptions.retentionHours,
+      },
       'acp adapter started',
     );
   }
@@ -163,35 +201,115 @@ export class AcpProtocolAdapter implements HttpProtocolAdapter {
         return;
       }
 
-      await this.handleCheckout(guarded.value, res);
+      const request = guarded.value;
+      const response = await this.dispatch(request);
+      writeAcpJson(res, response.status, response.body, this.responseHeaders(request, response));
     } catch (err) {
       this.fail(res, err, 'acp adapter: request handling failed');
     }
   }
 
   /**
+   * One request, at most one execution.
+   *
+   * A body-bearing route claims its idempotency key *before* the work starts,
+   * so a retry that arrives while the first one is still running finds the
+   * claim instead of starting a second checkout. A route with no key (the GET)
+   * is read-only and needs none.
+   */
+  private async dispatch(request: AcpGuardedRequest): Promise<AcpResponse> {
+    const store = this.idempotency;
+    const key = request.idempotencyKey;
+    if (store === undefined || key === undefined) return this.runCheckout(request);
+
+    const scope: AcpIdempotencyScope = {
+      identityHash: this.identityHash,
+      endpoint: request.route.path,
+      key,
+    };
+    const claim = store.claim(scope, requestFingerprint(request.body));
+
+    switch (claim.kind) {
+      case 'in-flight':
+        return this.asResponse(
+          acpFailure(
+            409,
+            'invalid_request',
+            'idempotency_in_flight',
+            'A request with this Idempotency-Key is still being processed.',
+          ),
+        );
+      case 'conflict':
+        return this.asResponse(
+          acpFailure(
+            422,
+            'invalid_request',
+            'idempotency_conflict',
+            'This Idempotency-Key was already used for a different request body.',
+          ),
+        );
+      case 'replay':
+        return { status: claim.status, body: claim.body, replayed: true };
+      default:
+        break;
+    }
+
+    let response: AcpResponse;
+    try {
+      response = await this.runCheckout(request);
+    } catch (err) {
+      // The attempt produced no answer worth keeping, so the key is freed for a
+      // clean retry rather than left claimed by a request that never completed.
+      store.release(scope);
+      throw err;
+    }
+
+    // 5xx is never cached: a transient failure must not poison the key for the
+    // whole retention window. 2xx and 4xx are the answer to this request and
+    // every retry of it.
+    if (response.status >= 500) store.release(scope);
+    else store.complete(scope, response);
+    return response;
+  }
+
+  /**
    * Everything above this line has held. Execution is not wired yet, and the
    * answer says so instead of inventing a checkout session.
    */
-  private async handleCheckout(request: AcpGuardedRequest, res: ServerResponse): Promise<void> {
-    writeAcpFailure(
-      res,
+  private async runCheckout(request: AcpGuardedRequest): Promise<AcpResponse> {
+    return this.asResponse(
       acpFailure(
         501,
         'processing_error',
         'not_implemented',
         `ACP operation "${request.route.operation}" is not available in this build.`,
       ),
-      this.responseHeaders(request),
     );
+  }
+
+  private asResponse(failure: AcpFailure): AcpResponse {
+    return { status: failure.status, body: failure.error };
   }
 
   /**
    * Protocol-owned headers only. A merchant backend's own headers are never
    * proxied onto an ACP response.
    */
-  private responseHeaders(request: AcpGuardedRequest): Readonly<Record<string, string>> {
-    return request.requestId !== undefined ? { [ACP_REQUEST_ID_HEADER]: request.requestId } : {};
+  private responseHeaders(
+    request: AcpGuardedRequest,
+    response?: AcpResponse,
+  ): Readonly<Record<string, string>> {
+    const replayed = response?.replayed === true;
+    return {
+      ...(request.requestId !== undefined ? { [ACP_REQUEST_ID_HEADER]: request.requestId } : {}),
+      ...(request.idempotencyKey !== undefined
+        ? { [ACP_IDEMPOTENCY_KEY_HEADER]: request.idempotencyKey }
+        : {}),
+      ...(replayed ? { [ACP_IDEMPOTENT_REPLAYED_HEADER]: 'true' } : {}),
+      ...(response?.status === 409
+        ? { 'retry-after': String(ACP_IN_FLIGHT_RETRY_AFTER_SECONDS) }
+        : {}),
+    };
   }
 
   private fail(res: ServerResponse, err: unknown, message: string): void {
@@ -219,6 +337,8 @@ export class AcpProtocolAdapter implements HttpProtocolAdapter {
   async stop(): Promise<void> {
     this.started = false;
     this.discovery = undefined;
+    this.idempotency?.close();
+    this.idempotency = undefined;
     this.context = undefined;
   }
 }

@@ -12,10 +12,12 @@ import { isAuthorizedBearer } from './auth.js';
 import {
   ACP_API_VERSION,
   ACP_API_VERSION_HEADER,
+  ACP_IDEMPOTENCY_KEY_HEADER,
   ACP_MAX_REQUEST_ID_LENGTH,
   ACP_REQUEST_ID_HEADER,
 } from './constants.js';
 import { type AcpFailure, acpFailure } from './errors.js';
+import { ACP_MAX_IDEMPOTENCY_KEY_LENGTH } from './idempotency/store.js';
 import { type AcpRouteMatch, matchAcpRoute } from './router.js';
 import { type AcpDefinition, validateAcpDocument } from './validation.js';
 
@@ -41,6 +43,8 @@ export interface AcpGuardedRequest {
   readonly body: Record<string, unknown>;
   /** The caller's `Request-Id`, bounded and filtered, when it sent a usable one. */
   readonly requestId?: string;
+  /** Present on every body-bearing route: ACP makes it mandatory there. */
+  readonly idempotencyKey?: string;
 }
 
 export type AcpGuardResult =
@@ -112,6 +116,38 @@ export async function guardAcpRequest(
     );
   }
 
+  // Header-level and cheap, so it runs before a byte of body is read: a POST
+  // without a usable key can never be executed, and reading its body first
+  // would be work an authenticated client could ask for at will.
+  let idempotencyKey: string | undefined;
+  if (route.acceptsBody) {
+    const presented = header(req, ACP_IDEMPOTENCY_KEY_HEADER)?.trim();
+    if (presented === undefined || presented.length === 0) {
+      return failed(
+        acpFailure(
+          400,
+          'invalid_request',
+          'idempotency_key_required',
+          `The ${ACP_IDEMPOTENCY_KEY_HEADER} header is required on this ACP operation.`,
+        ),
+      );
+    }
+    // Bounded and visible-ASCII for the same reason as Request-Id: the key is
+    // echoed back in a response header, so a CRLF in it is a response-splitting
+    // attempt rather than a key.
+    if (presented.length > ACP_MAX_IDEMPOTENCY_KEY_LENGTH || !isVisibleAscii(presented)) {
+      return failed(
+        acpFailure(
+          400,
+          'invalid_request',
+          'idempotency_key_invalid',
+          `The ${ACP_IDEMPOTENCY_KEY_HEADER} header must be 1-${ACP_MAX_IDEMPOTENCY_KEY_LENGTH} printable ASCII characters.`,
+        ),
+      );
+    }
+    idempotencyKey = presented;
+  }
+
   const read = await readBody(req, options.maxBodyBytes ?? ACP_MAX_REQUEST_BODY_BYTES);
   if (read.kind === 'too-large') {
     return failed(
@@ -141,7 +177,7 @@ export async function guardAcpRequest(
   const definition = REQUEST_DEFINITIONS[route.operation];
   if (definition === undefined) {
     // GET carries no document; a body on it is ignored rather than validated.
-    return ok(route, {}, req);
+    return ok(route, {}, req, idempotencyKey);
   }
 
   let body: unknown;
@@ -169,7 +205,7 @@ export async function guardAcpRequest(
     );
   }
 
-  return ok(route, body as Record<string, unknown>, req);
+  return ok(route, body as Record<string, unknown>, req, idempotencyKey);
 }
 
 function checkContentType(
@@ -203,11 +239,17 @@ function ok(
   route: AcpRouteMatch,
   body: Record<string, unknown>,
   req: IncomingMessage,
+  idempotencyKey: string | undefined,
 ): AcpGuardResult {
   const requestId = normalizeRequestId(header(req, ACP_REQUEST_ID_HEADER));
   return {
     ok: true,
-    value: { route, body, ...(requestId !== undefined ? { requestId } : {}) },
+    value: {
+      route,
+      body,
+      ...(requestId !== undefined ? { requestId } : {}),
+      ...(idempotencyKey !== undefined ? { idempotencyKey } : {}),
+    },
   };
 }
 
@@ -225,8 +267,12 @@ export function normalizeRequestId(value: string | undefined): string | undefine
   if (value === undefined) return undefined;
   const trimmed = value.trim().slice(0, ACP_MAX_REQUEST_ID_LENGTH);
   if (trimmed.length === 0) return undefined;
-  if (/[^\x20-\x7e]/.test(trimmed)) return undefined;
+  if (!isVisibleAscii(trimmed)) return undefined;
   return trimmed;
+}
+
+function isVisibleAscii(value: string): boolean {
+  return !/[^\x20-\x7e]/.test(value);
 }
 
 function header(req: IncomingMessage, name: string): string | undefined {

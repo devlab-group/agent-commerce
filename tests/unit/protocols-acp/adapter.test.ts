@@ -111,6 +111,7 @@ function goodHeaders(extra: Record<string, string> = {}): Record<string, string>
     authorization: `Bearer ${TOKEN}`,
     'api-version': ACP_SPEC_VERSION,
     'content-type': 'application/json',
+    'idempotency-key': 'idem-key-1',
     ...extra,
   };
 }
@@ -125,6 +126,7 @@ async function startedAdapter(context: ProtocolAdapterContext, discovery?: unkno
   const adapter = createAcpAdapter({
     mountPath: MOUNT,
     token: TOKEN,
+    idempotency: { path: ':memory:', retentionHours: 24 },
     ...(discovery !== undefined ? { discovery: discovery as never } : {}),
   });
   await adapter.start(context);
@@ -220,6 +222,7 @@ describe('ACP discovery', () => {
     const adapter = createAcpAdapter({
       mountPath: MOUNT,
       token: TOKEN,
+      idempotency: { path: ':memory:', retentionHours: 24 },
       discovery: { supportedCurrencies: ['US Dollars'] },
     });
     await expect(adapter.start(context)).rejects.toThrow(/discovery document/i);
@@ -235,7 +238,11 @@ describe('ACP discovery', () => {
   });
 
   it('serves nothing before start and reports its own health', async () => {
-    const adapter = createAcpAdapter({ mountPath: MOUNT, token: TOKEN });
+    const adapter = createAcpAdapter({
+      mountPath: MOUNT,
+      token: TOKEN,
+      idempotency: { path: ':memory:', retentionHours: 24 },
+    });
     const { req, res, result } = fakeExchange({ method: 'GET', url: ACP_WELL_KNOWN_PATH });
     await adapter.handleDiscovery(req as never, res as never);
 
@@ -253,6 +260,20 @@ describe('ACP request guards', () => {
     ['no API-Version', { 'api-version': undefined }, 400, 'missing_api_version'],
     ['an older API-Version', { 'api-version': '2026-01-30' }, 400, 'unsupported_api_version'],
     ['API-Version: latest', { 'api-version': 'latest' }, 400, 'unsupported_api_version'],
+    ['no Idempotency-Key', { 'idempotency-key': undefined }, 400, 'idempotency_key_required'],
+    ['a blank Idempotency-Key', { 'idempotency-key': '   ' }, 400, 'idempotency_key_required'],
+    [
+      'an over-long Idempotency-Key',
+      { 'idempotency-key': 'k'.repeat(256) },
+      400,
+      'idempotency_key_invalid',
+    ],
+    [
+      'an Idempotency-Key with a newline',
+      { 'idempotency-key': 'k\r\nx: 1' },
+      400,
+      'idempotency_key_invalid',
+    ],
     [
       'a non-JSON content type',
       { 'content-type': 'application/x-www-form-urlencoded' },

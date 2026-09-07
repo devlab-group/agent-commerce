@@ -65,6 +65,14 @@ export const ACP_JSON_MEDIA_TYPE = 'application/json';
  */
 export const ACP_API_VERSION_HEADER = 'api-version';
 export const ACP_REQUEST_ID_HEADER = 'request-id';
+export const ACP_IDEMPOTENCY_KEY_HEADER = 'idempotency-key';
+export const ACP_IDEMPOTENT_REPLAYED_HEADER = 'idempotent-replayed';
+
+/**
+ * Seconds a client is told to wait before retrying a key whose first request is
+ * still running. Short: the original is a live HTTP call, not a queue.
+ */
+export const ACP_IN_FLIGHT_RETRY_AFTER_SECONDS = 1;
 
 /**
  * Longest `Request-Id` echoed back. The value is the caller's, so it is
