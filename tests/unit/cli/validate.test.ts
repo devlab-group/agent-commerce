@@ -89,6 +89,7 @@ describe('runValidate — with an injected loader (isolated branch coverage)', (
             http: { enabled: false },
             mcp: { enabled: false, mountPath: '/mcp' },
             a2a: { enabled: false, mountPath: '/a2a' },
+            acp: { enabled: false, mountPath: '/acp' },
           },
         }),
     });

@@ -35,6 +35,7 @@ function config(): GatewayConfig {
       http: { enabled: true },
       mcp: { enabled: true, mountPath: '/mcp' },
       a2a: { enabled: true, mountPath: '/a2a' },
+      acp: { enabled: false, mountPath: '/acp' },
     },
     resources: [
       {

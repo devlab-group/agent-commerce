@@ -190,6 +190,7 @@ function config(publicBaseUrl: string): GatewayConfig {
       http: { enabled: true },
       mcp: { enabled: false, mountPath: '/mcp' },
       a2a: { enabled: true, mountPath: '/a2a' },
+      acp: { enabled: false, mountPath: '/acp' },
     },
     resources: [
       {

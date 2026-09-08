@@ -38,6 +38,12 @@ import {
   type Pricing,
 } from '../core/index.js';
 import { resolveX402Deployment, type X402FacilitatorConfig } from '../payments/x402/guardrails.js';
+import {
+  ACP_CHECKOUT_OPERATIONS,
+  ACP_OPERATION_INPUT_KEYS,
+  ACP_WELL_KNOWN_PATH,
+  type AcpCheckoutOperation,
+} from '../protocols/acp/constants.js';
 import { substituteEnv } from './env.js';
 
 const SUPPORTED_CONFIG_VERSION = 1;
@@ -127,6 +133,8 @@ const RESERVED_GATEWAY_PATHS = [
   // Fixed by the A2A specification, so it is the adapter's to serve and never
   // a configurable mount's to claim.
   '/.well-known/agent-card.json',
+  // Likewise fixed by the ACP specification.
+  ACP_WELL_KNOWN_PATH,
   '/api/resources',
   '/api/resources/:id/invoke',
   '/api/receipts',
@@ -164,6 +172,30 @@ const MountPathSchema = z
     },
   );
 
+/** Bearer is the only ACP auth scheme in this release - `none` is not offered. */
+const AcpAuthSchema = z.object({ type: z.literal('bearer'), token: z.string().min(1) }).strict();
+
+const AcpIdempotencySchema = z
+  .object({ path: z.string().min(1), retentionHours: NumberOrString.optional() })
+  .strict();
+
+/**
+ * Operation ids are validated against `ACP_CHECKOUT_OPERATIONS` in the business
+ * pass rather than spelled out again here: one list of the five names, and a
+ * missing or misspelled key gets a message naming the operation.
+ */
+const AcpCheckoutSchema = z.object({ operations: z.record(z.string().min(1)) }).strict();
+
+/** Optional discovery metadata. Omitted when not configured - never guessed. */
+const AcpDiscoverySchema = z
+  .object({
+    documentationUrl: z.string().min(1).optional(),
+    supportedCurrencies: z.array(z.string().min(1)).optional(),
+    supportedLocales: z.array(z.string().min(1)).optional(),
+    interventionTypes: z.array(z.string().min(1)).optional(),
+  })
+  .strict();
+
 const ProtocolsSchema = z
   .object({
     http: z.object({ enabled: BooleanOrString }).strict(),
@@ -182,11 +214,37 @@ const ProtocolsSchema = z
       })
       .strict()
       .optional(),
+    // Likewise optional and off by default. The sub-blocks are optional here
+    // and required by the business pass only when ACP is enabled, so a
+    // disabled placeholder block stays writable and an enabled one gets a
+    // message naming the piece it is missing.
+    acp: z
+      .object({
+        enabled: BooleanOrString,
+        mountPath: MountPathSchema.optional(),
+        auth: AcpAuthSchema.optional(),
+        idempotency: AcpIdempotencySchema.optional(),
+        checkout: AcpCheckoutSchema.optional(),
+        discovery: AcpDiscoverySchema.optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 
 /** Applied when `protocols.a2a` is absent or names no mount. */
 const DEFAULT_A2A_MOUNT_PATH = '/a2a';
+
+/** Applied when `protocols.acp` is absent or names no mount. */
+const DEFAULT_ACP_MOUNT_PATH = '/acp';
+
+/**
+ * Idempotency records must outlive the window in which a client may retry, and
+ * ACP fixes that window at 24 hours. A shorter retention would let a replayed
+ * key past an expired record and run a checkout side effect twice, so it is
+ * both the default and the floor.
+ */
+const ACP_RETENTION_HOURS = 24;
 
 const BackendMethodSchema = z.enum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
 
@@ -332,6 +390,32 @@ type RawResourceEntry = z.infer<typeof ResourceEntrySchema>;
 // Public shape (docs/contracts.md - exact).
 // ---------------------------------------------------------------------------
 
+/** Optional ACP discovery metadata. Absent fields are omitted from the document. */
+export interface AcpDiscoveryConfig {
+  readonly documentationUrl?: string;
+  readonly supportedCurrencies?: readonly string[];
+  readonly supportedLocales?: readonly string[];
+  readonly interventionTypes?: readonly string[];
+}
+
+/**
+ * Discriminated on `enabled` so an enabled ACP config carries everything the
+ * adapter needs, with no optional-field assertions at the mount point: a
+ * half-configured checkout lifecycle is rejected at load instead.
+ */
+export type AcpProtocolConfig =
+  | { readonly enabled: false; readonly mountPath: string }
+  | {
+      readonly enabled: true;
+      readonly mountPath: string;
+      readonly auth: { readonly type: 'bearer'; readonly token: string };
+      readonly idempotency: { readonly path: string; readonly retentionHours: number };
+      readonly checkout: {
+        readonly operations: Readonly<Record<AcpCheckoutOperation, string>>;
+      };
+      readonly discovery?: AcpDiscoveryConfig;
+    };
+
 export interface GatewayConfig {
   readonly version: 1;
   readonly merchant: { readonly id: string; readonly name: string; readonly publicBaseUrl: string };
@@ -346,6 +430,7 @@ export interface GatewayConfig {
     readonly http: { readonly enabled: boolean };
     readonly mcp: { readonly enabled: boolean; readonly mountPath: string };
     readonly a2a: { readonly enabled: boolean; readonly mountPath: string };
+    readonly acp: AcpProtocolConfig;
   };
   /** Canonical resources, already normalised. */
   readonly resources: readonly CommerceResource[];
@@ -512,6 +597,7 @@ function normalise(raw: RawConfig): GatewayConfig {
       enabled: toBoolean(raw.protocols.a2a?.enabled ?? false, 'protocols.a2a.enabled'),
       mountPath: raw.protocols.a2a?.mountPath ?? DEFAULT_A2A_MOUNT_PATH,
     },
+    acp: normaliseAcp(raw.protocols.acp),
   };
   validateMountPaths(protocols);
 
@@ -585,6 +671,7 @@ function normalise(raw: RawConfig): GatewayConfig {
   const resources = Object.entries(raw.resources).map(([id, entry]) =>
     normaliseResource(id, entry, protocols, x402),
   );
+  if (protocols.acp.enabled) validateAcpCheckoutMapping(protocols.acp, resources);
 
   return {
     version: SUPPORTED_CONFIG_VERSION,
@@ -614,6 +701,7 @@ interface NormalisedProtocols {
   readonly http: { readonly enabled: boolean };
   readonly mcp: { readonly enabled: boolean; readonly mountPath: string };
   readonly a2a: { readonly enabled: boolean; readonly mountPath: string };
+  readonly acp: AcpProtocolConfig;
 }
 
 /**
@@ -626,6 +714,7 @@ function validateMountPaths(protocols: NormalisedProtocols): void {
     [
       ['mcp', protocols.mcp],
       ['a2a', protocols.a2a],
+      ['acp', protocols.acp],
     ] as const
   ).filter(([, p]) => p.enabled);
 
@@ -638,6 +727,207 @@ function validateMountPaths(protocols: NormalisedProtocols): void {
           'CONFIG_INVALID',
           `protocols.${nameA}.mountPath ("${a.mountPath}") collides with protocols.${nameB}.mountPath ("${b.mountPath}") - each mount registers a wildcard, so overlapping prefixes cannot both be served`,
           { details: { path: `protocols.${nameA}.mountPath` } },
+        );
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// ACP (experimental)
+// ---------------------------------------------------------------------------
+
+type RawAcp = NonNullable<RawConfig['protocols']['acp']>;
+type EnabledAcpConfig = Extract<AcpProtocolConfig, { enabled: true }>;
+
+function acpInvalid(
+  path: string,
+  message: string,
+  extra: Record<string, unknown> = {},
+): CommerceError {
+  return new CommerceError('CONFIG_INVALID', message, { details: { path, ...extra } });
+}
+
+function normaliseAcp(raw: RawAcp | undefined): AcpProtocolConfig {
+  const mountPath = raw?.mountPath ?? DEFAULT_ACP_MOUNT_PATH;
+  if (raw === undefined || !toBoolean(raw.enabled, 'protocols.acp.enabled')) {
+    return { enabled: false, mountPath };
+  }
+
+  if (raw.auth === undefined) {
+    throw acpInvalid(
+      'protocols.acp.auth',
+      'protocols.acp.auth is required when ACP is enabled - every ACP checkout endpoint is authenticated, and "bearer" is the only scheme supported in this release',
+    );
+  }
+  if (raw.idempotency === undefined) {
+    throw acpInvalid(
+      'protocols.acp.idempotency',
+      'protocols.acp.idempotency is required when ACP is enabled - it names the SQLite file holding checkout idempotency records, and ACP makes the Idempotency-Key mandatory on every checkout POST',
+    );
+  }
+
+  const discovery = raw.discovery;
+
+  return {
+    enabled: true,
+    mountPath,
+    auth: raw.auth,
+    idempotency: {
+      path: raw.idempotency.path,
+      retentionHours: toNumber(
+        raw.idempotency.retentionHours ?? ACP_RETENTION_HOURS,
+        'protocols.acp.idempotency.retentionHours',
+        { min: ACP_RETENTION_HOURS },
+      ),
+    },
+    checkout: { operations: normaliseAcpOperations(raw.checkout) },
+    // Built key by key rather than passed through: absent metadata must stay
+    // absent from the discovery document, not appear there as `undefined`.
+    ...(discovery !== undefined
+      ? {
+          discovery: {
+            ...(discovery.documentationUrl !== undefined
+              ? { documentationUrl: discovery.documentationUrl }
+              : {}),
+            ...(discovery.supportedCurrencies !== undefined
+              ? { supportedCurrencies: discovery.supportedCurrencies }
+              : {}),
+            ...(discovery.supportedLocales !== undefined
+              ? { supportedLocales: discovery.supportedLocales }
+              : {}),
+            ...(discovery.interventionTypes !== undefined
+              ? { interventionTypes: discovery.interventionTypes }
+              : {}),
+          },
+        }
+      : {}),
+  };
+}
+
+/**
+ * All five operations, each on its own resource.
+ *
+ * Partial mappings are refused because ACP discovery advertises `checkout` as
+ * one service: a seller announcing it must be able to serve the whole
+ * lifecycle. One resource serving two operations is refused because the
+ * operations differ in method, canonical input and success status - a resource
+ * that satisfies both is a resource that implements neither faithfully.
+ */
+function normaliseAcpOperations(
+  checkout: RawAcp['checkout'],
+): Readonly<Record<AcpCheckoutOperation, string>> {
+  const configured: Record<string, string> = checkout?.operations ?? {};
+
+  for (const key of Object.keys(configured)) {
+    if (!(ACP_CHECKOUT_OPERATIONS as readonly string[]).includes(key)) {
+      throw acpInvalid(
+        `protocols.acp.checkout.operations.${key}`,
+        `protocols.acp.checkout.operations names unknown ACP checkout operation "${key}". Supported: ${ACP_CHECKOUT_OPERATIONS.join(', ')}.`,
+      );
+    }
+  }
+
+  const operations: Record<string, string> = {};
+  const claimedBy = new Map<string, AcpCheckoutOperation>();
+  for (const operation of ACP_CHECKOUT_OPERATIONS) {
+    const path = `protocols.acp.checkout.operations.${operation}`;
+    const resourceId = configured[operation];
+    if (resourceId === undefined) {
+      throw acpInvalid(
+        path,
+        `${path} is required when ACP is enabled - all five checkout operations must be mapped, since ACP discovery advertises the checkout service as a whole`,
+      );
+    }
+    const claimed = claimedBy.get(resourceId);
+    if (claimed !== undefined) {
+      throw acpInvalid(
+        path,
+        `${path} maps resource "${resourceId}", which is already mapped to "${claimed}" - each ACP checkout operation needs its own resource`,
+        { resourceId },
+      );
+    }
+    claimedBy.set(resourceId, operation);
+    operations[operation] = resourceId;
+  }
+  return operations as Record<AcpCheckoutOperation, string>;
+}
+
+function validateAcpCheckoutMapping(
+  acp: EnabledAcpConfig,
+  resources: readonly CommerceResource[],
+): void {
+  const byId = new Map(resources.map((resource) => [resource.id, resource]));
+
+  for (const operation of ACP_CHECKOUT_OPERATIONS) {
+    const resourceId = acp.checkout.operations[operation];
+    const path = `protocols.acp.checkout.operations.${operation}`;
+    const resource = byId.get(resourceId);
+    if (resource === undefined) {
+      throw acpInvalid(
+        path,
+        `${path} maps resource "${resourceId}", which is not defined under "resources"`,
+        { resourceId },
+      );
+    }
+    if (!resource.exposedVia.includes('acp')) {
+      throw acpInvalid(
+        path,
+        `Resource "${resourceId}" implements ACP operation "${operation}" but does not list "acp" in its expose - the mapping says which resource serves the operation, expose says ACP may invoke it, and both are required`,
+        { resourceId },
+      );
+    }
+    // ACP checkout carries its own purchase payment (`payment_data` on
+    // completion). Charging an Agent Commerce payment to *invoke* the operation
+    // would stack a second, unrelated payment layer on one call, and ACP has no
+    // wire representation for our payment-required outcome to negotiate it.
+    if (resource.pricing.type !== 'free' || resource.paymentMethods.length > 0) {
+      throw acpInvalid(
+        path,
+        `Resource "${resourceId}" implements ACP operation "${operation}" and must use pricing.type "free" with no "payments" - ACP checkout carries the merchant's own purchase payment, so the gateway does not also charge for the invocation`,
+        { resourceId },
+      );
+    }
+    validateAcpOperationInput(path, operation, resource);
+  }
+}
+
+/**
+ * The adapter sends a fixed canonical envelope per operation, so a resource
+ * whose input schema forbids a key ACP always sends - or demands one ACP never
+ * sends - can only ever fail at request time with INPUT_INVALID. Cheaper to
+ * say so at load.
+ */
+function validateAcpOperationInput(
+  path: string,
+  operation: AcpCheckoutOperation,
+  resource: CommerceResource,
+): void {
+  const schema = resource.inputSchema;
+  if (schema === undefined) return;
+  const keys: readonly string[] = ACP_OPERATION_INPUT_KEYS[operation];
+  const properties = schema['properties'];
+
+  if (schema['additionalProperties'] === false && isPlainObject(properties)) {
+    for (const key of keys) {
+      if (!Object.hasOwn(properties, key)) {
+        throw acpInvalid(
+          path,
+          `Resource "${resource.id}" implements ACP operation "${operation}" but its input schema sets additionalProperties: false without declaring "${key}", which the adapter always sends for this operation`,
+          { resourceId: resource.id },
+        );
+      }
+    }
+  }
+
+  const required = schema['required'];
+  if (Array.isArray(required)) {
+    for (const entry of required) {
+      if (typeof entry === 'string' && !keys.includes(entry)) {
+        throw acpInvalid(
+          path,
+          `Resource "${resource.id}" implements ACP operation "${operation}" but its input schema requires "${entry}", which that operation never supplies (it sends: ${keys.join(', ')})`,
+          { resourceId: resource.id },
         );
       }
     }
@@ -680,7 +970,7 @@ function normaliseResource(
       const hint = protocol === 'ucp' ? ' (UCP is planned, not supported in this release)' : '';
       throw new CommerceError(
         'CONFIG_INVALID',
-        `Resource "${id}" exposes unsupported protocol "${protocol}"${hint}. Supported: http, mcp, a2a.`,
+        `Resource "${id}" exposes unsupported protocol "${protocol}"${hint}. Supported: ${PROTOCOL_NAMES.join(', ')}.`,
         { details: { path: `resources.${id}.expose`, resourceId: id, protocol } },
       );
     }
@@ -705,6 +995,13 @@ function normaliseResource(
     throw new CommerceError(
       'CONFIG_INVALID',
       `Resource "${id}" is exposed via "a2a" but protocols.a2a.enabled is false`,
+      { details: { path: `resources.${id}.expose`, resourceId: id } },
+    );
+  }
+  if (entry.expose.includes('acp') && !protocols.acp.enabled) {
+    throw new CommerceError(
+      'CONFIG_INVALID',
+      `Resource "${id}" is exposed via "acp" but protocols.acp.enabled is false`,
       { details: { path: `resources.${id}.expose`, resourceId: id } },
     );
   }

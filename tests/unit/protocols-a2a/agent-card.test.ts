@@ -60,7 +60,7 @@ function context(resources: readonly CommerceResource[]): ProtocolAdapterContext
   return {
     pipeline: {
       execute: async () => {
-        throw new Error('unused in phase 3');
+        throw new Error('unused');
       },
     } as unknown as ExecutionPipeline,
     resources: createResourceRegistry(resources) as ResourceRegistry,

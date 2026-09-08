@@ -965,7 +965,7 @@ describe('parseConfig', () => {
     }
   });
 
-  it('rejects an expose value outside [http, mcp, a2a], mentioning UCP is planned', () => {
+  it('rejects an expose value outside the supported protocols, mentioning UCP is planned', () => {
     const raw = validRawConfig();
     (raw['resources'] as { weather_basic: { expose: string[] } }).weather_basic.expose = [
       'http',
@@ -1463,6 +1463,229 @@ describe('protocols.a2a', () => {
   it('allows a colliding mount while a2a is disabled, since nothing is mounted', () => {
     const config = parseConfig(withA2a({ enabled: false, mountPath: '/mcp' }), {});
     expect(config.protocols.a2a.enabled).toBe(false);
+  });
+});
+
+describe('protocols.acp', () => {
+  const OPERATIONS = {
+    createCheckoutSession: 'acp_checkout_create',
+    updateCheckoutSession: 'acp_checkout_update',
+    getCheckoutSession: 'acp_checkout_get',
+    completeCheckoutSession: 'acp_checkout_complete',
+    cancelCheckoutSession: 'acp_checkout_cancel',
+  } as const;
+
+  /** A resource shaped like the canonical envelope the adapter sends. */
+  function checkoutResource(keys: readonly ('path' | 'body')[]): Record<string, unknown> {
+    return {
+      name: 'ACP checkout operation',
+      input: {
+        type: 'object',
+        properties: Object.fromEntries(keys.map((key) => [key, { type: 'object' }])),
+        required: [...keys],
+        additionalProperties: false,
+      },
+      backend: {
+        type: 'http',
+        method: 'POST',
+        url: 'http://localhost:3000/checkout',
+        inputBindings: Object.fromEntries(keys.map((key) => [key, key])),
+      },
+      pricing: { type: 'free' },
+      expose: ['acp'],
+    };
+  }
+
+  /** `validRawConfig` plus the five mapped ACP resources and an enabled block. */
+  function withAcp(
+    acp: Record<string, unknown> | undefined,
+    resourceOverrides: Record<string, unknown> = {},
+  ): Record<string, unknown> {
+    const raw = validRawConfig();
+    const protocols = raw['protocols'] as Record<string, unknown>;
+    if (acp === undefined) delete protocols['acp'];
+    else protocols['acp'] = acp;
+
+    Object.assign(raw['resources'] as Record<string, unknown>, {
+      acp_checkout_create: checkoutResource(['body']),
+      acp_checkout_update: checkoutResource(['path', 'body']),
+      acp_checkout_get: checkoutResource(['path']),
+      acp_checkout_complete: checkoutResource(['path', 'body']),
+      acp_checkout_cancel: checkoutResource(['path']),
+      ...resourceOverrides,
+    });
+    return raw;
+  }
+
+  function enabledAcp(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      enabled: true,
+      auth: { type: 'bearer', token: 'secret-token' },
+      idempotency: { path: './acp-idempotency.sqlite' },
+      checkout: { operations: { ...OPERATIONS } },
+      ...overrides,
+    };
+  }
+
+  it('is disabled on the default mount when the block is absent', () => {
+    const raw = validRawConfig();
+    delete (raw['protocols'] as Record<string, unknown>)['acp'];
+    expect(parseConfig(raw, {}).protocols.acp).toEqual({ enabled: false, mountPath: '/acp' });
+  });
+
+  it('normalises an enabled block, defaulting the mount and the retention window', () => {
+    const config = parseConfig(withAcp(enabledAcp()), {});
+    expect(config.protocols.acp).toEqual({
+      enabled: true,
+      mountPath: '/acp',
+      auth: { type: 'bearer', token: 'secret-token' },
+      idempotency: { path: './acp-idempotency.sqlite', retentionHours: 24 },
+      checkout: { operations: OPERATIONS },
+    });
+  });
+
+  it('accepts a custom mount', () => {
+    const config = parseConfig(withAcp(enabledAcp({ mountPath: '/agents/acp' })), {});
+    expect(config.protocols.acp.mountPath).toBe('/agents/acp');
+  });
+
+  it.each([
+    ['an identical mount', '/mcp'],
+    ['a mount nested under the mcp one', '/mcp/acp'],
+    ['the acp well-known path', '/.well-known/acp.json'],
+    ['a prefix of the acp well-known path', '/.well-known'],
+  ])('rejects %s', (_label, mountPath) => {
+    expectConfigInvalid(() => parseConfig(withAcp(enabledAcp({ mountPath })), {}));
+  });
+
+  it('allows a colliding mount while acp is disabled, since nothing is mounted', () => {
+    const raw = validRawConfig();
+    (raw['protocols'] as Record<string, unknown>)['acp'] = { enabled: false, mountPath: '/mcp' };
+    expect(parseConfig(raw, {}).protocols.acp).toEqual({ enabled: false, mountPath: '/mcp' });
+  });
+
+  it.each([
+    ['no auth block', { auth: undefined }],
+    ['a scheme other than bearer', { auth: { type: 'none' } }],
+    ['an empty token', { auth: { type: 'bearer', token: '' } }],
+    ['no idempotency block', { idempotency: undefined }],
+    ['an empty idempotency path', { idempotency: { path: '' } }],
+  ])('rejects an enabled block with %s', (_label, overrides) => {
+    const acp = enabledAcp();
+    for (const [key, value] of Object.entries(overrides)) {
+      if (value === undefined) delete acp[key];
+      else acp[key] = value;
+    }
+    expectConfigInvalid(() => parseConfig(withAcp(acp), {}));
+  });
+
+  // 24 hours is ACP's retry window: a shorter retention would let a replayed
+  // key past an expired record and run a checkout side effect twice.
+  it('rejects a retention window below 24 hours', () => {
+    const acp = enabledAcp({ idempotency: { path: './acp.sqlite', retentionHours: 23 } });
+    expectConfigInvalid(() => parseConfig(withAcp(acp), {}));
+  });
+
+  it('accepts a longer retention window, including as an env-substituted string', () => {
+    const acp = enabledAcp({
+      idempotency: { path: './acp.sqlite', retentionHours: '${ACP_RETENTION}' },
+    });
+    const config = parseConfig(withAcp(acp), { ACP_RETENTION: '72' });
+    expect(config.protocols.acp.enabled && config.protocols.acp.idempotency.retentionHours).toBe(
+      72,
+    );
+  });
+
+  it('rejects an unknown key inside the block', () => {
+    expectConfigInvalid(() => parseConfig(withAcp(enabledAcp({ webhooks: true })), {}));
+  });
+
+  it('rejects a partially mapped checkout lifecycle', () => {
+    const operations: Record<string, string> = { ...OPERATIONS };
+    delete operations['cancelCheckoutSession'];
+    const acp = enabledAcp({ checkout: { operations } });
+    expectConfigInvalid(() => parseConfig(withAcp(acp), {}));
+  });
+
+  it('rejects an unknown operation id', () => {
+    const acp = enabledAcp({
+      checkout: { operations: { ...OPERATIONS, refundCheckoutSession: 'acp_checkout_create' } },
+    });
+    expectConfigInvalid(() => parseConfig(withAcp(acp), {}));
+  });
+
+  it('rejects one resource mapped to two operations', () => {
+    const acp = enabledAcp({
+      checkout: { operations: { ...OPERATIONS, getCheckoutSession: 'acp_checkout_create' } },
+    });
+    expectConfigInvalid(() => parseConfig(withAcp(acp), {}));
+  });
+
+  it('rejects a mapping naming a resource that does not exist', () => {
+    const acp = enabledAcp({
+      checkout: { operations: { ...OPERATIONS, getCheckoutSession: 'nope' } },
+    });
+    expectConfigInvalid(() => parseConfig(withAcp(acp), {}));
+  });
+
+  it('rejects a mapped resource that does not expose acp', () => {
+    const resource = checkoutResource(['path']);
+    resource['expose'] = ['http'];
+    expectConfigInvalid(() =>
+      parseConfig(withAcp(enabledAcp(), { acp_checkout_get: resource }), {}),
+    );
+  });
+
+  // ACP checkout carries its own purchase payment; charging for the invocation
+  // too would stack two unrelated payment layers on one call.
+  it('rejects a mapped resource that is paid', () => {
+    const resource = checkoutResource(['path']);
+    resource['pricing'] = { type: 'fixed', amount: '0.01', currency: 'USDC' };
+    resource['payments'] = ['x402'];
+    expectConfigInvalid(() =>
+      parseConfig(withAcp(enabledAcp(), { acp_checkout_get: resource }), {}),
+    );
+  });
+
+  it('rejects a mapped resource whose input schema forbids a key ACP always sends', () => {
+    const resource = checkoutResource(['path']);
+    (resource['input'] as { properties: Record<string, unknown> }).properties = {};
+    (resource['input'] as { required: string[] }).required = [];
+    expectConfigInvalid(() =>
+      parseConfig(withAcp(enabledAcp(), { acp_checkout_get: resource }), {}),
+    );
+  });
+
+  it('rejects a mapped resource requiring input the operation never sends', () => {
+    // Cancel sends no body: the pinned ACP schema does not require one.
+    const resource = checkoutResource(['path', 'body']);
+    expectConfigInvalid(() =>
+      parseConfig(withAcp(enabledAcp(), { acp_checkout_cancel: resource }), {}),
+    );
+  });
+
+  it('rejects expose: [acp] when protocols.acp.enabled is false', () => {
+    const raw = validRawConfig();
+    (raw['resources'] as { weather_basic: { expose: string[] } }).weather_basic.expose = ['acp'];
+    expectConfigInvalid(() => parseConfig(raw, {}));
+  });
+
+  it('keeps optional discovery metadata only when configured', () => {
+    const plain = parseConfig(withAcp(enabledAcp()), {});
+    expect(plain.protocols.acp.enabled && plain.protocols.acp.discovery).toBeUndefined();
+
+    const described = parseConfig(
+      withAcp(
+        enabledAcp({
+          discovery: { supportedCurrencies: ['usd'], documentationUrl: 'https://example.com/acp' },
+        }),
+      ),
+      {},
+    );
+    expect(described.protocols.acp.enabled && described.protocols.acp.discovery).toEqual({
+      documentationUrl: 'https://example.com/acp',
+      supportedCurrencies: ['usd'],
+    });
   });
 });
 

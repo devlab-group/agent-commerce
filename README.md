@@ -11,6 +11,7 @@
   <img alt="MCP" src="https://img.shields.io/badge/MCP-supported-6b4fbb">
   <img alt="x402" src="https://img.shields.io/badge/x402-supported-0052ff">
   <img alt="A2A" src="https://img.shields.io/badge/A2A-experimental-f0a30a">
+  <img alt="ACP" src="https://img.shields.io/badge/ACP-experimental-f0a30a">
 </p>
 
 ## What it is, in ten seconds
@@ -21,18 +22,17 @@ You already have an HTTP API. AI agents want to **discover** it, **call** it and
 Agent Commerce Gateway sits in front of your existing API, in **your**
 infrastructure, and does that for you. You describe an endpoint in a YAML file -
 or generate that description from an OpenAPI document you already have - and
-agents get an MCP tool and an x402 paywall. The money goes straight to your
-wallet - the gateway never holds it, and never holds your keys.
+agents get an MCP tool and an x402 paywall. Switch on the experimental adapters
+and the same resource is also an A2A skill, or an ACP checkout session. The
+money goes straight to your wallet - the gateway never holds it, and never holds
+your keys.
 
 ```text
 Your existing API → Agent Commerce Gateway → AI Agent
-                MCP · x402 · receipts · doctor
+          MCP · A2A · ACP · x402 · receipts · doctor
 ```
 
 ## Demo
-
-<!-- TODO(release): 15-30s GIF - left: buyer agent terminal, right: dashboard,
-     overlay: on-chain settlement. Replace this block before tagging. -->
 
 ```text
 [agent] Discovering resources over MCP...
@@ -232,13 +232,17 @@ See [docs/configuration.md](docs/configuration.md).
 | **x402**        | Supported    | x402 v2 (`@x402/core`, `@x402/evm`), scheme `exact`, EVM |
 | **HTTP**        | Supported    | native routes                                            |
 | **A2A**         | Experimental | A2A v1.0.0, binding `JSONRPC`, method `SendMessage`      |
-| UCP             | Planned      | -                                                        |
-| ACP · MPP · AP2 | Planned      | -                                                        |
+| **ACP**         | Experimental | ACP `2026-04-17`, REST checkout + discovery              |
+| UCP · MPP · AP2 | Planned      | -                                                        |
 
 "Planned" means **no code ships for it**. "Experimental" means the code ships,
-is tested against the official SDK, and serves a narrow named subset - A2A is
-off by default and documented in full at
-[docs/protocols.md](docs/protocols.md#a2a). Each adapter reports its own
+is tested against the protocol's own official artifacts, and serves a narrow
+named subset - A2A and ACP are both off by default and documented in full at
+[docs/protocols.md](docs/protocols.md#a2a) and
+[docs/protocols.md](docs/protocols.md#acp). ACP serves the five stable checkout
+operations and advertises `services: ["checkout"]` and nothing more; its
+`payment_data` stays with the merchant's own checkout and is never turned into
+an x402 payment. Each adapter reports its own
 `supportedSpec`, `capabilities` and `unsupported` list at runtime via
 `GET /.well-known/agent-commerce` and `agent-commerce doctor` - so the claim is
 checkable, not marketing. Detail: [docs/protocols.md](docs/protocols.md).
@@ -371,8 +375,9 @@ $ npm run agent-commerce -- doctor --config config-demo.yaml
 PASS  Config               valid - 2 resource(s), merchant "Demo Data Store" (using local chain manifest .deploy/local.json for X402_ASSET, X402_ASSET_NAME, X402_ASSET_VERSION, X402_ASSET_DECIMALS, MERCHANT_WALLET, X402_FACILITATOR_PRIVATE_KEY)
 PASS  Gateway              healthy and ready at http://127.0.0.1:8080
 PASS  Backend              2/2 backend host(s) reachable
-PASS  Protocols            http=on mcp=on (/mcp) a2a=off
+PASS  Protocols            http=on mcp=on (/mcp) a2a=off acp=off
 INFO  A2A                  disabled
+INFO  ACP                  disabled
 PASS  Payments             x402 v2 (scheme=exact) enabled - LOCAL dev chain (eip155:84532, chain id shared with Base Sepolia), destination=0x7099…79C8, facilitator=local
 INFO  Payments (MPP)       planned - not implemented in this release
 PASS  Storage              sqlite schema v1 writable; receipts=2
@@ -418,13 +423,13 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Roadmap
 
-**Now (v1.2.0)** - MCP, x402 v2, settlement on the local chain, Base Sepolia
-and Base mainnet, receipts, doctor, deterministic demo, an experimental
-A2A v1.0.0 adapter, and experimental OpenAPI import.
+**Now** - MCP, x402 v2, settlement on the local chain, Base Sepolia and Base
+mainnet, receipts, doctor, deterministic demo, experimental A2A v1.0.0 and ACP
+`2026-04-17` checkout adapters, and experimental OpenAPI import.
 
-**Next** - a stronger conformance suite · a `doctor` GitHub Action · UCP ·
-MPP · ACP · AP2 · Shopify and WooCommerce examples · PostgreSQL · richer
-observability · multi-file and remote OpenAPI sources.
+**Next** - a `doctor` GitHub Action · UCP · MPP · AP2 · more of ACP (carts,
+feed, delegated payment) · Shopify and WooCommerce examples · PostgreSQL ·
+richer observability · multi-file and remote OpenAPI sources.
 
 New protocols land only after the adapter model survives real use. Scope
 discipline is a release requirement, not a mood.

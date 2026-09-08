@@ -1,4 +1,5 @@
-import { existsSync } from 'node:fs';
+import { accessSync, existsSync, constants as fsConstants } from 'node:fs';
+import { dirname } from 'node:path';
 import picocolors from 'picocolors';
 import { extractPathParameterNames } from '../../core/execution/index.js';
 import { type CommerceResource, isCommerceError, type ReceiptStore } from '../../core/index.js';
@@ -16,6 +17,12 @@ import {
   A2A_SPEC_VERSION,
 } from '../../protocols/a2a/constants.js';
 import { A2A_UNSUPPORTED } from '../../protocols/a2a/descriptor.js';
+import {
+  ACP_API_VERSION,
+  ACP_SPEC_VERSION,
+  ACP_WELL_KNOWN_PATH,
+} from '../../protocols/acp/constants.js';
+import { ACP_UNSUPPORTED } from '../../protocols/acp/descriptor.js';
 import { createSqliteReceiptStore } from '../../storage/receipts/index.js';
 import { type ConfigLoader, type GatewayConfig, loadConfigDynamic } from '../lib/config-client.js';
 import { type FetchLike, fetchJson } from '../lib/http.js';
@@ -168,6 +175,98 @@ function findX402Mismatch(configured: LiveX402, live: LiveX402): string | undefi
   return `${diffs.join('; ')} — the gateway may be running against an older deployment; restart it or re-run chain:deploy`;
 }
 
+/**
+ * The idempotency database, diagnosed without creating it: `doctor` is
+ * read-only, and opening a mistyped path would leave a fresh empty database
+ * behind and report it as healthy.
+ */
+function acpIdempotencyCheck(idempotency: {
+  readonly path: string;
+  readonly retentionHours: number;
+}): DoctorCheck {
+  // Config refuses anything below 24h, so this states the window rather than
+  // policing it - if it ever reads lower, the two layers have drifted.
+  const retention = `retention ${idempotency.retentionHours}h`;
+  if (idempotency.retentionHours < 24) {
+    return {
+      name: 'ACP idempotency',
+      status: 'FAIL',
+      detail: `${retention} is below the 24h ACP minimum — a replayed key could run a checkout twice`,
+    };
+  }
+  if (idempotency.path === ':memory:') {
+    return {
+      name: 'ACP idempotency',
+      status: 'WARN',
+      detail: `in-memory store, ${retention} — replay protection is lost on every restart; use a file path in production`,
+    };
+  }
+  const directory = dirname(idempotency.path);
+  if (existsSync(idempotency.path)) {
+    try {
+      accessSync(idempotency.path, fsConstants.W_OK);
+      return { name: 'ACP idempotency', status: 'PASS', detail: `writable, ${retention}` };
+    } catch {
+      return {
+        name: 'ACP idempotency',
+        status: 'FAIL',
+        detail: `"${idempotency.path}" exists but is not writable by this user — the adapter cannot claim idempotency keys`,
+      };
+    }
+  }
+  if (directory !== '' && directory !== '.' && !existsSync(directory)) {
+    return {
+      name: 'ACP idempotency',
+      status: 'WARN',
+      detail: `no store yet at "${idempotency.path}" and its directory does not exist — it is created when the gateway starts, provided that path is writable`,
+    };
+  }
+  return {
+    name: 'ACP idempotency',
+    status: 'WARN',
+    detail: `no store yet at "${idempotency.path}" — it is created the first time the gateway starts (${retention})`,
+  };
+}
+
+/**
+ * The five mapped resources, re-checked against the same rules config enforces:
+ * present, acp-exposed, and free to invoke. Resource *ids* are named here
+ * because an operator needs them to fix a mapping; the mapping itself is
+ * config, not a secret, and never leaves this local report.
+ */
+function acpMappingCheck(
+  config: GatewayConfig,
+  operations: Readonly<Record<string, string>>,
+): DoctorCheck {
+  const byId = new Map(config.resources.map((resource) => [resource.id, resource]));
+  const problems: string[] = [];
+
+  for (const [operation, resourceId] of Object.entries(operations)) {
+    const resource = byId.get(resourceId);
+    if (resource === undefined) {
+      problems.push(`${operation} -> "${resourceId}" does not exist`);
+      continue;
+    }
+    if (!resource.exposedVia.includes('acp')) {
+      problems.push(`${operation} -> "${resourceId}" is not exposed via acp`);
+    }
+    // ACP checkout carries the merchant's own purchase payment; charging for
+    // the invocation as well would put two payment layers on one call.
+    if (resource.pricing.type !== 'free' || resource.paymentMethods.length > 0) {
+      problems.push(`${operation} -> "${resourceId}" is not free to invoke`);
+    }
+  }
+
+  if (problems.length > 0) {
+    return { name: 'ACP checkout mapping', status: 'FAIL', detail: problems.join('; ') };
+  }
+  return {
+    name: 'ACP checkout mapping',
+    status: 'PASS',
+    detail: `5 operations mapped to free acp-exposed resources (${Object.values(operations).join(', ')})`,
+  };
+}
+
 /** `agent-commerce doctor [--config] [--gateway] [--json]`. */
 export async function runDoctor(
   options: DoctorOptions,
@@ -278,7 +377,7 @@ export async function runDoctor(
     checks.push({
       name: 'Protocols',
       status: 'PASS',
-      detail: `http=${config.protocols.http.enabled ? 'on' : 'off'} mcp=${config.protocols.mcp.enabled ? `on (${mcpMountPath})` : 'off'} a2a=${config.protocols.a2a.enabled ? `on (${a2aMountPath})` : 'off'}`,
+      detail: `http=${config.protocols.http.enabled ? 'on' : 'off'} mcp=${config.protocols.mcp.enabled ? `on (${mcpMountPath})` : 'off'} a2a=${config.protocols.a2a.enabled ? `on (${a2aMountPath})` : 'off'} acp=${config.protocols.acp.enabled ? `on (${config.protocols.acp.mountPath})` : 'off'}`,
     });
   }
 
@@ -303,6 +402,43 @@ export async function runDoctor(
       name: 'A2A unsupported',
       status: 'INFO',
       detail: A2A_UNSUPPORTED.join(', '),
+    });
+  }
+
+  // 5c. ACP specifics. Read from config and the pins, never from the live
+  // gateway: the bearer token, the idempotency database path and the
+  // operation-to-resource mapping are all things this report must not print,
+  // and the well-known document deliberately does not carry them either.
+  if (config === undefined) {
+    checks.push({ name: 'ACP', status: 'WARN', detail: 'skipped — config invalid' });
+  } else if (!config.protocols.acp.enabled) {
+    checks.push({ name: 'ACP', status: 'INFO', detail: 'disabled' });
+  } else {
+    const acp = config.protocols.acp;
+    checks.push({
+      name: 'ACP',
+      status: 'PASS',
+      detail: `experimental · spec ${ACP_SPEC_VERSION} · API-Version ${ACP_API_VERSION} · service checkout · mount ${acp.mountPath} · discovery ${ACP_WELL_KNOWN_PATH}`,
+    });
+
+    // Whether a token is configured, never which one. An empty one cannot
+    // reach here - config refuses it - so this states the shape, not a secret.
+    checks.push({
+      name: 'ACP auth',
+      status: 'PASS',
+      detail: `bearer token configured (${acp.auth.token.length} characters, not shown)`,
+    });
+
+    checks.push(acpIdempotencyCheck(acp.idempotency));
+    checks.push(acpMappingCheck(config, acp.checkout.operations));
+
+    // Listed in full, never summarised as a count: "16 unsupported" tells an
+    // operator nothing about whether the one service their client needs is
+    // among them.
+    checks.push({
+      name: 'ACP unsupported',
+      status: 'INFO',
+      detail: ACP_UNSUPPORTED.join(', '),
     });
   }
 

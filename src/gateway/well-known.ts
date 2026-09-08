@@ -54,10 +54,26 @@ import { type AdapterRuntime, getAdapterHealth } from './adapters.js';
  */
 const GATEWAY_SUPPORTED_SPEC = 'agent-commerce/v1.0.0';
 
+/**
+ * The protocol block as published, not as configured.
+ *
+ * Built field by field rather than spread from `config.protocols`, because that
+ * object carries `protocols.acp.auth.token` - a live credential - plus the
+ * idempotency database path and the operation-to-resource mapping. This route
+ * is unauthenticated, so a future config field must be added here deliberately
+ * to become public, never by inheriting a shape.
+ */
+export interface WellKnownProtocols {
+  readonly http: { readonly enabled: boolean };
+  readonly mcp: { readonly enabled: boolean; readonly mountPath: string };
+  readonly a2a: { readonly enabled: boolean; readonly mountPath: string };
+  readonly acp: { readonly enabled: boolean; readonly mountPath: string };
+}
+
 export interface WellKnownDocument {
   readonly gateway: { readonly implementationVersion: string; readonly supportedSpec: string };
   readonly merchant: GatewayConfig['merchant'];
-  readonly protocols: GatewayConfig['protocols'];
+  readonly protocols: WellKnownProtocols;
   readonly adapters: ReadonlyArray<AdapterDescriptor & { readonly health: AdapterHealth }>;
   readonly paymentProviders: readonly AdapterDescriptor[];
   readonly store: AdapterDescriptor;
@@ -103,6 +119,15 @@ function publicHealth(health: AdapterHealth): AdapterHealth {
   return rest;
 }
 
+function publicProtocols(protocols: GatewayConfig['protocols']): WellKnownProtocols {
+  return {
+    http: { enabled: protocols.http.enabled },
+    mcp: { enabled: protocols.mcp.enabled, mountPath: protocols.mcp.mountPath },
+    a2a: { enabled: protocols.a2a.enabled, mountPath: protocols.a2a.mountPath },
+    acp: { enabled: protocols.acp.enabled, mountPath: protocols.acp.mountPath },
+  };
+}
+
 export async function buildWellKnownDocument(
   options: BuildWellKnownOptions,
 ): Promise<WellKnownDocument> {
@@ -121,7 +146,7 @@ export async function buildWellKnownDocument(
       supportedSpec: GATEWAY_SUPPORTED_SPEC,
     },
     merchant: options.config.merchant,
-    protocols: options.config.protocols,
+    protocols: publicProtocols(options.config.protocols),
     adapters,
     paymentProviders: options.paymentProviders.map((provider) => provider.descriptor),
     store: options.store.descriptor,

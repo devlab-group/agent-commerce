@@ -52,6 +52,19 @@ protocols:
   a2a:
     enabled: false
     mountPath: /a2a
+  # ACP (Agentic Commerce Protocol), stable snapshot 2026-04-17 — experimental,
+  # off by default. Enabling it serves the five checkout routes under mountPath
+  # and the specification-fixed discovery document at /.well-known/acp.json.
+  # Clients must send `Authorization: Bearer …`, `API-Version: 2026-04-17`, and
+  # an `Idempotency-Key` on every POST. Only the `checkout` service is served:
+  # carts, feed, orders, delegated payment and authentication, webhooks and the
+  # ACP MCP binding are not implemented.
+  #
+  # Enabling it needs the five mapped resources too - a complete, validating
+  # config is in examples/acp-checkout/. See docs/protocols.md#acp.
+  acp:
+    enabled: false
+    mountPath: /acp
 
 resources:
   # --- free resource: proves the gateway fronts an existing API -------------
