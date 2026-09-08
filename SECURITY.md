@@ -80,6 +80,14 @@ customer, not an intruder, so `POST /api/resources/:id/invoke`, `/mcp`,
 `GET /api/resources`, `GET /health` and `GET /.well-known/agent-commerce` are
 open. Paid resources are protected by payment, not by authentication.
 
+**ACP is the exception among agent routes.** When `protocols.acp` is enabled,
+every checkout route under its mount requires
+`Authorization: Bearer <protocols.acp.auth.token>`, compared in constant time;
+ACP's own discovery document at `/.well-known/acp.json` stays public and
+contains no configuration at all. Request `Signature` verification is not
+implemented and a `Signature` header never substitutes for the bearer token, so
+ACP must be deployed behind TLS. See [docs/security.md](docs/security.md#acp).
+
 **The operator routes are different.** `GET /api/receipts`, `GET /api/events`
 and `GET /api/events/stream` expose the merchant's commerce ledger — payer and
 payee addresses, amounts, settlement transaction hashes, resource ids and

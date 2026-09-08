@@ -14,7 +14,7 @@ import { parseConfig } from '../../../src/config/index.js';
 const REPO_ROOT = join(import.meta.dirname, '../../..');
 const EXAMPLES_DIR = join(REPO_ROOT, 'examples');
 
-const EXAMPLES = ['simple-paid-api', 'free-and-premium', 'paid-mcp-tool'] as const;
+const EXAMPLES = ['simple-paid-api', 'free-and-premium', 'paid-mcp-tool', 'acp-checkout'] as const;
 
 /**
  * The public-network examples need an environment: on a real chain there is no

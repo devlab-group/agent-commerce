@@ -137,6 +137,8 @@ The surface splits by audience, and the split is enforced, not advisory:
 | `GET /api/resources`, `/health`, `/.well-known/agent-commerce` | anyone        | none - public by design                                  |
 | `GET /ready`                                                   | operators     | none, but detail is a fixed vocabulary, never raw errors |
 | `GET /api/receipts`, `/api/events`, `/api/events/stream`       | **operators** | `server.adminToken`, compared in constant time           |
+| `GET /.well-known/acp.json`                                    | anyone        | none - public by design, and carries no configuration    |
+| `/acp/checkout_sessions…`                                      | agents        | `protocols.acp.auth.token`, compared in constant time    |
 
 The operator routes carry the merchant's commerce ledger. With no
 `server.adminToken` configured they return **404**, not open data - a missing
@@ -156,6 +158,32 @@ Every published port in `docker-compose.yml` binds `127.0.0.1`. Port 8545 in
 particular is an Anvil node with unlocked accounts and the full `anvil_*` admin
 namespace; on a shared network that would be unauthenticated control of the dev
 chain.
+
+### ACP
+
+ACP is the one agent-facing surface that **is** authenticated: every checkout
+route requires `Authorization: Bearer <token>`, compared in constant time
+against `protocols.acp.auth.token`. Both sides are hashed before comparison, so
+a wrong token costs the same whatever its length. Authentication runs before the
+request body is read, so an unauthenticated caller cannot make the adapter
+buffer or parse anything.
+
+Discovery at `/.well-known/acp.json` stays public and carries no configuration:
+no bearer token, no backend URL, no mapped resource ids, no idempotency database
+path. Only the digest of the token is ever persisted - the idempotency store
+scopes keys by `SHA-256("acp-auth:" + token)`, never by the token itself.
+
+`Signature` and `Timestamp` verification are **not implemented**, are not
+advertised, and a `Signature` header is never accepted in place of the bearer
+token. Deploy ACP behind TLS: a bearer token on a plaintext connection is a
+shared secret in the clear.
+
+`payment_data` on a completion is buyer payment material belonging to the
+merchant's own flow. It passes through to the merchant backend as ordinary
+business input and is never logged, never stored in a receipt, and never
+converted into an Agent Commerce payment proof. Delegated payment and delegated
+authentication are not implemented, so this feature adds no handling of raw card
+credentials anywhere in the gateway.
 
 ## What the gateway relays, and what it does not
 
@@ -286,6 +314,16 @@ rejection outcomes assert that balances did not move.
 | **an imported path value naming another host**                        | percent-encoded into one segment of the configured origin         | `tests/integration/openapi-import.test.ts`        |
 | **an imported query group colliding with a pinned backend query**     | `INPUT_INVALID` before payment; nothing settled                   | same                                              |
 | **an imported operation with an unsupported required parameter**      | never becomes a resource at all                                   | same                                              |
+| **an ACP request with no, wrong or non-bearer authorisation**         | 401 before the body is read; zero merchant calls                  | `tests/conformance/acp/protocol.test.ts`          |
+| **an ACP request naming an unsupported API version**                  | 400 naming `supported_versions`; never mapped to the pinned one   | same                                              |
+| **an ACP POST with no or an over-long `Idempotency-Key`**             | 400 before the body is read                                       | same                                              |
+| **an ACP key replayed while the first request is in flight**          | 409; the merchant is called exactly once                          | `tests/conformance/acp/idempotency.test.ts`       |
+| **an ACP key reused with a different body**                           | 422; the merchant is called exactly once                          | same                                              |
+| **an ACP completion retried after a 5xx**                             | not cached; the clean retry runs                                  | same                                              |
+| **a merchant answering an ACP route with a non-ACP document**         | refused as `processing_error`; its body never forwarded           | `tests/conformance/acp/errors.test.ts`            |
+| **a merchant leaking a connection string or stack in an error body**  | never relayed; the ACP error carries type, code and message only  | same                                              |
+| **an ACP `Request-Id` carrying a header-injection payload**           | dropped, never echoed                                             | `tests/unit/protocols-acp/adapter.test.ts`        |
+| **an ACP checkout resource configured as paid**                       | refused at config load; `payment-required` at runtime is a 500    | `tests/unit/config/schema.test.ts`                |
 
 Two of those exist because writing them found a bug. The SDK's `exact`/EVM
 scheme reports an unreachable node as `invalid_exact_evm_signature`, and its

@@ -11,13 +11,17 @@
  * here is a decision. The canonical cross-module contract lives in
  * `src/core/public-types.ts` and is guarded by `npm run check:contract`.
  *
- * **The protocol adapter and the payment provider are not here.** They live at
+ * **The MCP adapter and the payment provider are not here.** They live at
  * `@devlab.group/agent-commerce/mcp` and `@devlab.group/agent-commerce/x402`, because each needs
  * an optional peer dependency the rest of the package does not. Keeping them
  * here would make `createGateway` drag the whole EVM signing and RPC stack into
  * every install, including one serving a single free HTTP resource. See
  * `src/mcp.ts` and `src/x402.ts`. Everything reachable from *this* entry point
  * needs only the package's own `dependencies`.
+ *
+ * The ACP adapter *is* here, for exactly that reason: it needs no peer, only
+ * `ajv` and its own vendored schema, so a subpath for it would be a category
+ * rather than a peer-dependency boundary. A subpath is the latter.
  */
 
 export type { GatewayConfig } from './config/index.js';
@@ -30,6 +34,14 @@ export * from './core/public-types.js';
 export type { GatewayInstance, GatewayOptions } from './gateway/index.js';
 // --- run a gateway ---------------------------------------------------------
 export { createGateway } from './gateway/index.js';
+// --- the ACP checkout adapter (experimental; no peer dependency) ------------
+export type { AcpAdapterOptions } from './protocols/acp/index.js';
+export {
+  ACP_API_VERSION,
+  ACP_SPEC_VERSION,
+  ACP_WELL_KNOWN_PATH,
+  createAcpAdapter,
+} from './protocols/acp/index.js';
 export {
   createSqliteReceiptStore as receipts,
   createSqliteReceiptStore,
