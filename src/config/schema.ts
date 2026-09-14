@@ -26,11 +26,24 @@
 
 import { type ZodError, type ZodIssue, type ZodTypeAny, z } from 'zod';
 import {
+  AP2_DEFAULT_CLOCK_SKEW_SECONDS,
+  AP2_JWK_COORDINATE_BYTES,
+  AP2_JWK_CURVE,
+  AP2_JWK_MEMBERS,
+  AP2_KEY_TYPE,
+  AP2_MAX_CLOCK_SKEW_SECONDS,
+  AP2_MODES,
+  AP2_SIGNING_ALGORITHM,
+  AP2_SPEC_VERSION,
+  type Ap2Mode,
+} from '../authorization/ap2/constants.js';
+import {
   extractPathParameterNames,
   findUnparsedBraceToken,
   isObjectSchemaNode,
 } from '../core/execution/index.js';
 import {
+  type AuthorizationMethodName,
   CommerceError,
   type CommerceResource,
   PROTOCOL_NAMES,
@@ -301,6 +314,10 @@ const ResourceEntrySchema = z
     pricing: PricingSchema,
     expose: z.array(z.string().min(1)).min(1),
     payments: z.array(z.string().min(1)).optional(),
+    authorization: z
+      .object({ required: z.array(z.string().min(1)).min(1) })
+      .strict()
+      .optional(),
   })
   .strict();
 
@@ -371,6 +388,64 @@ const PaymentsSchema = z
   })
   .strict();
 
+/**
+ * A public verification key, given inline.
+ *
+ * Inline only: there is no `jwksUri`, no `jku`, no discovery URL. AP2 still
+ * has an open standardisation question around secure key distribution, and
+ * inventing dynamic trust here would mean fetching keys from a location a
+ * mandate can influence. The JWK's own members are checked against
+ * `AP2_JWK_MEMBERS` in the business pass, which stops `x5u` reintroducing the
+ * same fetch one level down.
+ */
+const Ap2KeySchema = z
+  .object({
+    kid: z.string().min(1),
+    jwk: z.record(z.string(), z.unknown()),
+  })
+  .strict();
+
+const Ap2IssuerSchema = z
+  .object({
+    issuer: z.string().min(1),
+    /**
+     * Required, not defaulted. Without it, a mandate minted for another
+     * merchant would verify here, and there is no value worth guessing for
+     * something that decides that.
+     */
+    audience: z.string().min(1),
+    keys: z.array(Ap2KeySchema).min(1),
+  })
+  .strict();
+
+const Ap2Schema = z
+  .object({
+    enabled: BooleanOrString,
+    specVersion: z.string().min(1).optional(),
+    mode: z.string().min(1).optional(),
+    trust: z
+      .object({
+        mandateIssuers: z.array(Ap2IssuerSchema).optional(),
+        checkoutIssuers: z.array(Ap2IssuerSchema).optional(),
+      })
+      .strict()
+      .optional(),
+    clockSkewSeconds: NumberOrString.optional(),
+    replay: z
+      .object({ path: z.string().min(1) })
+      .strict()
+      .optional(),
+  })
+  .strict();
+
+/**
+ * Optional block, off by default. A config predating AP2 stays valid, and the
+ * sub-blocks are optional here so a disabled placeholder is writable; the
+ * business pass requires each of them only once AP2 is enabled, and names the
+ * missing piece.
+ */
+const AuthorizationSchema = z.object({ ap2: Ap2Schema.optional() }).strict();
+
 const RawConfigSchema = z
   .object({
     version: z.literal(SUPPORTED_CONFIG_VERSION),
@@ -380,6 +455,7 @@ const RawConfigSchema = z
     protocols: ProtocolsSchema,
     resources: ResourcesMapSchema,
     payments: PaymentsSchema,
+    authorization: AuthorizationSchema.optional(),
   })
   .strict();
 
@@ -416,6 +492,41 @@ export type AcpProtocolConfig =
       readonly discovery?: AcpDiscoveryConfig;
     };
 
+/** One inline public verification key, trusted because an operator wrote it here. */
+export interface Ap2TrustedKey {
+  readonly kid: string;
+  readonly jwk: Readonly<Record<string, string>>;
+}
+
+/** One trusted issuer and the keys it signs with. */
+export interface Ap2TrustedIssuer {
+  readonly issuer: string;
+  readonly audience: string;
+  readonly keys: readonly Ap2TrustedKey[];
+}
+
+/**
+ * Discriminated on `enabled`, like `AcpProtocolConfig`: an enabled AP2 config
+ * carries everything the verifier needs, so nothing downstream asserts on an
+ * optional field, and a half-configured trust policy is rejected at load.
+ */
+export type Ap2AuthorizationConfig =
+  | { readonly enabled: false }
+  | {
+      readonly enabled: true;
+      readonly specVersion: typeof AP2_SPEC_VERSION;
+      readonly mode: Ap2Mode;
+      readonly trust: {
+        /** Signers of the Checkout Mandate itself. */
+        readonly mandateIssuers: readonly Ap2TrustedIssuer[];
+        /** Signers of the merchant checkout JWT the mandate binds. */
+        readonly checkoutIssuers: readonly Ap2TrustedIssuer[];
+      };
+      readonly clockSkewSeconds: number;
+      /** Its own SQLite file. An authorization replay is not a payment replay. */
+      readonly replay: { readonly path: string };
+    };
+
 export interface GatewayConfig {
   readonly version: 1;
   readonly merchant: { readonly id: string; readonly name: string; readonly publicBaseUrl: string };
@@ -450,6 +561,11 @@ export interface GatewayConfig {
       readonly allowUnauthenticatedFacilitator?: boolean;
     };
   };
+  /**
+   * Absent when no `authorization:` block is configured, which is how every
+   * config written before AP2 existed reads.
+   */
+  readonly authorization?: { readonly ap2: Ap2AuthorizationConfig };
 }
 
 // ---------------------------------------------------------------------------
@@ -585,6 +701,7 @@ function toBoolean(value: boolean | string, path: string): boolean {
 
 const SUPPORTED_PROTOCOLS: ReadonlySet<string> = new Set(PROTOCOL_NAMES);
 const SUPPORTED_PAYMENT_METHODS = new Set(['x402']);
+const SUPPORTED_AUTHORIZATION_METHODS: ReadonlySet<string> = new Set(['ap2']);
 
 function normalise(raw: RawConfig): GatewayConfig {
   const protocols = {
@@ -668,8 +785,13 @@ function normalise(raw: RawConfig): GatewayConfig {
     });
   }
 
+  const ap2 = normaliseAp2(raw.authorization?.ap2);
+  if (ap2?.enabled) {
+    validateReplayStoreIsolated(ap2.replay.path, raw.storage.receipts.path, protocols.acp);
+  }
+
   const resources = Object.entries(raw.resources).map(([id, entry]) =>
-    normaliseResource(id, entry, protocols, x402),
+    normaliseResource(id, entry, protocols, x402, ap2),
   );
   if (protocols.acp.enabled) validateAcpCheckoutMapping(protocols.acp, resources);
 
@@ -694,6 +816,7 @@ function normalise(raw: RawConfig): GatewayConfig {
     payments: {
       ...(x402 !== undefined ? { x402 } : {}),
     },
+    ...(ap2 !== undefined ? { authorization: { ap2 } } : {}),
   };
 }
 
@@ -731,6 +854,285 @@ function validateMountPaths(protocols: NormalisedProtocols): void {
       }
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// AP2 authorization (experimental)
+// ---------------------------------------------------------------------------
+
+type RawAp2 = NonNullable<NonNullable<RawConfig['authorization']>['ap2']>;
+
+function ap2Invalid(
+  path: string,
+  message: string,
+  extra: Record<string, unknown> = {},
+): CommerceError {
+  return new CommerceError('CONFIG_INVALID', message, { details: { path, ...extra } });
+}
+
+function normaliseAp2(raw: RawAp2 | undefined): Ap2AuthorizationConfig | undefined {
+  if (raw === undefined) return undefined;
+  if (!toBoolean(raw.enabled, 'authorization.ap2.enabled')) return { enabled: false };
+
+  const specVersion = raw.specVersion ?? AP2_SPEC_VERSION;
+  if (specVersion !== AP2_SPEC_VERSION) {
+    throw ap2Invalid(
+      'authorization.ap2.specVersion',
+      `authorization.ap2.specVersion "${specVersion}" is not supported - this gateway verifies against the tagged AP2 release ${AP2_SPEC_VERSION} only`,
+    );
+  }
+
+  const mode = raw.mode ?? AP2_MODES[0];
+  if (!(AP2_MODES as readonly string[]).includes(mode)) {
+    throw ap2Invalid(
+      'authorization.ap2.mode',
+      `authorization.ap2.mode "${mode}" is not supported. Supported: ${AP2_MODES.join(', ')}. Autonomous mode needs open mandates, agent key binding and constraint evaluation, none of which this release implements.`,
+    );
+  }
+
+  if (raw.replay === undefined) {
+    throw ap2Invalid(
+      'authorization.ap2.replay',
+      'authorization.ap2.replay is required when AP2 is enabled - it names the SQLite file recording which mandates have been spent, and without it a verified mandate could authorise a second settlement',
+    );
+  }
+
+  const mandateIssuers = normaliseIssuers(
+    raw.trust?.mandateIssuers,
+    'authorization.ap2.trust.mandateIssuers',
+  );
+  const checkoutIssuers = normaliseIssuers(
+    raw.trust?.checkoutIssuers,
+    'authorization.ap2.trust.checkoutIssuers',
+  );
+
+  return {
+    enabled: true,
+    specVersion: AP2_SPEC_VERSION,
+    mode: mode as Ap2Mode,
+    trust: { mandateIssuers, checkoutIssuers },
+    clockSkewSeconds: toNumber(
+      raw.clockSkewSeconds ?? AP2_DEFAULT_CLOCK_SKEW_SECONDS,
+      'authorization.ap2.clockSkewSeconds',
+      { min: 0, max: AP2_MAX_CLOCK_SKEW_SECONDS },
+    ),
+    replay: { path: raw.replay.path },
+  };
+}
+
+/**
+ * Both issuer lists are required and non-empty when AP2 is on.
+ *
+ * Two signatures have to be checked: the issuer's over the Checkout Mandate,
+ * and the merchant's over the checkout JWT it binds. An empty list would make
+ * every mandate fail verification, which reads as a broken deployment rather
+ * than as the misconfiguration it is.
+ */
+function normaliseIssuers(
+  raw: readonly z.infer<typeof Ap2IssuerSchema>[] | undefined,
+  path: string,
+): readonly Ap2TrustedIssuer[] {
+  if (raw === undefined || raw.length === 0) {
+    throw ap2Invalid(
+      path,
+      `${path} is required when AP2 is enabled and must name at least one issuer - trust is operator-configured and static, so an empty list means no mandate can ever verify`,
+    );
+  }
+
+  const seen = new Set<string>();
+  return raw.map((entry, index) => {
+    const entryPath = `${path}.${index}`;
+    if (seen.has(entry.issuer)) {
+      throw ap2Invalid(
+        `${entryPath}.issuer`,
+        `${entryPath}.issuer "${entry.issuer}" is listed twice - key lookup resolves by issuer, so a second entry for the same one is silently unreachable. Merge the keys into one entry instead (which is also how a rotation overlaps an old and a new key).`,
+        { issuer: entry.issuer },
+      );
+    }
+    seen.add(entry.issuer);
+
+    const kids = new Set<string>();
+    const keys = entry.keys.map((key, keyIndex) => {
+      const keyPath = `${entryPath}.keys.${keyIndex}`;
+      if (kids.has(key.kid)) {
+        throw ap2Invalid(
+          `${keyPath}.kid`,
+          `${keyPath}.kid "${key.kid}" is listed twice for issuer "${entry.issuer}" - a kid selects exactly one key, so which of the two verifies a signature would be undefined`,
+          { issuer: entry.issuer, kid: key.kid },
+        );
+      }
+      kids.add(key.kid);
+      return { kid: key.kid, jwk: validateJwk(key.jwk, key.kid, keyPath) };
+    });
+
+    return { issuer: entry.issuer, audience: entry.audience, keys };
+  });
+}
+
+/**
+ * Checks a configured verification key against the one shape this release
+ * accepts: a public P-256 key, nothing else.
+ *
+ * Every member is checked here rather than passed through to the JOSE library
+ * at first purchase, so a key that is wrong is wrong at deploy time. The
+ * alternative is learning about it from a buyer whose valid mandate was
+ * refused.
+ */
+function validateJwk(
+  jwk: Record<string, unknown>,
+  kid: string,
+  path: string,
+): Readonly<Record<string, string>> {
+  const fail = (detail: string): never => {
+    throw ap2Invalid(`${path}.jwk`, `${path}.jwk (kid "${kid}") ${detail}`, { kid });
+  };
+
+  for (const member of Object.keys(jwk)) {
+    if ((AP2_JWK_MEMBERS as readonly string[]).includes(member)) continue;
+    // `d` is the private scalar; naming it is worth the extra branch, because
+    // an operator who pasted a full key pair into the gateway has put signing
+    // material where only verification material belongs, and needs to know
+    // that rather than read "unsupported member".
+    if (member === 'd' || member === 'k') {
+      fail(
+        `carries private key material ("${member}"). The gateway verifies signatures and never produces them; publish only the public half. Treat the pasted key as compromised and rotate it.`,
+      );
+    }
+    fail(
+      `has unsupported member "${member}". Allowed: ${AP2_JWK_MEMBERS.join(', ')}. Members naming a URL are refused on purpose - keys are configured inline and never fetched.`,
+    );
+  }
+
+  const value = (member: string): string => {
+    const raw = jwk[member];
+    if (typeof raw !== 'string' || raw.length === 0) {
+      fail(`must give "${member}" as a non-empty string`);
+    }
+    return raw as string;
+  };
+
+  if (value('kty') !== AP2_KEY_TYPE) {
+    fail(
+      `must have kty "${AP2_KEY_TYPE}" (got "${value('kty')}") - ${AP2_SIGNING_ALGORITHM} is the only accepted algorithm`,
+    );
+  }
+  if (value('crv') !== AP2_JWK_CURVE) {
+    fail(
+      `must be on curve "${AP2_JWK_CURVE}" (got "${value('crv')}") - ${AP2_SIGNING_ALGORITHM} is the only accepted algorithm`,
+    );
+  }
+  for (const coordinate of ['x', 'y'] as const) {
+    const encoded = value(coordinate);
+    if (!/^[A-Za-z0-9_-]+$/.test(encoded)) {
+      fail(`coordinate "${coordinate}" is not base64url (no padding, no "+" or "/")`);
+    }
+    if (Buffer.from(encoded, 'base64url').length !== AP2_JWK_COORDINATE_BYTES) {
+      fail(
+        `coordinate "${coordinate}" decodes to ${Buffer.from(encoded, 'base64url').length} bytes; a ${AP2_JWK_CURVE} coordinate is ${AP2_JWK_COORDINATE_BYTES}`,
+      );
+    }
+  }
+  if (jwk['alg'] !== undefined && value('alg') !== AP2_SIGNING_ALGORITHM) {
+    fail(`declares alg "${value('alg')}"; only ${AP2_SIGNING_ALGORITHM} is accepted`);
+  }
+  if (jwk['use'] !== undefined && value('use') !== 'sig') {
+    fail(`declares use "${value('use')}"; a verification key must be "sig"`);
+  }
+  if (jwk['kid'] !== undefined && value('kid') !== kid) {
+    fail(`declares kid "${value('kid')}", which disagrees with the configured kid "${kid}"`);
+  }
+
+  const normalised: Record<string, string> = {};
+  for (const member of AP2_JWK_MEMBERS) {
+    if (jwk[member] !== undefined) normalised[member] = value(member);
+  }
+  return normalised;
+}
+
+/**
+ * The AP2 replay store gets its own SQLite file.
+ *
+ * Reserved mandates, payment attempts and ACP idempotency records have
+ * different schemas and different retention rules. Pointing two of them at one
+ * file gives either a migration conflict at startup or a shared write lock on
+ * the settlement path.
+ */
+function validateReplayStoreIsolated(
+  replayPath: string,
+  receiptsPath: string,
+  acp: AcpProtocolConfig,
+): void {
+  // Every `:memory:` handle is its own private database, so two of them are
+  // not the collision the literal comparison would call them.
+  if (replayPath === ':memory:') return;
+
+  const others: [string, string][] = [['storage.receipts.path', receiptsPath]];
+  if (acp.enabled) others.push(['protocols.acp.idempotency.path', acp.idempotency.path]);
+
+  for (const [otherPath, other] of others) {
+    if (replayPath !== other) continue;
+    throw ap2Invalid(
+      'authorization.ap2.replay.path',
+      `authorization.ap2.replay.path is the same file as ${otherPath} ("${replayPath}") - the AP2 replay store keeps its own schema and must not share a database with another store`,
+    );
+  }
+}
+
+/**
+ * Resolves a resource's `authorization.required` list against the configured
+ * provider.
+ *
+ * A requirement that cannot be enforced is worse than none, because the
+ * resource looks protected in config and settles unprotected in production.
+ * Everything that would produce that gap is refused here.
+ */
+function normaliseResourceAuthorization(
+  id: string,
+  entry: RawResourceEntry,
+  pricing: Pricing,
+  ap2: Ap2AuthorizationConfig | undefined,
+): CommerceResource['authorization'] | undefined {
+  const required = entry.authorization?.required;
+  if (required === undefined) return undefined;
+
+  const path = `resources.${id}.authorization.required`;
+  const methods: AuthorizationMethodName[] = [];
+  for (const method of required) {
+    if (!SUPPORTED_AUTHORIZATION_METHODS.has(method)) {
+      throw ap2Invalid(
+        path,
+        `Resource "${id}" requires unsupported authorization method "${method}". Supported: ${[...SUPPORTED_AUTHORIZATION_METHODS].join(', ')}.`,
+        { resourceId: id, method },
+      );
+    }
+    if (methods.includes(method as AuthorizationMethodName)) {
+      throw ap2Invalid(path, `Resource "${id}" lists authorization method "${method}" twice`, {
+        resourceId: id,
+        method,
+      });
+    }
+    if (method === 'ap2' && (ap2 === undefined || !ap2.enabled)) {
+      throw ap2Invalid(
+        path,
+        `Resource "${id}" requires authorization method "ap2", which is not configured or not enabled under authorization.ap2`,
+        { resourceId: id, method },
+      );
+    }
+    methods.push(method as AuthorizationMethodName);
+  }
+
+  // A mandate binds an exact amount and currency, so there has to be one. It
+  // also never unlocks a resource by itself, which makes requiring one on a
+  // free resource a statement the pipeline has no way to act on.
+  if (pricing.type !== 'fixed') {
+    throw ap2Invalid(
+      path,
+      `Resource "${id}" requires authorization but its pricing is "${pricing.type}" - authorization proves a purchase was approved and never replaces payment, so it applies to fixed-price paid resources only in this release`,
+      { resourceId: id },
+    );
+  }
+
+  return { required: methods };
 }
 
 // ---------------------------------------------------------------------------
@@ -944,6 +1346,7 @@ function normaliseResource(
   entry: RawResourceEntry,
   protocols: NormalisedProtocols,
   x402: NormalisedX402 | undefined,
+  ap2: Ap2AuthorizationConfig | undefined,
 ): CommerceResource {
   if (entry.input !== undefined) validateResourceSchemaKeywords(id, 'input', entry.input);
 
@@ -1061,6 +1464,8 @@ function normaliseResource(
       ? { type: 'free' }
       : { type: 'fixed', amount: entry.pricing.amount, currency: entry.pricing.currency };
 
+  const authorization = normaliseResourceAuthorization(id, entry, pricing, ap2);
+
   return {
     id,
     name: entry.name,
@@ -1089,6 +1494,7 @@ function normaliseResource(
     pricing,
     exposedVia: entry.expose as CommerceResource['exposedVia'],
     paymentMethods: paymentMethods as CommerceResource['paymentMethods'],
+    ...(authorization !== undefined ? { authorization } : {}),
   };
 }
 
