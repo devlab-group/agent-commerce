@@ -159,6 +159,26 @@ describe('published package metadata', () => {
     expect(manifest.pnpm).toBeUndefined();
   });
 
+  it('keeps the AP2 crypto libraries optional and exactly pinned', () => {
+    // A mandate decides whether a purchase was authorised, so nothing in that
+    // path floats. `jose` and `@sd-jwt/core` are optional peers because a
+    // consumer serving a free HTTP resource should not install a JOSE stack,
+    // and they are pinned because a signature verifier is not somewhere to
+    // accept whatever a fresh install resolves to.
+    for (const peer of ['jose', '@sd-jwt/core']) {
+      expect(manifest.peerDependencies?.[peer]).toBeDefined();
+      expect(manifest.peerDependenciesMeta?.[peer]?.optional).toBe(true);
+      expect(manifest.dependencies?.[peer]).toBeUndefined();
+      expect(manifest.devDependencies?.[peer]).toBe(manifest.peerDependencies?.[peer]);
+    }
+    // `@sd-jwt/core` ships a caret range on a 0.x package, which is the one
+    // transitive in the whole graph that sits inside signature verification.
+    const overrides = manifest.overrides as Record<string, unknown> | undefined;
+    expect(
+      (overrides?.['@sd-jwt/core'] as Record<string, string> | undefined)?.['@owf/identity-common'],
+    ).toMatch(/^\d+\.\d+\.\d+$/);
+  });
+
   it('ships a library entry alongside the CLI', () => {
     const exportsField = manifest.exports as Record<string, unknown> | undefined;
     expect(exportsField?.['.']).toBeDefined();

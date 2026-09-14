@@ -35,8 +35,12 @@ import {
   AP2_MODES,
   AP2_SIGNING_ALGORITHM,
   AP2_SPEC_VERSION,
-  type Ap2Mode,
 } from '../authorization/ap2/constants.js';
+import type {
+  Ap2AuthorizationConfig,
+  Ap2Mode,
+  Ap2TrustedIssuer,
+} from '../authorization/ap2/types.js';
 import {
   extractPathParameterNames,
   findUnparsedBraceToken,
@@ -490,41 +494,6 @@ export type AcpProtocolConfig =
         readonly operations: Readonly<Record<AcpCheckoutOperation, string>>;
       };
       readonly discovery?: AcpDiscoveryConfig;
-    };
-
-/** One inline public verification key, trusted because an operator wrote it here. */
-export interface Ap2TrustedKey {
-  readonly kid: string;
-  readonly jwk: Readonly<Record<string, string>>;
-}
-
-/** One trusted issuer and the keys it signs with. */
-export interface Ap2TrustedIssuer {
-  readonly issuer: string;
-  readonly audience: string;
-  readonly keys: readonly Ap2TrustedKey[];
-}
-
-/**
- * Discriminated on `enabled`, like `AcpProtocolConfig`: an enabled AP2 config
- * carries everything the verifier needs, so nothing downstream asserts on an
- * optional field, and a half-configured trust policy is rejected at load.
- */
-export type Ap2AuthorizationConfig =
-  | { readonly enabled: false }
-  | {
-      readonly enabled: true;
-      readonly specVersion: typeof AP2_SPEC_VERSION;
-      readonly mode: Ap2Mode;
-      readonly trust: {
-        /** Signers of the Checkout Mandate itself. */
-        readonly mandateIssuers: readonly Ap2TrustedIssuer[];
-        /** Signers of the merchant checkout JWT the mandate binds. */
-        readonly checkoutIssuers: readonly Ap2TrustedIssuer[];
-      };
-      readonly clockSkewSeconds: number;
-      /** Its own SQLite file. An authorization replay is not a payment replay. */
-      readonly replay: { readonly path: string };
     };
 
 export interface GatewayConfig {

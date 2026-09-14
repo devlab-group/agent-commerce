@@ -52,6 +52,45 @@ export const AP2_JWK_COORDINATE_BYTES = 32;
  */
 export const AP2_JWK_MEMBERS = ['kty', 'crv', 'x', 'y', 'kid', 'alg', 'use'] as const;
 
+/**
+ * The exact credential type of a closed Checkout Mandate.
+ *
+ * Compared against this literal, never matched as a prefix. `mandate.checkout`
+ * and `mandate.checkout.2` are different credentials with different rules, and
+ * `mandate.checkout.open.1` carries spending constraints this release does not
+ * evaluate - accepting it would tell a buyer their limits were checked when
+ * nothing read them.
+ */
+export const AP2_CHECKOUT_MANDATE_VCT = 'mandate.checkout.1';
+
+/**
+ * The Agent Commerce checkout profile every merchant checkout JWT must declare.
+ *
+ * This profile is ours, not AP2's: AP2 leaves the checkout document's payload
+ * outside its scope, so the claims a generic paid-resource invocation needs
+ * (resource id, input hash, amount, currency, payment method) had to be
+ * specified somewhere.
+ *
+ * A bare name rather than a URL, joining the set in CLAUDE.md 5b -
+ * `agent-commerce/delivery`, `agent-commerce/v1.0.0`,
+ * `resource://agent-commerce/...`. A profile id is a namespace and is never
+ * dereferenced, so a URL would buy nothing and would tie the wire format to a
+ * domain that has to outlive it. Compared exactly, never by prefix, and frozen
+ * once a release exists: merchants sign it into every checkout JWT, so
+ * changing it later breaks every deployed signer at once.
+ */
+export const AP2_CHECKOUT_PROFILE = 'agent-commerce/ap2/checkout/v1';
+
+/**
+ * The only digest algorithm accepted for SD-JWT disclosures and for the
+ * `checkout_hash` binding.
+ *
+ * AP2 takes this from the SD-JWT `_sd_alg`, defaulting to sha-256 when it is
+ * absent. A presentation naming anything else is refused rather than hashed
+ * as sha-256 anyway, which would check it under an algorithm it never claimed.
+ */
+export const AP2_DIGEST_ALGORITHM = 'sha-256';
+
 /** Seconds of clock skew tolerated on mandate and checkout time claims. */
 export const AP2_DEFAULT_CLOCK_SKEW_SECONDS = 60;
 
