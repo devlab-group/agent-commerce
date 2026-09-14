@@ -47,19 +47,25 @@ export interface AuthorizationRequirement {
 }
 
 /**
- * A verified, reserved authorization.
- *
- * `reference` is a safe stable identity (a digest, never the proof itself) fit
- * for a receipt. `reservationId` is the handle the pipeline later consumes or
- * releases depending on how settlement went.
+ * Safe audit identity of an authorization, fit for a receipt. `reference` is a
+ * digest: a receipt outlives its request, and a stored proof would be a
+ * spendable secret at rest.
  */
-export interface AuthorizationVerification {
-  readonly status: 'verified';
+export interface AuthorizationRecord {
   readonly method: AuthorizationMethodName;
   readonly reference: string;
-  readonly reservationId: string;
-  /** Safe audit summary only. Never the proof, its disclosures, or PII. */
+  /** Safe audit summary only. Never the proof, its disclosures, or PII */
   readonly metadata?: Readonly<Record<string, unknown>>;
+}
+
+/**
+ * A verified, reserved authorization. `reservationId` is the live handle the
+ * pipeline consumes, releases or marks uncertain once settlement resolves; it
+ * stays out of the record above because a handle is not an audit fact.
+ */
+export interface AuthorizationVerification extends AuthorizationRecord {
+  readonly status: 'verified';
+  readonly reservationId: string;
 }
 
 /** Input to {@link AuthorizationProvider.verifyAndReserve}. */
@@ -87,16 +93,18 @@ export interface AuthorizationFinalizeContext {
 /**
  * Contract every authorization method implements.
  *
- * The lifecycle is verify -> reserve -> settlement outcome -> consume/release.
- * The two halves straddle settlement because a proof has to be reserved
- * *before* funds move, so a replay cannot race a settlement, and its fate is
- * only known *after*. Releasing is for failures that provably moved no money.
- * Anything ambiguous is consumed rather than handed back: an authorization
- * handed back after an uncertain settlement can be spent a second time.
+ * The lifecycle straddles settlement: a proof must be reserved *before* funds
+ * move so a replay cannot race one, and its fate is only known *after*.
+ *
+ * Release only for a failure that provably moved no money. Anything ambiguous
+ * is marked uncertain: a proof handed back after a settlement that may have
+ * landed can be spent twice.
  */
 export interface AuthorizationProvider {
   readonly name: AuthorizationMethodName;
   readonly descriptor: AdapterDescriptor;
+  /** What a buyer must present, advertised beside the payment challenge */
+  readonly requirement: AuthorizationRequirement;
 
   /**
    * Verify a submission against the resolved purchase and atomically reserve
@@ -113,6 +121,12 @@ export interface AuthorizationProvider {
 
   /** Return a reservation to unused. Only for failures that moved no funds. */
   release(reservationId: string, context: AuthorizationFinalizeContext): Promise<void>;
+
+  /**
+   * Settlement broadcast but never confirmed: neither spend the reservation
+   * nor hand it back, and flag it for an operator
+   */
+  markUncertain(reservationId: string, context: AuthorizationFinalizeContext): Promise<void>;
 
   health(): Promise<AdapterHealth>;
 }

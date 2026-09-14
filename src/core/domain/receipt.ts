@@ -3,6 +3,7 @@
  *
  * FROZEN CONTRACT.
  */
+import type { AuthorizationRecord } from './authorization.js';
 import type { IsoTimestamp } from './common.js';
 import type { PaymentResult } from './payment.js';
 
@@ -12,6 +13,11 @@ export interface CommerceReceipt {
   readonly resourceId: string;
   /** Absent for free resources. */
   readonly payment?: PaymentResult;
+  /**
+   * Present only when the resource required one. A method and a digest, so the
+   * receipt records that consent existed without storing the proof of it.
+   */
+  readonly authorization?: AuthorizationRecord;
   readonly deliveredAt: IsoTimestamp;
   readonly backendStatus: number;
   readonly durationMs?: number;

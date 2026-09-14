@@ -13,6 +13,10 @@ export const COMMERCE_EVENT_TYPES = [
   'payment.rejected',
   'payment.verified',
   'payment.settled',
+  // The same two types whatever the method, so an audit-trail reader never
+  // has to know what AP2 is
+  'authorization.verified',
+  'authorization.rejected',
   'backend.called',
   'backend.failed',
   'resource.delivered',

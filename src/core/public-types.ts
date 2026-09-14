@@ -17,6 +17,7 @@
 export type {
   AuthorizationFinalizeContext,
   AuthorizationProvider,
+  AuthorizationRecord,
   AuthorizationRequirement,
   AuthorizationSubmission,
   AuthorizationVerification,

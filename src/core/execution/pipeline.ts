@@ -7,12 +7,18 @@
  * 3. resolve price
  * 4. free -> straight to backend
  * 5. paid -> pick provider -> createRequirement -> (challenge | verify ->
- * reserve replay key -> settle), fail closed at every step
+ * authorize/reserve -> reserve replay key -> settle -> consume/release the
+ * authorization), fail closed at every step
  * 6. call backend BACKEND_TIMEOUT / BACKEND_ERROR
  * 7. persist receipt, emit events, return outcome
  */
 
-import type { PaymentMethodName } from '../domain/common.js';
+import type {
+  AuthorizationProvider,
+  AuthorizationRecord,
+  AuthorizationVerification,
+} from '../domain/authorization.js';
+import type { AuthorizationMethodName, PaymentMethodName } from '../domain/common.js';
 import type { CommerceEvent, EventSink } from '../domain/event.js';
 import type { PaymentProvider, PaymentRequirement, PaymentResult } from '../domain/payment.js';
 import type { CommerceReceipt } from '../domain/receipt.js';
@@ -30,12 +36,23 @@ import { compileJsonSchema, type Validator } from './validation.js';
 export interface CreateExecutionPipelineOptions {
   readonly resources: ResourceRegistry;
   readonly paymentProviders: readonly PaymentProvider[];
+  /** Empty by default, so a deployment configuring none is unchanged */
+  readonly authorizationProviders?: readonly AuthorizationProvider[];
   readonly store: ReceiptStore;
   readonly backend: BackendExecutor;
   readonly events: EventSink;
   readonly logger: Logger;
   readonly clock: Clock;
   readonly ids: IdGenerator;
+}
+
+/**
+ * A reservation held across settlement, plus the summary the receipt keeps.
+ * `finalize` is the only way it ends, so no path can leave one open.
+ */
+interface AuthorizationHold {
+  readonly record: AuthorizationRecord;
+  finalize(action: 'consume' | 'release' | 'markUncertain'): Promise<void>;
 }
 
 export function createExecutionPipeline(
@@ -79,6 +96,117 @@ export function createExecutionPipeline(
 
   function buildEvent(partial: Omit<CommerceEvent, 'id' | 'at'>): CommerceEvent {
     return { id: options.ids.next('evt'), at: options.clock.nowIso(), ...partial };
+  }
+
+  /**
+   * Verify and reserve what the resource requires, or undefined if it requires
+   * none. Runs after payment verification, which has no side effect: a bad
+   * payment proof must not burn a reservation.
+   */
+  async function authorizeAndReserve(
+    request: CanonicalRequest,
+    resource: CommerceResource,
+    providers: readonly AuthorizationProvider[],
+    requirement: PaymentRequirement,
+    input: unknown,
+  ): Promise<AuthorizationHold | undefined> {
+    if (providers.length === 0) return undefined;
+
+    const submission = request.authorization;
+    const provider = providers.find((candidate) => candidate.name === submission?.method);
+    // A request carries one proof, so a resource requiring two methods is
+    // refused here rather than half-checked
+    const unmet = providers.filter((candidate) => candidate !== provider).map((c) => c.name);
+
+    if (submission === undefined || provider === undefined || unmet.length > 0) {
+      await safeEmit(
+        buildEvent({
+          type: 'authorization.rejected',
+          requestId: request.requestId,
+          resourceId: resource.id,
+          adapter: request.protocol,
+          status: 'error',
+          data: { reason: 'AUTHORIZATION_REQUIRED', methods: unmet },
+        }),
+      );
+      throw new CommerceError(
+        'AUTHORIZATION_REQUIRED',
+        `Resource "${resource.id}" requires authorization: ${unmet.join(', ')}`,
+        {
+          requestId: request.requestId,
+          resourceId: resource.id,
+          details: { required: providers.map((candidate) => candidate.name), missing: unmet },
+        },
+      );
+    }
+
+    let verification: AuthorizationVerification;
+    try {
+      verification = await provider.verifyAndReserve({
+        requestId: request.requestId,
+        resourceId: resource.id,
+        input,
+        submission,
+        requirement,
+      });
+    } catch (error) {
+      // An untyped throw says nothing about whose fault it was. Unavailable is
+      // honest and retryable; invalid would blame the buyer for our outage.
+      const mapped = isCommerceError(error)
+        ? error
+        : new CommerceError(
+            'AUTHORIZATION_PROVIDER_UNAVAILABLE',
+            'Authorization provider is unavailable',
+            {
+              requestId: request.requestId,
+              resourceId: resource.id,
+              cause: error,
+            },
+          );
+      await safeEmit(
+        buildEvent({
+          type: 'authorization.rejected',
+          requestId: request.requestId,
+          resourceId: resource.id,
+          adapter: request.protocol,
+          status: 'error',
+          data: { reason: mapped.code, method: provider.name },
+        }),
+      );
+      throw mapped;
+    }
+
+    await safeEmit(
+      buildEvent({
+        type: 'authorization.verified',
+        requestId: request.requestId,
+        resourceId: resource.id,
+        adapter: request.protocol,
+        status: 'ok',
+        data: { method: verification.method, reference: verification.reference },
+      }),
+    );
+
+    const context = { requestId: request.requestId, resourceId: resource.id };
+    return {
+      record: {
+        method: verification.method,
+        reference: verification.reference,
+        ...(verification.metadata !== undefined ? { metadata: verification.metadata } : {}),
+      },
+      async finalize(action) {
+        try {
+          await provider[action](verification.reservationId, context);
+        } catch (error) {
+          // Any failure leaves the row reserved, which is still unspendable.
+          // Not worth replacing the outcome the caller is about to see.
+          options.logger.error(
+            { err: describeError(error), requestId: request.requestId, action },
+            'Authorization finalization failed; the reservation stays reserved',
+          );
+        }
+      },
+    };
   }
 
   async function execute(request: CanonicalRequest): Promise<ExecutionOutcome> {
@@ -152,7 +280,22 @@ export function createExecutionPipeline(
       );
     }
 
+    // Authorization gates settlement, so requiring one on a free resource
+    // means nothing would ever read the proof. Config refuses it at load; the
+    // execution path must not be the one that serves it unchecked.
+    if (resource.pricing.type !== 'fixed' && (resource.authorization?.required.length ?? 0) > 0) {
+      throw new CommerceError(
+        'CONFIG_INVALID',
+        `Resource "${resource.id}" requires authorization but is not a paid resource`,
+        {
+          requestId: request.requestId,
+          resourceId: resource.id,
+        },
+      );
+    }
+
     let paymentResult: PaymentResult | undefined;
+    let authorization: AuthorizationRecord | undefined;
 
     if (resource.pricing.type === 'fixed') {
       const pricing = resource.pricing;
@@ -168,6 +311,14 @@ export function createExecutionPipeline(
           },
         );
       }
+
+      // Resolved before the challenge so the 402 can name what the retry must
+      // also carry, and so an uncheckable method fails before payment starts
+      const authProviders = resolveAuthorizationProviders(
+        options.authorizationProviders ?? [],
+        resource,
+        request.requestId,
+      );
 
       let requirement: PaymentRequirement;
       try {
@@ -203,6 +354,9 @@ export function createExecutionPipeline(
           requestId: request.requestId,
           resourceId: resource.id,
           requirement,
+          ...(authProviders.length > 0
+            ? { authorization: authProviders.map((p) => p.requirement) }
+            : {}),
         };
       }
 
@@ -285,6 +439,15 @@ export function createExecutionPipeline(
       }
       const replayKey = verification.replayKey;
 
+      const hold = await authorizeAndReserve(
+        request,
+        resource,
+        authProviders,
+        requirement,
+        validInput,
+      );
+      authorization = hold?.record;
+
       try {
         await options.store.reservePaymentAttempt({
           requestId: request.requestId,
@@ -309,6 +472,7 @@ export function createExecutionPipeline(
           'STORAGE_ERROR',
           'Payment attempt could not be recorded',
         );
+        await hold?.finalize('release');
         await safeEmit(
           buildEvent({
             type: 'payment.rejected',
@@ -354,6 +518,9 @@ export function createExecutionPipeline(
         // is still not delivered either way: only what gets *recorded*
         // changes, never the fail-closed outcome.
         const uncertainTxHash = uncertainSettlementTxHash(error);
+        // An unconfirmed broadcast may still have moved funds, so the proof is
+        // not handed back. Only a settlement that provably failed is releasable.
+        await hold?.finalize(uncertainTxHash !== undefined ? 'markUncertain' : 'release');
         await safePersist(
           () =>
             options.store.updatePaymentAttempt(
@@ -409,6 +576,7 @@ export function createExecutionPipeline(
       }
 
       if (settlement.status !== 'settled') {
+        await hold?.finalize('release');
         await safePersist(
           () =>
             options.store.updatePaymentAttempt({
@@ -442,6 +610,7 @@ export function createExecutionPipeline(
         );
       }
 
+      await hold?.finalize('consume');
       await safePersist(
         () =>
           options.store.updatePaymentAttempt({
@@ -510,6 +679,7 @@ export function createExecutionPipeline(
           backendStatus: backendErrorStatus(commerceError),
           protocol: request.protocol,
           payment: paymentResult,
+          ...(authorization !== undefined ? { authorization } : {}),
           metadata: { delivered: false, backendErrorCode: commerceError.code },
         };
         await safePersist(
@@ -566,6 +736,7 @@ export function createExecutionPipeline(
       durationMs: backendResponse.durationMs,
       protocol: request.protocol,
       ...(paymentResult !== undefined ? { payment: paymentResult } : {}),
+      ...(authorization !== undefined ? { authorization } : {}),
     };
 
     await safePersist(() => options.store.saveReceipt(receipt), 'saveReceipt', request.requestId);
@@ -612,6 +783,31 @@ function uncertainSettlementTxHash(error: unknown): string | undefined {
   if (!isCommerceError(error) || error.code !== 'PAYMENT_PROVIDER_UNAVAILABLE') return undefined;
   const hash = error.details?.['transactionHash'];
   return typeof hash === 'string' ? hash : undefined;
+}
+
+/**
+ * The provider for each method a resource requires, in the resource's order.
+ *
+ * Config refuses an unconfigured method at load. Missing it here would mean
+ * serving the resource with no authorization at all, so it is checked again.
+ */
+function resolveAuthorizationProviders(
+  providers: readonly AuthorizationProvider[],
+  resource: CommerceResource,
+  requestId: string,
+): readonly AuthorizationProvider[] {
+  const required = resource.authorization?.required ?? [];
+  return required.map((method: AuthorizationMethodName) => {
+    const found = providers.find((provider) => provider.name === method);
+    if (!found) {
+      throw new CommerceError(
+        'CONFIG_INVALID',
+        `Resource "${resource.id}" requires authorization method "${method}", which is not enabled`,
+        { requestId, resourceId: resource.id },
+      );
+    }
+    return found;
+  });
 }
 
 function pickProvider(
