@@ -1,14 +1,10 @@
 /**
  * Stage two: the merchant checkout JWT the mandate binds.
  *
- * AP2 leaves this document's payload outside its own scope, so all the mandate
- * guarantees is `checkout_hash`: a digest of the exact compact JWT the buyer
- * approved. Two things have to hold, and neither substitutes for the other.
- *
- * The hash proves the buyer approved *this* document. The signature proves the
- * merchant issued it. Checking only the hash accepts any document a buyer
- * chose to approve, including one they wrote themselves. Checking only the
- * signature accepts a genuine merchant document this mandate never covered.
+ * Two things have to hold. The hash proves the buyer approved *this* document;
+ * the signature proves the merchant issued it. Hash alone accepts a document
+ * the buyer wrote themselves; signature alone accepts a genuine merchant
+ * document this mandate never covered.
  */
 import { type JWTVerifyOptions, jwtVerify } from 'jose';
 import type { Clock } from '../../core/index.js';
@@ -36,11 +32,8 @@ function decodeSegment(jwt: string, index: 0 | 1): Record<string, unknown> | und
 }
 
 /**
- * Verifies the checkout JWT carried by an already-verified mandate.
- *
- * `mandateClaims` must come from a mandate whose own signature has been
- * checked, because `checkout_hash` is only worth anything if the issuer signed
- * it.
+ * `mandateClaims` must come from an already-verified mandate: `checkout_hash`
+ * is worth nothing unless the issuer signed it
  */
 export async function verifyCheckoutJwt(
   mandateClaims: Readonly<Record<string, unknown>>,
@@ -89,13 +82,11 @@ export async function verifyCheckoutJwt(
   const exp = claims['exp'];
   const iat = claims['iat'];
   const jti = claims['jti'];
-  // Same reasoning as the mandate's own freshness check: jose validates a time
-  // claim only when it is present, so requiring them is this file's job.
+  // jose validates a time claim only when present, so requiring them is ours
   if (typeof exp !== 'number' || typeof iat !== 'number') {
     throw ap2Rejected('invalid_claims', context);
   }
-  // `jti` is what a later settlement is recorded against, so a checkout
-  // document without one cannot be told apart from another.
+  // `jti` is what replay defence and the receipt record, so it is required
   if (typeof jti !== 'string' || jti.length === 0) {
     throw ap2Rejected('invalid_claims', context);
   }
@@ -106,26 +97,19 @@ export async function verifyCheckoutJwt(
 }
 
 /**
- * Recomputes the digest over the exact compact string the mandate carried.
- *
- * Hashed as the bytes that arrived, never re-encoded from parsed claims. Two
- * JSON serialisations of one payload differ in whitespace and key order, so
- * they differ in digest, and every valid mandate would fail. Normalising first
- * would be worse: it hashes a document other than the one being verified.
+ * Hashed as the bytes that arrived, never re-encoded from parsed claims: a
+ * re-serialised payload has a different digest, and normalising first would
+ * hash a document other than the one being verified
  */
 async function requireMatchingHash(
   compact: string,
   expected: string,
   context: Ap2ErrorContext,
 ): Promise<void> {
-  const digest = await crypto.subtle.digest(
-    // sha-256 only. The mandate's `_sd_alg` has already been pinned to it by
-    // the time this runs, so there is no second algorithm to dispatch on.
-    'SHA-256',
-    new TextEncoder().encode(compact),
-  );
+  // sha-256 only: `_sd_alg` was already pinned to it upstream
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(compact));
   const actual = Buffer.from(digest).toString('base64url');
-  // A plain comparison: both sides are public values an attacker holding the
-  // presentation already knows, so there is no secret for timing to leak.
+  // Plain comparison: both sides are public to anyone holding the
+  // presentation, so there is no secret for timing to leak
   if (actual !== expected) throw ap2Rejected('checkout_binding_failed', context);
 }

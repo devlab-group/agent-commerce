@@ -1,14 +1,10 @@
 /**
- * The Direct Checkout Mandate verifier, exercised with real ES256 signatures.
+ * The Direct Checkout Mandate verifier, with real ES256 signatures. See
+ * fixtures.ts for what these vectors are and are not.
  *
- * See fixtures.ts for what these vectors are and, more importantly, what they
- * are not: mandates built to the v0.2.0 shape by this repository, not golden
- * vectors from the reference implementation.
- *
- * Every negative case asserts the error CODE as well as the rejection, because
- * the one thing this feature must never do is report a bad mandate as a
- * payment problem. A 402 tells an auto-paying client to spend money on a
- * request that was never going to be delivered.
+ * Every negative case asserts the error CODE too: reporting a bad mandate as a
+ * payment problem would tell an auto-paying client to spend money on a request
+ * that was never going to be delivered.
  */
 import { beforeAll, describe, expect, it } from 'vitest';
 import type { EnabledAp2Config } from '../../../src/authorization/ap2/types.js';
@@ -55,7 +51,7 @@ function verifierFor(config: EnabledAp2Config, at: Date = NOW): Ap2MandateVerifi
   return createAp2MandateVerifier({ config, clock: fixedClock(at) });
 }
 
-/** Returns the CommerceError a rejected verification produced. */
+// Returns the CommerceError a rejected verification produced
 async function rejection(run: Promise<unknown>): Promise<CommerceError> {
   try {
     await run;
@@ -66,7 +62,7 @@ async function rejection(run: Promise<unknown>): Promise<CommerceError> {
   return expect.unreachable('expected the mandate to be refused') as never;
 }
 
-/** Every refusal here must be an authorization failure, never a payment one. */
+// Every refusal here must be an authorization failure, never a payment one
 async function expectRefused(run: Promise<unknown>, reason?: string): Promise<CommerceError> {
   const error = await rejection(run);
   expect(error.code).toBe('AUTHORIZATION_INVALID');
@@ -139,7 +135,7 @@ describe('malformed presentations', () => {
 
   it('refuses a disclosure appended that no digest in the payload references', async () => {
     // The forged-claim attack: append `[salt, "amount", "0.01"]` and hope the
-    // verifier merges it in without checking it was ever committed to.
+    // verifier merges it in without checking it was ever committed to
     const forged = disclosure('salt-forged', 'amount', '0.01');
     const presentation = await mintMandate(parties.mandateSigner, checkoutJwt, {
       extraDisclosures: [forged],
@@ -197,9 +193,8 @@ describe('signature and trust', () => {
   });
 
   it('refuses a mandate signed by a key that is trusted for checkout documents only', async () => {
-    // Key confusion across the two trust lists. Being allowed to sign the
-    // merchant's own checkout documents must not confer the power to issue
-    // mandates authorising purchases from them.
+    // Signing the merchant's checkout documents must not confer the power to
+    // issue mandates authorising purchases from them
     const presentation = await mintMandate(parties.checkoutSigner, checkoutJwt, {
       header: { kid: parties.mandateSigner.kid },
     });
@@ -231,10 +226,9 @@ describe('signature and trust', () => {
   });
 
   it('refuses HS256 forged against the public key', async () => {
-    // The classic confusion: take the public EC key, treat it as an HMAC
-    // secret, and sign. Refused twice over - by the algorithm allowlist and by
-    // the key being an EC key that cannot do HMAC - and this asserts the
-    // outcome rather than which of the two got there first.
+    // Take the public EC key, treat it as an HMAC secret, sign. Refused twice
+    // over (allowlist, and an EC key cannot do HMAC); this asserts the
+    // outcome, not which one got there first.
     const header = Buffer.from(
       JSON.stringify({ alg: 'HS256', kid: parties.mandateSigner.kid }),
     ).toString('base64url');
@@ -324,8 +318,8 @@ describe('the merchant checkout JWT', () => {
   });
 
   it('refuses a swapped checkout JWT, caught by checkout_hash', async () => {
-    // A genuine, correctly signed merchant document - for a different
-    // purchase. The signature verifies; the hash the buyer approved does not.
+    // A genuine merchant document, for a different purchase: the signature
+    // verifies, the hash the buyer approved does not
     const other = await signCheckoutJwt(
       parties.checkoutSigner,
       checkoutPayload({ jti: 'checkout_OTHER' }),
@@ -398,7 +392,7 @@ describe('the merchant checkout JWT', () => {
   });
 
   it('refuses a mandate and a checkout JWT that are each valid but unrelated', async () => {
-    // Both documents genuine, neither binding the other.
+    // Both documents genuine, neither binding the other
     const unrelated = await signCheckoutJwt(
       parties.checkoutSigner,
       checkoutPayload({ jti: 'checkout_UNRELATED' }),
@@ -430,9 +424,8 @@ describe('error reporting', () => {
   });
 
   it('reports a broken configured key as our fault, not the buyer', async () => {
-    // The config loader would refuse this key, so reaching the verifier with
-    // one means our deployment is broken. Blaming the payer would burn a
-    // mandate that is very likely fine.
+    // Config would refuse this key, so reaching the verifier means our
+    // deployment is broken. Blaming the payer burns a mandate that is fine.
     const broken = configFor(parties, {
       trust: {
         mandateIssuers: [
@@ -457,7 +450,7 @@ describe('trust list separation', () => {
     const config = configFor(parties, {
       trust: {
         mandateIssuers: parties.mandateIssuers,
-        // Only the mandate issuer is trusted for checkout documents now.
+        // Only the mandate issuer is trusted for checkout documents now
         checkoutIssuers: [trustedIssuer(MANDATE_ISSUER, CHECKOUT_AUDIENCE, parties.mandateSigner)],
       },
     });

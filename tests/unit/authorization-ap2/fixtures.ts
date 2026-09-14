@@ -1,20 +1,14 @@
 /**
  * Builds AP2 Direct Checkout Mandate presentations for the verifier tests.
  *
- * PROVENANCE, because it decides what these tests are worth. These are not
- * golden vectors from the AP2 repository. They are built here to the v0.2.0
- * closed Checkout Mandate shape (`vct` `mandate.checkout.1`, a `checkout_hash`
- * over the exact compact checkout JWT, SD-JWT disclosures under `_sd` with
- * `_sd_alg` sha-256), with real ES256 keys and real signatures from `jose`.
+ * PROVENANCE: these are NOT golden vectors from the AP2 repository. They are
+ * built here to the v0.2.0 closed Checkout Mandate shape, with real ES256 keys
+ * and real signatures from `jose`. So they show the verifier enforces the
+ * rules as this repository reads them; they do not show interoperability with
+ * a mandate the reference implementation minted. Upstream vectors, with the
+ * commit recorded, belong here before anyone calls this stable.
  *
- * So they show the verifier enforces the rules as this repository reads them.
- * They do not show interoperability with a mandate minted by the reference
- * implementation. Vectors generated from upstream, with the commit recorded,
- * are what would show that, and they belong here before anyone calls this
- * feature stable.
- *
- * Keys are generated per test run and never written down. Nothing here signs
- * anything outside the test process.
+ * Keys are generated per run and never written down.
  */
 import { exportJWK, generateKeyPair, SignJWT } from 'jose';
 import {
@@ -28,11 +22,11 @@ export const MANDATE_AUDIENCE = 'merchant.example';
 export const CHECKOUT_ISSUER = 'https://merchant.example';
 export const CHECKOUT_AUDIENCE = 'agent-commerce';
 
-/** Fixed instant every fixture is minted against, so nothing races a real clock. */
+/** Fixed instant every fixture is minted against, so nothing races a real clock */
 export const NOW = new Date('2026-09-14T12:00:00.000Z');
 const NOW_SECONDS = Math.floor(NOW.getTime() / 1000);
 
-/** `CryptoKey` is a DOM type and server code here does not load the DOM lib. */
+// `CryptoKey` is a DOM type and server code here does not load the DOM lib
 type PrivateKey = Awaited<ReturnType<typeof generateKeyPair>>['privateKey'];
 
 export interface SigningIdentity {
@@ -76,15 +70,15 @@ async function sha256(input: string): Promise<string> {
   return base64url(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input)));
 }
 
-/** base64url(SHA-256(utf8)), the digest AP2 uses everywhere. */
+/** base64url(SHA-256(utf8)), the digest AP2 uses everywhere */
 export const sha256Base64url = sha256;
 
-/** One SD-JWT disclosure for an object property: `[salt, name, value]`. */
+/** One SD-JWT disclosure for an object property: `[salt, name, value]` */
 export function disclosure(salt: string, name: string, value: unknown): string {
   return Buffer.from(JSON.stringify([salt, name, value]), 'utf8').toString('base64url');
 }
 
-/** The Agent Commerce checkout profile payload, as the plan specifies it. */
+/** The Agent Commerce checkout profile payload, as the plan specifies it */
 export function checkoutPayload(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     iss: CHECKOUT_ISSUER,
@@ -115,26 +109,69 @@ export async function signCheckoutJwt(
 }
 
 export interface MandateOptions {
-  /** Replaces the compact checkout JWT after `checkout_hash` has been computed. */
+  /** Replaces the compact checkout JWT after `checkout_hash` has been computed */
   readonly checkoutJwtOverride?: string;
   readonly payloadOverrides?: Record<string, unknown>;
   readonly header?: Record<string, unknown>;
-  /** Extra disclosure strings appended to the presentation. */
+  /** Extra disclosure strings appended to the presentation */
   readonly extraDisclosures?: readonly string[];
-  /** Omit the disclosure that carries the checkout JWT. */
+  /** Extra claims committed to in `_sd`, disclosable independently */
+  readonly disclosable?: Readonly<Record<string, unknown>>;
+  /** Which of {@link MandateOptions.disclosable} to actually present */
+  readonly present?: readonly string[];
+  /** Omit the disclosure that carries the checkout JWT */
   readonly withholdCheckoutDisclosure?: boolean;
 }
 
 /**
+ * A signed mandate and its disclosures, kept apart. ES256 uses a fresh nonce
+ * per signature, so a test needing ONE mandate presented two ways must mint
+ * once and vary the disclosures afterwards.
+ */
+export interface MandateParts {
+  readonly signedToken: string;
+  readonly checkoutDisclosure: string;
+  /** Encoded disclosure per optional claim name */
+  readonly optional: Readonly<Record<string, string>>;
+}
+
+/** Joins a signed token and a chosen set of disclosures into a presentation */
+export function assemblePresentation(signedToken: string, disclosures: readonly string[]): string {
+  return `${signedToken}~${disclosures.map((d) => `${d}~`).join('')}`;
+}
+
+/**
  * Mints a closed Checkout Mandate presentation carrying `checkout_jwt` as a
- * selectively disclosed claim, which is the shape a Direct presentation takes.
+ * selectively disclosed claim, which is the shape a Direct presentation takes
  */
 export async function mintMandate(
   mandateSigner: SigningIdentity,
   checkoutJwt: string,
   options: MandateOptions = {},
 ): Promise<string> {
+  const parts = await mintMandateParts(mandateSigner, checkoutJwt, options);
+  const presented = [
+    ...(options.withholdCheckoutDisclosure ? [] : [parts.checkoutDisclosure]),
+    ...Object.entries(parts.optional)
+      .filter(([name]) => options.present === undefined || options.present.includes(name))
+      .map(([, encoded]) => encoded),
+    ...(options.extraDisclosures ?? []),
+  ];
+  return assemblePresentation(parts.signedToken, presented);
+}
+
+/** The same mandate, handed back unassembled */
+export async function mintMandateParts(
+  mandateSigner: SigningIdentity,
+  checkoutJwt: string,
+  options: MandateOptions = {},
+): Promise<MandateParts> {
   const checkoutDisclosure = disclosure('salt-checkout', 'checkout_jwt', checkoutJwt);
+  const optional = Object.entries(options.disclosable ?? {}).map(([name, value]) => ({
+    name,
+    encoded: disclosure(`salt-${name}`, name, value),
+  }));
+  const optionalDigests = await Promise.all(optional.map((entry) => sha256(entry.encoded)));
   const payload: Record<string, unknown> = {
     vct: AP2_CHECKOUT_MANDATE_VCT,
     iss: MANDATE_ISSUER,
@@ -143,7 +180,7 @@ export async function mintMandate(
     exp: NOW_SECONDS + 300,
     checkout_hash: await sha256(checkoutJwt),
     _sd_alg: 'sha-256',
-    _sd: [await sha256(checkoutDisclosure)],
+    _sd: [await sha256(checkoutDisclosure), ...optionalDigests],
     ...options.payloadOverrides,
   };
 
@@ -151,17 +188,14 @@ export async function mintMandate(
     .setProtectedHeader({ alg: 'ES256', kid: mandateSigner.kid, ...options.header })
     .sign(mandateSigner.privateKey);
 
-  const presented = [
-    ...(options.withholdCheckoutDisclosure
-      ? []
-      : [
-          options.checkoutJwtOverride !== undefined
-            ? disclosure('salt-checkout', 'checkout_jwt', options.checkoutJwtOverride)
-            : checkoutDisclosure,
-        ]),
-    ...(options.extraDisclosures ?? []),
-  ];
-  return `${jws}~${presented.map((d) => `${d}~`).join('')}`;
+  return {
+    signedToken: jws,
+    checkoutDisclosure:
+      options.checkoutJwtOverride !== undefined
+        ? disclosure('salt-checkout', 'checkout_jwt', options.checkoutJwtOverride)
+        : checkoutDisclosure,
+    optional: Object.fromEntries(optional.map((entry) => [entry.name, entry.encoded])),
+  };
 }
 
 export interface Party {
@@ -172,7 +206,7 @@ export interface Party {
   readonly checkoutIssuers: readonly Ap2TrustedIssuer[];
 }
 
-/** Key generation is the slow part, so a suite builds this once. */
+/** Key generation is the slow part, so a suite builds this once */
 export async function createParties(): Promise<Party> {
   const [mandateSigner, checkoutSigner, stranger] = await Promise.all([
     identity('mandate-key-2026-01'),
@@ -188,7 +222,7 @@ export async function createParties(): Promise<Party> {
   };
 }
 
-/** A `Clock` pinned to {@link NOW}, or to an offset from it. */
+/** A `Clock` pinned to {@link NOW}, or to an offset from it */
 export function fixedClock(at: Date = NOW) {
   return {
     now: () => at,

@@ -1,27 +1,20 @@
 /**
- * Every failure the AP2 verifier can report, and the rule for reporting it.
+ * Every failure the AP2 verifier can report.
  *
- * `CommerceError.message` reaches the client over HTTP, MCP and A2A, so
- * nothing derived from the presentation may appear in one. A mandate carries
- * the buyer's approved purchase and, in the general case, personal data; an
- * error that quoted the claim it choked on would publish it to whoever sent
- * the request. The reason is a fixed phrase from the list below, the machine
- * -readable code goes in `details.reason`, and the underlying exception goes
- * on `cause`, which is never serialised.
+ * `CommerceError.message` reaches the client, and a mandate carries the
+ * buyer's purchase and often personal data, so messages are fixed phrases from
+ * the list below. The machine-readable code goes in `details.reason` and the
+ * original exception on `cause`, which is never serialised.
  *
- * Two codes. A buyer presenting a bad mandate gets AUTHORIZATION_INVALID. Our
- * own verifier failing to work gets AUTHORIZATION_PROVIDER_UNAVAILABLE,
- * because no verdict was reached, and blaming the buyer for our outage is how
- * a perfectly good mandate ends up refused.
+ * Two codes: AUTHORIZATION_INVALID when the buyer's mandate is bad,
+ * AUTHORIZATION_PROVIDER_UNAVAILABLE when our verifier never reached a
+ * verdict. Blaming the buyer for our outage refuses a good mandate.
  */
 import { CommerceError } from '../../core/index.js';
 
 /**
- * Machine-readable rejection reasons.
- *
- * Coarse on purpose. A client learns that its mandate was refused and roughly
- * where, not which check failed at what offset. The finer version turns an
- * error response into an oracle for probing the trust policy.
+ * Coarse on purpose: a client learns roughly where its mandate was refused,
+ * not which check failed. Finer detail is an oracle for probing trust policy.
  */
 export const AP2_REJECTION_REASONS = [
   'malformed_presentation',
@@ -34,6 +27,7 @@ export const AP2_REJECTION_REASONS = [
   'wrong_audience',
   'unsupported_mandate_type',
   'checkout_binding_failed',
+  'purchase_mismatch',
 ] as const;
 
 export type Ap2RejectionReason = (typeof AP2_REJECTION_REASONS)[number];
@@ -49,6 +43,7 @@ const MESSAGES: Readonly<Record<Ap2RejectionReason, string>> = {
   wrong_audience: 'The mandate is addressed to a different audience.',
   unsupported_mandate_type: 'The mandate is not a closed Direct Checkout Mandate.',
   checkout_binding_failed: 'The merchant checkout document bound to the mandate did not verify.',
+  purchase_mismatch: 'The mandate does not authorize this purchase.',
 };
 
 export interface Ap2ErrorContext {
@@ -57,7 +52,7 @@ export interface Ap2ErrorContext {
   readonly cause?: unknown;
 }
 
-/** The buyer's mandate is bad. Fail closed, and say only which stage refused it. */
+/** The buyer's mandate is bad. Fail closed */
 export function ap2Rejected(
   reason: Ap2RejectionReason,
   context: Ap2ErrorContext = {},
@@ -71,11 +66,8 @@ export function ap2Rejected(
 }
 
 /**
- * Our verifier could not reach a verdict.
- *
- * A configured key that will not import, or anything else that means the
- * check never ran. Retryable, and never recorded against the payer: the
- * mandate may well be perfectly good.
+ * The check never ran (a configured key that will not import, say). Retryable,
+ * and never recorded against the payer: the mandate may be perfectly good.
  */
 export function ap2Unavailable(detail: string, context: Ap2ErrorContext = {}): CommerceError {
   return new CommerceError(

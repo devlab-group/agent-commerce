@@ -1,16 +1,12 @@
 /**
- * Stage one: parse the SD-JWT presentation, verify the issuer's signature and
- * resolve the disclosures into a claim set.
+ * Stage one: parse the presentation, verify the issuer's signature, resolve
+ * the disclosures.
  *
- * The disclosure mechanics come from `@sd-jwt/core` rather than being written
- * out here. Three attacks live in that algorithm: a disclosure appended that
- * no digest in the payload references, the same disclosure presented twice,
- * and a disclosure that will not decode. The library refuses all three, and a
- * hand-rolled digest walk would be reimplementing exactly that, with less
- * coverage, on the path deciding whether a purchase was authorised.
- *
- * The cryptography is `jose`'s. This file supplies the policy around it: which
- * key, which algorithm, which audience, and what counts as a fresh mandate.
+ * Disclosure mechanics come from `@sd-jwt/core`, which refuses the three
+ * attacks that live in that algorithm: an appended disclosure nothing
+ * references, the same disclosure twice, and one that will not decode.
+ * Cryptography is `jose`'s. This file supplies the policy: which key, which
+ * algorithm, which audience, what counts as fresh.
  */
 import { decodeSdJwt, getClaims, splitSdJwt } from '@sd-jwt/core';
 import { type JWTVerifyOptions, jwtVerify } from 'jose';
@@ -25,17 +21,21 @@ import type { TrustStore } from './trust.js';
 
 export interface VerifiedMandate {
   readonly issuer: string;
-  /** Every claim, with the presented disclosures resolved into place. */
+  /** Every claim, with the presented disclosures resolved into place */
   readonly claims: Readonly<Record<string, unknown>>;
+  /**
+   * The issuer-signed token on its own, without the disclosures.
+   *
+   * This, not the presentation string, is the stable identity of a mandate:
+   * disclosing or withholding an optional claim rewrites the presentation and
+   * leaves the signed token untouched. Replay defence keys on a digest of it.
+   */
+  readonly signedToken: string;
 }
 
 /**
- * SHA-256 over a disclosure string.
- *
- * `@sd-jwt/core` passes the algorithm it read from `_sd_alg`, so this doubles
- * as the enforcement point: anything but sha-256 throws instead of being
- * quietly computed as sha-256, which would let a presentation declare one
- * algorithm and be checked under another.
+ * `@sd-jwt/core` passes the algorithm it read from `_sd_alg`, so this is also
+ * where a presentation declaring anything but sha-256 is refused
  */
 async function hasher(data: string | ArrayBuffer, algorithm: string): Promise<Uint8Array> {
   if (algorithm.toLowerCase() !== AP2_DIGEST_ALGORITHM) {
@@ -52,12 +52,9 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 }
 
 /**
- * Parses and verifies the mandate half of a presentation.
- *
- * Order is the security boundary of this file: nothing is read out of the
- * payload as *trusted* until `jwtVerify` has returned. The header's `kid` and
- * the payload's `iss` are read before that, but only to choose which
- * configured key to try, and choosing wrong can only make the signature fail.
+ * Order is the security boundary here: nothing is trusted until `jwtVerify`
+ * returns. `kid` and `iss` are read before that only to pick which configured
+ * key to try, and picking wrong just makes the signature fail.
  */
 export async function verifyMandate(
   presentation: string,
@@ -68,17 +65,16 @@ export async function verifyMandate(
   let encodedJws: string;
   try {
     // Covers a malformed base JWT, a disclosure that will not decode, a
-    // duplicate digest, and an `_sd_alg` this release does not implement.
+    // duplicate digest, and an `_sd_alg` this release does not implement
     decoded = await decodeSdJwt(presentation, hasher);
     encodedJws = splitSdJwt(presentation).jwt;
   } catch (cause) {
     throw ap2Rejected('malformed_presentation', { ...context, cause });
   }
 
-  // A key-binding JWT proves possession of the key a mandate was bound to.
-  // Direct mode issues no bound mandates, so one arriving here belongs to a
-  // flow this release does not verify, and ignoring it would mean silently
-  // not checking a proof that was sent.
+  // Direct mode issues no key-bound mandates, so one arriving here belongs to
+  // a flow we do not verify. Ignoring it would mean silently not checking a
+  // proof that was sent.
   if (decoded.kbJwt !== undefined) {
     throw ap2Rejected('unsupported_mandate_type', context);
   }
@@ -92,16 +88,14 @@ export async function verifyMandate(
   const { issuer, key } = await deps.trust.resolve(rawPayload['iss'], header['kid'], context);
 
   const options: JWTVerifyOptions = {
-    // Redundant today and kept anyway: the resolved key is an EC public key,
-    // so jose already refuses `alg: none` and an HMAC forged against it. The
-    // allowlist is what keeps that true if this ever resolves to a key set
-    // rather than one key, where the header would get to pick.
+    // Redundant today (the key is EC, so jose already refuses `alg: none` and
+    // a forged HMAC) and kept for the day this resolves a key set instead of
+    // one key, where the header would get to pick
     algorithms: [AP2_SIGNING_ALGORITHM],
     issuer: issuer.issuer,
     audience: issuer.audience,
     clockTolerance: deps.clockSkewSeconds,
-    // The injected clock, not jose's own `Date.now()`, so an expiry test is a
-    // test rather than a race against the wall clock.
+    // Injected clock, not jose's `Date.now()`, so expiry tests are tests
     currentDate: deps.clock.now(),
   };
 
@@ -117,29 +111,26 @@ export async function verifyMandate(
 
   let claims: Record<string, unknown>;
   try {
-    // Resolved against the VERIFIED payload. Handing `getClaims` the decoded
-    // one would match disclosures against digests nobody signed.
+    // Against the VERIFIED payload: the decoded one would match disclosures
+    // against digests nobody signed
     claims = (await getClaims(verifiedPayload, decoded.disclosures, hasher)) as Record<
       string,
       unknown
     >;
   } catch (cause) {
-    // Where an appended disclosure that no digest references is refused.
+    // Where an appended disclosure that no digest references is refused
     throw ap2Rejected('malformed_presentation', { ...context, cause });
   }
 
   requireClosedCheckoutMandate(claims, context);
 
-  return { issuer: issuer.issuer, claims };
+  return { issuer: issuer.issuer, claims, signedToken: encodedJws };
 }
 
 /**
- * Maps a jose verification failure onto one of our coarse reasons.
- *
  * Matched on jose's stable error `code`, not its message. A client is owed
- * the difference between "your mandate has expired" and "it did not verify at
- * all"; anything finer describes our checks back to whoever is probing
- * them.
+ * "expired" versus "did not verify"; anything finer describes our checks back
+ * to whoever is probing them.
  */
 function classifyJoseFailure(cause: unknown): 'expired' | 'wrong_audience' | 'invalid_signature' {
   const code = (cause as { code?: unknown })?.code;
@@ -153,11 +144,8 @@ function classifyJoseFailure(cause: unknown): 'expired' | 'wrong_audience' | 'in
 }
 
 /**
- * `exp` and `iat` are required, not merely checked when present.
- *
- * jose validates both only if the claim is there, so a mandate omitting `exp`
- * verifies and then never expires. An authorisation to spend money that is
- * valid forever is not something to accept because a field was absent.
+ * Required, not merely checked when present: jose validates a time claim only
+ * if it is there, so a mandate omitting `exp` would verify and never expire
  */
 function requireFreshness(
   payload: Record<string, unknown>,
@@ -170,19 +158,12 @@ function requireFreshness(
     throw ap2Rejected('invalid_claims', context);
   }
   const nowSeconds = Math.floor(deps.clock.now().getTime() / 1000);
-  // An issuance timestamp in the future is either a broken signer or a mandate
-  // minted to outlive the window its own `exp` describes.
+  // A future `iat` is a broken signer, or a mandate minted to outlive its own
+  // expiry window
   if (iat > nowSeconds + deps.clockSkewSeconds) throw ap2Rejected('expired', context);
 }
 
-/**
- * Exactly `mandate.checkout.1`, compared against the literal.
- *
- * A `startsWith` test would accept `mandate.checkout.1x`. Accepting the open
- * variant would be worse: it carries `allowed_merchants` and `line_items`
- * constraints this release does not evaluate, so a buyer would read their
- * spending limits as enforced when nothing had looked at them.
- */
+// Exactly `mandate.checkout.1`; see AP2_CHECKOUT_MANDATE_VCT for why
 function requireClosedCheckoutMandate(
   claims: Record<string, unknown>,
   context: Ap2ErrorContext,
