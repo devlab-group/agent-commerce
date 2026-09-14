@@ -7,6 +7,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { GatewayConfig } from '../config/index.js';
 import type { EventBus } from '../core/execution/index.js';
 import {
+  AUTHORIZATION_HEADER,
   type CanonicalRequest,
   type Clock,
   CommerceError,
@@ -16,6 +17,7 @@ import {
   PAYMENT_REQUIRED_HEADER,
   PAYMENT_RESPONSE_HEADER,
   type PaymentProvider,
+  parseAuthorizationHeader,
   type ReceiptStore,
   type ResourceRegistry,
   toCommerceError,
@@ -222,6 +224,14 @@ async function handleInvoke(
         ? { method: paymentMethod, payload: paymentValue }
         : undefined;
 
+    // Its own header rather than a reserved body field: HTTP already carries
+    // the payment proof out of band, and an authorization inside the body
+    // would have to survive every backend input-binding mode intact.
+    const authorization = parseAuthorizationHeader(
+      request.headers[AUTHORIZATION_HEADER],
+      request.id,
+    );
+
     const canonicalRequest: CanonicalRequest = {
       requestId: request.id,
       resourceId,
@@ -229,6 +239,7 @@ async function handleInvoke(
       protocol: 'http',
       receivedAt: options.clock.nowIso(),
       ...(payment !== undefined ? { payment } : {}),
+      ...(authorization !== undefined ? { authorization } : {}),
     };
 
     const outcome = await options.pipeline.execute(canonicalRequest);

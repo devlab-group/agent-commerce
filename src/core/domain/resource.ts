@@ -3,7 +3,13 @@
  *
  * FROZEN CONTRACT.
  */
-import type { DecimalAmount, JsonSchema, PaymentMethodName, ProtocolName } from './common.js';
+import type {
+  AuthorizationMethodName,
+  DecimalAmount,
+  JsonSchema,
+  PaymentMethodName,
+  ProtocolName,
+} from './common.js';
 
 /** HTTP methods a backend handler may use. */
 export type BackendMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
@@ -79,6 +85,17 @@ export interface CommerceResource {
   readonly pricing: Pricing;
   readonly exposedVia: readonly ProtocolName[];
   readonly paymentMethods: readonly PaymentMethodName[];
+  /**
+   * Authorization the buyer must present in addition to payment.
+   *
+   * Opt-in per resource and absent by default, so every resource configured
+   * before this existed behaves exactly as it did. It sits beside
+   * `paymentMethods` rather than inside it: an authorization method is not a
+   * payment rail and must never be selectable as one.
+   */
+  readonly authorization?: {
+    readonly required: readonly AuthorizationMethodName[];
+  };
 }
 
 /** Read-only view of every configured resource. */

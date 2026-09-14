@@ -4,7 +4,7 @@ import {
   compileJsonSchema,
   validateBackendRequestShape,
 } from '../../../src/core/execution/index.js';
-import { isCommerceError, PAYMENT_INPUT_FIELD } from '../../../src/core/index.js';
+import { isCommerceError, RESERVED_INPUT_FIELDS } from '../../../src/core/index.js';
 import { validRawConfig } from './fixtures.js';
 
 function expectConfigInvalid(fn: () => unknown): void {
@@ -608,21 +608,24 @@ describe('parseConfig', () => {
     });
   });
 
-  it(`rejects a resource whose input.properties declares the reserved "${PAYMENT_INPUT_FIELD}" field`, () => {
-    const raw = validRawConfig();
-    (
-      raw['resources'] as { weather_basic: { input: { properties: Record<string, unknown> } } }
-    ).weather_basic.input.properties[PAYMENT_INPUT_FIELD] = { type: 'string' };
-    expectConfigInvalid(() => parseConfig(raw, {}));
-    try {
-      parseConfig(raw, {});
-    } catch (error) {
-      if (isCommerceError(error)) {
-        expect(error.message).toContain(PAYMENT_INPUT_FIELD);
-        expect(error.message).toContain('reserved');
+  it.each(RESERVED_INPUT_FIELDS)(
+    'rejects a resource whose input.properties declares the reserved "%s" field',
+    (reserved) => {
+      const raw = validRawConfig();
+      (
+        raw['resources'] as { weather_basic: { input: { properties: Record<string, unknown> } } }
+      ).weather_basic.input.properties[reserved] = { type: 'string' };
+      expectConfigInvalid(() => parseConfig(raw, {}));
+      try {
+        parseConfig(raw, {});
+      } catch (error) {
+        if (isCommerceError(error)) {
+          expect(error.message).toContain(reserved);
+          expect(error.message).toContain('reserved');
+        }
       }
-    }
-  });
+    },
+  );
 
   it('rejects a paid resource declaring no payment methods', () => {
     const raw = validRawConfig();
@@ -1795,9 +1798,9 @@ describe('parseConfig backend.inputBindings', () => {
     );
   });
 
-  it('rejects a binding to the reserved payment input field', () => {
+  it.each(RESERVED_INPUT_FIELDS)('rejects a binding to the reserved "%s" input field', (field) => {
     expectConfigInvalid(() =>
-      parseConfig(bindingConfig({ bindings: { ...bindings, body: PAYMENT_INPUT_FIELD } }), {}),
+      parseConfig(bindingConfig({ bindings: { ...bindings, body: field } }), {}),
     );
   });
 

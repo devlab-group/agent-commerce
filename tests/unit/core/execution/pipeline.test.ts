@@ -471,6 +471,41 @@ describe('createExecutionPipeline', () => {
     expect(outcome.kind).toBe('delivered');
   });
 
+  it('strips every reserved field, not only _payment, before validating input', async () => {
+    // Defence in depth. Adapters lift these out already, so reaching here
+    // means one of them stopped doing so - and the closed schema below would
+    // then turn a gateway-reserved field into the caller's INPUT_INVALID.
+    const resource = makeResource({
+      id: 'res-1',
+      pricing: { type: 'free' },
+      inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    });
+    const store = createFakeStore();
+    const backendInputs: unknown[] = [];
+    const pipeline = createExecutionPipeline({
+      resources: createResourceRegistry([resource]),
+      paymentProviders: [],
+      store,
+      backend: createFakeBackendExecutor(async (_handler, request) => {
+        backendInputs.push(request.input);
+        return { status: 200, headers: {}, body: { ok: true }, durationMs: 1 };
+      }),
+      events: store,
+      logger: createCapturingLogger(),
+      clock: createFakeClock(),
+      ids: createFakeIdGenerator(),
+    });
+
+    const outcome = await pipeline.execute(
+      makeRequest({
+        input: { _payment: 'whatever', _authorization: { method: 'ap2', payload: 'proof' } },
+      }),
+    );
+
+    expect(outcome.kind).toBe('delivered');
+    expect(backendInputs).toEqual([{}]);
+  });
+
   it('returns a PaymentRequiredOutcome and emits payment.required when no proof is supplied', async () => {
     const resource = makeResource({
       id: 'res-1',

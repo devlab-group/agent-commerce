@@ -66,12 +66,13 @@ import {
   type CanonicalRequest,
   CommerceError,
   type CommerceResource,
+  extractReservedInputFields,
   type HttpProtocolAdapter,
   type ProtocolAdapterContext,
   toCommerceError,
 } from '../../core/index.js';
 import { buildDescriptor, PACKAGE_VERSION } from './descriptor.js';
-import { errorResult, extractPaymentSubmission, mapOutcome } from './result-mapping.js';
+import { errorResult, mapOutcome } from './result-mapping.js';
 import {
   buildInputSchema,
   buildToolDescription,
@@ -379,14 +380,20 @@ export class McpProtocolAdapter implements HttpProtocolAdapter {
           new CommerceError('RESOURCE_NOT_FOUND', `Unknown tool "${resourceId}".`, { resourceId }),
         );
       }
-      const { input, payment } = extractPaymentSubmission(rawArgs, resource);
+      const requestId = context.ids.next('mcp');
+      const { input, payment, authorization } = extractReservedInputFields(
+        rawArgs,
+        resource,
+        requestId,
+      );
       const request: CanonicalRequest = {
-        requestId: context.ids.next('mcp'),
+        requestId,
         resourceId,
         input,
         protocol: 'mcp',
         receivedAt: context.clock.nowIso(),
         ...(payment !== undefined ? { payment } : {}),
+        ...(authorization !== undefined ? { authorization } : {}),
       };
       await this.acquireToolCallSlot(signal);
       try {

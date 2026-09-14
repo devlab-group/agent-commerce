@@ -33,9 +33,9 @@ import {
 import {
   CommerceError,
   type CommerceResource,
-  PAYMENT_INPUT_FIELD,
   PROTOCOL_NAMES,
   type Pricing,
+  RESERVED_INPUT_FIELDS,
 } from '../core/index.js';
 import { resolveX402Deployment, type X402FacilitatorConfig } from '../payments/x402/guardrails.js';
 import {
@@ -948,21 +948,20 @@ function normaliseResource(
   if (entry.input !== undefined) validateResourceSchemaKeywords(id, 'input', entry.input);
 
   const inputProperties = entry.input?.['properties'];
-  if (
-    inputProperties &&
-    typeof inputProperties === 'object' &&
-    PAYMENT_INPUT_FIELD in inputProperties
-  ) {
-    throw new CommerceError(
-      'CONFIG_INVALID',
-      `Resource "${id}" declares an input property "${PAYMENT_INPUT_FIELD}", which is reserved for payment proofs`,
-      {
-        details: {
-          path: `resources.${id}.input.properties.${PAYMENT_INPUT_FIELD}`,
-          resourceId: id,
+  if (inputProperties && typeof inputProperties === 'object') {
+    for (const reserved of RESERVED_INPUT_FIELDS) {
+      if (!(reserved in inputProperties)) continue;
+      throw new CommerceError(
+        'CONFIG_INVALID',
+        `Resource "${id}" declares an input property "${reserved}", which is reserved by the gateway`,
+        {
+          details: {
+            path: `resources.${id}.input.properties.${reserved}`,
+            resourceId: id,
+          },
         },
-      },
-    );
+      );
+    }
   }
 
   for (const protocol of entry.expose) {
@@ -1412,11 +1411,8 @@ function validateInputBindings(
   );
 
   for (const [location, property] of entries) {
-    if (property === PAYMENT_INPUT_FIELD) {
-      fail(
-        `binds "${location}" to "${PAYMENT_INPUT_FIELD}", which is reserved for payment proofs`,
-        { location },
-      );
+    if (RESERVED_INPUT_FIELDS.includes(property)) {
+      fail(`binds "${location}" to "${property}", which is reserved by the gateway`, { location });
     }
     const other = seen.get(property);
     if (other !== undefined) {

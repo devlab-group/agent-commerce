@@ -3,7 +3,7 @@
  *
  * Order is a security boundary — do not reorder:
  * 1. resolve resource RESOURCE_NOT_FOUND
- * 2. strip `_payment`, validate input INPUT_INVALID
+ * 2. strip reserved input fields, validate input INPUT_INVALID
  * 3. resolve price
  * 4. free -> straight to backend
  * 5. paid -> pick provider -> createRequirement -> (challenge | verify ->
@@ -18,7 +18,7 @@ import type { PaymentProvider, PaymentRequirement, PaymentResult } from '../doma
 import type { CommerceReceipt } from '../domain/receipt.js';
 import type { CanonicalRequest, ExecutionOutcome, ExecutionPipeline } from '../domain/request.js';
 import type { CommerceResource, ResourceRegistry } from '../domain/resource.js';
-import { PAYMENT_INPUT_FIELD } from '../domain/wire.js';
+import { RESERVED_INPUT_FIELDS } from '../domain/wire.js';
 import { CommerceError, isCommerceError, toCommerceError } from '../errors/index.js';
 import type { BackendExecutor, BackendResponse } from '../interfaces/backend.js';
 import type { Logger } from '../interfaces/logger.js';
@@ -110,8 +110,8 @@ export function createExecutionPipeline(
       }),
     );
 
-    // 2. strip reserved payment field, then validate input
-    const strippedInput = stripPaymentField(request.input);
+    // 2. strip reserved gateway fields, then validate input
+    const strippedInput = stripReservedFields(request.input);
     const validation = getValidator(resource)(strippedInput);
     if (!validation.valid) {
       throw new CommerceError(
@@ -625,9 +625,9 @@ function pickProvider(
   return undefined;
 }
 
-const RESERVED_INPUT_KEYS = new Set([PAYMENT_INPUT_FIELD, '__proto__']);
+const RESERVED_INPUT_KEYS = new Set([...RESERVED_INPUT_FIELDS, '__proto__']);
 
-function stripPaymentField(input: unknown): unknown {
+function stripReservedFields(input: unknown): unknown {
   if (typeof input !== 'object' || input === null || Array.isArray(input)) return input;
   const record = input as Record<string, unknown>;
   // Object.hasOwn: `in` would also match inherited names and strip things

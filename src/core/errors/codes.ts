@@ -13,6 +13,10 @@ export const COMMERCE_ERROR_CODES = [
   'PAYMENT_REPLAYED',
   'PAYMENT_PROVIDER_UNAVAILABLE',
   'PAYMENT_SETTLEMENT_FAILED',
+  'AUTHORIZATION_REQUIRED',
+  'AUTHORIZATION_INVALID',
+  'AUTHORIZATION_REPLAYED',
+  'AUTHORIZATION_PROVIDER_UNAVAILABLE',
   'BACKEND_TIMEOUT',
   'BACKEND_ERROR',
   'PROTOCOL_UNSUPPORTED',
@@ -38,6 +42,14 @@ export const COMMERCE_ERROR_HTTP_STATUS: Readonly<Record<CommerceErrorCode, numb
   PAYMENT_REPLAYED: 409,
   PAYMENT_PROVIDER_UNAVAILABLE: 503,
   PAYMENT_SETTLEMENT_FAILED: 502,
+  // 403, not 402: the buyer's money is not the problem. A 402 tells a client
+  // "pay and retry", which cannot fix a missing or rejected mandate, and a
+  // client that auto-pays on 402 would be charged for a request that was
+  // never going to be delivered.
+  AUTHORIZATION_REQUIRED: 403,
+  AUTHORIZATION_INVALID: 403,
+  AUTHORIZATION_REPLAYED: 409,
+  AUTHORIZATION_PROVIDER_UNAVAILABLE: 503,
   BACKEND_TIMEOUT: 504,
   BACKEND_ERROR: 502,
   PROTOCOL_UNSUPPORTED: 501,
@@ -49,6 +61,10 @@ export const COMMERCE_ERROR_HTTP_STATUS: Readonly<Record<CommerceErrorCode, numb
 /** Codes for which a client may reasonably retry the same request. */
 export const RETRYABLE_ERROR_CODES: ReadonlySet<CommerceErrorCode> = new Set([
   'PAYMENT_PROVIDER_UNAVAILABLE',
+  // Our verifier or our replay store was unreachable, so no verdict on the
+  // mandate was ever reached. That is an outage on our side, and the same
+  // proof will verify once it clears.
+  'AUTHORIZATION_PROVIDER_UNAVAILABLE',
   'BACKEND_TIMEOUT',
   // Load shedding is transient by definition: the caller should back off and
   // try again. Before this code existed the MCP adapter's queue-full path threw

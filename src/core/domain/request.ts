@@ -5,6 +5,7 @@
  * `ExecutionOutcome` (or a thrown `CommerceError`) back into their own wire
  * format. Adapters must never call merchant backends directly.
  */
+import type { AuthorizationRequirement, AuthorizationSubmission } from './authorization.js';
 import type { IsoTimestamp, ProtocolName } from './common.js';
 import type { PaymentRequirement, PaymentResult, PaymentSubmission } from './payment.js';
 import type { CommerceReceipt } from './receipt.js';
@@ -18,6 +19,12 @@ export interface CanonicalRequest {
   readonly protocol: ProtocolName;
   /** Payment proof, when the client is retrying after a challenge. */
   readonly payment?: PaymentSubmission;
+  /**
+   * Authorization proof, when the resource requires one. Independent of
+   * `payment`: neither substitutes for the other, and a resource requiring
+   * authorization needs both.
+   */
+  readonly authorization?: AuthorizationSubmission;
   readonly receivedAt: IsoTimestamp;
   /** Non-secret transport metadata (client id, user agent, …). */
   readonly metadata?: Readonly<Record<string, unknown>>;
@@ -42,6 +49,11 @@ export interface PaymentRequiredOutcome {
   readonly requestId: string;
   readonly resourceId: string;
   readonly requirement: PaymentRequirement;
+  /**
+   * Authorization the buyer must also present on the retry, when the resource
+   * requires one. Absent for the ordinary paid resource.
+   */
+  readonly authorization?: readonly AuthorizationRequirement[];
 }
 
 /**

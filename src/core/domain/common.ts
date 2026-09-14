@@ -35,6 +35,16 @@ export const PROTOCOL_NAMES: readonly ProtocolName[] = ['http', 'mcp', 'a2a', 'a
 /** Payment methods a resource can accept in this release. */
 export type PaymentMethodName = 'x402';
 
+/**
+ * Authorization methods a resource can require in this release.
+ *
+ * Deliberately not a `ProtocolName` and not a `PaymentMethodName`: an
+ * authorization method is neither a transport nor a payment rail. It proves
+ * the purchase was approved, and sits beside the payment rather than
+ * replacing it.
+ */
+export type AuthorizationMethodName = 'ap2';
+
 /** ISO-8601 timestamp string, always UTC with millisecond precision. */
 export type IsoTimestamp = string;
 
@@ -62,7 +72,7 @@ export interface AdapterHealth {
  */
 export interface AdapterDescriptor {
   readonly name: string;
-  readonly kind: 'protocol' | 'payment' | 'storage';
+  readonly kind: 'protocol' | 'payment' | 'storage' | 'authorization';
   /** Version of this adapter implementation (independent of the spec). */
   readonly implementationVersion: string;
   /** Exact pinned specification revision this adapter targets. */
