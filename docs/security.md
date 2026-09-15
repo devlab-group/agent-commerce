@@ -7,15 +7,16 @@ deliberately do not defend.
 ## Trust boundaries
 
 ```text
-  UNTRUSTED SEMI-TRUSTED TRUSTED
-  ───────── ──────────── ───────
-  agent input ────► gateway process ────► merchant backend
-  payment proofs (validates all (administrator
-  protocol traffic of the left, configured, assumed
-                             holds no keys) to be yours)
+       UNTRUSTED                    SEMI-TRUSTED                       TRUSTED
+  ────────────────────       ──────────────────────────       ─────────────────────────
 
-                            configuration ◄──── administrator (trusted)
-                            environment ◄──── operator (trusted)
+  agent input          ────► gateway process            ────► merchant backend
+  payment proofs             validates all agent input,       administrator configured,
+  authorization proofs       holds no keys                    assumed to be yours
+  protocol traffic
+
+                             configuration              ◄──── administrator
+                             environment                ◄──── operator
 ```
 
 Everything from an agent is untrusted and validated. Configuration is trusted

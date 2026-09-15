@@ -16,39 +16,40 @@ The gateway is in the middle of the *protocol* and outside the *custody*.
 ## The round trip
 
 ```text
- buyer gateway chain / backend
-   │ │ │
-   │ 1. tools/call market_report │ │
-   ├────────────────────────────►│ │
-   │ │ resolve resource, validate input │
-   │ │ price: 0.01 USDC → paid │
-   │ │ createRequirement │
-   │ 2. isError + envelope │ │
-   │◄────────────────────────────┤ PaymentRequiredEnvelope │
-   │ payment.accepts[0] │ (x402 PaymentRequirements) │
-   │ │ │
-   │ 3. sign EIP-3009 │ │
-   │ authorisation │ │
-   │ (to = merchant payTo) │ │
-   │ │ │
-   │ 4. tools/call + _payment │ │
-   ├────────────────────────────►│ │
-   │ │ verify ── signature, recipient,│
-   │ │ amount, window, │
-   │ │ balance, network, │
-   │ │ asset ───────────────┤ read
-   │ │ replayKey = H(chainId, asset, │
-   │ │ payer, nonce) │
-   │ │ reservePaymentAttempt(replayKey) │
-   │ │ duplicate ⇒ PAYMENT_REPLAYED │
-   │ │ settle ─────────────────────────┤ tx
-   │ │ transferWithAuthorization│
-   │ │◄──────────────────────────────────┤ receipt
-   │ │ call merchant backend ────────────┤
-   │ │◄──────────────────────────────────┤ 200
-   │ │ saveReceipt(txHash) │
-   │ 5. result + receipt │ │
-   │◄────────────────────────────┤ │
+ buyer                           gateway                         chain / backend
+   │                                │                                   │
+   │ 1. tools/call market_report    │                                   │
+   ├───────────────────────────────►│                                   │
+   │                                │ resolve resource, validate input  │
+   │                                │ price 0.01 USDC → paid            │
+   │                                │ createRequirement                 │
+   │◄───────────────────────────────┤ PaymentRequiredEnvelope           │
+   │ 2. isError + envelope          │ (x402 PaymentRequirements)        │
+   │    payment.accepts[0]          │                                   │
+   │                                │                                   │
+   │ 3. sign EIP-3009 authorisation │                                   │
+   │    (to = merchant payTo)       │                                   │
+   │                                │                                   │
+   │ 4. tools/call + _payment       │                                   │
+   ├───────────────────────────────►│                                   │
+   │                                │ verify: signature, recipient,     │
+   │                                │         amount, window,           │
+   │                                │         network, asset            │
+   │                                ├──────────────────────────────────►│ chain: balance / allowance
+   │                                │ replayKey = H(chainId, asset,     │
+   │                                │               payer, nonce)       │
+   │                                │ reservePaymentAttempt(replayKey)  │
+   │                                │   duplicate ⇒ PAYMENT_REPLAYED    │
+   │                                │ settle                            │
+   │                                ├──────────────────────────────────►│ chain: transferWithAuthorization
+   │                                │◄──────────────────────────────────┤ chain: tx receipt
+   │                                │ call merchant backend             │
+   │                                ├──────────────────────────────────►│ backend: GET /api/report
+   │                                │◄──────────────────────────────────┤ backend: 200 + body
+   │                                │ saveReceipt(txHash)               │
+   │                                │                                   │
+   │◄───────────────────────────────┤                                   │
+   │ 5. result + receipt            │                                   │
 ```
 
 Steps 1–2 and 4–5 are the same over plain HTTP; the challenge arrives as a

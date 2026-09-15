@@ -10,28 +10,31 @@ not scale, and handing the money to a proprietary middleman defeats the point.
 ## The shape of the answer
 
 ```text
-        ┌──────────────────────────────────────────────────────────┐
-        │ AI Agent │
-        └───────────────┬──────────────────────────────────────────┘
-                        │ MCP (tools/list, tools/call) · HTTP + PAYMENT-SIGNATURE
-        ┌───────────────▼──────────────────────────────────────────┐
-        │ Agent Commerce Gateway │
-        │ (runs in MERCHANT infrastructure) │
-        │ │
-        │ protocol adapters ──┐ │
-        │ mcp, http │ │
-        │ ▼ │
-        │ ExecutionPipeline ── the single path │
-        │ │ │
-        │ ┌───────────────┼────────────────┐ │
-        │ ▼ ▼ ▼ │
-        │ PaymentProvider BackendExecutor ReceiptStore │
-        │ (x402) (bounded HTTP) (SQLite) │
-        └──────┬────────────────┬──────────────────────────────────┘
-               │ │
-      payment protocol ┌──────▼───────────────┐
-      buyer → merchant │ Merchant Backend API │ (unchanged)
-                       └──────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                                   AI Agent                                   │
+└───────────────────────────────────────┬──────────────────────────────────────┘
+                                        │  MCP (tools/list, tools/call) · A2A · ACP · HTTP
+                                        │  PAYMENT-SIGNATURE · Agent-Authorization
+┌───────────────────────────────────────▼──────────────────────────────────────┐
+│                            Agent Commerce Gateway                            │
+│                      (runs in MERCHANT infrastructure)                       │
+│                                                                              │
+│                  protocol adapters: mcp · http · a2a · acp                   │
+│                                      │                                       │
+│                                      ▼                                       │
+│                              ExecutionPipeline                               │
+│                                      │                                       │
+│             ┌────────────────────┬───┴─────────────┬────────────────┐        │
+│             ▼                    ▼                 ▼                ▼        │
+│   AuthorizationProvider   PaymentProvider   BackendExecutor   ReceiptStore   │
+│           (ap2)               (x402)        (bounded HTTP)      (SQLite)     │
+└───────────────────────────────────────┬──────────────────────────────────────┘
+                                        │
+                           ┌────────────▼───────────┐
+                           │  Merchant Backend API  │
+                           └────────────────────────┘
+
+payment protocol: buyer → merchant, directly. Never through the gateway.
 ```
 
 Three properties are load-bearing:
@@ -39,7 +42,7 @@ Three properties are load-bearing:
 - **Self-hosted.** The gateway runs in the merchant's infrastructure. There is
   no central service operated by this project, and none is planned.
 - **Non-custodial.** The gateway orchestrates a payment protocol; it never holds
-  funds or keys. See.
+  funds or keys. See [security.md](security.md).
 - **Configuration, not rewriting.** A merchant exposes an existing endpoint by
   describing it in `config.yaml`. If they already have an OpenAPI description,
   `agent-commerce import openapi` writes that configuration for them - an
@@ -82,7 +85,7 @@ passes them through and never inspects them.
 
 Why this matters: adding ACP, AP2, A2A or a second payment rail becomes one new
 adapter rather than a core rewrite - and semantics from one protocol cannot leak
-into another. See.
+into another. See [contributing-adapters.md](contributing-adapters.md).
 
 ## The execution pipeline
 
