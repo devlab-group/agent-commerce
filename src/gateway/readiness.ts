@@ -1,8 +1,9 @@
 /**
  * `GET /ready` readiness computation: 503 unless the store, every configured
- * protocol adapter, AND every payment provider are healthy. `status: 'warn'`
- * is treated as still-serving (degraded); only `status: 'fail'` blocks
- * readiness — applied uniformly to all three kinds of dependency.
+ * protocol adapter, every payment provider AND every authorization provider
+ * are healthy. `status: 'warn'` is treated as still-serving (degraded); only
+ * `status: 'fail'` blocks readiness — applied uniformly to all four kinds of
+ * dependency.
  *
  * Payment providers are consulted here alongside the store and protocol
  * adapters: without that, a gateway whose x402 RPC is unreachable reports
@@ -26,7 +27,14 @@
  * READINESS_TTL_MS and collapses concurrent callers onto one in-flight
  * evaluation, so a burst of N requests produces at most one real check.
  */
-import type { AdapterHealth, Clock, Logger, PaymentProvider, ReceiptStore } from '../core/index.js';
+import type {
+  AdapterHealth,
+  AuthorizationProvider,
+  Clock,
+  Logger,
+  PaymentProvider,
+  ReceiptStore,
+} from '../core/index.js';
 import { type AdapterRuntime, getAdapterHealth } from './adapters.js';
 
 export interface ReadinessCheck {
@@ -40,12 +48,14 @@ export interface ReadinessResult {
   readonly store: ReadinessCheck;
   readonly adapters: readonly ReadinessCheck[];
   readonly paymentProviders: readonly ReadinessCheck[];
+  readonly authorizationProviders: readonly ReadinessCheck[];
 }
 
 export interface CheckReadinessOptions {
   readonly store: ReceiptStore;
   readonly adapterRuntimes: readonly AdapterRuntime[];
   readonly paymentProviders: readonly PaymentProvider[];
+  readonly authorizationProviders: readonly AuthorizationProvider[];
   readonly clock: Clock;
   readonly logger: Logger;
 }
@@ -67,6 +77,46 @@ const PAYMENT_PROVIDER_DETAIL: Readonly<Record<AdapterHealth['status'], string |
   warn: 'payment-provider-degraded',
   fail: 'payment-provider-unreachable',
 };
+
+const AUTHORIZATION_PROVIDER_DETAIL: Readonly<Record<AdapterHealth['status'], string | undefined>> =
+  {
+    pass: undefined,
+    warn: 'authorization-provider-degraded',
+    fail: 'authorization-provider-unreachable',
+  };
+
+/**
+ * One probe for both provider kinds. A provider whose `health()` throws told us
+ * nothing, so it counts as failing rather than as absent, and only the fixed
+ * vocabulary above reaches the client.
+ */
+async function probeProvider(
+  provider: { readonly name: string; health(): Promise<AdapterHealth> },
+  kind: string,
+  details: Readonly<Record<AdapterHealth['status'], string | undefined>>,
+  options: Pick<CheckReadinessOptions, 'clock' | 'logger'>,
+): Promise<ReadinessCheck> {
+  let health: AdapterHealth;
+  try {
+    health = await provider.health();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    options.logger.error({ err: message, provider: provider.name }, `${kind} health() threw`);
+    health = { status: 'fail', checkedAt: options.clock.nowIso() };
+  }
+  if (health.detail !== undefined) {
+    options.logger.debug(
+      { provider: provider.name, detail: health.detail },
+      `${kind} health detail (not sent to the client)`,
+    );
+  }
+  const detail = details[health.status];
+  return {
+    name: provider.name,
+    status: health.status,
+    ...(detail !== undefined ? { detail } : {}),
+  };
+}
 
 export async function checkReadiness(options: CheckReadinessOptions): Promise<ReadinessResult> {
   let storeHealth: AdapterHealth;
@@ -105,40 +155,30 @@ export async function checkReadiness(options: CheckReadinessOptions): Promise<Re
   );
 
   const paymentProviderChecks = await Promise.all(
-    options.paymentProviders.map(async (provider): Promise<ReadinessCheck> => {
-      let health: AdapterHealth;
-      try {
-        health = await provider.health();
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        options.logger.error(
-          { err: message, provider: provider.name },
-          'payment provider health() threw',
-        );
-        health = { status: 'fail', checkedAt: options.clock.nowIso() };
-      }
-      if (health.detail !== undefined) {
-        options.logger.debug(
-          { provider: provider.name, detail: health.detail },
-          'payment provider health detail (not sent to the client)',
-        );
-      }
-      const detail = PAYMENT_PROVIDER_DETAIL[health.status];
-      return {
-        name: provider.name,
-        status: health.status,
-        ...(detail !== undefined ? { detail } : {}),
-      };
-    }),
+    options.paymentProviders.map((provider) =>
+      probeProvider(provider, 'payment provider', PAYMENT_PROVIDER_DETAIL, options),
+    ),
+  );
+
+  // An unusable authorization provider blocks readiness on the same threshold
+  // as a payment one: a resource that requires a mandate cannot be served
+  // without it, and serving the challenge anyway promises what we cannot honour
+  const authorizationProviderChecks = await Promise.all(
+    options.authorizationProviders.map((provider) =>
+      probeProvider(provider, 'authorization provider', AUTHORIZATION_PROVIDER_DETAIL, options),
+    ),
   );
 
   const storeReady = storeHealth.status !== 'fail';
   const adaptersReady = adapterChecks.every((check) => check.status !== 'fail');
   const paymentProvidersReady = paymentProviderChecks.every((check) => check.status !== 'fail');
+  const authorizationProvidersReady = authorizationProviderChecks.every(
+    (check) => check.status !== 'fail',
+  );
   const storeDetail = storeThrew ? 'store-unreachable' : STORE_DETAIL[storeHealth.status];
 
   return {
-    ready: storeReady && adaptersReady && paymentProvidersReady,
+    ready: storeReady && adaptersReady && paymentProvidersReady && authorizationProvidersReady,
     store: {
       name: 'store',
       status: storeHealth.status,
@@ -146,6 +186,7 @@ export async function checkReadiness(options: CheckReadinessOptions): Promise<Re
     },
     adapters: adapterChecks,
     paymentProviders: paymentProviderChecks,
+    authorizationProviders: authorizationProviderChecks,
   };
 }
 

@@ -189,14 +189,17 @@ describe('published package metadata', () => {
     // a consumer serving a free HTTP resource. None of these is needed by the
     // main entry or the CLI, so they are optional peers reached by subpath.
     const exportsField = manifest.exports as Record<string, unknown> | undefined;
-    for (const subpath of ['./mcp', './x402']) {
+    for (const subpath of ['./ap2', './mcp', './x402']) {
       expect(exportsField?.[subpath]).toBeDefined();
     }
     for (const peer of [
       '@coinbase/x402',
       '@modelcontextprotocol/sdk',
+      '@sd-jwt/core',
       '@x402/core',
       '@x402/evm',
+      'canonicalize',
+      'jose',
       'viem',
     ]) {
       expect(manifest.peerDependencies?.[peer]).toBeDefined();
@@ -370,6 +373,7 @@ describe.skipIf(!existsSync(libEntry))('built library entry', () => {
 });
 
 describe.skipIf(!existsSync(libEntry))('optional-peer subpaths', () => {
+  const ap2Entry = join(pkgRoot, 'dist', 'ap2.js');
   const mcpEntry = join(pkgRoot, 'dist', 'mcp.js');
   const x402Entry = join(pkgRoot, 'dist', 'x402.js');
 
@@ -392,6 +396,15 @@ describe.skipIf(!existsSync(libEntry))('optional-peer subpaths', () => {
   it('imports only its own peer, in each subpath', () => {
     expect(bareImportsOf(mcpEntry)).toEqual(['@modelcontextprotocol/sdk']);
     expect(bareImportsOf(x402Entry).sort()).toEqual(['@x402/core', '@x402/evm', 'viem']);
+    // `better-sqlite3` rides along through the shared storage chunk: the AP2
+    // replay store is a SQLite file. It is a real dependency, not a peer, so
+    // it is always installed anyway.
+    expect(bareImportsOf(ap2Entry).sort()).toEqual([
+      '@sd-jwt/core',
+      'better-sqlite3',
+      'canonicalize',
+      'jose',
+    ]);
   });
 
   it('exports its factory under both the short and the full name', () => {
@@ -406,6 +419,7 @@ describe.skipIf(!existsSync(libEntry))('optional-peer subpaths', () => {
       );
     expect(probe(mcpEntry, ['mcp', 'createMcpAdapter'])).toBe('');
     expect(probe(x402Entry, ['x402', 'createX402PaymentProvider', 'createPaymentProof'])).toBe('');
+    expect(probe(ap2Entry, ['ap2', 'createAp2AuthorizationProvider'])).toBe('');
   });
 
   it('shares one CommerceError class with the main entry', () => {

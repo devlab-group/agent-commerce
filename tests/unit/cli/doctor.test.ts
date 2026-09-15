@@ -1203,3 +1203,164 @@ describe('runDoctor - ACP', () => {
     }
   });
 });
+
+describe('runDoctor - AP2', () => {
+  const KEY = {
+    kty: 'EC',
+    crv: 'P-256',
+    // RFC 7515 A.3.1's public P-256 key. A published test vector, not a key
+    // anything here can sign with.
+    x: 'f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU',
+    y: 'x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0',
+  };
+
+  function enabledAp2(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      enabled: true,
+      specVersion: '0.2.0',
+      mode: 'direct',
+      trust: {
+        mandateIssuers: [
+          {
+            issuer: 'https://surface.example',
+            audience: 'merchant.example',
+            keys: [{ kid: 'mandate-2026-01', jwk: KEY }],
+          },
+        ],
+        checkoutIssuers: [
+          {
+            issuer: 'https://merchant.example',
+            audience: 'agent-commerce',
+            keys: [{ kid: 'checkout-2026-01', jwk: KEY }],
+          },
+        ],
+      },
+      clockSkewSeconds: 60,
+      replay: { path: ':memory:' },
+      ...overrides,
+    };
+  }
+
+  function gatedResource(): CommerceResource {
+    return {
+      id: 'market_report',
+      name: 'Market Report',
+      handler: { type: 'http', method: 'GET', url: 'http://backend.local/report' },
+      pricing: { type: 'fixed', amount: '0.01', currency: 'USDC' },
+      exposedVia: ['http'],
+      paymentMethods: ['x402'],
+      authorization: { required: ['ap2'] },
+    };
+  }
+
+  async function ap2Report(
+    ap2: unknown,
+    resources: readonly CommerceResource[] = [gatedResource()],
+  ): Promise<Awaited<ReturnType<typeof runDoctor>>> {
+    const base = makeGatewayConfig();
+    return runDoctor(
+      { gatewayUrl: GATEWAY },
+      {
+        fetchImpl: healthyFetch(),
+        loadConfig: async () => ({
+          ...base,
+          resources,
+          ...(ap2 === undefined
+            ? {}
+            : {
+                authorization: { ap2: ap2 as NonNullable<GatewayConfig['authorization']>['ap2'] },
+              }),
+        }),
+        createStore: () => makeFakeReceiptStore(),
+      },
+    );
+  }
+
+  it('reports AP2 as disabled without any further AP2 checks', async () => {
+    const report = await ap2Report({ enabled: false }, []);
+
+    expect(report.checks.find((c) => c.name === 'AP2')?.detail).toBe('disabled');
+    for (const name of ['AP2 trust', 'AP2 replay store', 'AP2 resources', 'AP2 unsupported']) {
+      expect(report.checks.find((c) => c.name === name)).toBeUndefined();
+    }
+  });
+
+  it('reports AP2 as disabled when no authorization block is configured at all', async () => {
+    const report = await ap2Report(undefined, []);
+
+    expect(report.checks.find((c) => c.name === 'AP2')?.detail).toBe('disabled');
+  });
+
+  it('reports the pinned spec, the mode, the mandate type and the profile', async () => {
+    const report = await ap2Report(enabledAp2());
+
+    const ap2 = report.checks.find((c) => c.name === 'AP2');
+    expect(ap2?.status).toBe('PASS');
+    expect(ap2?.detail).toContain('experimental');
+    expect(ap2?.detail).toContain('spec 0.2.0');
+    expect(ap2?.detail).toContain('mode direct');
+    expect(ap2?.detail).toContain('mandate.checkout.1');
+    expect(ap2?.detail).toContain('agent-commerce/ap2/checkout/v1');
+    expect(ap2?.detail).toContain('clock skew 60s');
+  });
+
+  it('names the trusted issuers and how many keys each has, never a key', async () => {
+    const report = await ap2Report(enabledAp2());
+
+    const trust = report.checks.find((c) => c.name === 'AP2 trust');
+    expect(trust?.detail).toContain('mandate issuers: https://surface.example (1 key)');
+    expect(trust?.detail).toContain('checkout issuers: https://merchant.example (1 key)');
+    // Key material is public, but it is trust policy nobody asked this report
+    // to print, and a report is pasted into issues
+    expect(JSON.stringify(report)).not.toContain(KEY.x);
+    expect(JSON.stringify(report)).not.toContain(KEY.y);
+  });
+
+  it('warns that an in-memory replay store forgets every spent mandate', async () => {
+    const report = await ap2Report(enabledAp2());
+
+    const replay = report.checks.find((c) => c.name === 'AP2 replay store');
+    expect(replay?.status).toBe('WARN');
+    expect(replay?.detail).toContain('in-memory');
+  });
+
+  it('warns when a store file does not exist yet, without creating one', async () => {
+    const path = join(tmpdir(), `ap2-doctor-${Date.now()}.db`);
+    const report = await ap2Report(enabledAp2({ replay: { path } }));
+
+    const replay = report.checks.find((c) => c.name === 'AP2 replay store');
+    expect(replay?.status).toBe('WARN');
+    expect(existsSync(path)).toBe(false);
+  });
+
+  it('names the resources a mandate now gates', async () => {
+    const report = await ap2Report(enabledAp2());
+
+    const resources = report.checks.find((c) => c.name === 'AP2 resources');
+    expect(resources?.status).toBe('PASS');
+    expect(resources?.detail).toBe('market_report');
+  });
+
+  it('warns when AP2 is enabled but gates nothing', async () => {
+    const report = await ap2Report(enabledAp2(), []);
+
+    const resources = report.checks.find((c) => c.name === 'AP2 resources');
+    expect(resources?.status).toBe('WARN');
+    expect(resources?.detail).toContain('no resource requires it');
+  });
+
+  it('lists what AP2 does not do in full, rather than as a count', async () => {
+    const report = await ap2Report(enabledAp2());
+
+    const unsupported = report.checks.find((c) => c.name === 'AP2 unsupported');
+    for (const capability of [
+      'autonomous mode',
+      'open checkout mandates (mandate.checkout.open.1)',
+      'spending constraint evaluation',
+      'JWKS and any key discovery by URL (jku, x5u)',
+      'AP2 over the ACP checkout adapter',
+    ]) {
+      expect(unsupported?.detail).toContain(capability);
+    }
+  });
+});

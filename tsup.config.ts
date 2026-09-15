@@ -12,8 +12,8 @@ const pkg = require('./package.json') as {
 /**
  * Two builds, four entry points.
  *
- * **Library** — `dist/index.js` plus the two optional-peer subpaths,
- * `dist/mcp.js` and `dist/x402.js`. These are built together with
+ * **Library** — `dist/index.js` plus the three optional-peer subpaths,
+ * `dist/ap2.js`, `dist/mcp.js` and `dist/x402.js`. These are built together with
  * `splitting: true` so everything they share — `src/core`, `CommerceError`,
  * the canonical types — lands in one shared chunk that all three import.
  * That is not a size optimisation, it is a correctness requirement: built as
@@ -74,7 +74,7 @@ const shared = {
 export default defineConfig([
   {
     ...shared,
-    entry: { index: 'src/index.ts', mcp: 'src/mcp.ts', x402: 'src/x402.ts' },
+    entry: { index: 'src/index.ts', ap2: 'src/ap2.ts', mcp: 'src/mcp.ts', x402: 'src/x402.ts' },
     clean: true,
     splitting: true,
   },

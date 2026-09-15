@@ -12,11 +12,15 @@
  * store that will not open is fatal, not degraded;
  * 3. build payment providers — a paid resource with no working provider must
  * fail closed at request time, not be quietly downgraded to free;
+ * 3b. build authorization providers — same reasoning, and the replay database
+ * opens here, so a mandate store that will not open stops startup;
  * 4. build protocol adapters — these are isolated: one failing to start is
  * reported unhealthy and does not stop the others;
  * 5. listen, then print the effective settlement destination so an operator
  * or presenter can see where money actually goes.
  */
+import type { Ap2AuthorizationProvider } from '../authorization/ap2/index.js';
+import { createAp2AuthorizationProvider } from '../authorization/ap2/index.js';
 import { loadConfig } from '../config/index.js';
 import type { PaymentProvider, ProtocolAdapter, ReceiptStore } from '../core/index.js';
 import { CommerceError, isCommerceError } from '../core/index.js';
@@ -72,6 +76,14 @@ async function main(): Promise<void> {
     );
   }
 
+  // Built only when enabled: the replay database is opened by the constructor,
+  // so a disabled AP2 block creates no file and holds no handle.
+  const authorizationProviders: Ap2AuthorizationProvider[] = [];
+  const ap2 = config.authorization?.ap2;
+  if (ap2?.enabled) {
+    authorizationProviders.push(createAp2AuthorizationProvider({ config: ap2, logger }));
+  }
+
   // A paid resource with no provider is a configuration error we can catch now
   // rather than discovering it on the first purchase attempt. Config validation
   // already rejects this, so reaching here means the two drifted apart.
@@ -123,6 +135,7 @@ async function main(): Promise<void> {
     config,
     store,
     paymentProviders,
+    authorizationProviders,
     protocolAdapters,
     logger,
   });
@@ -136,6 +149,7 @@ async function main(): Promise<void> {
       resources: config.resources.length,
       protocols: protocolAdapters.map((adapter) => adapter.name),
       payments: paymentProviders.map((provider) => provider.name),
+      authorization: authorizationProviders.map((provider) => provider.name),
     },
     'gateway listening',
   );
@@ -167,6 +181,7 @@ async function main(): Promise<void> {
     void (async () => {
       try {
         await gateway.close();
+        for (const provider of authorizationProviders) provider.close();
         await store.close();
         process.exit(0);
       } catch (error) {

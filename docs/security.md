@@ -215,6 +215,15 @@ list. What exists:
   into one upstream RPC call per request
 - `X-Request-Id` accepted only as `[A-Za-z0-9._:-]{1,64}`, so a caller cannot
   write an unbounded string into every audit row
+- an **8192-byte cap on the `Agent-Authorization` header**
+  (`MAX_AUTHORIZATION_HEADER_BYTES`), checked on the raw header before it is
+  base64url-decoded or parsed as JSON. Over the limit is
+  `AUTHORIZATION_INVALID`, and nothing from the caller's value is echoed back.
+  The cap is on the encoded header rather than on the decoded proof because
+  base64url expands by 4/3, so a decode-first check would have to allocate the
+  oversized string first. A real Direct Checkout Mandate presentation is well
+  inside it; MCP and A2A carry the same proof in the request body instead and
+  are bounded by the body-size cap
 
 What does **not** exist: rate limiting, per-agent quotas, adaptive
 backpressure. Put the gateway behind your own edge if you expose it publicly.

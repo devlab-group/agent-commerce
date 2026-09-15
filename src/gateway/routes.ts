@@ -8,6 +8,7 @@ import type { GatewayConfig } from '../config/index.js';
 import type { EventBus } from '../core/execution/index.js';
 import {
   AUTHORIZATION_HEADER,
+  type AuthorizationProvider,
   type CanonicalRequest,
   type Clock,
   CommerceError,
@@ -40,6 +41,7 @@ export interface RegisterRoutesOptions {
   readonly resources: ResourceRegistry;
   readonly store: ReceiptStore;
   readonly paymentProviders: readonly PaymentProvider[];
+  readonly authorizationProviders: readonly AuthorizationProvider[];
   readonly eventBus: EventBus;
   readonly clock: Clock;
   readonly adapterRuntimes: readonly AdapterRuntime[];
@@ -57,6 +59,7 @@ export function registerRoutes(options: RegisterRoutesOptions): void {
     store: options.store,
     adapterRuntimes: options.adapterRuntimes,
     paymentProviders: options.paymentProviders,
+    authorizationProviders: options.authorizationProviders,
     clock: options.clock,
     logger: options.logger,
   });

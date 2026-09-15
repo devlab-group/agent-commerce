@@ -1,6 +1,15 @@
 import { accessSync, existsSync, constants as fsConstants } from 'node:fs';
 import { dirname } from 'node:path';
 import picocolors from 'picocolors';
+// Constants and a descriptor only. Importing the AP2 provider here would pull
+// jose and @sd-jwt/core into the CLI bundle and make two optional peers
+// mandatory for anyone running `agent-commerce`.
+import {
+  AP2_CHECKOUT_MANDATE_VCT,
+  AP2_CHECKOUT_PROFILE,
+  AP2_SPEC_VERSION,
+} from '../../authorization/ap2/constants.js';
+import { AP2_UNSUPPORTED } from '../../authorization/ap2/descriptor.js';
 import { extractPathParameterNames } from '../../core/execution/index.js';
 import { type CommerceResource, isCommerceError, type ReceiptStore } from '../../core/index.js';
 import {
@@ -175,6 +184,73 @@ function findX402Mismatch(configured: LiveX402, live: LiveX402): string | undefi
   return `${diffs.join('; ')} — the gateway may be running against an older deployment; restart it or re-run chain:deploy`;
 }
 
+// Issuer ids and how many keys each carries. Never a key
+function describeIssuers(
+  label: string,
+  issuers: readonly { readonly issuer: string; readonly keys: readonly unknown[] }[],
+): string {
+  const described = issuers
+    .map(
+      (entry) => `${entry.issuer} (${entry.keys.length} key${entry.keys.length === 1 ? '' : 's'})`,
+    )
+    .join(', ');
+  return `${label} issuers: ${described}`;
+}
+
+/**
+ * Whether an existing file can be written, without creating one. Shared by the
+ * two store checks below: each loses its guarantee on an unwritable file, and
+ * a second copy of the probe is how one of them reports PASS on a path the
+ * gateway cannot actually use.
+ */
+function isWritableFile(path: string): boolean {
+  try {
+    accessSync(path, fsConstants.W_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The AP2 replay database, diagnosed without creating it. A read-only command
+ * that produced the file would report a healthy empty store and shadow the
+ * real one, exactly as the receipt-store check describes.
+ */
+function ap2ReplayCheck(path: string): DoctorCheck {
+  const name = 'AP2 replay store';
+  if (path === ':memory:') {
+    return {
+      name,
+      status: 'WARN',
+      detail:
+        'in-memory store - every spent mandate is forgotten on restart, so one could authorize a second purchase; use a file path in production',
+    };
+  }
+  if (existsSync(path)) {
+    return isWritableFile(path)
+      ? { name, status: 'PASS', detail: `writable at "${path}"` }
+      : {
+          name,
+          status: 'FAIL',
+          detail: `"${path}" exists but is not writable by this user - no mandate could be recorded as spent`,
+        };
+  }
+  const directory = dirname(path);
+  if (directory !== '' && directory !== '.' && !existsSync(directory)) {
+    return {
+      name,
+      status: 'WARN',
+      detail: `no store yet at "${path}" and its directory does not exist - it is created when the gateway starts, provided that path is writable`,
+    };
+  }
+  return {
+    name,
+    status: 'WARN',
+    detail: `no store yet at "${path}" - it is created the first time the gateway starts`,
+  };
+}
+
 /**
  * The idempotency database, diagnosed without creating it: `doctor` is
  * read-only, and opening a mistyped path would leave a fresh empty database
@@ -203,16 +279,13 @@ function acpIdempotencyCheck(idempotency: {
   }
   const directory = dirname(idempotency.path);
   if (existsSync(idempotency.path)) {
-    try {
-      accessSync(idempotency.path, fsConstants.W_OK);
-      return { name: 'ACP idempotency', status: 'PASS', detail: `writable, ${retention}` };
-    } catch {
-      return {
-        name: 'ACP idempotency',
-        status: 'FAIL',
-        detail: `"${idempotency.path}" exists but is not writable by this user — the adapter cannot claim idempotency keys`,
-      };
-    }
+    return isWritableFile(idempotency.path)
+      ? { name: 'ACP idempotency', status: 'PASS', detail: `writable, ${retention}` }
+      : {
+          name: 'ACP idempotency',
+          status: 'FAIL',
+          detail: `"${idempotency.path}" exists but is not writable by this user — the adapter cannot claim idempotency keys`,
+        };
   }
   if (directory !== '' && directory !== '.' && !existsSync(directory)) {
     return {
@@ -439,6 +512,55 @@ export async function runDoctor(
       name: 'ACP unsupported',
       status: 'INFO',
       detail: ACP_UNSUPPORTED.join(', '),
+    });
+  }
+
+  // 5d. AP2 authorization. Read from config and the pins only. Verification
+  // keys are public, but they are still trust policy an operator did not ask
+  // this report to print, so only issuer ids and key counts appear.
+  const ap2 = config?.authorization?.ap2;
+  if (config === undefined) {
+    checks.push({ name: 'AP2', status: 'WARN', detail: 'skipped — config invalid' });
+  } else if (ap2 === undefined || !ap2.enabled) {
+    checks.push({ name: 'AP2', status: 'INFO', detail: 'disabled' });
+  } else {
+    checks.push({
+      name: 'AP2',
+      status: 'PASS',
+      detail: `experimental · spec ${AP2_SPEC_VERSION} · mode ${ap2.mode} · ${AP2_CHECKOUT_MANDATE_VCT} · profile ${AP2_CHECKOUT_PROFILE} · clock skew ${ap2.clockSkewSeconds}s`,
+    });
+
+    // Two lists, reported separately: signing the merchant's checkout
+    // documents must not read as the power to issue mandates.
+    checks.push({
+      name: 'AP2 trust',
+      status: 'PASS',
+      detail: `${describeIssuers('mandate', ap2.trust.mandateIssuers)} · ${describeIssuers('checkout', ap2.trust.checkoutIssuers)}`,
+    });
+
+    checks.push(ap2ReplayCheck(ap2.replay.path));
+
+    // Resource ids, so an operator can see exactly which purchases now need a
+    // mandate. An empty list means AP2 is configured and gating nothing.
+    const gated = config.resources.filter((resource) =>
+      resource.authorization?.required.includes('ap2'),
+    );
+    checks.push({
+      name: 'AP2 resources',
+      status: gated.length > 0 ? 'PASS' : 'WARN',
+      detail:
+        gated.length > 0
+          ? gated.map((resource) => resource.id).join(', ')
+          : 'AP2 is enabled but no resource requires it — every purchase settles without a mandate',
+    });
+
+    // Listed in full, never summarised as a count: "14 unsupported" tells an
+    // operator nothing about whether the one thing their client sends is
+    // among them.
+    checks.push({
+      name: 'AP2 unsupported',
+      status: 'INFO',
+      detail: AP2_UNSUPPORTED.join(', '),
     });
   }
 

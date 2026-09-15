@@ -12,6 +12,7 @@ import {
   HttpBackendExecutor,
 } from '../core/execution/index.js';
 import {
+  type AuthorizationProvider,
   type BackendExecutor,
   type Clock,
   type ExecutionPipeline,
@@ -46,6 +47,8 @@ export interface GatewayOptions {
   readonly config: GatewayConfig;
   readonly store: ReceiptStore;
   readonly paymentProviders: readonly PaymentProvider[];
+  /** Absent means no resource requires authorization, which is the default */
+  readonly authorizationProviders?: readonly AuthorizationProvider[];
   readonly protocolAdapters: readonly ProtocolAdapter[];
   readonly logger?: Logger;
   readonly clock?: Clock;
@@ -69,11 +72,14 @@ export async function createGateway(options: GatewayOptions): Promise<GatewayIns
   const logger = options.logger ?? createGatewayLogger({ name: options.config.merchant.id }).core;
   const backend = options.backend ?? new HttpBackendExecutor({ logger });
 
+  const authorizationProviders = options.authorizationProviders ?? [];
+
   const resources = createResourceRegistry(options.config.resources);
   const eventBus = createEventBus({ store: options.store, logger });
   const pipeline = createExecutionPipeline({
     resources,
     paymentProviders: options.paymentProviders,
+    authorizationProviders,
     store: options.store,
     backend,
     events: eventBus,
@@ -119,6 +125,7 @@ export async function createGateway(options: GatewayOptions): Promise<GatewayIns
     resources,
     store: options.store,
     paymentProviders: options.paymentProviders,
+    authorizationProviders,
     eventBus,
     clock,
     adapterRuntimes,

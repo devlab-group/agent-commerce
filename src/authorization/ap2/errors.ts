@@ -6,7 +6,8 @@
  * the list below. The machine-readable code goes in `details.reason` and the
  * original exception on `cause`, which is never serialised.
  *
- * Two codes: AUTHORIZATION_INVALID when the buyer's mandate is bad,
+ * Three codes: AUTHORIZATION_INVALID when the buyer's mandate is bad,
+ * AUTHORIZATION_REPLAYED when it is good but spent, and
  * AUTHORIZATION_PROVIDER_UNAVAILABLE when our verifier never reached a
  * verdict. Blaming the buyer for our outage refuses a good mandate.
  */
@@ -63,6 +64,22 @@ export function ap2Rejected(
     ...(context.resourceId !== undefined ? { resourceId: context.resourceId } : {}),
     ...(context.cause !== undefined ? { cause: context.cause } : {}),
   });
+}
+
+/**
+ * The mandate verified but has already been presented. A separate code from
+ * a bad mandate: nothing is wrong with this proof except that it is spent
+ */
+export function ap2Replayed(state: string, context: Ap2ErrorContext = {}): CommerceError {
+  return new CommerceError(
+    'AUTHORIZATION_REPLAYED',
+    'This mandate has already been presented and cannot authorize another purchase.',
+    {
+      details: { method: 'ap2', reason: 'replayed', state },
+      ...(context.requestId !== undefined ? { requestId: context.requestId } : {}),
+      ...(context.resourceId !== undefined ? { resourceId: context.resourceId } : {}),
+    },
+  );
 }
 
 /**
