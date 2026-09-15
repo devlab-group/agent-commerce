@@ -419,7 +419,9 @@ describe.skipIf(!existsSync(libEntry))('optional-peer subpaths', () => {
       );
     expect(probe(mcpEntry, ['mcp', 'createMcpAdapter'])).toBe('');
     expect(probe(x402Entry, ['x402', 'createX402PaymentProvider', 'createPaymentProof'])).toBe('');
-    expect(probe(ap2Entry, ['ap2', 'createAp2AuthorizationProvider'])).toBe('');
+    expect(probe(ap2Entry, ['ap2', 'createAp2AuthorizationProvider', 'createCheckoutJwt'])).toBe(
+      '',
+    );
   });
 
   it('shares one CommerceError class with the main entry', () => {

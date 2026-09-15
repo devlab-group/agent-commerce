@@ -28,10 +28,14 @@ export {
   type Ap2AuthorizationProviderOptions,
   type Ap2Mode,
   type Ap2RejectionReason,
+  type Ap2SigningKey,
   type Ap2TrustedIssuer,
   type Ap2TrustedKey,
+  type CreateCheckoutJwtOptions,
   createAp2AuthorizationProvider,
   // `ap2` reads well at a call site; the full name reads better in a trace.
   createAp2AuthorizationProvider as ap2,
+  // Merchant-side, and the only export here that signs rather than verifies.
+  createCheckoutJwt,
   type EnabledAp2Config,
 } from './authorization/ap2/index.js';

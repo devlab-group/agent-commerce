@@ -100,7 +100,7 @@ serving a free HTTP resource has no business installing.
 | gateway, config, receipts, CLI    | `@devlab.group/agent-commerce` | `from '@devlab.group/agent-commerce'`      |
 | expose resources as MCP tools     | `+ @modelcontextprotocol/sdk`  | `from '@devlab.group/agent-commerce/mcp'`  |
 | accept x402 payments              | `+ @x402/core @x402/evm viem`  | `from '@devlab.group/agent-commerce/x402'` |
-| verify AP2 mandates               | `+ jose @sd-jwt/core canonicalize` | `from '@devlab.group/agent-commerce/ap2'` |
+| verify AP2 mandates, sign checkout JWTs | `+ jose @sd-jwt/core canonicalize` | `from '@devlab.group/agent-commerce/ap2'` |
 | authenticate to a CDP facilitator | `+ @coinbase/x402`             | (no import - loaded on demand)             |
 
 ```bash

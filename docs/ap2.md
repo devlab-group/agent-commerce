@@ -143,6 +143,48 @@ known any of that when they approved.
 
 Without it, one mandate for `translate` would authorise any translation.
 
+## Minting the checkout JWT
+
+The gateway only verifies. Someone has to sign, and for the checkout JWT that
+someone is you, in your own process, with a key whose public half you listed
+under `checkoutIssuers`.
+
+```ts
+import { createCheckoutJwt } from '@devlab.group/agent-commerce/ap2';
+
+const jwt = await createCheckoutJwt({
+  privateKey,                        // a private JWK, or a PKCS#8 PEM
+  kid: 'checkout-2026-01',           // must match a configured key
+  issuer: 'https://merchant.example',
+  audience: 'agent-commerce',
+  resourceId: 'market_report',
+  input: { city: 'Berlin' },         // it computes the RFC 8785 digest
+  amount: '0.01',                    // a string, from your own catalogue
+  currency: 'USDC',
+  paymentMethod: 'x402',
+  destination, network, asset,       // as the 402 published them
+});
+```
+
+It exists mainly for `input_hash`. A signer that reaches for a sorted-key
+`JSON.stringify` agrees with this gateway on most inputs and parts company on
+the ones carrying floats or non-ASCII keys, and the resulting mandate is
+refused with a reason that does not say which field disagreed.
+
+It also refuses, before signing, what would otherwise become that same opaque
+refusal: a numeric `amount`, the public half of the key pair, a key that is not
+P-256, and a missing required field.
+
+What it cannot check is agreement with the gateway's own resolved requirement,
+which it never sees. Take `amount` and `currency` from your catalogue and the
+settlement coordinates from the 402, rather than echoing what the agent asked
+for. A lie from the agent fails closed at verification either way, but a
+mismatch you introduce fails just as closed and is yours to debug.
+
+The mandate that wraps this JWT is signed elsewhere, by the buyer's agent or
+credential provider, using a key listed under `mandateIssuers`. Nothing in this
+package mints one: the gateway is the merchant, not the buyer.
+
 ## Trust
 
 **Static public keys only.** Every verification key is written into
@@ -321,7 +363,8 @@ page is a bug.
 - JWKS, `jku`, `x5u`, issuer metadata fetching, remote revocation
 - key rotation without a config change
 - algorithms other than ES256, digests other than sha-256
-- mandate issuance, merchant checkout JWT issuance, signed Checkout Receipts
+- mandate issuance and signed Checkout Receipts (the checkout JWT you can sign
+  with `createCheckoutJwt`, above; the mandate itself is the buyer's side)
 - an AP2 transport adapter, `/.well-known/ap2`, AP2 as a payment rail
 - AP2 over the ACP checkout adapter
 

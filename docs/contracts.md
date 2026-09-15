@@ -90,6 +90,7 @@ the generated file is right and this table is stale.
 - **Additive:** the generic authorization contract - `AuthorizationMethodName` (`'ap2'`), `AuthorizationSubmission`, `AuthorizationRequirement`, `AuthorizationVerification`, `AuthorizationProvider` and its two contexts; optional `CanonicalRequest.authorization`, optional `CommerceResource.authorization`, optional `PaymentRequiredOutcome.authorization` and the matching `PaymentRequiredEnvelope.authorization`; `AdapterDescriptor.kind` gains `'authorization'`; four `AUTHORIZATION_*` error codes (403 / 403 / 409 / 503, the last retryable); and the wire carriers `AUTHORIZATION_INPUT_FIELD` (`_authorization`), `AUTHORIZATION_HEADER` (`agent-authorization`), `MAX_AUTHORIZATION_HEADER_BYTES` and `RESERVED_INPUT_FIELDS`. *Use case:* AP2 mandate verification - proving the human behind an agent approved this exact purchase, a separate question from whether the payment verified. *Why generic:* AP2 is the first implementation, not the abstraction. Core states that a resource requires authorization and when the pipeline checks it, and knows nothing about SD-JWTs. An authorization method is deliberately neither a `ProtocolName` nor a `PaymentMethodName`, because it is not a transport and must never be selectable as a payment rail. *Compatibility:* every field is optional and every consumer that sets none behaves exactly as before; a resource with no `authorization` policy is unchanged end to end. `extractReservedInputFields` replaces the two hand-written `_payment` extractors in the MCP and A2A adapters with one path in core, so the reserved-field list cannot drift between surfaces. `_payment` handling is byte-identical, including dropping a proof for a resource with no configured rail.
 - **Additive:** `AuthorizationRecord`; optional `CommerceReceipt.authorization`; `AuthorizationProvider` gains `requirement` and `markUncertain`; `AuthorizationVerification` now extends `AuthorizationRecord`; `CommerceEventType` gains `authorization.verified` and `authorization.rejected`. *Use case:* the execution pipeline enforcing authorization, in the order payment verify -> authorize/reserve -> payment replay reserve -> settle -> consume/release/mark-uncertain. *Why `requirement` on the provider:* the 402 challenge has to name what the retry must also carry, and only the provider knows its own spec version and payload profile. *Why `markUncertain` rather than leaving a reservation alone:* a settlement that was broadcast but never confirmed must not hand the proof back, and "we did nothing" is indistinguishable from a path that forgot to finalize. *Why the receipt stores a record and not the verification:* `reservationId` is a live handle, not an audit fact, and a stored proof would be a spendable secret at rest. *Compatibility:* `CommerceReceipt.authorization` is optional and absent for every resource that requires no authorization; the receipt store adds schema version 2 (`ALTER TABLE receipts ADD COLUMN authorization_json`), so an existing database keeps its rows. `AuthorizationProvider` is not yet implemented by anything shipped, so the two new members break no consumer.
 - **Additive (non-frozen surfaces):** `GatewayOptions.authorizationProviders` (optional) and `ReadinessResult.authorizationProviders`; a new `./ap2` subpath exporting `createAp2AuthorizationProvider` / `ap2`, with `jose`, `@sd-jwt/core` and `canonicalize` as optional peers. *Use case:* running AP2 as a wired subsystem. *Why a subpath:* one entry per distinct peer set, named for the peer - a gateway serving no gated resource should install neither a JOSE stack nor an SD-JWT parser, and the main entry and the CLI import the narrow AP2 modules (`constants.ts`, `types.ts`, `descriptor.ts`) so neither pulls a peer. *Readiness:* an authorization provider reporting `fail` blocks `/ready` on the same threshold as a payment provider - a resource that requires a mandate cannot be served without one, and serving its challenge anyway promises what cannot be honoured. Only the fixed vocabulary token `authorization-provider-unreachable` reaches the client. *Compatibility:* both fields are additive and a deployment configuring no authorization behaves exactly as before.
+- **Additive (`./ap2` subpath):** `createCheckoutJwt` and `CreateCheckoutJwtOptions`. *Use case:* a merchant has to sign the checkout JWT a Checkout Mandate binds, and the gateway only verifies. *Why it ships:* `input_hash` is an RFC 8785 digest, and a hand-rolled signer reaching for a sorted-key `JSON.stringify` agrees on most inputs and disagrees on floats and non-ASCII keys - producing a mandate refused with a deliberately coarse reason. The helper also refuses a numeric `amount`, the public half of a key pair, a non-P-256 key and a missing field before signing, rather than letting each become that same opaque refusal. *Scope:* signing only. It runs in the merchant's process, never calls the gateway and is never called by it - the mirror of `createPaymentProof`. The Checkout Mandate itself is the buyer's side and nothing here mints one.
 ---
 
 # Integration contract - exact factory signatures
@@ -219,6 +220,29 @@ export interface Ap2TrustedKey {
   /** A public P-256 JWK, validated member by member at config load. */
   readonly jwk: Readonly<Record<string, string>>;
 }
+
+/** Merchant-side. Signs the checkout JWT a Checkout Mandate binds. */
+export interface CreateCheckoutJwtOptions {
+  /** A private ES256 JWK, or a PKCS#8 PEM. Never leaves the caller's process. */
+  readonly privateKey: Ap2SigningKey;
+  readonly kid: string;
+  readonly issuer: string;
+  readonly audience: string;
+  readonly resourceId: string;
+  /** Hashed with RFC 8785 (JCS), the same way the gateway hashes it. */
+  readonly input: unknown;
+  /** A decimal string; compared as a string, never numerically. */
+  readonly amount: string;
+  readonly currency: string;
+  readonly paymentMethod: string;
+  readonly destination?: string;
+  readonly network?: string;
+  readonly asset?: string;
+  readonly jwtId?: string;
+  readonly expiresInSeconds?: number;
+  readonly now?: Date;
+}
+export function createCheckoutJwt(options: CreateCheckoutJwtOptions): Promise<string>;
 
 export const AP2_SPEC_VERSION = '0.2.0';
 export const AP2_CHECKOUT_PROFILE = 'agent-commerce/ap2/checkout/v1';

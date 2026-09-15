@@ -5,6 +5,12 @@
  * pulls the optional peers (`jose`, `@sd-jwt/core`, `canonicalize`), so the
  * main entry and the CLI import the narrow modules instead of this barrel.
  */
+
+export {
+  type Ap2SigningKey,
+  type CreateCheckoutJwtOptions,
+  createCheckoutJwt,
+} from './checkout-signer.js';
 export {
   AP2_CHECKOUT_MANDATE_VCT,
   AP2_CHECKOUT_PROFILE,
