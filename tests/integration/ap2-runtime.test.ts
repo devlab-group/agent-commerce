@@ -314,6 +314,39 @@ describe('AP2 wired into the gateway', () => {
     expect(JSON.stringify(body)).not.toContain(parties.mandateSigner.publicJwk['x']);
   });
 
+  it('advertises itself in the well-known document, so the claim is checkable', async () => {
+    const gw = await startGateway([startAp2()]);
+
+    const res = await gw.server.inject({ method: 'GET', url: '/.well-known/agent-commerce' });
+    const body = res.json<{
+      authorizationProviders: {
+        name: string;
+        kind: string;
+        status: string;
+        supportedSpec: string;
+      }[];
+      paymentProviders: { name: string }[];
+    }>();
+
+    const [ap2] = body.authorizationProviders;
+    expect(ap2?.name).toBe('ap2');
+    expect(ap2?.kind).toBe('authorization');
+    expect(ap2?.status).toBe('experimental');
+    expect(ap2?.supportedSpec).toContain('0.2.0');
+    // Listed apart from the rails: an authorization method is not a payment
+    // method and must never be selectable as one
+    expect(body.paymentProviders.map((p) => p.name)).not.toContain('ap2');
+    // Public keys are public, but the document still does not carry trust policy
+    expect(JSON.stringify(body)).not.toContain(parties.mandateSigner.publicJwk['x']);
+  });
+
+  it('reports an empty list when no authorization is configured', async () => {
+    const gw = await startGateway([]);
+
+    const res = await gw.server.inject({ method: 'GET', url: '/.well-known/agent-commerce' });
+    expect(res.json<{ authorizationProviders: unknown[] }>().authorizationProviders).toEqual([]);
+  });
+
   it('runs with no authorization provider at all, which is the default', async () => {
     const gw = await startGateway([]);
 

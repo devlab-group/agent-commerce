@@ -33,6 +33,7 @@ import type { GatewayConfig } from '../config/index.js';
 import type {
   AdapterDescriptor,
   AdapterHealth,
+  AuthorizationProvider,
   Clock,
   PaymentProvider,
   ReceiptStore,
@@ -76,6 +77,12 @@ export interface WellKnownDocument {
   readonly protocols: WellKnownProtocols;
   readonly adapters: ReadonlyArray<AdapterDescriptor & { readonly health: AdapterHealth }>;
   readonly paymentProviders: readonly AdapterDescriptor[];
+  /**
+   * Empty unless a resource requires authorization. Listed separately from
+   * `paymentProviders` because an authorization method is not a payment rail
+   * and must never be selectable as one.
+   */
+  readonly authorizationProviders: readonly AdapterDescriptor[];
   readonly store: AdapterDescriptor;
   readonly payments: {
     readonly x402?: {
@@ -97,6 +104,7 @@ export interface WellKnownDocument {
 export interface BuildWellKnownOptions {
   readonly config: GatewayConfig;
   readonly paymentProviders: readonly PaymentProvider[];
+  readonly authorizationProviders: readonly AuthorizationProvider[];
   readonly store: ReceiptStore;
   readonly adapterRuntimes: readonly AdapterRuntime[];
   readonly clock: Clock;
@@ -149,6 +157,7 @@ export async function buildWellKnownDocument(
     protocols: publicProtocols(options.config.protocols),
     adapters,
     paymentProviders: options.paymentProviders.map((provider) => provider.descriptor),
+    authorizationProviders: options.authorizationProviders.map((provider) => provider.descriptor),
     store: options.store.descriptor,
     payments: {
       ...(x402 !== undefined

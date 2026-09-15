@@ -166,14 +166,12 @@ const jwt = await createCheckoutJwt({
 });
 ```
 
-It exists mainly for `input_hash`. A signer that reaches for a sorted-key
-`JSON.stringify` agrees with this gateway on most inputs and parts company on
-the ones carrying floats or non-ASCII keys, and the resulting mandate is
-refused with a reason that does not say which field disagreed.
+It exists mainly to compute [`input_hash`](#the-input-hash) the way the gateway
+does, so nobody has to reimplement JCS and discover the difference on a float.
 
-It also refuses, before signing, what would otherwise become that same opaque
-refusal: a numeric `amount`, the public half of the key pair, a key that is not
-P-256, and a missing required field.
+It also refuses, before signing, what would otherwise surface much later as one
+coarse `AUTHORIZATION_INVALID`: a numeric `amount`, the public half of the key
+pair, a key that is not P-256, and a missing required field.
 
 What it cannot check is agreement with the gateway's own resolved requirement,
 which it never sees. Take `amount` and `currency` from your catalogue and the
@@ -347,6 +345,8 @@ npm install @devlab.group/agent-commerce jose @sd-jwt/core canonicalize
 
 `agent-commerce doctor` reports the pins, the trusted issuer ids with key
 counts, the replay store's writability, and which resources a mandate gates.
+`GET /.well-known/agent-commerce` lists the provider's descriptor under
+`authorizationProviders`, apart from the payment rails.
 
 ## Not implemented
 

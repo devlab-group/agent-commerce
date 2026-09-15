@@ -6,11 +6,10 @@
  * never calls the gateway and the gateway never calls it - the mirror of
  * `createPaymentProof`, which a buyer runs to produce a payment proof.
  *
- * It exists for one claim in particular. `input_hash` is an RFC 8785 digest,
- * and a hand-rolled signer that reaches for a sorted-key `JSON.stringify`
- * agrees with this gateway on most inputs and disagrees on the ones that carry
- * floats or non-ASCII keys. The mandate then fails verification with a
- * deliberately coarse reason that does not say which field disagreed.
+ * It exists for `input_hash`, an RFC 8785 digest. A signer reaching for a
+ * sorted-key `JSON.stringify` agrees on most inputs and disagrees on floats
+ * and non-ASCII keys, and the mandate is then refused with a reason that does
+ * not say which field disagreed.
  */
 import { importPKCS8, type JWK, SignJWT } from 'jose';
 import {
@@ -64,10 +63,7 @@ export interface CreateCheckoutJwtOptions {
 
   /** Defaults to a random UUID. Recorded on the receipt and used for replay defence */
   readonly jwtId?: string;
-  /**
-   * Defaults to 900 (15 minutes). A human approval sits inside this window, so
-   * it has to outlast someone reading a checkout screen.
-   */
+  /** Defaults to 900: a human approval sits inside this window */
   readonly expiresInSeconds?: number;
   /** Injectable so a test need not move the wall clock */
   readonly now?: Date;
@@ -89,9 +85,9 @@ function describe(value: unknown): string {
 }
 
 /**
- * Refuses the two copy-paste mistakes that would otherwise surface as an
- * opaque verification failure: signing with the public half, and signing with
- * a key of the wrong type.
+ * Every rejection here is a mistake that would otherwise surface as an opaque
+ * verification failure much later: the public half of the pair, the wrong key
+ * type, or a PEM that is not PKCS#8.
  */
 async function resolveKey(
   key: Ap2SigningKey,
@@ -149,7 +145,6 @@ export async function createCheckoutJwt(options: CreateCheckoutJwtOptions): Prom
   const agentCommerce: Record<string, string> = {
     profile: AP2_CHECKOUT_PROFILE,
     resource_id: resourceId,
-    // The reason this helper exists
     input_hash: await computeInputHash(options.input),
     amount,
     currency,

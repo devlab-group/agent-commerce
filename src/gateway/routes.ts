@@ -76,6 +76,7 @@ export function registerRoutes(options: RegisterRoutesOptions): void {
     buildWellKnownDocument({
       config: options.config,
       paymentProviders: options.paymentProviders,
+      authorizationProviders: options.authorizationProviders,
       store: options.store,
       adapterRuntimes: options.adapterRuntimes,
       clock: options.clock,

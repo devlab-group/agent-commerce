@@ -12,6 +12,7 @@
   <img alt="x402" src="https://img.shields.io/badge/x402-supported-0052ff">
   <img alt="A2A" src="https://img.shields.io/badge/A2A-experimental-f0a30a">
   <img alt="ACP" src="https://img.shields.io/badge/ACP-experimental-f0a30a">
+  <img alt="AP2" src="https://img.shields.io/badge/AP2-experimental-f0a30a">
 </p>
 
 ## What it is, in ten seconds
@@ -23,13 +24,15 @@ Agent Commerce Gateway sits in front of your existing API, in **your**
 infrastructure, and does that for you. You describe an endpoint in a YAML file -
 or generate that description from an OpenAPI document you already have - and
 agents get an MCP tool and an x402 paywall. Switch on the experimental adapters
-and the same resource is also an A2A skill, or an ACP checkout session. The
-money goes straight to your wallet - the gateway never holds it, and never holds
-your keys.
+and the same resource is also an A2A skill, or an ACP checkout session. Switch
+on AP2 and a paid resource additionally demands a signed mandate: proof that the
+human behind the agent approved that exact purchase, checked before anything
+settles. The money goes straight to your wallet - the gateway never holds it,
+and never holds your keys.
 
 ```text
 Your existing API → Agent Commerce Gateway → AI Agent
-          MCP · A2A · ACP · x402 · receipts · doctor
+      MCP · A2A · ACP · x402 · AP2 · receipts · doctor
 ```
 
 ## Demo
@@ -274,6 +277,10 @@ checkable, not marketing. Detail: [docs/protocols.md](docs/protocols.md).
 - **Real settlement in CI.** The end-to-end test asserts the buyer's balance
   falls and the merchant's rises by exactly the price, with a real transaction
   hash in the receipt. A log line saying "payment successful" would not count.
+- **Authorization is separate from payment.** A resource can also require an
+  AP2 mandate, verified before settlement and spendable exactly once. It never
+  moves money and never unlocks a resource on its own - the payment still has
+  to be real. Detail: [docs/ap2.md](docs/ap2.md).
 
 Detail: [docs/payment-flow.md](docs/payment-flow.md).
 
@@ -392,6 +399,7 @@ PASS  Backend              2/2 backend host(s) reachable
 PASS  Protocols            http=on mcp=on (/mcp) a2a=off acp=off
 INFO  A2A                  disabled
 INFO  ACP                  disabled
+INFO  AP2                  disabled
 PASS  Payments             x402 v2 (scheme=exact) enabled - LOCAL dev chain (eip155:84532, chain id shared with Base Sepolia), destination=0x7099…79C8, facilitator=local
 INFO  Payments (MPP)       planned - not implemented in this release
 PASS  Storage              sqlite schema v1 writable; receipts=2
