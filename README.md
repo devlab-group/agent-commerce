@@ -90,16 +90,17 @@ const { url } = await gateway.listen();
 
 ### Optional peers - install only the rails you use
 
-The MCP adapter and the x402 provider live on their own subpaths, because each
-needs a dependency the rest of the package does not - the x402 rail brings the
-whole EVM signing and RPC stack, which a gateway serving a free HTTP resource
-has no business installing.
+The MCP adapter, the x402 provider and AP2 verification live on their own
+subpaths, because each needs a dependency the rest of the package does not -
+the x402 rail brings the whole EVM signing and RPC stack, which a gateway
+serving a free HTTP resource has no business installing.
 
 | You want                          | Install                        | Import                                     |
 | --------------------------------- | ------------------------------ | ------------------------------------------ |
 | gateway, config, receipts, CLI    | `@devlab.group/agent-commerce` | `from '@devlab.group/agent-commerce'`      |
 | expose resources as MCP tools     | `+ @modelcontextprotocol/sdk`  | `from '@devlab.group/agent-commerce/mcp'`  |
 | accept x402 payments              | `+ @x402/core @x402/evm viem`  | `from '@devlab.group/agent-commerce/x402'` |
+| verify AP2 mandates               | `+ jose @sd-jwt/core canonicalize` | `from '@devlab.group/agent-commerce/ap2'` |
 | authenticate to a CDP facilitator | `+ @coinbase/x402`             | (no import - loaded on demand)             |
 
 ```bash
@@ -109,7 +110,13 @@ npm install @devlab.group/agent-commerce @modelcontextprotocol/sdk @x402/core @x
 ```ts
 import { mcp } from '@devlab.group/agent-commerce/mcp';
 import { x402 } from '@devlab.group/agent-commerce/x402';
+import { ap2 } from '@devlab.group/agent-commerce/ap2';
 ```
+
+The AP2 three are small - about 1.3 MB installed between them, against roughly
+63 MB for the x402 stack - but they stay optional on the same principle: a
+deployment that gates nothing on a mandate should not carry a JOSE stack and an
+SD-JWT parser to serve a resource.
 
 Peers are pinned exactly: x402's schemas and EIP-712 domains cross this
 boundary, so a version skew is a correctness problem rather than a convenience
@@ -233,7 +240,14 @@ See [docs/configuration.md](docs/configuration.md).
 | **HTTP**        | Supported    | native routes                                            |
 | **A2A**         | Experimental | A2A v1.0.0, binding `JSONRPC`, method `SendMessage`      |
 | **ACP**         | Experimental | ACP `2026-04-17`, REST checkout + discovery              |
-| UCP · MPP · AP2 | Planned      | -                                                        |
+| **AP2**         | Experimental | AP2 `v0.2.0`, Direct Checkout Mandate verification       |
+| UCP · MPP       | Planned      | -                                                        |
+
+AP2 is in that table because people look there, but it is not a transport: it
+is an **authorization** method that gates settlement on a resource that still
+takes a real payment. It is merchant-side mandate verification, not a full AP2
+Merchant implementation - the gateway holds no signing key and issues no
+Checkout Receipt. Detail: [docs/ap2.md](docs/ap2.md).
 
 "Planned" means **no code ships for it**. "Experimental" means the code ships,
 is tested against the protocol's own official artifacts, and serves a narrow
@@ -425,11 +439,13 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 **Now** - MCP, x402 v2, settlement on the local chain, Base Sepolia and Base
 mainnet, receipts, doctor, deterministic demo, experimental A2A v1.0.0 and ACP
-`2026-04-17` checkout adapters, and experimental OpenAPI import.
+`2026-04-17` checkout adapters, experimental AP2 v0.2.0 mandate verification,
+and experimental OpenAPI import.
 
-**Next** - a `doctor` GitHub Action · UCP · MPP · AP2 · more of ACP (carts,
-feed, delegated payment) · Shopify and WooCommerce examples · PostgreSQL ·
-richer observability · multi-file and remote OpenAPI sources.
+**Next** - a `doctor` GitHub Action · UCP · MPP · autonomous-mode AP2 (open
+mandates, agent key binding, constraint evaluation) · more of ACP (carts, feed,
+delegated payment) · Shopify and WooCommerce examples · PostgreSQL · richer
+observability · multi-file and remote OpenAPI sources.
 
 New protocols land only after the adapter model survives real use. Scope
 discipline is a release requirement, not a mood.
@@ -441,6 +457,7 @@ discipline is a release requirement, not a mood.
 | [Architecture](docs/architecture.md)           | how the pieces fit                          |
 | [Payment flow](docs/payment-flow.md)           | the paid round trip, and every way it fails |
 | [Protocols](docs/protocols.md)                 | exactly what is and is not supported        |
+| [AP2](docs/ap2.md)                             | mandate verification and the trust model    |
 | [Configuration](docs/configuration.md)         | `config.yaml` reference                     |
 | [OpenAPI import](docs/openapi-import.md)       | generate resources from an existing API     |
 | [Security model](docs/security.md)             | trust boundaries, and what we do not defend |

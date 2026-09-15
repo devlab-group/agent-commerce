@@ -12,9 +12,9 @@ implemented, exactly what is not, and pins the revisions.
 | **HTTP** | Supported | —                                                                                    | native resource routes with `PAYMENT-SIGNATURE`                     |
 | **A2A**  | Experimental | A2A **v1.0.0**, negotiation version `1.0`, binding `JSONRPC`                     | Agent Card discovery, `SendMessage`, terminal tasks, paid flow      |
 | **ACP**  | Experimental | ACP stable snapshot **2026-04-17**, REST binding                                 | discovery, the five checkout operations, bearer auth, idempotency   |
+| **AP2**  | Experimental | AP2 **v0.2.0**, tagged 2026-04-28, commit `b4587ac`, Direct mode               | closed Checkout Mandate verification before settlement                         |
 | UCP      | Planned   | —                                                                                    | planned, no code ships                                                         |
 | MPP      | Planned   | —                                                                                    | planned, no code ships                                                         |
-| AP2      | Planned   | —                                                                                    | planned, no code ships                                                         |
 
 "Planned" means **no code ships for it**. There is no partial adapter, no
 endpoint and no diagnostic pretending otherwise.
@@ -23,6 +23,12 @@ endpoint and no diagnostic pretending otherwise.
 ships, it is tested against the protocol's own official artifacts - the A2A SDK,
 the ACP schema and examples - and the supported subset is narrow and named
 below. Both are off by default.
+
+AP2 is listed here because this is where people look, but it is not a
+transport and has no adapter, no mount path and no discovery document. It is an
+authorization method: it decides whether a payment is allowed to settle, and a
+resource that requires one still needs a real payment proof. It has its own
+page, [ap2.md](ap2.md), and `doctor` reports it separately from the protocols.
 
 Every adapter reports itself at runtime through
 `GET /.well-known/agent-commerce` and in `agent-commerce doctor`, with

@@ -29,6 +29,8 @@ Never logged, never persisted, never returned:
 - private keys, seed phrases, mnemonics
 - `Authorization` headers and backend API secrets
 - the `PAYMENT-SIGNATURE` header and raw payment authorisation payloads
+- the `Agent-Authorization` header, AP2 presentations, their disclosures, and
+  the merchant checkout JWT they bind
 - `signature`, `secret`, `apiKey`, `signerPrivateKey`, `adminToken` and `token`
   fields, **at the top level and one level deep** (see below)
 
@@ -44,6 +46,32 @@ raw object that may carry a secret at depth ≥ 2. The **receipt store's**
 redaction (`src/storage/receipts/redact.ts`) has no such limit: it is a
 recursive key-pattern strip at every depth. Both have tests. Resolved `${VAR}` values are never printed, even
 in configuration error messages - errors name the *variable*, not the value.
+
+## Authorization trust (AP2)
+
+A separate trust anchor from payment, and a deliberately small one. The key
+policy, the two issuer lists and the rotation procedure are in
+[ap2.md](ap2.md#trust).
+
+Every AP2 verification key is a **public** key an operator wrote into
+`config.yaml`. The gateway performs no key discovery of any kind: no JWKS
+endpoint, no `jku`, no `x5u`, no issuer metadata fetch, no revocation call.
+A JWK is validated member by member at load against an allowlist, so private
+material and anything naming a URL is refused without the check having to name
+it. That closes an SSRF surface before it exists: no code path lets a presented
+mandate cause an outbound request, and removing a key from the config is the
+revocation.
+
+The algorithm comes from local policy, never from the JWT header: ES256 over
+P-256, one entry, so `alg: none` and the HMAC family are excluded by
+construction rather than by a check that has to remember them. `iss` and `kid`
+select which configured key verifies a mandate, and an unrecognised pair is
+refused - there is no "try every key" fallback that would make `kid` advisory.
+
+Digests are taken over the bytes that arrived - the compact checkout JWT as
+presented, and the issuer-signed token - never over a re-serialised object. A
+normalised payload has a different digest, and hashing it would check a
+document other than the one being verified.
 
 ## SSRF
 

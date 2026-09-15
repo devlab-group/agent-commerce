@@ -164,6 +164,68 @@ export type DeploymentMode = 'local' | 'testnet' | 'mainnet';
 export const SUPPORTED_NETWORK_IDS: readonly string[]; // ['eip155:84532', 'eip155:8453']
 ```
 
+## `src/authorization/ap2`
+> **Published as** `@devlab.group/agent-commerce/ap2`, gated behind the optional
+> peers `jose`, `@sd-jwt/core` and `canonicalize`. The main entry and the CLI
+> import only the narrow modules (`constants.ts`, `types.ts`, `descriptor.ts`),
+> which pull no peer, so `doctor` can report AP2 without installing a JOSE
+> stack. Trust and config types live here rather than in `src/config`, the way
+> `X402FacilitatorConfig` does: the subsystem owns its own config shape and the
+> loader imports it.
+
+```ts
+export interface Ap2AuthorizationProviderOptions {
+  /** The enabled half of the parsed `authorization.ap2` block. */
+  readonly config: EnabledAp2Config;
+  readonly clock?: Clock;
+  readonly logger?: Logger;
+  /** Injectable so tests need not touch the filesystem. */
+  readonly replayStore?: Ap2ReplayStore;
+}
+
+/** The gateway owns the lifetime: `close()` releases the replay database. */
+export interface Ap2AuthorizationProvider extends AuthorizationProvider {
+  close(): void;
+}
+export function createAp2AuthorizationProvider(
+  options: Ap2AuthorizationProviderOptions,
+): Ap2AuthorizationProvider;
+
+export type Ap2AuthorizationConfig =
+  | { readonly enabled: false }
+  | {
+      readonly enabled: true;
+      readonly specVersion: '0.2.0';
+      readonly mode: 'direct';
+      readonly trust: {
+        /** Signers of the Checkout Mandate itself. */
+        readonly mandateIssuers: readonly Ap2TrustedIssuer[];
+        /** Signers of the merchant checkout JWT the mandate binds. */
+        readonly checkoutIssuers: readonly Ap2TrustedIssuer[];
+      };
+      readonly clockSkewSeconds: number;
+      /** Its own SQLite file. An authorization replay is not a payment replay. */
+      readonly replay: { readonly path: string };
+    };
+
+export interface Ap2TrustedIssuer {
+  readonly issuer: string;
+  /** Per issuer, not gateway-wide: the mandate is addressed to the merchant. */
+  readonly audience: string;
+  readonly keys: readonly Ap2TrustedKey[];
+}
+export interface Ap2TrustedKey {
+  readonly kid: string;
+  /** A public P-256 JWK, validated member by member at config load. */
+  readonly jwk: Readonly<Record<string, string>>;
+}
+
+export const AP2_SPEC_VERSION = '0.2.0';
+export const AP2_CHECKOUT_PROFILE = 'agent-commerce/ap2/checkout/v1';
+export const AP2_CAPABILITIES: readonly string[];
+export const AP2_UNSUPPORTED: readonly string[];
+```
+
 ## `src/protocols/mcp`
 > **Published as** `@devlab.group/agent-commerce/mcp`, gated behind the optional peer
 > `@modelcontextprotocol/sdk`. In-repo consumers keep importing it by relative

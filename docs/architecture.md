@@ -29,9 +29,9 @@ not scale, and handing the money to a proprietary middleman defeats the point.
         │ (x402) (bounded HTTP) (SQLite) │
         └──────┬────────────────┬──────────────────────────────────┘
                │ │
-      payment protocol ┌──────▼──────────────┐
+      payment protocol ┌──────▼───────────────┐
       buyer → merchant │ Merchant Backend API │ (unchanged)
-                         └──────────────────────┘
+                       └──────────────────────┘
 ```
 
 Three properties are load-bearing:
@@ -103,8 +103,10 @@ CanonicalRequest
        ├─ no proof ──► PaymentRequiredOutcome (402) ─────┤ fail closed
        ├─ verify ──► rejected ► PAYMENT_INVALID ──────┤
        ├─ replayKey missing ────► PAYMENT_INVALID ───────┤
+       ├─ authorize + reserve ──► AUTHORIZATION_* ───────┤
        ├─ reserve replayKey ────► PAYMENT_REPLAYED ──────┤
-       └─ settle ─────────────► PAYMENT_SETTLEMENT_FAILED
+       ├─ settle ─────────────► PAYMENT_SETTLEMENT_FAILED
+       └─ consume | release | mark the authorization
                                                           │
   ┌───────────────────────────────────────────────────────┘
   ├─ call merchant backend ────────────────► BACKEND_TIMEOUT / BACKEND_ERROR
@@ -115,6 +117,12 @@ CanonicalRequest
 `verify` never moves money; only `settle` does. The replay reservation sits
 deliberately **between** them: a duplicate authorisation is rejected before any
 funds move.
+
+The authorization step is opt-in per resource and absent from almost every
+deployment. Where a resource does require one, it sits between payment
+verification and settlement for the same reason the replay reservation does,
+and only a failure that provably moved no money hands it back. See
+[ap2.md](ap2.md#where-it-sits).
 
 ## Correlation
 
@@ -128,6 +136,11 @@ Event sequence for a successful paid request:
 resource.requested → payment.required → payment.verified → payment.settled
                    → backend.called → resource.delivered
 ```
+
+A resource requiring authorization adds `authorization.verified` (or
+`authorization.rejected`) between the request and the payment events. The event
+types are the same whatever the method, so reading the audit trail never
+requires knowing what AP2 is.
 
 ## Adapter isolation
 
@@ -151,15 +164,16 @@ demo buyer agent is a deterministic program, and that is the path CI runs.
 
 ## Where to look in the code
 
-| Concern                                    | Path                           |
-| ------------------------------------------ | ------------------------------ |
-| canonical model, errors, pipeline          | `src/core`                     |
-| config schema, loader, env substitution    | `src/config`                   |
-| Fastify server, routes, adapter mounting   | `src/gateway`                  |
-| MCP adapter                                | `src/protocols/mcp`            |
-| x402 provider + local/remote facilitator   | `src/payments/x402`            |
-| SQLite receipts/events/attempts            | `src/storage/receipts`         |
-| OpenAPI import (config ingress only)       | `src/openapi`                  |
-| CLI (`init`, `import`, `validate`, `doctor`, `demo`) | `src/cli`            |
-| demo merchant API / buyer / dashboard      | `demo/*`                       |
-| MockUSDC + local chain scripts             | `contracts/`, `scripts/chain/` |
+| Concern                                              | Path                           |
+| ---------------------------------------------------- | ------------------------------ |
+| canonical model, errors, pipeline                    | `src/core`                     |
+| config schema, loader, env substitution              | `src/config`                   |
+| Fastify server, routes, adapter mounting             | `src/gateway`                  |
+| MCP adapter                                          | `src/protocols/mcp`            |
+| x402 provider + local/remote facilitator             | `src/payments/x402`            |
+| AP2 mandate verification                             | `src/authorization/ap2`        |
+| SQLite receipts/events/attempts                      | `src/storage/receipts`         |
+| OpenAPI import (config ingress only)                 | `src/openapi`                  |
+| CLI (`init`, `import`, `validate`, `doctor`, `demo`) | `src/cli`                      |
+| demo merchant API / buyer / dashboard                | `demo/*`                       |
+| MockUSDC + local chain scripts                       | `contracts/`, `scripts/chain/` |

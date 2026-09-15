@@ -34,6 +34,7 @@ npm run agent-commerce -- validate
 | `protocols`        | yes                         | which surfaces are enabled    |
 | `resources`        | yes                         | the capabilities you expose   |
 | `payments`         | when a paid resource exists | rail configuration            |
+| `authorization`    | no                          | AP2 mandate verification      |
 
 ## Resources
 
@@ -208,6 +209,61 @@ idempotency database is its own file - it never shares a table with receipts or
 the x402 replay defence.
 
 See [protocols.md](protocols.md#acp) for the wire contract.
+
+## `authorization.ap2`
+
+Experimental, off by default, and absent from a config that predates it. Full
+reference, including the checkout profile and the trust model:
+[ap2.md](ap2.md).
+
+```yaml
+authorization:
+  ap2:
+    enabled: true
+    specVersion: "0.2.0"       # the only supported value
+    mode: direct               # the only supported mode
+    clockSkewSeconds: 60       # default; 300 is the ceiling
+    replay:
+      path: ./data/ap2-authorizations.sqlite   # its own file, never shared
+    trust:
+      mandateIssuers:          # who may issue a Checkout Mandate
+        - issuer: https://surface.example
+          audience: merchant.example
+          keys:
+            - kid: mandate-2026-01
+              jwk: { kty: EC, crv: P-256, x: "...", y: "..." }
+      checkoutIssuers:         # who may sign the merchant checkout JWT
+        - issuer: https://merchant.example
+          audience: agent-commerce
+          keys:
+            - kid: checkout-2026-01
+              jwk: { kty: EC, crv: P-256, x: "...", y: "..." }
+```
+
+Then require it on a paid resource:
+
+```yaml
+resources:
+  market_report:
+    pricing: { type: fixed, amount: "0.01", currency: USDC }
+    payments: [x402]
+    authorization:
+      required: [ap2]
+```
+
+Public keys only, written here by an operator. Nothing is fetched: no JWKS, no
+`jku`, no `x5u`, no issuer discovery. A JWK carrying private material is
+refused at load and names the key to rotate.
+
+The two issuer lists are separate on purpose - signing the merchant's checkout
+documents must not confer the power to issue mandates - and `audience` is
+required per issuer rather than defaulted, because without it a mandate minted
+for another merchant would verify here.
+
+Refused at load: requiring `ap2` while the block is absent or disabled;
+requiring it on a **free** resource, since authorization gates settlement and
+there would be none; a `replay.path` shared with the receipt store or the ACP
+idempotency store; and a `clockSkewSeconds` above the ceiling.
 
 ## Payments
 

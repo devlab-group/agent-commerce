@@ -1,5 +1,5 @@
 # ---------------------------------------------------------------------------
-# Agent Commerce Gateway — example configuration
+# Agent Commerce Gateway - example configuration
 #
 # Copy to `config.yaml` and edit, or generate one with:
 # npm run agent-commerce -- init
@@ -44,7 +44,7 @@ protocols:
   mcp:
     enabled: true
     mountPath: /mcp
-  # A2A (Agent2Agent) v1.0.0 — experimental, off by default.
+  # A2A (Agent2Agent) v1.0.0 - experimental, off by default.
   # Enabling it serves JSON-RPC `SendMessage` at mountPath and the
   # specification-fixed Agent Card at /.well-known/agent-card.json. Clients must
   # send `A2A-Version: 1.0`. Streaming, task persistence and push notifications
@@ -52,7 +52,7 @@ protocols:
   a2a:
     enabled: false
     mountPath: /a2a
-  # ACP (Agentic Commerce Protocol), stable snapshot 2026-04-17 — experimental,
+  # ACP (Agentic Commerce Protocol), stable snapshot 2026-04-17 - experimental,
   # off by default. Enabling it serves the five checkout routes under mountPath
   # and the specification-fixed discovery document at /.well-known/acp.json.
   # Clients must send `Authorization: Bearer …`, `API-Version: 2026-04-17`, and
@@ -118,14 +118,14 @@ payments:
     assetVersion: ${X402_ASSET_VERSION}
     assetDecimals: ${X402_ASSET_DECIMALS}
     # Merchant-controlled settlement destination.
-    # This is NEVER a gateway-owned wallet — see docs/security.md.
+    # This is NEVER a gateway-owned wallet - see docs/security.md.
     payTo: ${MERCHANT_WALLET}
     # Seconds a payment challenge stays valid.
     maxTimeoutSeconds: 120
     # Who verifies the authorisation and broadcasts the transfer.
     #
     # mode: local   the facilitator runs in this process and signs with
-    #               signerPrivateKey. Deterministic dev chain only — the key
+    #               signerPrivateKey. Deterministic dev chain only - the key
     #               must be an Anvil well-known one, and startup refuses it
     #               against anything that is not a local/private RPC.
     #
@@ -136,7 +136,7 @@ payments:
       mode: local
       signerPrivateKey: ${X402_FACILITATOR_PRIVATE_KEY}
     #
-    # A public testnet instead — no key anywhere in this file:
+    # A public testnet instead - no key anywhere in this file:
     #
     # network: eip155:84532
     # facilitator:
@@ -156,3 +156,55 @@ payments:
     #   auth:
     #     type: bearer
     #     token: ${X402_FACILITATOR_TOKEN}
+
+# ---------------------------------------------------------------------------
+# AP2 mandate verification - experimental, off by default.
+#
+# Makes a paid resource require proof that the human behind the agent approved
+# THIS purchase: a signed AP2 v0.2.0 Direct Checkout Mandate, verified before
+# the payment is allowed to settle. A mandate never unlocks a resource on its
+# own and never moves money; the resource still takes a real x402 payment.
+#
+# Public keys only, written here by you. Nothing is fetched at runtime: no
+# JWKS, no `jku`, no `x5u`, no issuer discovery. Rotate by listing the new key
+# beside the old one, moving the signer to the new `kid`, then removing the old.
+#
+# Needs the optional peers:  npm install jose @sd-jwt/core canonicalize
+# Full reference: docs/ap2.md
+# ---------------------------------------------------------------------------
+# authorization:
+#   ap2:
+#     enabled: true
+#     specVersion: "0.2.0"     # the only supported value
+#     mode: direct             # the only supported mode
+#     clockSkewSeconds: 60     # default; 300 is the ceiling
+#     replay:
+#       # Its own file. An authorization replay is not a payment replay, and a
+#       # spent mandate must stay spent for as long as you can be asked what
+#       # you delivered.
+#       path: ./data/ap2-authorizations.sqlite
+#     trust:
+#       # Who may issue a Checkout Mandate. Usually the buyer's shopping agent
+#       # or credential provider.
+#       mandateIssuers:
+#         - issuer: https://surface.example
+#           audience: ${MERCHANT_ID}      # required: who the mandate is for
+#           keys:
+#             - kid: mandate-2026-01
+#               jwk: { kty: EC, crv: P-256, x: "...", y: "..." }
+#       # Who signs YOUR checkout documents. A separate list on purpose:
+#       # signing checkouts must not confer the power to issue mandates.
+#       checkoutIssuers:
+#         - issuer: https://merchant.example
+#           audience: agent-commerce
+#           keys:
+#             - kid: checkout-2026-01
+#               jwk: { kty: EC, crv: P-256, x: "...", y: "..." }
+#
+# Then require it on a paid resource, under `resources:`:
+#
+#   market_report:
+#     pricing: { type: fixed, amount: "0.01", currency: USDC }
+#     payments: [x402]
+#     authorization:
+#       required: [ap2]

@@ -106,6 +106,11 @@ Deriving the key from the authorisation rather than the request is what makes
 it work: the same authorisation replayed against a *different* request still
 collides.
 
+A resource that also requires an AP2 mandate gets a third, independent
+reservation, in its own database and on its own key. It is claimed before the
+payment replay key and released only by a failure that provably moved no money.
+See [ap2.md](ap2.md#replay).
+
 ## Amounts
 
 Canonical amounts are decimal strings in display units — `"0.01"` — never
