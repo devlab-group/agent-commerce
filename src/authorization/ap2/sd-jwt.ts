@@ -92,6 +92,11 @@ export async function verifyMandate(
     // a forged HMAC) and kept for the day this resolves a key set instead of
     // one key, where the header would get to pick
     algorithms: [AP2_SIGNING_ALGORITHM],
+    // Also redundant, and for the same reason: the key was resolved *from*
+    // `iss` against the configured allowlist, so nothing reaching here can
+    // carry a different one. It backstops a future resolver that matches on
+    // something else. `audience` below is not redundant - `aud` is the
+    // presenter's claim, checked against what the operator configured.
     issuer: issuer.issuer,
     audience: issuer.audience,
     clockTolerance: deps.clockSkewSeconds,

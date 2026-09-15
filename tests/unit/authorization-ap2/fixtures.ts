@@ -2,8 +2,9 @@
  * Builds AP2 Direct Checkout Mandate presentations for the verifier tests.
  *
  * PROVENANCE: these are NOT golden vectors from the AP2 repository. They are
- * built here to the v0.2.0 closed Checkout Mandate shape, with real ES256 keys
- * and real signatures from `jose`. So they show the verifier enforces the
+ * built here to the closed Checkout Mandate shape of AP2 v0.2.0, the release
+ * tagged 2026-04-28 at commit b4587ac, with real ES256 keys and real
+ * signatures from `jose`. So they show the verifier enforces the
  * rules as this repository reads them; they do not show interoperability with
  * a mandate the reference implementation minted. Upstream vectors, with the
  * commit recorded, belong here before anyone calls this stable.
@@ -24,7 +25,8 @@ export const CHECKOUT_AUDIENCE = 'agent-commerce';
 
 /** Fixed instant every fixture is minted against, so nothing races a real clock */
 export const NOW = new Date('2026-09-14T12:00:00.000Z');
-const NOW_SECONDS = Math.floor(NOW.getTime() / 1000);
+/** {@link NOW} as the epoch seconds every `iat`/`exp` here is built from */
+export const NOW_SECONDS = Math.floor(NOW.getTime() / 1000);
 
 // `CryptoKey` is a DOM type and server code here does not load the DOM lib
 type PrivateKey = Awaited<ReturnType<typeof generateKeyPair>>['privateKey'];

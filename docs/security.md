@@ -333,6 +333,22 @@ rejection outcomes assert that balances did not move.
 | **a merchant leaking a connection string or stack in an error body**  | never relayed; the ACP error carries type, code and message only  | same                                              |
 | **an ACP `Request-Id` carrying a header-injection payload**           | dropped, never echoed                                             | `tests/unit/protocols-acp/adapter.test.ts`        |
 | **an ACP checkout resource configured as paid**                       | refused at config load; `payment-required` at runtime is a 500    | `tests/unit/config/schema.test.ts`                |
+| **an AP2 mandate with a tampered signature**                          | `AUTHORIZATION_INVALID`; nothing settles                          | `tests/integration/ap2-x402-conformance.test.ts`  |
+| **an expired AP2 mandate**                                            | `AUTHORIZATION_INVALID`; nothing settles                          | same                                              |
+| **a mandate from an issuer that is not configured**                   | refused at the trust allowlist, before any signature check        | same, `tests/unit/authorization-ap2`              |
+| **a mandate claiming a trusted `kid` but signed with another key**    | refused at the signature; `kid` selects the key, never labels it  | same                                              |
+| **a mandate naming a `kid` the issuer does not have**                 | refused; no "try every key" fallback                              | same                                              |
+| **a mandate whose `checkout_hash` does not match its checkout JWT**   | `checkout_binding_failed`; nothing settles                        | same                                              |
+| **a mandate approved for another resource, input, amount, currency, payment method, network or asset** | `purchase_mismatch`, one coarse reason; nothing settles | same                                              |
+| **a mandate silent about the chain the requirement names**            | refused - fail closed both ways                                   | same                                              |
+| **a mandate presented twice**                                         | `AUTHORIZATION_REPLAYED`; the second purchase moves no funds      | same, `tests/e2e/authorization`                   |
+| **the same mandate re-presented with a fresh, valid payment proof**   | still refused; balances unchanged on a real chain                 | `tests/e2e/authorization`                         |
+| **a mandate replayed under selective disclosure** (one mandate, many presentation strings) | refused - the replay key is the issuer-signed token, not the presentation | `tests/unit/authorization-ap2` |
+| **the AP2 replay store unreachable**                                  | `AUTHORIZATION_PROVIDER_UNAVAILABLE`, retryable, never the buyer's fault | `tests/integration/ap2-runtime.test.ts`     |
+| **a payment rejected after a mandate verified**                       | the reservation is released; a corrected proof reuses the mandate | `tests/integration/ap2-x402-conformance.test.ts`  |
+| **a settlement broadcast but never confirmed**                        | the mandate is *not* handed back; marked uncertain for an operator | same                                             |
+| **a free resource configured to require a mandate**                   | refused at config load, and again on the execution path           | `tests/unit/config/ap2.test.ts`, `tests/unit/core/execution` |
+| **an oversized `Agent-Authorization` header**                         | `AUTHORIZATION_INVALID` before any decode; nothing echoed back    | `tests/integration/authorization-carrier.test.ts` |
 
 Two of those exist because writing them found a bug. The SDK's `exact`/EVM
 scheme reports an unreachable node as `invalid_exact_evm_signature`, and its
