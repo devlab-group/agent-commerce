@@ -41,6 +41,7 @@ describe('createReadinessProbe', () => {
       store,
       adapterRuntimes: [],
       paymentProviders: [provider],
+      authorizationProviders: [],
       clock,
       logger: NOOP_LOGGER,
     });
@@ -59,7 +60,14 @@ describe('createReadinessProbe', () => {
     };
     const clock = createFakeClock();
     const probe = createReadinessProbe(
-      { store, adapterRuntimes: [], paymentProviders: [], clock, logger: NOOP_LOGGER },
+      {
+        store,
+        adapterRuntimes: [],
+        paymentProviders: [],
+        authorizationProviders: [],
+        clock,
+        logger: NOOP_LOGGER,
+      },
       2000,
     );
 
@@ -78,7 +86,14 @@ describe('createReadinessProbe', () => {
     };
     const clock = createFakeClock();
     const probe = createReadinessProbe(
-      { store, adapterRuntimes: [], paymentProviders: [], clock, logger: NOOP_LOGGER },
+      {
+        store,
+        adapterRuntimes: [],
+        paymentProviders: [],
+        authorizationProviders: [],
+        clock,
+        logger: NOOP_LOGGER,
+      },
       2000,
     );
 
@@ -93,7 +108,14 @@ describe('createReadinessProbe', () => {
     store.healthStatus = 'pass';
     const clock = createFakeClock();
     const probe = createReadinessProbe(
-      { store, adapterRuntimes: [], paymentProviders: [], clock, logger: NOOP_LOGGER },
+      {
+        store,
+        adapterRuntimes: [],
+        paymentProviders: [],
+        authorizationProviders: [],
+        clock,
+        logger: NOOP_LOGGER,
+      },
       100,
     );
 

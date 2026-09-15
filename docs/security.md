@@ -7,15 +7,16 @@ deliberately do not defend.
 ## Trust boundaries
 
 ```text
-  UNTRUSTED SEMI-TRUSTED TRUSTED
-  ───────── ──────────── ───────
-  agent input ────► gateway process ────► merchant backend
-  payment proofs (validates all (administrator
-  protocol traffic of the left, configured, assumed
-                             holds no keys) to be yours)
+       UNTRUSTED                    SEMI-TRUSTED                       TRUSTED
+  ────────────────────       ──────────────────────────       ─────────────────────────
 
-                            configuration ◄──── administrator (trusted)
-                            environment ◄──── operator (trusted)
+  agent input          ────► gateway process            ────► merchant backend
+  payment proofs             validates all agent input,       administrator configured,
+  authorization proofs       holds no keys                    assumed to be yours
+  protocol traffic
+
+                             configuration              ◄──── administrator
+                             environment                ◄──── operator
 ```
 
 Everything from an agent is untrusted and validated. Configuration is trusted
@@ -29,6 +30,8 @@ Never logged, never persisted, never returned:
 - private keys, seed phrases, mnemonics
 - `Authorization` headers and backend API secrets
 - the `PAYMENT-SIGNATURE` header and raw payment authorisation payloads
+- the `Agent-Authorization` header, AP2 presentations, their disclosures, and
+  the merchant checkout JWT they bind
 - `signature`, `secret`, `apiKey`, `signerPrivateKey`, `adminToken` and `token`
   fields, **at the top level and one level deep** (see below)
 
@@ -44,6 +47,32 @@ raw object that may carry a secret at depth ≥ 2. The **receipt store's**
 redaction (`src/storage/receipts/redact.ts`) has no such limit: it is a
 recursive key-pattern strip at every depth. Both have tests. Resolved `${VAR}` values are never printed, even
 in configuration error messages - errors name the *variable*, not the value.
+
+## Authorization trust (AP2)
+
+A separate trust anchor from payment, and a deliberately small one. The key
+policy, the two issuer lists and the rotation procedure are in
+[ap2.md](ap2.md#trust).
+
+Every AP2 verification key is a **public** key an operator wrote into
+`config.yaml`. The gateway performs no key discovery of any kind: no JWKS
+endpoint, no `jku`, no `x5u`, no issuer metadata fetch, no revocation call.
+A JWK is validated member by member at load against an allowlist, so private
+material and anything naming a URL is refused without the check having to name
+it. That closes an SSRF surface before it exists: no code path lets a presented
+mandate cause an outbound request, and removing a key from the config is the
+revocation.
+
+The algorithm comes from local policy, never from the JWT header: ES256 over
+P-256, one entry, so `alg: none` and the HMAC family are excluded by
+construction rather than by a check that has to remember them. `iss` and `kid`
+select which configured key verifies a mandate, and an unrecognised pair is
+refused - there is no "try every key" fallback that would make `kid` advisory.
+
+Digests are taken over the bytes that arrived - the compact checkout JWT as
+presented, and the issuer-signed token - never over a re-serialised object. A
+normalised payload has a different digest, and hashing it would check a
+document other than the one being verified.
 
 ## SSRF
 
@@ -215,6 +244,15 @@ list. What exists:
   into one upstream RPC call per request
 - `X-Request-Id` accepted only as `[A-Za-z0-9._:-]{1,64}`, so a caller cannot
   write an unbounded string into every audit row
+- an **8192-byte cap on the `Agent-Authorization` header**
+  (`MAX_AUTHORIZATION_HEADER_BYTES`), checked on the raw header before it is
+  base64url-decoded or parsed as JSON. Over the limit is
+  `AUTHORIZATION_INVALID`, and nothing from the caller's value is echoed back.
+  The cap is on the encoded header rather than on the decoded proof because
+  base64url expands by 4/3, so a decode-first check would have to allocate the
+  oversized string first. A real Direct Checkout Mandate presentation is well
+  inside it; MCP and A2A carry the same proof in the request body instead and
+  are bounded by the body-size cap
 
 What does **not** exist: rate limiting, per-agent quotas, adaptive
 backpressure. Put the gateway behind your own edge if you expose it publicly.
@@ -324,6 +362,22 @@ rejection outcomes assert that balances did not move.
 | **a merchant leaking a connection string or stack in an error body**  | never relayed; the ACP error carries type, code and message only  | same                                              |
 | **an ACP `Request-Id` carrying a header-injection payload**           | dropped, never echoed                                             | `tests/unit/protocols-acp/adapter.test.ts`        |
 | **an ACP checkout resource configured as paid**                       | refused at config load; `payment-required` at runtime is a 500    | `tests/unit/config/schema.test.ts`                |
+| **an AP2 mandate with a tampered signature**                          | `AUTHORIZATION_INVALID`; nothing settles                          | `tests/integration/ap2-x402-conformance.test.ts`  |
+| **an expired AP2 mandate**                                            | `AUTHORIZATION_INVALID`; nothing settles                          | same                                              |
+| **a mandate from an issuer that is not configured**                   | refused at the trust allowlist, before any signature check        | same, `tests/unit/authorization-ap2`              |
+| **a mandate claiming a trusted `kid` but signed with another key**    | refused at the signature; `kid` selects the key, never labels it  | same                                              |
+| **a mandate naming a `kid` the issuer does not have**                 | refused; no "try every key" fallback                              | same                                              |
+| **a mandate whose `checkout_hash` does not match its checkout JWT**   | `checkout_binding_failed`; nothing settles                        | same                                              |
+| **a mandate approved for another resource, input, amount, currency, payment method, network or asset** | `purchase_mismatch`, one coarse reason; nothing settles | same                                              |
+| **a mandate silent about the chain the requirement names**            | refused - fail closed both ways                                   | same                                              |
+| **a mandate presented twice**                                         | `AUTHORIZATION_REPLAYED`; the second purchase moves no funds      | same, `tests/e2e/authorization`                   |
+| **the same mandate re-presented with a fresh, valid payment proof**   | still refused; balances unchanged on a real chain                 | `tests/e2e/authorization`                         |
+| **a mandate replayed under selective disclosure** (one mandate, many presentation strings) | refused - the replay key is the issuer-signed token, not the presentation | `tests/unit/authorization-ap2` |
+| **the AP2 replay store unreachable**                                  | `AUTHORIZATION_PROVIDER_UNAVAILABLE`, retryable, never the buyer's fault | `tests/integration/ap2-runtime.test.ts`     |
+| **a payment rejected after a mandate verified**                       | the reservation is released; a corrected proof reuses the mandate | `tests/integration/ap2-x402-conformance.test.ts`  |
+| **a settlement broadcast but never confirmed**                        | the mandate is *not* handed back; marked uncertain for an operator | same                                             |
+| **a free resource configured to require a mandate**                   | refused at config load, and again on the execution path           | `tests/unit/config/ap2.test.ts`, `tests/unit/core/execution` |
+| **an oversized `Agent-Authorization` header**                         | `AUTHORIZATION_INVALID` before any decode; nothing echoed back    | `tests/integration/authorization-carrier.test.ts` |
 
 Two of those exist because writing them found a bug. The SDK's `exact`/EVM
 scheme reports an unreachable node as `invalid_exact_evm_signature`, and its

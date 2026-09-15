@@ -7,6 +7,8 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { GatewayConfig } from '../config/index.js';
 import type { EventBus } from '../core/execution/index.js';
 import {
+  AUTHORIZATION_HEADER,
+  type AuthorizationProvider,
   type CanonicalRequest,
   type Clock,
   CommerceError,
@@ -16,6 +18,7 @@ import {
   PAYMENT_REQUIRED_HEADER,
   PAYMENT_RESPONSE_HEADER,
   type PaymentProvider,
+  parseAuthorizationHeader,
   type ReceiptStore,
   type ResourceRegistry,
   toCommerceError,
@@ -38,6 +41,7 @@ export interface RegisterRoutesOptions {
   readonly resources: ResourceRegistry;
   readonly store: ReceiptStore;
   readonly paymentProviders: readonly PaymentProvider[];
+  readonly authorizationProviders: readonly AuthorizationProvider[];
   readonly eventBus: EventBus;
   readonly clock: Clock;
   readonly adapterRuntimes: readonly AdapterRuntime[];
@@ -55,6 +59,7 @@ export function registerRoutes(options: RegisterRoutesOptions): void {
     store: options.store,
     adapterRuntimes: options.adapterRuntimes,
     paymentProviders: options.paymentProviders,
+    authorizationProviders: options.authorizationProviders,
     clock: options.clock,
     logger: options.logger,
   });
@@ -71,6 +76,7 @@ export function registerRoutes(options: RegisterRoutesOptions): void {
     buildWellKnownDocument({
       config: options.config,
       paymentProviders: options.paymentProviders,
+      authorizationProviders: options.authorizationProviders,
       store: options.store,
       adapterRuntimes: options.adapterRuntimes,
       clock: options.clock,
@@ -222,6 +228,14 @@ async function handleInvoke(
         ? { method: paymentMethod, payload: paymentValue }
         : undefined;
 
+    // Its own header rather than a reserved body field: HTTP already carries
+    // the payment proof out of band, and an authorization inside the body
+    // would have to survive every backend input-binding mode intact.
+    const authorization = parseAuthorizationHeader(
+      request.headers[AUTHORIZATION_HEADER],
+      request.id,
+    );
+
     const canonicalRequest: CanonicalRequest = {
       requestId: request.id,
       resourceId,
@@ -229,6 +243,7 @@ async function handleInvoke(
       protocol: 'http',
       receivedAt: options.clock.nowIso(),
       ...(payment !== undefined ? { payment } : {}),
+      ...(authorization !== undefined ? { authorization } : {}),
     };
 
     const outcome = await options.pipeline.execute(canonicalRequest);

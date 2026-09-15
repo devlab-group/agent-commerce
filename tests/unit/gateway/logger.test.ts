@@ -4,6 +4,7 @@ import { PassThrough } from 'node:stream';
 import Fastify from 'fastify';
 import pino from 'pino';
 import { describe, expect, it } from 'vitest';
+import { AUTHORIZATION_HEADER, PAYMENT_HEADER } from '../../../src/core/index.js';
 import {
   buildNotFoundHandler,
   createGatewayLogger,
@@ -26,7 +27,11 @@ describe('createGatewayLogger', () => {
     instance.info(
       {
         req: {
-          headers: { authorization: 'Bearer secret-token', 'payment-signature': 'base64proof' },
+          headers: {
+            authorization: 'Bearer secret-token',
+            'payment-signature': 'base64proof',
+            'agent-authorization': 'base64mandate',
+          },
         },
       },
       'request',
@@ -37,7 +42,28 @@ describe('createGatewayLogger', () => {
     expect(combined).not.toContain('0xSUPER_SECRET');
     expect(combined).not.toContain('secret-token');
     expect(combined).not.toContain('base64proof');
+    expect(combined).not.toContain('base64mandate');
     expect(combined).toContain('[REDACTED]');
+  });
+
+  it('redacts every wire header that carries a credential or a proof', async () => {
+    // Asserts the redaction, not the spelling of the path: a new header
+    // constant with no path has to fail here, and rewriting an existing path
+    // in another notation that still redacts must not
+    for (const header of ['authorization', PAYMENT_HEADER, AUTHORIZATION_HEADER]) {
+      const stream = new PassThrough();
+      const chunks: string[] = [];
+      stream.on('data', (chunk: Buffer) => chunks.push(chunk.toString('utf8')));
+      const instance = pino(
+        { level: 'info', redact: { paths: [...REDACT_PATHS], censor: '[REDACTED]' } },
+        stream,
+      );
+
+      instance.info({ req: { headers: { [header]: 'SENSITIVE-VALUE' } } }, 'request');
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(chunks.join(''), header).not.toContain('SENSITIVE-VALUE');
+    }
   });
 
   it('exposes a Logger-shaped wrapper whose child() also redacts', async () => {

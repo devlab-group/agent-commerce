@@ -48,6 +48,7 @@ export function makeReceipt(overrides: Partial<CommerceReceipt> = {}): CommerceR
     ...(overrides.durationMs !== undefined ? { durationMs: overrides.durationMs } : {}),
     ...(overrides.protocol !== undefined ? { protocol: overrides.protocol } : {}),
     ...(overrides.metadata !== undefined ? { metadata: overrides.metadata } : {}),
+    ...(overrides.authorization !== undefined ? { authorization: overrides.authorization } : {}),
   };
 }
 

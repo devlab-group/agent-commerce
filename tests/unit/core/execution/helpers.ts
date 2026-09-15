@@ -5,6 +5,11 @@
  */
 import type {
   AdapterDescriptor,
+  AuthorizationMethodName,
+  AuthorizationProvider,
+  AuthorizationRequirement,
+  AuthorizationVerification,
+  AuthorizationVerificationContext,
   BackendExecutor,
   BackendHandler,
   BackendRequest,
@@ -270,5 +275,71 @@ export function makeResource(overrides: Partial<CommerceResource> = {}): Commerc
     exposedVia: ['http'],
     paymentMethods: [],
     ...overrides,
+  };
+}
+
+export interface FakeAuthorizationProviderOptions {
+  readonly name?: AuthorizationMethodName;
+  readonly requirement?: AuthorizationRequirement;
+  readonly verifyAndReserve?: (
+    ctx: AuthorizationVerificationContext,
+  ) => Promise<AuthorizationVerification>;
+  readonly consume?: (reservationId: string) => Promise<void>;
+  readonly release?: (reservationId: string) => Promise<void>;
+  readonly markUncertain?: (reservationId: string) => Promise<void>;
+  /** Called with each lifecycle action, for cross-fake ordering assertions */
+  readonly onCall?: (action: string) => void;
+}
+
+export interface FakeAuthorizationProvider extends AuthorizationProvider {
+  /** Lifecycle calls in order, so a test can assert counts and transitions */
+  readonly calls: string[];
+  /** What verifyAndReserve was last asked to bind against */
+  readonly contexts: AuthorizationVerificationContext[];
+}
+
+export function createFakeAuthorizationProvider(
+  options: FakeAuthorizationProviderOptions = {},
+): FakeAuthorizationProvider {
+  const name = options.name ?? 'ap2';
+  const calls: string[] = [];
+  const contexts: AuthorizationVerificationContext[] = [];
+
+  const record = (action: string): void => {
+    calls.push(action);
+    options.onCall?.(action);
+  };
+
+  return {
+    name,
+    descriptor: { ...fakeDescriptor, kind: 'authorization', name },
+    requirement: options.requirement ?? { method: name, version: '0.2.0', profile: 'test/v1' },
+    calls,
+    contexts,
+    async verifyAndReserve(ctx) {
+      record('verifyAndReserve');
+      contexts.push(ctx);
+      if (options.verifyAndReserve) return options.verifyAndReserve(ctx);
+      return {
+        status: 'verified',
+        method: name,
+        reference: 'sha256:REFERENCE',
+        reservationId: 'reservation-1',
+        metadata: { checkoutId: 'checkout-1' },
+      };
+    },
+    async consume(reservationId) {
+      record('consume');
+      await options.consume?.(reservationId);
+    },
+    async release(reservationId) {
+      record('release');
+      await options.release?.(reservationId);
+    },
+    async markUncertain(reservationId) {
+      record('markUncertain');
+      await options.markUncertain?.(reservationId);
+    },
+    health: async () => ({ status: 'pass', checkedAt: '2026-01-01T00:00:00.000Z' }),
   };
 }

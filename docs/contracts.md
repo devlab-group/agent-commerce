@@ -17,17 +17,18 @@ The cross-package contract is `src/core/public-types.ts`.
 | `CommerceReceipt`, `PaymentAttempt`                                                                                                                                                                                                                              | `domain/receipt.ts`                             | receipt-store, gateway, cli, dashboard |
 | `CommerceEvent`, `CommerceEventType`, `EventSink`                                                                                                                                                                                                                | `domain/event.ts`                               | everything                             |
 | `CanonicalRequest`, `ExecutionOutcome`, `DeliveredOutcome`, `PaymentRequiredOutcome`, `ExecutionPipeline`                                                                                                                                                        | `domain/request.ts`                             | gateway, mcp                           |
-| `AdapterDescriptor`, `AdapterHealth`, `JsonSchema`, `ProtocolName`, `PaymentMethodName`, `DecimalAmount`, `IsoTimestamp`                                                                                                                                         | `domain/common.ts`                              | everything                             |
+| `AuthorizationSubmission`, `AuthorizationRequirement`, `AuthorizationVerification`, `AuthorizationProvider`, `AuthorizationVerificationContext`, `AuthorizationFinalizeContext`                                                                                  | `domain/authorization.ts`                       | gateway, ap2, mcp, a2a                 |
+| `AdapterDescriptor`, `AdapterHealth`, `JsonSchema`, `ProtocolName`, `PaymentMethodName`, `AuthorizationMethodName`, `DecimalAmount`, `IsoTimestamp`                                                                                                              | `domain/common.ts`                              | everything                             |
 | `CommerceError`, `CommerceErrorCode`, `COMMERCE_ERROR_HTTP_STATUS`, `toCommerceError`, `isCommerceError`                                                                                                                                                         | `errors/**`                                     | everything                             |
 | `ProtocolAdapter`, `HttpProtocolAdapter`, `ProtocolAdapterContext`                                                                                                                                                                                               | `interfaces/protocol-adapter.ts`                | gateway, mcp                           |
 | `ReceiptStore`, `PaymentAttemptReservation`, `PaymentAttemptUpdate`, `ListOptions`                                                                                                                                                                               | `interfaces/store.ts`                           | receipt-store, gateway, cli            |
 | `BackendExecutor`, `BackendRequest`, `BackendResponse`                                                                                                                                                                                                           | `interfaces/backend.ts`                         | core, gateway                          |
 | `Logger`, `NOOP_LOGGER`, `Clock`, `IdGenerator`, `systemClock`                                                                                                                                                                                                   | `interfaces/logger.ts`, `interfaces/runtime.ts` | everything                             |
-| `PaymentRequiredEnvelope`, `toPaymentRequiredEnvelope`, `isPaymentRequiredEnvelope`, `DeliverySummary`, `toDeliverySummary`, `DELIVERY_SUMMARY_META_KEY`, `ErrorEnvelope`, `toErrorEnvelope`, `PAYMENT_HEADER`, `PAYMENT_RESPONSE_HEADER`, `PAYMENT_INPUT_FIELD` | `domain/wire.ts`                                | gateway, mcp, dx, demo                 |
+| `PaymentRequiredEnvelope`, `toPaymentRequiredEnvelope`, `isPaymentRequiredEnvelope`, `DeliverySummary`, `toDeliverySummary`, `DELIVERY_SUMMARY_META_KEY`, `ErrorEnvelope`, `toErrorEnvelope`, `PAYMENT_HEADER`, `PAYMENT_RESPONSE_HEADER`, `PAYMENT_INPUT_FIELD`, `AUTHORIZATION_INPUT_FIELD`, `AUTHORIZATION_HEADER`, `MAX_AUTHORIZATION_HEADER_BYTES`, `RESERVED_INPUT_FIELDS`, `parseAuthorizationSubmission`, `parseAuthorizationHeader`, `extractReservedInputFields` | `domain/wire.ts`                                | gateway, mcp, dx, demo                 |
 | `COMMERCE_ERROR_CODES`, `COMMERCE_EVENT_TYPES`, `RETRYABLE_ERROR_CODES`, `DEFAULT_BACKEND_TIMEOUT_MS`, `isHttpProtocolAdapter`, `BackendMethod`, `CommerceErrorInfo`, `CommerceErrorOptions`                                                                     | `errors/**`, `domain/**`, `interfaces/**`       | everything                             |
 
 **The authoritative enumeration is [`contract-surface.txt`](contract-surface.txt)**
-- 68 symbols, generated by `scripts/contract-surface.mjs` from the barrel
+- 85 symbols, generated by `scripts/contract-surface.mjs` from the barrel
 itself and enforced by `npm run check:contract`. The table above groups them
 for orientation; it is written by hand and was found under-enumerating in round
 6 (the whole `domain/wire.ts` group was missing). If the two ever disagree,
@@ -51,7 +52,14 @@ the generated file is right and this table is stale.
    always applies a timeout.
 7. Amounts are decimal strings in display units ("0.01"); conversion to base
    units belongs to the payment provider.
-8. `exactOptionalPropertyTypes` is on: build optional fields conditionally
+8. `AuthorizationSubmission.payload` is preserved byte-for-byte from the wire.
+   Providers derive a replay identity by hashing it, so decoding and
+   reserialising it would give one proof two identities.
+9. An authorization failure is never reported with a `PAYMENT_*` code. A 402
+   tells a client to pay and retry, which cannot fix a missing or rejected
+   mandate, and an auto-paying client would be charged for a request that was
+   never going to be delivered.
+10. `exactOptionalPropertyTypes` is on: build optional fields conditionally
    (`...(x !== undefined ? { x }: {})`), do not assign `undefined`.
 
 ## Change log
@@ -79,6 +87,11 @@ the generated file is right and this table is stale.
 - **Additive:** `PROTOCOL_NAMES`, the `ProtocolName` values as a runtime array. *Use case:* config validation and the OpenAPI importer's `--expose` both have to check a protocol name at runtime, and config was carrying its own hardcoded `new Set(['http','mcp','a2a'])`. *Alternative considered:* deriving `ProtocolName` from the array instead; rejected because it makes the surface printer expand the type into a literal union at every use site, turning a no-op into a noisy contract diff. *Compatibility:* additive value export, typed `readonly ProtocolName[]` so an unsupported name cannot enter it. No consumer changes.
 - **Additive:** `ProtocolName` gains `'acp'` (experimental); config gains `protocols.acp` (disabled by default, mount `/acp`) and accepts `expose: [acp]`. *Use case:* the ACP checkout adapter. *Shape:* unlike `mcp`/`a2a`, the normalised `protocols.acp` is discriminated on `enabled` - an enabled block carries `auth`, `idempotency` and all five `checkout.operations` mappings, so the adapter needs no optional-field assertions and a half-configured checkout lifecycle is refused at load rather than advertised through ACP discovery. *Compatibility:* additive union member; a config with no `protocols.acp` block parses unchanged.
 - **Additive (main entry):** `createAcpAdapter`, `AcpAdapterOptions`, `ACP_SPEC_VERSION`, `ACP_API_VERSION`, `ACP_WELL_KNOWN_PATH`. *Use case:* a consumer running `createGateway` needs the adapter to mount. *Why the main entry and not a subpath:* a subpath is a peer-dependency boundary, not a category - the ACP adapter needs no peer, only `ajv`/`ajv-formats` (real dependencies) and its own vendored schema. *Cost:* the pinned schema is inlined into `dist/index.js` (+~124 kB; package 396 kB -> 479 kB). The CLI bundle is unaffected - `doctor` reads only the ACP constants and descriptor, never the validator.
+- **Additive:** the generic authorization contract - `AuthorizationMethodName` (`'ap2'`), `AuthorizationSubmission`, `AuthorizationRequirement`, `AuthorizationVerification`, `AuthorizationProvider` and its two contexts; optional `CanonicalRequest.authorization`, optional `CommerceResource.authorization`, optional `PaymentRequiredOutcome.authorization` and the matching `PaymentRequiredEnvelope.authorization`; `AdapterDescriptor.kind` gains `'authorization'`; four `AUTHORIZATION_*` error codes (403 / 403 / 409 / 503, the last retryable); and the wire carriers `AUTHORIZATION_INPUT_FIELD` (`_authorization`), `AUTHORIZATION_HEADER` (`agent-authorization`), `MAX_AUTHORIZATION_HEADER_BYTES` and `RESERVED_INPUT_FIELDS`. *Use case:* AP2 mandate verification - proving the human behind an agent approved this exact purchase, a separate question from whether the payment verified. *Why generic:* AP2 is the first implementation, not the abstraction. Core states that a resource requires authorization and when the pipeline checks it, and knows nothing about SD-JWTs. An authorization method is deliberately neither a `ProtocolName` nor a `PaymentMethodName`, because it is not a transport and must never be selectable as a payment rail. *Compatibility:* every field is optional and every consumer that sets none behaves exactly as before; a resource with no `authorization` policy is unchanged end to end. `extractReservedInputFields` replaces the two hand-written `_payment` extractors in the MCP and A2A adapters with one path in core, so the reserved-field list cannot drift between surfaces. `_payment` handling is byte-identical, including dropping a proof for a resource with no configured rail.
+- **Additive:** `AuthorizationRecord`; optional `CommerceReceipt.authorization`; `AuthorizationProvider` gains `requirement` and `markUncertain`; `AuthorizationVerification` now extends `AuthorizationRecord`; `CommerceEventType` gains `authorization.verified` and `authorization.rejected`. *Use case:* the execution pipeline enforcing authorization, in the order payment verify -> authorize/reserve -> payment replay reserve -> settle -> consume/release/mark-uncertain. *Why `requirement` on the provider:* the 402 challenge has to name what the retry must also carry, and only the provider knows its own spec version and payload profile. *Why `markUncertain` rather than leaving a reservation alone:* a settlement that was broadcast but never confirmed must not hand the proof back, and "we did nothing" is indistinguishable from a path that forgot to finalize. *Why the receipt stores a record and not the verification:* `reservationId` is a live handle, not an audit fact, and a stored proof would be a spendable secret at rest. *Compatibility:* `CommerceReceipt.authorization` is optional and absent for every resource that requires no authorization; the receipt store adds schema version 2 (`ALTER TABLE receipts ADD COLUMN authorization_json`), so an existing database keeps its rows. `AuthorizationProvider` is not yet implemented by anything shipped, so the two new members break no consumer.
+- **Additive (non-frozen surfaces):** `GatewayOptions.authorizationProviders` (optional) and `ReadinessResult.authorizationProviders`; a new `./ap2` subpath exporting `createAp2AuthorizationProvider` / `ap2`, with `jose`, `@sd-jwt/core` and `canonicalize` as optional peers. *Use case:* running AP2 as a wired subsystem. *Why a subpath:* one entry per distinct peer set, named for the peer - a gateway serving no gated resource should install neither a JOSE stack nor an SD-JWT parser, and the main entry and the CLI import the narrow AP2 modules (`constants.ts`, `types.ts`, `descriptor.ts`) so neither pulls a peer. *Readiness:* an authorization provider reporting `fail` blocks `/ready` on the same threshold as a payment provider - a resource that requires a mandate cannot be served without one, and serving its challenge anyway promises what cannot be honoured. Only the fixed vocabulary token `authorization-provider-unreachable` reaches the client. *Compatibility:* both fields are additive and a deployment configuring no authorization behaves exactly as before.
+- **Additive (`./ap2` subpath):** `createCheckoutJwt` and `CreateCheckoutJwtOptions`. *Use case:* a merchant has to sign the checkout JWT a Checkout Mandate binds, and the gateway only verifies. *Why it ships:* `input_hash` is an RFC 8785 digest, and a hand-rolled signer reaching for a sorted-key `JSON.stringify` agrees on most inputs and disagrees on floats and non-ASCII keys - producing a mandate refused with a deliberately coarse reason. The helper also refuses a numeric `amount`, the public half of a key pair, a non-P-256 key and a missing field before signing, rather than letting each become that same opaque refusal. *Scope:* signing only. It runs in the merchant's process, never calls the gateway and is never called by it - the mirror of `createPaymentProof`. The Checkout Mandate itself is the buyer's side and nothing here mints one.
+- **Additive (gateway wire surface):** `WellKnownDocument.authorizationProviders`, an `AdapterDescriptor[]` that is empty unless a resource requires authorization. *Use case:* the README promises every adapter's `supportedSpec`, `capabilities` and `unsupported` list is checkable at runtime rather than taken on trust, and AP2 was reportable through `doctor` but absent from the document. *Why a separate field and not `paymentProviders`:* an authorization method is not a payment rail and must never be selectable as one - the same reason `AuthorizationMethodName` is neither a `ProtocolName` nor a `PaymentMethodName`. *Compatibility:* additive; the field is always present, and the dashboard's hand-maintained mirror carries only what it renders, as it already does for `protocols.acp`.
 ---
 
 # Integration contract - exact factory signatures
@@ -153,6 +166,91 @@ export type DeploymentMode = 'local' | 'testnet' | 'mainnet';
 export const SUPPORTED_NETWORK_IDS: readonly string[]; // ['eip155:84532', 'eip155:8453']
 ```
 
+## `src/authorization/ap2`
+> **Published as** `@devlab.group/agent-commerce/ap2`, gated behind the optional
+> peers `jose`, `@sd-jwt/core` and `canonicalize`. The main entry and the CLI
+> import only the narrow modules (`constants.ts`, `types.ts`, `descriptor.ts`),
+> which pull no peer, so `doctor` can report AP2 without installing a JOSE
+> stack. Trust and config types live here rather than in `src/config`, the way
+> `X402FacilitatorConfig` does: the subsystem owns its own config shape and the
+> loader imports it.
+
+```ts
+export interface Ap2AuthorizationProviderOptions {
+  /** The enabled half of the parsed `authorization.ap2` block. */
+  readonly config: EnabledAp2Config;
+  readonly clock?: Clock;
+  readonly logger?: Logger;
+  /** Injectable so tests need not touch the filesystem. */
+  readonly replayStore?: Ap2ReplayStore;
+}
+
+/** The gateway owns the lifetime: `close()` releases the replay database. */
+export interface Ap2AuthorizationProvider extends AuthorizationProvider {
+  close(): void;
+}
+export function createAp2AuthorizationProvider(
+  options: Ap2AuthorizationProviderOptions,
+): Ap2AuthorizationProvider;
+
+export type Ap2AuthorizationConfig =
+  | { readonly enabled: false }
+  | {
+      readonly enabled: true;
+      readonly specVersion: '0.2.0';
+      readonly mode: 'direct';
+      readonly trust: {
+        /** Signers of the Checkout Mandate itself. */
+        readonly mandateIssuers: readonly Ap2TrustedIssuer[];
+        /** Signers of the merchant checkout JWT the mandate binds. */
+        readonly checkoutIssuers: readonly Ap2TrustedIssuer[];
+      };
+      readonly clockSkewSeconds: number;
+      /** Its own SQLite file. An authorization replay is not a payment replay. */
+      readonly replay: { readonly path: string };
+    };
+
+export interface Ap2TrustedIssuer {
+  readonly issuer: string;
+  /** Per issuer, not gateway-wide: the mandate is addressed to the merchant. */
+  readonly audience: string;
+  readonly keys: readonly Ap2TrustedKey[];
+}
+export interface Ap2TrustedKey {
+  readonly kid: string;
+  /** A public P-256 JWK, validated member by member at config load. */
+  readonly jwk: Readonly<Record<string, string>>;
+}
+
+/** Merchant-side. Signs the checkout JWT a Checkout Mandate binds. */
+export interface CreateCheckoutJwtOptions {
+  /** A private ES256 JWK, or a PKCS#8 PEM. Never leaves the caller's process. */
+  readonly privateKey: Ap2SigningKey;
+  readonly kid: string;
+  readonly issuer: string;
+  readonly audience: string;
+  readonly resourceId: string;
+  /** Hashed with RFC 8785 (JCS), the same way the gateway hashes it. */
+  readonly input: unknown;
+  /** A decimal string; compared as a string, never numerically. */
+  readonly amount: string;
+  readonly currency: string;
+  readonly paymentMethod: string;
+  readonly destination?: string;
+  readonly network?: string;
+  readonly asset?: string;
+  readonly jwtId?: string;
+  readonly expiresInSeconds?: number;
+  readonly now?: Date;
+}
+export function createCheckoutJwt(options: CreateCheckoutJwtOptions): Promise<string>;
+
+export const AP2_SPEC_VERSION = '0.2.0';
+export const AP2_CHECKOUT_PROFILE = 'agent-commerce/ap2/checkout/v1';
+export const AP2_CAPABILITIES: readonly string[];
+export const AP2_UNSUPPORTED: readonly string[];
+```
+
 ## `src/protocols/mcp`
 > **Published as** `@devlab.group/agent-commerce/mcp`, gated behind the optional peer
 > `@modelcontextprotocol/sdk`. In-repo consumers keep importing it by relative
@@ -174,6 +272,8 @@ export interface GatewayOptions {
   readonly config: GatewayConfig; // from src/config
   readonly store: ReceiptStore;
   readonly paymentProviders: readonly PaymentProvider[];
+  // Absent means no resource requires authorization, which is the default
+  readonly authorizationProviders?: readonly AuthorizationProvider[];
   readonly protocolAdapters: readonly ProtocolAdapter[];
   readonly logger?: Logger;
   readonly clock?: Clock;
@@ -243,8 +343,8 @@ export interface GatewayConfig {
 | Route                              | Purpose                                                                                                                                                                                      |
 | ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `GET /health`                      | liveness - always 200 when the process is up                                                                                                                                                 |
-| `GET /ready`                       | readiness - 200 only when config, store, every required adapter **and every configured payment provider** are healthy (`fail` blocks; `warn` is degraded-but-serving)                        |
-| `GET /.well-known/agent-commerce`  | merchant + adapter descriptors, protocol/spec versions                                                                                                                                       |
+| `GET /ready`                       | readiness - 200 only when config, store, every required adapter, **every configured payment provider and every authorization provider** are healthy (`fail` blocks; `warn` is degraded-but-serving) |
+| `GET /.well-known/agent-commerce`  | merchant, adapter, payment-provider and authorization-provider descriptors, protocol/spec versions                                                                                            |
 | `GET /api/resources`               | canonical resource list (no secrets)                                                                                                                                                         |
 | `POST /api/resources/:id/invoke`   | HTTP protocol surface; `PAYMENT-SIGNATURE` header carries the proof; 402 + `PaymentRequiredEnvelope` body and `PAYMENT-REQUIRED` header when unpaid; `PAYMENT-RESPONSE` header on settlement |
 | `GET /api/receipts?limit=`         | recent receipts (dashboard/CLI)                                                                                                                                                              |

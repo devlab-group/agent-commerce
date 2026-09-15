@@ -71,6 +71,14 @@ const MIGRATIONS: readonly Migration[] = [
       `);
     },
   },
+  {
+    version: 2,
+    up(db) {
+      // Not folded into v1: an existing database must keep its rows, and a
+      // receipt written before authorization truthfully has none
+      db.exec(`ALTER TABLE receipts ADD COLUMN authorization_json TEXT;`);
+    },
+  },
 ];
 
 /** Current target schema version — the version of the last migration. */

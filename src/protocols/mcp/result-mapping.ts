@@ -8,13 +8,11 @@
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import {
   type CommerceError,
-  type CommerceResource,
   DELIVERY_SUMMARY_META_KEY,
   type DeliveredOutcome,
   type ExecutionOutcome,
   PAYMENT_INPUT_FIELD,
   type PaymentRequiredOutcome,
-  type PaymentSubmission,
   toDeliverySummary,
   toErrorEnvelope,
   toPaymentRequiredEnvelope,
@@ -22,33 +20,6 @@ import {
 
 function toRecord(value: object): Record<string, unknown> {
   return value as Record<string, unknown>;
-}
-
-/**
- * Splits raw MCP tool arguments into resource input and an optional payment
- * submission. `_payment` never leaks into the input handed to the pipeline.
- *
- * The payment method is derived from the resource's own `paymentMethods`
- * (never hard-coded) — this adapter does not decide which rail a resource
- * uses, that is core/config's job. If a `_payment` proof is supplied for a
- * resource with no configured payment method (or an unrecognised resource),
- * it is dropped rather than forwarded under an invented method: the pipeline
- * then treats the request as unpaid and decides for itself (free delivery,
- * or a rejection) — never a payment-method guess made in this adapter.
- */
-export function extractPaymentSubmission(
-  rawArgs: Record<string, unknown>,
-  resource: CommerceResource | undefined,
-): {
-  input: Record<string, unknown>;
-  payment?: PaymentSubmission;
-} {
-  const { [PAYMENT_INPUT_FIELD]: paymentValue, ...input } = rawArgs;
-  const method = resource?.paymentMethods[0];
-  if (typeof paymentValue === 'string' && paymentValue.length > 0 && method !== undefined) {
-    return { input, payment: { method, payload: paymentValue } };
-  }
-  return { input };
 }
 
 export function deliveredResult(outcome: DeliveredOutcome): CallToolResult {

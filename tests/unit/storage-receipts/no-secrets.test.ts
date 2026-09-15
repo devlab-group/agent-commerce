@@ -80,6 +80,23 @@ describe('no-secrets guarantee', () => {
     expect(JSON.stringify(fetched)).not.toContain('0xSHOULD_NOT_PERSIST');
   });
 
+  it('strips a secret-shaped field from receipt.authorization.metadata', async () => {
+    const receipt = makeReceipt({
+      id: 'r_auth',
+      authorization: {
+        method: 'ap2',
+        reference: 'sha256:abc',
+        metadata: { mandateToken: 'eyJ...', checkoutId: 'checkout-1' },
+      },
+    });
+    await store.saveReceipt(receipt);
+
+    const fetched = await store.getReceipt('r_auth');
+    expect(fetched?.authorization?.metadata?.['mandateToken']).toBe('[REDACTED]');
+    expect(fetched?.authorization?.metadata?.['checkoutId']).toBe('checkout-1');
+    expect(fetched?.authorization?.reference).toBe('sha256:abc');
+  });
+
   it('strips a raw payment proof / Authorization header from receipt.payment.metadata', async () => {
     const receipt = makeReceipt({
       id: 'r_secret_payment',

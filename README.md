@@ -12,6 +12,7 @@
   <img alt="x402" src="https://img.shields.io/badge/x402-supported-0052ff">
   <img alt="A2A" src="https://img.shields.io/badge/A2A-experimental-f0a30a">
   <img alt="ACP" src="https://img.shields.io/badge/ACP-experimental-f0a30a">
+  <img alt="AP2" src="https://img.shields.io/badge/AP2-experimental-f0a30a">
 </p>
 
 ## What it is, in ten seconds
@@ -23,13 +24,14 @@ Agent Commerce Gateway sits in front of your existing API, in **your**
 infrastructure, and does that for you. You describe an endpoint in a YAML file -
 or generate that description from an OpenAPI document you already have - and
 agents get an MCP tool and an x402 paywall. Switch on the experimental adapters
-and the same resource is also an A2A skill, or an ACP checkout session. The
-money goes straight to your wallet - the gateway never holds it, and never holds
-your keys.
+and the same resource is also an A2A skill, or an ACP checkout session. Switch
+on AP2 and a paid resource can also demand a signed mandate: proof the human
+behind the agent approved that exact purchase. The money goes straight to your
+wallet - the gateway never holds it, and never holds your keys.
 
 ```text
 Your existing API → Agent Commerce Gateway → AI Agent
-          MCP · A2A · ACP · x402 · receipts · doctor
+      MCP · A2A · ACP · x402 · AP2 · receipts · doctor
 ```
 
 ## Demo
@@ -54,11 +56,9 @@ Your existing API → Agent Commerce Gateway → AI Agent
 ```
 
 The dashboard at <http://localhost:5173> shows the same request as it happens.
-It polls the authenticated events route on a short interval rather than
-streaming: a browser `EventSource` cannot send the admin token, and the operator
-routes are closed without one - so the SSE endpoint is reachable by a
-header-capable client, never by a browser. Polling is the dashboard's intended
-path, not a degraded mode.
+It polls the authenticated events route rather than streaming, because a browser
+cannot send the admin token over `EventSource`; see
+[why the stream is polled](SECURITY.md#the-live-event-stream-is-polled-not-streamed).
 
 ## Install
 
@@ -90,17 +90,18 @@ const { url } = await gateway.listen();
 
 ### Optional peers - install only the rails you use
 
-The MCP adapter and the x402 provider live on their own subpaths, because each
-needs a dependency the rest of the package does not - the x402 rail brings the
-whole EVM signing and RPC stack, which a gateway serving a free HTTP resource
-has no business installing.
+The MCP adapter, the x402 provider and AP2 verification live on their own
+subpaths, because each needs a dependency the rest of the package does not -
+the x402 rail brings the whole EVM signing and RPC stack, which a gateway
+serving a free HTTP resource has no business installing.
 
-| You want                          | Install                        | Import                                     |
-| --------------------------------- | ------------------------------ | ------------------------------------------ |
-| gateway, config, receipts, CLI    | `@devlab.group/agent-commerce` | `from '@devlab.group/agent-commerce'`      |
-| expose resources as MCP tools     | `+ @modelcontextprotocol/sdk`  | `from '@devlab.group/agent-commerce/mcp'`  |
-| accept x402 payments              | `+ @x402/core @x402/evm viem`  | `from '@devlab.group/agent-commerce/x402'` |
-| authenticate to a CDP facilitator | `+ @coinbase/x402`             | (no import - loaded on demand)             |
+| You want                                | Install                            | Import                                     |
+| --------------------------------------- | ---------------------------------- | ------------------------------------------ |
+| gateway, config, receipts, CLI          | `@devlab.group/agent-commerce`     | `from '@devlab.group/agent-commerce'`      |
+| expose resources as MCP tools           | `+ @modelcontextprotocol/sdk`      | `from '@devlab.group/agent-commerce/mcp'`  |
+| accept x402 payments                    | `+ @x402/core @x402/evm viem`      | `from '@devlab.group/agent-commerce/x402'` |
+| verify AP2 mandates, sign checkout JWTs | `+ jose @sd-jwt/core canonicalize` | `from '@devlab.group/agent-commerce/ap2'`  |
+| authenticate to a CDP facilitator       | `+ @coinbase/x402`                 | (no import - loaded on demand)             |
 
 ```bash
 npm install @devlab.group/agent-commerce @modelcontextprotocol/sdk @x402/core @x402/evm viem
@@ -109,7 +110,13 @@ npm install @devlab.group/agent-commerce @modelcontextprotocol/sdk @x402/core @x
 ```ts
 import { mcp } from '@devlab.group/agent-commerce/mcp';
 import { x402 } from '@devlab.group/agent-commerce/x402';
+import { ap2 } from '@devlab.group/agent-commerce/ap2';
 ```
+
+The AP2 three are small - about 1.3 MB installed between them, against roughly
+63 MB for the x402 stack - but they stay optional on the same principle: a
+deployment that gates nothing on a mandate should not carry a JOSE stack and an
+SD-JWT parser to serve a resource.
 
 Peers are pinned exactly: x402's schemas and EIP-712 domains cross this
 boundary, so a version skew is a correctness problem rather than a convenience
@@ -157,30 +164,33 @@ To stop and wipe state: `docker compose down -v`.
 ## How it works
 
 ```text
-        ┌──────────────────────────────────────────────────────┐
-        │ AI Agent │
-        └──────────────┬───────────────────────────────────────┘
-                       │ MCP · HTTP + PAYMENT-SIGNATURE
-        ┌──────────────▼───────────────────────────────────────┐
-        │ Agent Commerce Gateway (yours) │
-        │ │
-        │ protocol adapters → ExecutionPipeline → … │
-        │ │ │
-        │ ┌─────────────────────┼──────────────┐ │
-        │ ▼ ▼ ▼ │
-        │ PaymentProvider BackendExecutor ReceiptStore │
-        │ (x402) (bounded HTTP) (SQLite) │
-        └────────┬─────────────────────┬───────────────────────┘
-                 │ │
-        buyer → merchant ┌──────▼───────────────┐
-        (never through us) │ Your backend API │
-                                └───────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                                   AI Agent                                   │
+└───────────────────────────────────────┬──────────────────────────────────────┘
+                                        │  MCP · A2A · ACP · HTTP
+                                        │  PAYMENT-SIGNATURE
+                                        │  Agent-Authorization
+┌───────────────────────────────────────▼──────────────────────────────────────┐
+│                        Agent Commerce Gateway (yours)                        │
+│                                                                              │
+│                   protocol adapters  →  ExecutionPipeline                    │
+│                                                 │                            │
+│             ┌────────────────────┬──────────────┴──┬────────────────┐        │
+│             ▼                    ▼                 ▼                ▼        │
+│   AuthorizationProvider   PaymentProvider   BackendExecutor   ReceiptStore   │
+│           (ap2)               (x402)        (bounded HTTP)      (SQLite)     │
+└───────────────────────────────────────┬──────────────────────────────────────┘
+                                        │
+                             ┌──────────▼─────────┐
+                             │  Your backend API  │
+                             └────────────────────┘
 ```
 
 Every protocol adapter converges on **one execution pipeline**. That is what
 makes payment enforcement a property of the system rather than something each
-adapter has to remember. Full detail in
-[docs/architecture.md](docs/architecture.md).
+adapter has to remember. Money never passes through the box: the buyer pays the
+merchant directly on chain, and the gateway holds neither the funds nor a key.
+Full detail in [docs/architecture.md](docs/architecture.md).
 
 ## Configure a resource
 
@@ -219,33 +229,39 @@ It writes a reviewable `resources:` fragment - path, query and JSON body
 mapped, schemas converted to what the gateway actually enforces - and
 deliberately leaves `pricing` and `expose` out, because an OpenAPI document has
 no opinion on what an operation costs or who may see it. Credentials are never
-imported. See [docs/openapi-import.md](docs/openapi-import.md) for the exact
-supported subset.
+imported. See [OpenAPI import](docs/openapi-import.md) for the exact supported subset.
 
 See [docs/configuration.md](docs/configuration.md).
 
 ## Protocol support
 
-| Protocol        | Status       | Pinned revision                                          |
-| --------------- | ------------ | -------------------------------------------------------- |
-| **MCP**         | Supported    | `@modelcontextprotocol/sdk@1.30.0`                       |
-| **x402**        | Supported    | x402 v2 (`@x402/core`, `@x402/evm`), scheme `exact`, EVM |
-| **HTTP**        | Supported    | native routes                                            |
-| **A2A**         | Experimental | A2A v1.0.0, binding `JSONRPC`, method `SendMessage`      |
-| **ACP**         | Experimental | ACP `2026-04-17`, REST checkout + discovery              |
-| UCP · MPP · AP2 | Planned      | -                                                        |
+| Protocol  | Status       | Pinned revision                                          |
+| --------- | ------------ | -------------------------------------------------------- |
+| **MCP**   | Supported    | `@modelcontextprotocol/sdk@1.30.0`                       |
+| **x402**  | Supported    | x402 v2 (`@x402/core`, `@x402/evm`), scheme `exact`, EVM |
+| **HTTP**  | Supported    | native routes                                            |
+| **A2A**   | Experimental | A2A v1.0.0, binding `JSONRPC`, method `SendMessage`      |
+| **ACP**   | Experimental | ACP `2026-04-17`, REST checkout + discovery              |
+| **AP2**   | Experimental | AP2 `v0.2.0`, Direct Checkout Mandate verification       |
+| UCP · MPP | Planned      | -                                                        |
+
+[AP2](docs/ap2.md) is in that table because people look there, but it is an **authorization**
+method rather than a transport: it gates settlement on a resource that still
+takes a real payment, and it is the verifying half only - the gateway holds no
+signing key and issues no Checkout Receipt.
 
 "Planned" means **no code ships for it**. "Experimental" means the code ships,
 is tested against the protocol's own official artifacts, and serves a narrow
-named subset - A2A and ACP are both off by default and documented in full at
-[docs/protocols.md](docs/protocols.md#a2a) and
-[docs/protocols.md](docs/protocols.md#acp). ACP serves the five stable checkout
-operations and advertises `services: ["checkout"]` and nothing more; its
-`payment_data` stays with the merchant's own checkout and is never turned into
-an x402 payment. Each adapter reports its own
-`supportedSpec`, `capabilities` and `unsupported` list at runtime via
-`GET /.well-known/agent-commerce` and `agent-commerce doctor` - so the claim is
-checkable, not marketing. Detail: [docs/protocols.md](docs/protocols.md).
+named subset: [A2A](docs/protocols.md#a2a) and [ACP](docs/protocols.md#acp) are
+both off by default and documented in full there, as are
+[MCP](docs/protocols.md#mcp) and [x402](docs/protocols.md#x402). ACP serves the
+five stable checkout operations and advertises `services: ["checkout"]` and
+nothing more; its `payment_data` stays with the merchant's own checkout and is
+never turned into an x402 payment.
+
+Each adapter reports its own `supportedSpec`, `capabilities` and `unsupported`
+list at runtime through `GET /.well-known/agent-commerce` and
+`agent-commerce doctor`, so the claim is checkable rather than marketing.
 
 ## Payment model
 
@@ -260,8 +276,10 @@ checkable, not marketing. Detail: [docs/protocols.md](docs/protocols.md).
 - **Real settlement in CI.** The end-to-end test asserts the buyer's balance
   falls and the merchant's rises by exactly the price, with a real transaction
   hash in the receipt. A log line saying "payment successful" would not count.
-
-Detail: [docs/payment-flow.md](docs/payment-flow.md).
+- **Authorization is separate from payment.** A resource can also require an
+  AP2 mandate, verified before settlement and spendable exactly once. It never
+  moves money and never unlocks a resource on its own - the payment still has
+  to be real.
 
 ## Public networks
 
@@ -378,6 +396,7 @@ PASS  Backend              2/2 backend host(s) reachable
 PASS  Protocols            http=on mcp=on (/mcp) a2a=off acp=off
 INFO  A2A                  disabled
 INFO  ACP                  disabled
+INFO  AP2                  disabled
 PASS  Payments             x402 v2 (scheme=exact) enabled - LOCAL dev chain (eip155:84532, chain id shared with Base Sepolia), destination=0x7099…79C8, facilitator=local
 INFO  Payments (MPP)       planned - not implemented in this release
 PASS  Storage              sqlite schema v1 writable; receipts=2
@@ -398,8 +417,9 @@ Exits non-zero if anything fails. `--json` for machines.
 The demo binds everything to `127.0.0.1`. Before putting the gateway anywhere
 reachable by anyone else, know the split:
 
-- **Agent routes** (`/api/resources/:id/invoke`, `/mcp`) are unauthenticated by
-  design - paid resources are protected by payment, not by a password.
+- **Agent routes** (`/api/resources/:id/invoke`, `/mcp`, the A2A mount) are
+  unauthenticated by design - paid resources are protected by payment, not by a
+  password. ACP is the exception: its checkout routes require a bearer token.
 - **Operator routes** (`/api/receipts`, `/api/events`, `/api/events/stream`) are
   the merchant's commerce ledger: payer addresses, amounts, settlement hashes.
   They require `server.adminToken`, and return **404** if none is configured.
@@ -425,11 +445,13 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 **Now** - MCP, x402 v2, settlement on the local chain, Base Sepolia and Base
 mainnet, receipts, doctor, deterministic demo, experimental A2A v1.0.0 and ACP
-`2026-04-17` checkout adapters, and experimental OpenAPI import.
+`2026-04-17` checkout adapters, experimental AP2 v0.2.0 mandate verification,
+and experimental OpenAPI import.
 
-**Next** - a `doctor` GitHub Action · UCP · MPP · AP2 · more of ACP (carts,
-feed, delegated payment) · Shopify and WooCommerce examples · PostgreSQL ·
-richer observability · multi-file and remote OpenAPI sources.
+**Next** - a `doctor` GitHub Action · UCP · MPP · autonomous-mode AP2 (open
+mandates, agent key binding, constraint evaluation) · more of ACP (carts, feed,
+delegated payment) · Shopify and WooCommerce examples · PostgreSQL · richer
+observability · multi-file and remote OpenAPI sources.
 
 New protocols land only after the adapter model survives real use. Scope
 discipline is a release requirement, not a mood.
@@ -441,6 +463,7 @@ discipline is a release requirement, not a mood.
 | [Architecture](docs/architecture.md)           | how the pieces fit                          |
 | [Payment flow](docs/payment-flow.md)           | the paid round trip, and every way it fails |
 | [Protocols](docs/protocols.md)                 | exactly what is and is not supported        |
+| [AP2](docs/ap2.md)                             | mandate verification and the trust model    |
 | [Configuration](docs/configuration.md)         | `config.yaml` reference                     |
 | [OpenAPI import](docs/openapi-import.md)       | generate resources from an existing API     |
 | [Security model](docs/security.md)             | trust boundaries, and what we do not defend |

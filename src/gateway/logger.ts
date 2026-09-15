@@ -1,7 +1,7 @@
 /**
- * Pino logger factory with redaction. Never log secrets: Authorization
- * headers, the payment-signature header, private keys, seeds, mnemonics,
- * signatures.
+ * Pino logger factory with redaction. Never log secrets: the credential and
+ * proof headers (`authorization`, `payment-signature`, `agent-authorization`),
+ * private keys, seeds, mnemonics, signatures.
  *
  * Two independent things are built here, deliberately not the same pino
  * instance (Fastify's `loggerInstance` option forces its generic `Logger`
@@ -20,7 +20,7 @@
 import { createRequire } from 'node:module';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import pino, { type LoggerOptions, type Logger as PinoLogger } from 'pino';
-import type { Logger } from '../core/index.js';
+import { AUTHORIZATION_HEADER, type Logger, PAYMENT_HEADER } from '../core/index.js';
 
 /**
  * Absolute path to pino-pretty, or `undefined` when it is not installed.
@@ -75,9 +75,19 @@ const SECRET_FIELD_NAMES = [
  * are single-level, so a secret at depth ≥ 2 is still not covered, and the
  * documentation says so rather than promising "any field".
  */
+/**
+ * Request headers carrying a credential or a proof, read from the wire
+ * constants rather than written out again here.
+ *
+ * A hardcoded copy is how this drifted before: `x-payment` became
+ * `payment-signature` for x402 v2, and a literal list would still be redacting
+ * a header no client sends. `agent-authorization` carries an AP2 mandate and
+ * belongs here for the same reason a payment proof does.
+ */
+const SECRET_HEADERS = ['authorization', PAYMENT_HEADER, AUTHORIZATION_HEADER] as const;
+
 export const REDACT_PATHS: readonly string[] = [
-  'req.headers.authorization',
-  'req.headers["payment-signature"]',
+  ...SECRET_HEADERS.map((name) => `req.headers[${JSON.stringify(name)}]`),
   ...SECRET_FIELD_NAMES,
   ...SECRET_FIELD_NAMES.map((name) => `*.${name}`),
 ];

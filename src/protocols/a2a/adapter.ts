@@ -18,6 +18,7 @@ import {
   CommerceError,
   type CommerceResource,
   type ExecutionOutcome,
+  extractReservedInputFields,
   type HttpProtocolAdapter,
   type ProtocolAdapterContext,
   toCommerceError,
@@ -47,11 +48,7 @@ import {
   jsonRpcResult,
   parseJsonRpcRequest,
 } from './jsonrpc.js';
-import {
-  type A2aInvocation,
-  extractPaymentSubmission,
-  parseInvocation,
-} from './message-mapping.js';
+import { type A2aInvocation, parseInvocation } from './message-mapping.js';
 import {
   completedTask,
   failedTask,
@@ -314,18 +311,27 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
       );
     }
 
-    const { input, payment } = extractPaymentSubmission(invocation.input, resource);
-    const request: CanonicalRequest = {
-      requestId: context.ids.next('a2a'),
-      resourceId: invocation.resourceId,
-      input,
-      protocol: 'a2a',
-      receivedAt: context.clock.nowIso(),
-      ...(payment !== undefined ? { payment } : {}),
-    };
-    const identity = this.taskIdentity(context, request.requestId);
+    const requestId = context.ids.next('a2a');
+    const identity = this.taskIdentity(context, requestId);
 
+    // Reserved-field extraction sits inside the try: a malformed
+    // `_authorization` envelope is rejected there, and that rejection is a
+    // commerce outcome for the caller like any other, not an escaped throw.
     try {
+      const { input, payment, authorization } = extractReservedInputFields(
+        invocation.input,
+        resource,
+        requestId,
+      );
+      const request: CanonicalRequest = {
+        requestId,
+        resourceId: invocation.resourceId,
+        input,
+        protocol: 'a2a',
+        receivedAt: context.clock.nowIso(),
+        ...(payment !== undefined ? { payment } : {}),
+        ...(authorization !== undefined ? { authorization } : {}),
+      };
       const outcome: ExecutionOutcome = await context.pipeline.execute(request);
       return this.taskResult(
         id,
@@ -339,7 +345,7 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
       // nothing internal reaches the artifact.
       const error = toCommerceError(err);
       context.logger.warn(
-        { resourceId: invocation.resourceId, requestId: request.requestId, err: error.toInfo() },
+        { resourceId: invocation.resourceId, requestId, err: error.toInfo() },
         'a2a adapter: execution failed',
       );
       return this.taskResult(id, failedTask(error, identity));

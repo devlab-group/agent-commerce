@@ -14,10 +14,20 @@
  * See docs/contracts.md for the freeze record.
  */
 
+export type {
+  AuthorizationFinalizeContext,
+  AuthorizationProvider,
+  AuthorizationRecord,
+  AuthorizationRequirement,
+  AuthorizationSubmission,
+  AuthorizationVerification,
+  AuthorizationVerificationContext,
+} from './domain/authorization.js';
 // --- canonical domain ------------------------------------------------------
 export type {
   AdapterDescriptor,
   AdapterHealth,
+  AuthorizationMethodName,
   DecimalAmount,
   IsoTimestamp,
   JsonSchema,
@@ -61,12 +71,19 @@ export type {
   PaymentRequiredEnvelope,
 } from './domain/wire.js';
 export {
+  AUTHORIZATION_HEADER,
+  AUTHORIZATION_INPUT_FIELD,
   DELIVERY_SUMMARY_META_KEY,
+  extractReservedInputFields,
   isPaymentRequiredEnvelope,
+  MAX_AUTHORIZATION_HEADER_BYTES,
   PAYMENT_HEADER,
   PAYMENT_INPUT_FIELD,
   PAYMENT_REQUIRED_HEADER,
   PAYMENT_RESPONSE_HEADER,
+  parseAuthorizationHeader,
+  parseAuthorizationSubmission,
+  RESERVED_INPUT_FIELDS,
   toDeliverySummary,
   toErrorEnvelope,
   toPaymentRequiredEnvelope,

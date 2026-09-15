@@ -5,6 +5,7 @@
  * present (see docs/contracts.md, assumption 8).
  */
 import type {
+  AuthorizationRecord,
   CommerceEvent,
   CommerceEventType,
   CommerceReceipt,
@@ -23,6 +24,7 @@ export interface ReceiptRow {
   readonly duration_ms: number | null;
   readonly protocol: string | null;
   readonly metadata_json: string | null;
+  readonly authorization_json: string | null;
 }
 
 export interface EventRow {
@@ -65,6 +67,7 @@ export function receiptToRow(receipt: CommerceReceipt): {
   duration_ms: number | null;
   protocol: string | null;
   metadata_json: string | null;
+  authorization_json: string | null;
 } {
   return {
     id: receipt.id,
@@ -76,6 +79,8 @@ export function receiptToRow(receipt: CommerceReceipt): {
     duration_ms: receipt.durationMs !== undefined ? receipt.durationMs : null,
     protocol: receipt.protocol !== undefined ? receipt.protocol : null,
     metadata_json: receipt.metadata !== undefined ? JSON.stringify(redact(receipt.metadata)) : null,
+    authorization_json:
+      receipt.authorization !== undefined ? JSON.stringify(redact(receipt.authorization)) : null,
   };
 }
 
@@ -85,6 +90,12 @@ export function rowToReceipt(row: ReceiptRow): CommerceReceipt {
   const metadata =
     row.metadata_json !== null
       ? (JSON.parse(row.metadata_json) as Record<string, unknown>)
+      : undefined;
+  // Null for every receipt written before this column existed, and for every
+  // resource that requires no authorization
+  const authorization =
+    row.authorization_json !== null
+      ? (JSON.parse(row.authorization_json) as AuthorizationRecord)
       : undefined;
   return {
     id: row.id,
@@ -96,6 +107,7 @@ export function rowToReceipt(row: ReceiptRow): CommerceReceipt {
     ...(row.duration_ms !== null ? { durationMs: row.duration_ms } : {}),
     ...(row.protocol !== null ? { protocol: row.protocol } : {}),
     ...(metadata !== undefined ? { metadata } : {}),
+    ...(authorization !== undefined ? { authorization } : {}),
   };
 }
 

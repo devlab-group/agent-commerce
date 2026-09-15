@@ -121,11 +121,18 @@ describe('receipts', () => {
     });
   });
 
-  it('round-trips optional fields (payment, protocol, metadata) exactly', async () => {
+  it('round-trips optional fields (payment, protocol, metadata, authorization) exactly', async () => {
     const receipt = makeReceipt({
       id: 'r_full',
       protocol: 'http',
       metadata: { note: 'ok' },
+      authorization: {
+        method: 'ap2',
+        reference: 'sha256:abc',
+        // Not `checkoutJwtId`: the redactor strips any key containing "jwt",
+        // so a provider naming its audit fields carelessly persists nothing
+        metadata: { checkoutId: 'checkout-1' },
+      },
       payment: {
         status: 'settled',
         provider: 'x402',
@@ -149,6 +156,15 @@ describe('receipts', () => {
     expect('durationMs' in (fetched ?? {})).toBe(false);
     expect('protocol' in (fetched ?? {})).toBe(false);
     expect('metadata' in (fetched ?? {})).toBe(false);
+    expect('authorization' in (fetched ?? {})).toBe(false);
+  });
+
+  it('reads a receipt written before the authorization column existed', async () => {
+    // Migration 2 added the column, so a v1 row has NULL there. That must read
+    // back as "required none", not as a receipt the mapper refuses.
+    await store.saveReceipt(makeReceipt({ id: 'r_legacy' }));
+    const fetched = await store.getReceipt('r_legacy');
+    expect(fetched?.authorization).toBeUndefined();
   });
 });
 

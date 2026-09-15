@@ -92,8 +92,8 @@ export function createSqliteReceiptStore(options: SqliteReceiptStoreOptions): Re
   migrate(db);
 
   const insertReceiptStmt = db.prepare(
-    `INSERT INTO receipts (id, request_id, resource_id, payment_json, delivered_at, backend_status, duration_ms, protocol, metadata_json)
-     VALUES (@id, @request_id, @resource_id, @payment_json, @delivered_at, @backend_status, @duration_ms, @protocol, @metadata_json)`,
+    `INSERT INTO receipts (id, request_id, resource_id, payment_json, delivered_at, backend_status, duration_ms, protocol, metadata_json, authorization_json)
+     VALUES (@id, @request_id, @resource_id, @payment_json, @delivered_at, @backend_status, @duration_ms, @protocol, @metadata_json, @authorization_json)`,
   );
   const getReceiptStmt = db.prepare<[string], ReceiptRow>('SELECT * FROM receipts WHERE id = ?');
   const listReceiptsStmt = db.prepare<[number], ReceiptRow>(
