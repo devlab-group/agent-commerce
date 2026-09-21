@@ -508,33 +508,31 @@ export function createExecutionPipeline(
           verification,
         });
       } catch (error) {
-        // / "the RPC did not answer" and "the transfer did not
-        // happen" are different facts. A provider that broadcast a settlement
-        // transaction and then failed to confirm it throws
-        // PAYMENT_PROVIDER_UNAVAILABLE with details.transactionHash attached
-        // (the hash is known before confirmation). Recording that as plain
-        // `failed` would tell the merchant's reconciliation artefact a
-        // falsehood — the buyer's funds may already have moved. The resource
-        // is still not delivered either way: only what gets *recorded*
-        // changes, never the fail-closed outcome.
-        const uncertainTxHash = uncertainSettlementTxHash(error);
-        // An unconfirmed broadcast may still have moved funds, so the proof is
-        // not handed back. Only a settlement that provably failed is releasable.
-        await hold?.finalize(uncertainTxHash !== undefined ? 'markUncertain' : 'release');
+        // A verdict arrives as a *returned* PaymentResult, settled or
+        // rejected. A throw means no verdict was obtained, and no throw on
+        // this rail can say whether the transfer happened: a facilitator can
+        // accept a settlement, broadcast it, then lose the response to a
+        // timeout, a reset or a proxy 502. "No transaction hash" is not
+        // evidence of "no transfer", only evidence that we never heard one.
+        // So every throw out of settle() is uncertain: the attempt is
+        // recorded unresolved and the authorization hold is kept, because a
+        // released mandate is spendable again with a fresh payment
+        // authorization against a charge that may already have landed. Only
+        // a returned `rejected` below - the facilitator's own statement that
+        // nothing moved - releases it. The resource is not delivered either
+        // way: only what gets *recorded* changes, never the fail-closed
+        // outcome.
+        const txHash = settlementTxHash(error);
+        await hold?.finalize('markUncertain');
         await safePersist(
           () =>
-            options.store.updatePaymentAttempt(
-              uncertainTxHash !== undefined
-                ? { replayKey, status: 'settlement-uncertain', externalReference: uncertainTxHash }
-                : {
-                    replayKey,
-                    status: 'failed',
-                    ...(error instanceof Error ? { rejectionReason: error.message } : {}),
-                  },
-            ),
-          uncertainTxHash !== undefined
-            ? 'updatePaymentAttempt(settlement-uncertain)'
-            : 'updatePaymentAttempt(failed)',
+            options.store.updatePaymentAttempt({
+              replayKey,
+              status: 'settlement-uncertain',
+              ...(txHash !== undefined ? { externalReference: txHash } : {}),
+              ...(error instanceof Error ? { rejectionReason: error.message } : {}),
+            }),
+          'updatePaymentAttempt(settlement-uncertain)',
           request.requestId,
         );
         await safeEmit(
@@ -545,34 +543,32 @@ export function createExecutionPipeline(
             adapter: request.protocol,
             paymentProvider: provider.name,
             status: 'error',
-            data:
-              uncertainTxHash !== undefined
-                ? { reason: 'settlement-uncertain', transactionHash: uncertainTxHash }
-                : { reason: 'settlement-threw' },
+            data: {
+              reason: 'settlement-uncertain',
+              ...(txHash !== undefined ? { transactionHash: txHash } : {}),
+            },
           }),
         );
         // The merchant's record now tells the truth (above); the buyer must
-        // too — they are the party whose funds may have moved, and the
+        // too - they are the party whose funds may have moved, and the
         // client-visible error is their only way to find out. Code stays
-        // PAYMENT_SETTLEMENT_FAILED (not PAYMENT_PROVIDER_UNAVAILABLE, which
-        // is retryable) — a retry would reuse the already-reserved replay
-        // key. The transaction hash is safe to disclose: it's the buyer's
-        // own payment, public on-chain the moment it lands. Nothing else
-        // from the underlying error travels — only this flag and the hash.
-        throw new CommerceError(
-          'PAYMENT_SETTLEMENT_FAILED',
-          uncertainTxHash !== undefined
-            ? 'Settlement could not be confirmed'
-            : 'Payment settlement failed',
-          {
-            requestId: request.requestId,
-            resourceId: resource.id,
-            cause: error,
-            ...(uncertainTxHash !== undefined
-              ? { details: { settlementUncertain: true, transactionHash: uncertainTxHash } }
-              : {}),
+        // PAYMENT_SETTLEMENT_FAILED, not the retryable
+        // PAYMENT_PROVIDER_UNAVAILABLE: a retry would reuse the
+        // already-reserved replay key, and paying again is the one thing an
+        // unresolved settlement must never invite. The correlation id is the
+        // envelope's requestId; the transaction hash, when there is one, is
+        // safe to disclose, being the buyer's own payment and public
+        // on-chain the moment it lands. Nothing else from the underlying
+        // error travels.
+        throw new CommerceError('PAYMENT_SETTLEMENT_FAILED', 'Settlement could not be confirmed', {
+          requestId: request.requestId,
+          resourceId: resource.id,
+          cause: error,
+          details: {
+            settlementUncertain: true,
+            ...(txHash !== undefined ? { transactionHash: txHash } : {}),
           },
-        );
+        });
       }
 
       if (settlement.status !== 'settled') {
@@ -779,9 +775,11 @@ function backendErrorStatus(error: CommerceError): number {
   return typeof status === 'number' ? status : 0;
 }
 
-function uncertainSettlementTxHash(error: unknown): string | undefined {
-  if (!isCommerceError(error) || error.code !== 'PAYMENT_PROVIDER_UNAVAILABLE') return undefined;
-  const hash = error.details?.['transactionHash'];
+// The broadcast transaction hash a provider attached to a settlement throw,
+// when it knows one. Absent far more often than not: the response that would
+// have carried it is usually the thing that went missing
+function settlementTxHash(error: unknown): string | undefined {
+  const hash = isCommerceError(error) ? error.details?.['transactionHash'] : undefined;
   return typeof hash === 'string' ? hash : undefined;
 }
 

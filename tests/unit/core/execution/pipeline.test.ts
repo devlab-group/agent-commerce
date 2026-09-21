@@ -1166,7 +1166,7 @@ describe('createExecutionPipeline', () => {
     );
   });
 
-  it('settle() throwing -> PAYMENT_SETTLEMENT_FAILED, attempt marked failed', async () => {
+  it('settle() throwing -> PAYMENT_SETTLEMENT_FAILED, attempt marked settlement-uncertain', async () => {
     const resource = makeResource({
       id: 'res-1',
       pricing: { type: 'fixed', amount: '0.01', currency: 'USDC' },
@@ -1200,15 +1200,18 @@ describe('createExecutionPipeline', () => {
     if (!isCommerceError(thrown)) throw new Error('unreachable');
     expect(thrown.code).toBe('PAYMENT_SETTLEMENT_FAILED');
 
-    // Ordinary failure: neither the flag nor a hash — there is no hash to show.
-    expect(thrown.message).toBe('Payment settlement failed');
-    expect(thrown.details).toBeUndefined();
+    // No hash to show, but "we never heard back" is not "nothing moved". The
+    // buyer is told the outcome is unknown, with the requestId to follow up on.
+    expect(thrown.message).toBe('Settlement could not be confirmed');
+    expect(thrown.details).toEqual({ settlementUncertain: true });
     const { toErrorEnvelope } = await import('../../../../src/core/domain/wire.js');
     const envelope = toErrorEnvelope(thrown);
-    expect(envelope.details).toBeUndefined();
+    expect(envelope.details).toEqual({ settlementUncertain: true });
+    expect(envelope.requestId).toBeDefined();
 
     const attempt = [...store.attempts.values()][0];
-    expect(attempt?.status).toBe('failed');
+    expect(attempt?.status).toBe('settlement-uncertain');
+    expect(attempt?.externalReference).toBeUndefined();
   });
 
   it('settle() throwing PAYMENT_PROVIDER_UNAVAILABLE with a transactionHash records settlement-uncertain, not failed', async () => {
@@ -1264,7 +1267,7 @@ describe('createExecutionPipeline', () => {
     expect(attempt?.externalReference).toBe('0xdeadbeef');
   });
 
-  it('settle() throwing PAYMENT_PROVIDER_UNAVAILABLE with no transactionHash still records failed', async () => {
+  it('settle() throwing PAYMENT_PROVIDER_UNAVAILABLE with no transactionHash records settlement-uncertain', async () => {
     const resource = makeResource({
       id: 'res-1',
       pricing: { type: 'fixed', amount: '0.01', currency: 'USDC' },
@@ -1274,7 +1277,9 @@ describe('createExecutionPipeline', () => {
     const { CommerceError } = await import('../../../../src/core/errors/index.js');
     const provider = createFakePaymentProvider({
       settle: async () => {
-        throw new CommerceError('PAYMENT_PROVIDER_UNAVAILABLE', 'RPC unreachable before broadcast');
+        // The facilitator took the settlement and then dropped the response,
+        // so there is no hash. An absent hash is not an absent transfer.
+        throw new CommerceError('PAYMENT_PROVIDER_UNAVAILABLE', 'connection reset during settle');
       },
     });
     const pipeline = createExecutionPipeline({
@@ -1295,7 +1300,7 @@ describe('createExecutionPipeline', () => {
     );
 
     const attempt = [...store.attempts.values()][0];
-    expect(attempt?.status).toBe('failed');
+    expect(attempt?.status).toBe('settlement-uncertain');
   });
 
   it('tolerates a non-Error thrown by a persistence call', async () => {

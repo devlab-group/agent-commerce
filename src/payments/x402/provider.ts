@@ -540,14 +540,28 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
           { cause: err },
         );
       }
-      const rejectionReason = isOnChainRevertError(err)
-        ? 'transaction_reverted'
-        : 'unexpected_settle_error';
+      // A revert is the chain's own statement that the transfer did not
+      // happen, so it is a real rejection and the pipeline may release what
+      // it holds. Anything else out of settle() is unclassified: we cannot
+      // tell whether the transfer was broadcast, so it must not come back as
+      // a rejection the buyer can be blamed for. It goes back as an
+      // unavailable provider, and the pipeline records it unresolved.
+      if (!isOnChainRevertError(err)) {
+        logger.warn(
+          { err: describeError(err) },
+          'x402 settle(): settlement failed with an unclassified error; outcome unknown',
+        );
+        throw new CommerceError(
+          'PAYMENT_PROVIDER_UNAVAILABLE',
+          'x402 provider: settlement failed with an unclassified error; outcome unknown',
+          { cause: err },
+        );
+      }
       logger.warn(
-        { err: describeError(err), rejectionReason },
-        'x402 settle(): settlement transaction failed',
+        { err: describeError(err), rejectionReason: 'transaction_reverted' },
+        'x402 settle(): settlement transaction reverted on chain',
       );
-      return rejectedSettlement(rejectionReason);
+      return rejectedSettlement('transaction_reverted');
     }
 
     if (!sdkResult.success) {

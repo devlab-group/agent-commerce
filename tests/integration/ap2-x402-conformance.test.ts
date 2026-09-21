@@ -601,6 +601,35 @@ describe('AP2 over x402: when settlement goes wrong', () => {
     expect(counts.backend).toBe(1);
   });
 
+  it('does not hand the mandate back when the facilitator drops the response', async () => {
+    // The facilitator took the settlement and then lost the reply, so there
+    // is no transaction hash to report. That absent hash is what used to make
+    // this look like a clean failure and hand the mandate back.
+    const gw = await startGateway(
+      countingRail({
+        settle: async () => {
+          throw new CommerceError('PAYMENT_PROVIDER_UNAVAILABLE', 'socket hang up');
+        },
+      }),
+    );
+    const presentation = await mandate();
+
+    const uncertain = await purchase(presentation, gw);
+    expect(uncertain.statusCode).toBe(502);
+    expect(uncertain.body['code']).toBe('PAYMENT_SETTLEMENT_FAILED');
+    // No hash to hand over, but the buyer is still told not to pay again
+    expect(uncertain.body['details']).toEqual({ settlementUncertain: true });
+
+    // A *different* payment authorization, so nothing here can be refused as
+    // a payment replay: the rail issues a fresh replayKey per verify, and the
+    // refusal is still the authorization one. The mandate is what is no
+    // longer spendable.
+    const retry = await invoke(gw, { proof: 'x402-proof-2', presentation });
+    expect(retry.statusCode).toBe(409);
+    expect(retry.body['code']).toBe('AUTHORIZATION_REPLAYED');
+    expect(counts.backend).toBe(0);
+  });
+
   it('does not hand the mandate back when a broadcast settlement was never confirmed', async () => {
     const gw = await startGateway(
       countingRail({

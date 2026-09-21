@@ -341,6 +341,7 @@ rejection outcomes assert that balances did not move.
 | an unknown key nested under an `additionalProperties` schema         | rejected by the closed schema                                     | same                                              |
 | a hostile or unbounded facilitator rejection string                  | clamped before it reaches buyer, event or ledger                  | `tests/unit/payments-x402`                        |
 | facilitator timeout                                                  | `PAYMENT_PROVIDER_UNAVAILABLE`, settlement treated as *uncertain* | `tests/unit/payments-x402`                        |
+| a settle() throw the provider cannot classify                        | `PAYMENT_PROVIDER_UNAVAILABLE`, *uncertain* - never a rejection   | `tests/unit/payments-x402`                        |
 | **facilitator 401 / 5xx**                                            | `PAYMENT_PROVIDER_UNAVAILABLE`, never charged to the buyer        | `tests/integration/adversarial-payment.test.ts`   |
 | **malformed facilitator response**                                   | refused; never read as a verdict                                  | same                                              |
 | backend timeout                                                      | `BACKEND_TIMEOUT`                                                 | `tests/unit/core/execution`                       |
@@ -375,7 +376,7 @@ rejection outcomes assert that balances did not move.
 | **a mandate replayed under selective disclosure** (one mandate, many presentation strings) | refused - the replay key is the issuer-signed token, not the presentation | `tests/unit/authorization-ap2` |
 | **the AP2 replay store unreachable**                                  | `AUTHORIZATION_PROVIDER_UNAVAILABLE`, retryable, never the buyer's fault | `tests/integration/ap2-runtime.test.ts`     |
 | **a payment rejected after a mandate verified**                       | the reservation is released; a corrected proof reuses the mandate | `tests/integration/ap2-x402-conformance.test.ts`  |
-| **a settlement broadcast but never confirmed**                        | the mandate is *not* handed back; marked uncertain for an operator | same                                             |
+| **a settlement whose outcome never came back** (timeout, reset, proxy 502, with or without a transaction hash) | the mandate is *not* handed back; marked uncertain for an operator | same, `tests/unit/core/execution` |
 | **a free resource configured to require a mandate**                   | refused at config load, and again on the execution path           | `tests/unit/config/ap2.test.ts`, `tests/unit/core/execution` |
 | **an oversized `Agent-Authorization` header**                         | `AUTHORIZATION_INVALID` before any decode; nothing echoed back    | `tests/integration/authorization-carrier.test.ts` |
 

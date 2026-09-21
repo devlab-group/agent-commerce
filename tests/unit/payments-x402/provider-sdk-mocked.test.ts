@@ -346,7 +346,7 @@ describe('provider — SDK-boundary branches (mocked x402/facilitator)', () => {
     expect(withoutReason.rejectionReason).toBe('settlement_failed');
   });
 
-  it('settle() classifies an on-chain revert distinctly from an unexpected error', async () => {
+  it('settle() rejects an on-chain revert but reports an unclassified throw as unavailable', async () => {
     const provider = makeProvider();
     const requirement = await provider.createRequirement(paymentContext());
     const proof = await createPaymentProof({
@@ -379,16 +379,21 @@ describe('provider — SDK-boundary branches (mocked x402/facilitator)', () => {
     expect(reverted.asset).toBe(ASSET);
     expect(reverted.replayKey).toBe('0xreverted');
 
+    // An unclassified throw says nothing about whether the transfer was
+    // broadcast, so it is not a rejection the buyer can be blamed for. It goes
+    // back as an unavailable provider, and the pipeline records it unresolved.
     settleMock.mockRejectedValueOnce(new TypeError('boom'));
-    const unexpected = await provider.settle({
-      requestId: 'req-1',
-      resource: RESOURCE,
-      requirement,
-      submission: { method: 'x402', payload: proof },
-      verification: { status: 'verified', provider: 'x402', amount: '0.01', currency: 'USD' },
-    });
-    expect(unexpected.status).toBe('rejected');
-    expect(unexpected.rejectionReason).toBe('unexpected_settle_error');
+    await expect(
+      provider.settle({
+        requestId: 'req-1',
+        resource: RESOURCE,
+        requirement,
+        submission: { method: 'x402', payload: proof },
+        verification: { status: 'verified', provider: 'x402', amount: '0.01', currency: 'USD' },
+      }),
+    ).rejects.toSatisfy(
+      (error: unknown) => isCommerceError(error) && error.code === 'PAYMENT_PROVIDER_UNAVAILABLE',
+    );
   });
 
   it('settle() throws PAYMENT_PROVIDER_UNAVAILABLE when the SDK throws a connection-shaped error', async () => {
