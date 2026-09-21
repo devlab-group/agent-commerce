@@ -45,6 +45,71 @@ describe('HttpBackendExecutor', () => {
     expect(capturedUrl?.searchParams.get('city')).toBeNull();
   });
 
+  it('forwards an idempotency key to the merchant as Idempotency-Key', async () => {
+    let capturedHeaders: Record<string, string> = {};
+    const fetchImpl = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      capturedHeaders = Object.fromEntries(new Headers(init?.headers).entries());
+      return jsonResponse(201, { created: true });
+    });
+    const executor = new HttpBackendExecutor({ fetchImpl: fetchImpl as unknown as typeof fetch });
+
+    const handler: BackendHandler = {
+      type: 'http',
+      method: 'POST',
+      url: 'http://backend.local/api/orders',
+    };
+    await executor.call(handler, {
+      requestId: 'req-1',
+      resourceId: 'orders',
+      input: { sku: 'abc' },
+      idempotencyKey: 'op-key-1',
+    });
+
+    expect(capturedHeaders['idempotency-key']).toBe('op-key-1');
+  });
+
+  it('sends no Idempotency-Key when the protocol has no notion of one', async () => {
+    let capturedHeaders: Record<string, string> = {};
+    const fetchImpl = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      capturedHeaders = Object.fromEntries(new Headers(init?.headers).entries());
+      return jsonResponse(200, { ok: true });
+    });
+    const executor = new HttpBackendExecutor({ fetchImpl: fetchImpl as unknown as typeof fetch });
+
+    await executor.call(
+      { type: 'http', method: 'GET', url: 'http://backend.local/api/weather' },
+      { requestId: 'req-1', resourceId: 'weather', input: {} },
+    );
+
+    expect(capturedHeaders['idempotency-key']).toBeUndefined();
+  });
+
+  it('replaces a statically configured idempotency header, whatever its casing', async () => {
+    let capturedHeaders: Record<string, string> = {};
+    const fetchImpl = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      capturedHeaders = Object.fromEntries(new Headers(init?.headers).entries());
+      return jsonResponse(201, { created: true });
+    });
+    const executor = new HttpBackendExecutor({ fetchImpl: fetchImpl as unknown as typeof fetch });
+
+    const handler: BackendHandler = {
+      type: 'http',
+      method: 'POST',
+      url: 'http://backend.local/api/orders',
+      headers: { 'Idempotency-Key': 'baked-in-and-never-changing' },
+    };
+    await executor.call(handler, {
+      requestId: 'req-1',
+      resourceId: 'orders',
+      input: { sku: 'abc' },
+      idempotencyKey: 'op-key-1',
+    });
+
+    // A fixed key would make every order after the first look like a retry of
+    // the first, so the per-operation value wins rather than deferring to config
+    expect(capturedHeaders['idempotency-key']).toBe('op-key-1');
+  });
+
   it('sends remaining input as a JSON body for POST', async () => {
     let capturedBody: string | undefined;
     let capturedHeaders: Record<string, string> = {};

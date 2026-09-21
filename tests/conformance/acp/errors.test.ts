@@ -130,7 +130,7 @@ describe('merchant failures', () => {
     expect(JSON.stringify(result.body)).not.toContain('already shipped');
   });
 
-  it('does not store a refused answer, so the same key may be retried', async () => {
+  it('refuses a retry after a merchant 5xx instead of running the operation twice', async () => {
     stack = await startAcpStack();
     stack.nextReply({ status: 500, body: LEAKY_BODY });
     const headers = acpHeaders({ 'idempotency-key': 'idem-error-retry' });
@@ -145,7 +145,13 @@ describe('merchant failures', () => {
     });
 
     expect(failed.status).toBe(502);
-    expect(retry.status).toBe(200);
-    expect(stack.calls).toHaveLength(2);
+    // A merchant 500 is not proof the merchant did nothing: it may have
+    // recorded the order and failed afterwards. Re-running the completion
+    // would be the second one.
+    expect(retry.status).toBe(409);
+    expect(retry.body['code']).toBe('idempotency_unresolved');
+    // No Retry-After: waiting does not resolve this, the merchant's records do
+    expect(retry.headers.get('retry-after')).toBeNull();
+    expect(stack.calls).toHaveLength(1);
   });
 });

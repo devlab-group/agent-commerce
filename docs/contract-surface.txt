@@ -88,6 +88,7 @@ interface BackendHandler {
   }
 
 interface BackendRequest {
+    readonly idempotencyKey?: string;
     readonly input: unknown;
     readonly requestId: string;
     readonly resourceId: string;
@@ -102,6 +103,7 @@ interface BackendResponse {
 
 interface CanonicalRequest {
     readonly authorization?: AuthorizationSubmission;
+    readonly idempotencyKey?: string;
     readonly input: unknown;
     readonly metadata?: Readonly<Record<string, unknown>>;
     readonly payment?: PaymentSubmission;

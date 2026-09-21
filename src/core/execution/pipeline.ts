@@ -641,6 +641,7 @@ export function createExecutionPipeline(
         requestId: request.requestId,
         resourceId: resource.id,
         input: validInput,
+        ...(request.idempotencyKey !== undefined ? { idempotencyKey: request.idempotencyKey } : {}),
       });
     } catch (error) {
       const commerceError = toCommerceError(error, 'BACKEND_ERROR', 'Backend call failed');

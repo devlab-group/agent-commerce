@@ -26,6 +26,13 @@ export interface CanonicalRequest {
    */
   readonly authorization?: AuthorizationSubmission;
   readonly receivedAt: IsoTimestamp;
+  /**
+   * Stable name for the side-effecting operation this request performs, when
+   * the protocol has one. Carried through to `BackendRequest` so the merchant
+   * can recognise a retry as the same operation. Never `requestId`, which is
+   * new on every call.
+   */
+  readonly idempotencyKey?: string;
   /** Non-secret transport metadata (client id, user agent, …). */
   readonly metadata?: Readonly<Record<string, unknown>>;
 }

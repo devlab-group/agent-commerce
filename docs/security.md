@@ -199,8 +199,11 @@ buffer or parse anything.
 
 Discovery at `/.well-known/acp.json` stays public and carries no configuration:
 no bearer token, no backend URL, no mapped resource ids, no idempotency database
-path. Only the digest of the token is ever persisted - the idempotency store
-scopes keys by `SHA-256("acp-auth:" + token)`, never by the token itself.
+path. The token is not persisted in any form - the idempotency store scopes
+keys by the gateway's public base URL, and the token plays no part in it. It
+used to scope by `SHA-256("acp-auth:" + token)`, which kept the secret out of
+the file but let a rotation free every outstanding claim. A credential must not
+be able to do that, so the scope moved off it entirely.
 
 `Signature` and `Timestamp` verification are **not implemented**, are not
 advertised, and a `Signature` header is never accepted in place of the bearer
@@ -357,6 +360,10 @@ rejection outcomes assert that balances did not move.
 | **an ACP request naming an unsupported API version**                  | 400 naming `supported_versions`; never mapped to the pinned one   | same                                              |
 | **an ACP POST with no or an over-long `Idempotency-Key`**             | 400 before the body is read                                       | same                                              |
 | **an ACP key replayed while the first request is in flight**          | 409; the merchant is called exactly once                          | `tests/conformance/acp/idempotency.test.ts`       |
+| **an ACP operation the merchant acted on before timing out**          | 409 `idempotency_unresolved`; one order, never two                | same                                              |
+| **an ACP retry after a merchant 5xx**                                 | the claim is held, not freed; the merchant is not called again    | same, `tests/conformance/acp/errors.test.ts`      |
+| **an unresolved ACP record outliving its retention window**           | kept; only a completed record expires                             | `tests/unit/protocols-acp/idempotency.test.ts`    |
+| **an ACP claim outliving a bearer-token rotation**                    | kept; the scope is the deployment, never the credential           | same                                              |
 | **an ACP key reused with a different body**                           | 422; the merchant is called exactly once                          | same                                              |
 | **an ACP completion retried after a 5xx**                             | not cached; the clean retry runs                                  | same                                              |
 | **a merchant answering an ACP route with a non-ACP document**         | refused as `processing_error`; its body never forwarded           | `tests/conformance/acp/errors.test.ts`            |

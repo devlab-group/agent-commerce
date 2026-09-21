@@ -205,7 +205,7 @@ The adapter contains **no payment logic** and never calls a merchant backend.
 | Default mount | `/acp` |
 | Services | `checkout` only |
 | Authentication | `Authorization: Bearer <token>`, required on every checkout route |
-| Idempotency | `Idempotency-Key` required on every POST, durable, retained >= 24h |
+| Idempotency | `Idempotency-Key` required on every POST, durable, retained >= 24h, forwarded to the merchant |
 
 The schema is **vendored, not fetched**: the exact released
 `schema.agentic_checkout.json` sits in the repository with its upstream commit
@@ -275,9 +275,12 @@ would be inventing one.
 
 `Idempotency-Key` is mandatory on every ACP POST and is checked before the
 request body is even read. A key is scoped by
-`(authenticated identity, concrete endpoint path, key)`, where the identity is a
-SHA-256 digest of the bearer token - the token itself never reaches the database,
-the logs, or a response.
+`(deployment, concrete endpoint path, key)`, where the deployment is the
+gateway's own public base URL. Deliberately **not** the bearer token or a
+digest of it: a claim must survive a credential rotation, and scoping by the
+token meant a rotated one found no row, reserved afresh, and re-ran an
+operation whose outcome might already be unknown. The token plays no part in
+idempotency and never reaches the database, the logs, or a response.
 
 The fingerprint is taken over the **parsed** JSON, so a retry through a
 different serializer (different key order, `1.0` where it first sent `1`) is a
@@ -290,21 +293,58 @@ distinguish requests.
 | Same key, same body, still running | `409 idempotency_in_flight` with `Retry-After` |
 | Same key, same body, finished | the stored answer, with `Idempotent-Replayed: true`, no merchant call |
 | Same key, different body | `422 idempotency_conflict`, no merchant call |
-| A `5xx` result | not cached - a clean retry runs again |
+| Merchant answered, even to refuse (`4xx`) | cached; the refusal is the answer to every retry |
+| Merchant reached, outcome unknown (timeout, `5xx`, unreadable reply) | `409 idempotency_unresolved`, no `Retry-After`, the merchant is not called again |
+| Failed before the merchant was called | not cached - a clean retry runs |
 
-Records are kept for at least 24 hours; the configuration floor is the same 24
-hours, because a shorter window would let a replayed key past an expired record
-and run a checkout twice. Cleanup is lazy, inside the same transaction that
-claims a key - there is no background worker.
+Completed records are kept for at least 24 hours; the configuration floor is the
+same 24 hours, because a shorter window would let a replayed key past an expired
+record and run a checkout twice. Cleanup is lazy, inside the same transaction
+that claims a key - there is no background worker.
+
+**An unresolved record never expires.** A timeout or a merchant `5xx` is not
+evidence that the merchant did nothing: it may have created the order and lost
+the response. Freeing the key would hand the next retry a clean slate and place
+the second order, so the claim is kept and the caller is told the outcome is
+unknown rather than invited to retry. Sweeping such a row on a timer would
+re-create that same bug, so retention only ever deletes a completed one.
+Clearing an unresolved record is an operator's decision, taken against the
+merchant's own records.
+
+### What the merchant must implement
+
+The gateway forwards an **`Idempotency-Key` request header** on every call it
+makes for a side-effecting ACP operation. It is not the caller's key but a
+SHA-256 digest over `(deployment, endpoint, caller key)`, so it is
+
+- **identical** across a client retry, a network-level retry, a gateway restart
+  and a credential rotation, which is what makes it usable as the name of an
+  operation;
+- **different** for the same key used on two endpoints, and for two gateways
+  fronting the same backend;
+- **opaque** - it carries back neither the caller's key nor anything about the
+  gateway.
+
+A merchant should key its own record of a side-effecting operation on that
+value: if a request arrives under a key it has already completed, return the
+original result rather than performing the operation again. It also needs some
+way to look an operation up by that key, because that is what an operator uses
+to resolve an unresolved record.
+
+**If the merchant does not implement it**, everything above still holds for
+retries the gateway sees - the claim is durable and concurrency-safe, and no
+ambiguous failure ever frees one. What weakens is the case the gateway cannot
+see: a request that reached the merchant twice by some path outside it, such as
+a proxy retry or a duplicate delivery, which only the merchant can collapse.
 
 **The limit, stated plainly.** A merchant side effect over HTTP and a local
 SQLite commit are not one transaction. Ordinary retries and concurrency are
 protected durably, but if the process dies after the merchant completed an order
 and before the answer was stored, that key stays claimed and every retry is
-answered `409` until it expires - deliberately, because re-running a completion
-whose remote state is unknown risks charging a buyer twice. This is not
-exactly-once semantics across a remote system, and it is not claimed to be:
-merchant-side idempotency on destructive operations is still recommended.
+refused - deliberately, because re-running a completion whose remote state is
+unknown risks charging a buyer twice. This is not exactly-once semantics across
+a remote system, and it is not claimed to be: merchant-side idempotency on
+destructive operations is still recommended.
 
 ### Errors
 

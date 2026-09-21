@@ -11,13 +11,30 @@
 import { createHash } from 'node:crypto';
 
 /**
- * The authenticated caller, as a value safe to persist.
+ * The name the merchant sees for one checkout operation.
  *
- * The bearer token itself never reaches the database, the logs or a response;
- * only this digest of it does, and the digest is never returned to a client.
+ * Derived from the same scope that claims the key locally - deployment,
+ * endpoint and the caller's key - so it is identical across a client retry, a
+ * network retry, a gateway restart and a credential rotation.
+ *
+ * Hashed rather than forwarded raw because the caller's key alone does not
+ * name an operation. ACP scopes it per endpoint, so one client may
+ * legitimately send `Idempotency-Key: 1` to both create and complete, and a
+ * merchant keying state on the raw value would read those as one operation.
+ * The digest folds the whole scope into the one header ACP gives us.
+ *
+ * What it does *not* do is separate two clients that picked the same key.
+ * They share a deployment and an endpoint, so they share a derived key, and
+ * they already share a row in the local claim store for the same reason. ACP
+ * makes key uniqueness the client's responsibility, and nothing here can fix
+ * that for them.
  */
-export function identityHash(token: string): string {
-  return sha256(`acp-auth:${token}`);
+export function operationKey(scope: {
+  readonly deployment: string;
+  readonly endpoint: string;
+  readonly key: string;
+}): string {
+  return sha256(`acp-operation:${scope.deployment}:${scope.endpoint}:${scope.key}`);
 }
 
 /** SHA-256 over the canonical form of a parsed JSON document. */

@@ -39,7 +39,7 @@ describe('createCheckoutSession', () => {
     expect(validateAcpDocument('checkoutSession', result.body)).toBeUndefined();
     expect(result.headers.get('content-type')).toContain('application/json');
 
-    expect(stack.calls).toEqual([
+    expect(stack.calls).toMatchObject([
       {
         method: 'POST',
         path: '/checkout_sessions',
@@ -58,7 +58,7 @@ describe('updateCheckoutSession', () => {
 
     expect(result.status).toBe(200);
     expect(validateAcpDocument('checkoutSession', result.body)).toBeUndefined();
-    expect(stack.calls[0]).toEqual({
+    expect(stack.calls[0]).toMatchObject({
       method: 'POST',
       path: '/checkout_sessions/cs_abc123',
       query: {},
@@ -76,7 +76,7 @@ describe('getCheckoutSession', () => {
 
     expect(result.status).toBe(200);
     expect(validateAcpDocument('checkoutSession', result.body)).toBeUndefined();
-    expect(stack.calls[0]).toEqual({
+    expect(stack.calls[0]).toMatchObject({
       method: 'GET',
       path: '/checkout_sessions/cs_abc123',
       query: {},
@@ -117,7 +117,7 @@ describe('cancelCheckoutSession', () => {
     expect(result.status).toBe(200);
     expect(validateAcpDocument('checkoutSession', result.body)).toBeUndefined();
     expect(result.body['status']).toBe('canceled');
-    expect(stack.calls[0]).toEqual({
+    expect(stack.calls[0]).toMatchObject({
       method: 'POST',
       path: '/checkout_sessions/cs_abc123/cancel',
       query: {},
