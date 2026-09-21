@@ -1,6 +1,6 @@
 {
   "name": "@devlab.group/agent-commerce",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "Open-source, self-hosted, non-custodial commerce and payment orchestration gateway for AI agents.",
   "license": "Apache-2.0",
   "type": "module",
@@ -50,12 +50,19 @@
     "ai-agents",
     "agentic-commerce",
     "mcp",
+    "model-context-protocol",
     "x402",
     "payments",
     "web3",
     "commerce",
     "ai",
-    "cli"
+    "cli",
+    "a2a",
+    "agent-to-agent",
+    "acp",
+    "agent-commerce-protocol",
+    "ap2",
+    "agent-payment-protocol"
   ],
   "scripts": {
     "build": "tsup",
