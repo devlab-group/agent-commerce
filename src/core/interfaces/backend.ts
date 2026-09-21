@@ -12,6 +12,16 @@ export interface BackendRequest {
   readonly resourceId: string;
   /** Validated resource input. */
   readonly input: unknown;
+  /**
+   * Names the *operation*, so the merchant can recognise a repeat of it.
+   *
+   * Not `requestId`, which is fresh per call and would make every retry look
+   * like new work. An adapter sets this only when it can derive a value that
+   * survives a client retry, a reconnect and a gateway restart; the HTTP
+   * executor forwards it as the `Idempotency-Key` request header. Absent
+   * means the protocol has no such notion, and the merchant sees no header.
+   */
+  readonly idempotencyKey?: string;
 }
 
 export interface BackendResponse {

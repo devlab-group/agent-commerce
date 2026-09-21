@@ -500,10 +500,15 @@ describe('execution pipeline authorization', () => {
       expect(auth.calls).toEqual(['verifyAndReserve', 'release']);
     });
 
-    it('releases the reservation when settlement throws without moving funds', async () => {
+    it('keeps the reservation when settlement throws with no hash and no verdict', async () => {
       const auth = createFakeAuthorizationProvider();
+      let backendCalls = 0;
       const { pipeline } = buildPipeline({
         authorizationProviders: [auth],
+        backend: createFakeBackendExecutor(async () => {
+          backendCalls += 1;
+          return { status: 200, body: {}, headers: {}, durationMs: 0 };
+        }),
         paymentProviders: [
           createFakePaymentProvider({
             settle: async () => {
@@ -516,7 +521,11 @@ describe('execution pipeline authorization', () => {
       await expect(pipeline.execute(makeRequest())).rejects.toSatisfy(
         (error: unknown) => codeOf(error) === 'PAYMENT_SETTLEMENT_FAILED',
       );
-      expect(auth.calls).toEqual(['verifyAndReserve', 'release']);
+      // A throw is not a verdict, hash or no hash. Releasing here would hand
+      // back a mandate that a fresh payment authorization can spend again,
+      // against a charge that may already have landed.
+      expect(auth.calls).toEqual(['verifyAndReserve', 'markUncertain']);
+      expect(backendCalls).toBe(0);
     });
 
     it('marks the reservation uncertain when a broadcast settlement was never confirmed', async () => {

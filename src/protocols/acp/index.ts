@@ -27,7 +27,7 @@ export { ACP_CAPABILITIES, ACP_UNSUPPORTED } from './descriptor.js';
 export type { AcpDiscoveryMetadata } from './discovery.js';
 export { buildAcpDiscoveryDocument } from './discovery.js';
 export type { AcpError, AcpErrorType, AcpFailure } from './errors.js';
-export { identityHash, requestFingerprint } from './idempotency/fingerprint.js';
+export { operationKey, requestFingerprint } from './idempotency/fingerprint.js';
 export {
   ACP_MAX_IDEMPOTENCY_KEY_LENGTH,
   type AcpIdempotencyClaim,

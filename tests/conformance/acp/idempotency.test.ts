@@ -8,6 +8,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  ACP_EXAMPLES,
   type AcpStack,
   acpFetch,
   acpHeaders,
@@ -88,15 +89,58 @@ describe('completion replay', () => {
     expect(stack.calls).toHaveLength(1);
   });
 
-  it('does not cache a 5xx, so a clean retry reaches the merchant again', async () => {
+  it('holds the key after a merchant 5xx rather than letting a retry order twice', async () => {
     stack.nextReply({ status: 500, body: { error: 'merchant exploded' } });
     const failed = await complete('idem-complete-5');
     const retry = await complete('idem-complete-5');
 
     expect(failed.status).toBe(502);
-    expect(retry.status).toBe(200);
+    // The merchant was reached and its outcome is unknown, so the answer is
+    // neither replayed (we have none to give) nor re-run (it could order twice)
+    expect(retry.status).toBe(409);
+    expect(retry.body['code']).toBe('idempotency_unresolved');
     expect(retry.headers.get('idempotent-replayed')).toBeNull();
-    expect(stack.calls).toHaveLength(2);
+    expect(stack.calls).toHaveLength(1);
+  });
+
+  it('places one order when the merchant acts and the answer arrives too late', async () => {
+    // The reported case: the merchant records the order, then takes longer
+    // than our timeout to say so. "No answer" is not "no order", and the
+    // retry that follows must not place a second one.
+    const slow = await startAcpStack({ backendTimeoutMs: 150 });
+    try {
+      slow.nextReply({
+        status: 200,
+        body: ACP_EXAMPLES['complete_checkout_session_response'],
+        delayMs: 500,
+      });
+      const headers = acpHeaders({ 'idempotency-key': 'idem-late-answer' });
+      const timedOut = await acpFetch(slow, COMPLETE_PATH, { headers, body: COMPLETE_REQUEST });
+      const retry = await acpFetch(slow, COMPLETE_PATH, { headers, body: COMPLETE_REQUEST });
+
+      expect(timedOut.status).toBe(504);
+      expect(retry.status).toBe(409);
+      expect(retry.body['code']).toBe('idempotency_unresolved');
+      expect(slow.calls).toHaveLength(1);
+    } finally {
+      await slow.close();
+    }
+  });
+
+  it('gives the merchant one stable key for an operation, across retries', async () => {
+    const headers = acpHeaders({ 'idempotency-key': 'idem-stable' });
+    await acpFetch(stack, COMPLETE_PATH, { headers, body: COMPLETE_REQUEST });
+    // A second endpoint, same client key: a merchant keying state on the
+    // forwarded value must not see two operations as one.
+    await acpFetch(stack, '/acp/checkout_sessions', { headers, body: CREATE_REQUEST });
+
+    const [completed, created] = stack.calls;
+    const forwarded = completed?.headers['idempotency-key'];
+    expect(forwarded).toBeDefined();
+    // Never the caller's own key: it is client-supplied, and it is scoped by a
+    // digest of the bearer token that must not leave the process.
+    expect(forwarded).not.toBe('idem-stable');
+    expect(created?.headers['idempotency-key']).not.toBe(forwarded);
   });
 
   it('scopes a key to its endpoint, so the same key may create and complete', async () => {

@@ -158,6 +158,24 @@ describe('durability', () => {
     expect(existsSync(path)).toBe(true);
   });
 
+  it('still refuses an uncertain mandate after the database is reopened', () => {
+    // The state that carries the money risk: a settlement whose outcome nobody
+    // learned must not turn spendable again because the gateway restarted
+    const path = join(scratch, 'uncertain-reopen.sqlite');
+    const first = createAp2ReplayStore({ path });
+    first.reserve(request());
+    first.markUncertain('sha256:AAAA');
+    first.close();
+
+    const second = createAp2ReplayStore({ path });
+    expect(second.stateOf('sha256:AAAA')).toBe('uncertain');
+    expect(second.reserve(request({ requestId: 'req-2' }))).toEqual({
+      kind: 'replayed',
+      state: 'uncertain',
+    });
+    second.close();
+  });
+
   it('reopens an existing file without re-running the migration', () => {
     const path = join(scratch, 'migrate-once.sqlite');
     const first = createAp2ReplayStore({ path });

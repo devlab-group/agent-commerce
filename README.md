@@ -79,9 +79,15 @@ onboarding an existing API is the CLI's main job.
 import { createGateway, loadConfig, receipts } from '@devlab.group/agent-commerce';
 
 const config = await loadConfig({ path: 'config.yaml' });
+const store = receipts({ path: './receipts.sqlite' });
+// Every ReceiptStore must be initialised before anything else touches it -
+// for the SQLite one this is where a schema written by a newer version is
+// caught, at boot rather than at the first query
+await store.init();
+
 const gateway = await createGateway({
   config,
-  store: receipts({ path: './receipts.sqlite' }),
+  store,
   paymentProviders: [],
   protocolAdapters: [],
 });

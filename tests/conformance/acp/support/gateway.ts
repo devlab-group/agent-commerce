@@ -44,6 +44,8 @@ export interface MerchantCall {
   readonly path: string;
   readonly query: Record<string, string>;
   readonly body: unknown;
+  /** Lowercased, as Node delivers them. What the gateway sent, not what the ACP client did. */
+  readonly headers: Record<string, string>;
 }
 
 /** How the merchant should answer the next call, when a test needs something specific. */
@@ -96,6 +98,12 @@ async function startMerchant(state: MerchantState): Promise<{ server: Server; or
         path: url.pathname,
         query: Object.fromEntries(url.searchParams),
         body: raw.length > 0 ? JSON.parse(raw) : undefined,
+        headers: Object.fromEntries(
+          Object.entries(req.headers).map(([name, value]) => [
+            name,
+            Array.isArray(value) ? value.join(',') : (value ?? ''),
+          ]),
+        ),
       });
 
       const reply = state.queued ?? defaultReply(req.method ?? '', url.pathname);

@@ -21,6 +21,12 @@ import { type Logger, NOOP_LOGGER } from '../interfaces/logger.js';
 
 const MAX_BODY_SNIPPET_LENGTH = 512;
 /**
+ * How a merchant recognises a repeat of an operation it may already have
+ * performed. The de-facto standard name, and the one ACP already mandates
+ * inbound, so a merchant speaking ACP needs no second convention.
+ */
+const IDEMPOTENCY_KEY_HEADER = 'idempotency-key';
+/**
  * The one canonical `{param}` grammar. Extraction, substitution, the config
  * gate and `doctor`'s probe all go through it.
  *
@@ -98,6 +104,15 @@ export class HttpBackendExecutor implements BackendExecutor {
     }
 
     const headers: Record<string, string> = { ...(handler.headers ?? {}) };
+    // Overrides a configured header of the same name rather than deferring to
+    // it, unlike content-type below. A *static* idempotency key is never a
+    // deliberate setting: every request after the first would look like a
+    // retry of the first, and an idempotent merchant would replay one answer
+    // forever. Only the per-operation value is usable.
+    if (request.idempotencyKey !== undefined) {
+      deleteHeader(headers, IDEMPOTENCY_KEY_HEADER);
+      headers[IDEMPOTENCY_KEY_HEADER] = request.idempotencyKey;
+    }
     let body: string | undefined;
 
     //.set() REPLACES an existing param, so without this check a caller
@@ -448,6 +463,15 @@ function stringifyPrimitive(value: unknown): string {
 function hasHeader(headers: Record<string, string>, name: string): boolean {
   const target = name.toLowerCase();
   return Object.keys(headers).some((key) => key.toLowerCase() === target);
+}
+
+// Header names are case-insensitive, so replacing one means removing whatever
+// casing it was configured under first; plain assignment would leave both
+function deleteHeader(headers: Record<string, string>, name: string): void {
+  const target = name.toLowerCase();
+  for (const key of Object.keys(headers)) {
+    if (key.toLowerCase() === target) delete headers[key];
+  }
 }
 
 function headersToRecord(headers: Headers): Record<string, string> {

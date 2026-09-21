@@ -19,6 +19,13 @@ export interface AcpResponse {
   readonly body: unknown;
   /** True when this answer came from the idempotency store rather than work done now. */
   readonly replayed?: boolean;
+  /**
+   * Seconds to put in `Retry-After`, set only where retrying is the right
+   * move. Opt-in rather than derived from the status: two of the 409s this
+   * adapter returns must *not* invite a retry, so a shared status is a poor
+   * proxy for advice to the caller.
+   */
+  readonly retryAfterSeconds?: number;
 }
 
 /**

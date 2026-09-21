@@ -20,16 +20,23 @@ export interface AcpCanonicalRequestOptions {
   readonly resourceId: string;
   readonly requestId: string;
   readonly receivedAt: string;
+  /**
+   * Names this checkout operation to the merchant. The adapter derives it from
+   * the idempotency scope, so it is the same value on every retry - unlike
+   * `requestId`, which is new each time.
+   */
+  readonly idempotencyKey?: string;
 }
 
 export function toCanonicalRequest(options: AcpCanonicalRequestOptions): CanonicalRequest {
-  const { request, resourceId, requestId, receivedAt } = options;
+  const { request, resourceId, requestId, receivedAt, idempotencyKey } = options;
   return {
     requestId,
     resourceId,
     input: canonicalInput(request),
     protocol: 'acp',
     receivedAt,
+    ...(idempotencyKey !== undefined ? { idempotencyKey } : {}),
   };
 }
 

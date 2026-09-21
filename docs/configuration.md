@@ -204,9 +204,18 @@ before it can fail at request time. A complete, validating configuration is in
 [examples/acp-checkout](../examples/acp-checkout).
 
 `retentionHours` may not go below 24: a shorter window would let a replayed
-`Idempotency-Key` past an expired record and run a checkout twice. The
-idempotency database is its own file - it never shares a table with receipts or
-the x402 replay defence.
+`Idempotency-Key` past an expired record and run a checkout twice. It bounds
+*completed* records only. One whose merchant outcome was never learned is kept
+until an operator clears it, because to the next retry, deleting it looks
+exactly like the operation never having happened. The idempotency database is
+its own file - it never shares a table with receipts or the x402 replay
+defence.
+
+The gateway forwards an `Idempotency-Key` header to the merchant on every
+side-effecting checkout call, derived so that it is stable across retries, a
+restart and a token rotation. See
+[protocols.md](protocols.md#idempotency) for what the merchant should do with
+it.
 
 See [protocols.md](protocols.md#acp) for the wire contract.
 
