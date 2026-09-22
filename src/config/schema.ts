@@ -50,6 +50,7 @@ import {
   type AuthorizationMethodName,
   CommerceError,
   type CommerceResource,
+  PAYMENT_METHOD_NAMES,
   PROTOCOL_NAMES,
   type Pricing,
   RESERVED_INPUT_FIELDS,
@@ -189,7 +190,7 @@ const MountPathSchema = z
     },
   );
 
-/** Bearer is the only ACP auth scheme in this release - `none` is not offered. */
+/** Bearer is the only ACP auth scheme - `none` is not offered. */
 const AcpAuthSchema = z.object({ type: z.literal('bearer'), token: z.string().min(1) }).strict();
 
 const AcpIdempotencySchema = z
@@ -669,7 +670,7 @@ function toBoolean(value: boolean | string, path: string): boolean {
 // ---------------------------------------------------------------------------
 
 const SUPPORTED_PROTOCOLS: ReadonlySet<string> = new Set(PROTOCOL_NAMES);
-const SUPPORTED_PAYMENT_METHODS = new Set(['x402']);
+const SUPPORTED_PAYMENT_METHODS: ReadonlySet<string> = new Set(PAYMENT_METHOD_NAMES);
 const SUPPORTED_AUTHORIZATION_METHODS: ReadonlySet<string> = new Set(['ap2']);
 
 function normalise(raw: RawConfig): GatewayConfig {
@@ -1414,17 +1415,24 @@ function normaliseResource(
       if (!SUPPORTED_PAYMENT_METHODS.has(method)) {
         throw new CommerceError(
           'CONFIG_INVALID',
-          `Resource "${id}" names unsupported payment method "${method}". Supported: x402.`,
+          `Resource "${id}" names unsupported payment method "${method}". Supported: ${PAYMENT_METHOD_NAMES.join(', ')}.`,
           { details: { path: `resources.${id}.payments`, resourceId: id, method } },
         );
       }
-      if (method === 'x402' && (!x402 || !x402.enabled)) {
-        throw new CommerceError(
-          'CONFIG_INVALID',
-          `Resource "${id}" names payment method "x402" which is not configured or not enabled under payments.x402`,
-          { details: { path: `resources.${id}.payments`, resourceId: id, method } },
-        );
-      }
+    }
+    // Every rail a provider is built for, so the check stays one rule as rails
+    // are added. A paid resource needs one of its named rails enabled, not all
+    // of them - the pipeline takes the first that has a provider and ignores
+    // the rest. Refusing here is what keeps the composition root's equivalent
+    // guard a drift detector rather than the only thing standing between a
+    // buyer and a resource that can never be charged for.
+    const enabledRails = x402?.enabled ? ['x402'] : [];
+    if (!paymentMethods.some((method) => enabledRails.includes(method))) {
+      throw new CommerceError(
+        'CONFIG_INVALID',
+        `Resource "${id}" names payment method(s) "${paymentMethods.join(', ')}", none of which is configured and enabled under "payments"`,
+        { details: { path: `resources.${id}.payments`, resourceId: id, paymentMethods } },
+      );
     }
   }
 

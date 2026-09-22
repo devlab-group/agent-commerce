@@ -533,6 +533,31 @@ describe('createExecutionPipeline', () => {
     expect(store.receipts).toHaveLength(0);
   });
 
+  it('a resource declaring both rails is served by the one it has a provider for', async () => {
+    const resource = makeResource({
+      id: 'res-1',
+      pricing: { type: 'fixed', amount: '0.01', currency: 'USDC' },
+      paymentMethods: ['mpp', 'x402'],
+    });
+    const store = createFakeStore();
+    const pipeline = createExecutionPipeline({
+      resources: createResourceRegistry([resource]),
+      paymentProviders: [createFakePaymentProvider({ name: 'x402' })],
+      store,
+      backend: createFakeBackendExecutor(),
+      events: store,
+      logger: createCapturingLogger(),
+      clock: createFakeClock(),
+      ids: createFakeIdGenerator(),
+    });
+
+    const outcome = await pipeline.execute(makeRequest());
+    expect(outcome.kind).toBe('payment-required');
+    // mpp is skipped because no provider is registered for it, so reaching
+    // x402 is resolution rather than fallback - nothing was attempted on mpp
+    expect((outcome as PaymentRequiredOutcome).requirement.provider).toBe('x402');
+  });
+
   it('PAYMENT_PROVIDER_UNAVAILABLE when no configured provider matches the resource payment methods', async () => {
     const resource = makeResource({
       id: 'res-1',

@@ -4,7 +4,11 @@ import {
   compileJsonSchema,
   validateBackendRequestShape,
 } from '../../../src/core/execution/index.js';
-import { isCommerceError, RESERVED_INPUT_FIELDS } from '../../../src/core/index.js';
+import {
+  isCommerceError,
+  PAYMENT_METHOD_NAMES,
+  RESERVED_INPUT_FIELDS,
+} from '../../../src/core/index.js';
 import { validRawConfig } from './fixtures.js';
 
 function expectConfigInvalid(fn: () => unknown): void {
@@ -920,6 +924,52 @@ describe('parseConfig', () => {
     weather['payments'] = ['x402'];
     const config = parseConfig(raw, {});
     expect(config.resources.some((r) => r.id === 'weather_basic')).toBe(true);
+  });
+
+  it('accepts a resource declaring both rails, in its own order', () => {
+    const raw = validRawConfig();
+    (raw['resources'] as { market_report: { payments: string[] } }).market_report.payments = [
+      'x402',
+      'mpp',
+    ];
+    const config = parseConfig(raw, {});
+    const report = config.resources.find((r) => r.id === 'market_report');
+    expect(report?.paymentMethods).toEqual(['x402', 'mpp']);
+  });
+
+  it('rejects a paid resource whose only named rail has no provider behind it', () => {
+    const raw = validRawConfig();
+    (raw['resources'] as { market_report: { payments: string[] } }).market_report.payments = [
+      'mpp',
+    ];
+    expectConfigInvalid(() => parseConfig(raw, {}));
+  });
+
+  it('accepts a resource naming a rail with no provider as long as one named rail is enabled', () => {
+    const raw = validRawConfig();
+    (raw['resources'] as { market_report: { payments: string[] } }).market_report.payments = [
+      'mpp',
+      'x402',
+    ];
+    const config = parseConfig(raw, {});
+    expect(config.resources.find((r) => r.id === 'market_report')?.paymentMethods).toEqual([
+      'mpp',
+      'x402',
+    ]);
+  });
+
+  it('names every supported rail when rejecting an unknown one', () => {
+    const raw = validRawConfig();
+    (raw['resources'] as { market_report: { payments: string[] } }).market_report.payments = [
+      'stripe',
+    ];
+    try {
+      parseConfig(raw, {});
+      expect.unreachable();
+    } catch (error) {
+      if (!isCommerceError(error)) throw error;
+      for (const name of PAYMENT_METHOD_NAMES) expect(error.message).toContain(name);
+    }
   });
 
   it('rejects a resource naming an unsupported payment method', () => {
