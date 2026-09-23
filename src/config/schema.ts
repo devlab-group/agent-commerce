@@ -1420,12 +1420,9 @@ function normaliseResource(
         );
       }
     }
-    // Every rail a provider is built for, so the check stays one rule as rails
-    // are added. A paid resource needs one of its named rails enabled, not all
-    // of them - the pipeline takes the first that has a provider and ignores
-    // the rest. Refusing here is what keeps the composition root's equivalent
-    // guard a drift detector rather than the only thing standing between a
-    // buyer and a resource that can never be charged for.
+    // A paid resource needs at least one named rail enabled, but not every
+    // named rail. Rejecting it here leaves the composition-root check as a
+    // drift detector rather than the first enforceable guard.
     const enabledRails = x402?.enabled ? ['x402'] : [];
     if (!paymentMethods.some((method) => enabledRails.includes(method))) {
       throw new CommerceError(

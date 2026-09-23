@@ -24,6 +24,10 @@
       "types": "./dist/mcp.d.ts",
       "import": "./dist/mcp.js"
     },
+    "./mpp": {
+      "types": "./dist/mpp.d.ts",
+      "import": "./dist/mpp.js"
+    },
     "./x402": {
       "types": "./dist/x402.d.ts",
       "import": "./dist/x402.js"
@@ -118,6 +122,7 @@
     "@x402/evm": "2.23.0",
     "canonicalize": "5.0.0",
     "jose": "6.2.12",
+    "mppx": "0.10.1",
     "viem": "2.55.18"
   },
   "peerDependenciesMeta": {
@@ -142,6 +147,9 @@
     "jose": {
       "optional": true
     },
+    "mppx": {
+      "optional": true
+    },
     "viem": {
       "optional": true
     }
@@ -162,6 +170,7 @@
     "@x402/evm": "2.23.0",
     "canonicalize": "5.0.0",
     "jose": "6.2.12",
+    "mppx": "0.10.1",
     "pino-pretty": "13.1.2",
     "react": "19.0.8",
     "react-dom": "19.0.8",

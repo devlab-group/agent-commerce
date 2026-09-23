@@ -216,12 +216,9 @@ async function handleInvoke(
     const paymentHeader = request.headers[PAYMENT_HEADER];
     const paymentValue = Array.isArray(paymentHeader) ? paymentHeader[0] : paymentHeader;
 
-    // The gateway does not decide which rail a resource uses — that's the
-    // canonical resource's job (mirrors the protocol-side fix in the MCP
-    // adapter). Derive the method from resource.paymentMethods instead of
-    // hard-coding 'x402'. If a proof arrives for a resource with no payment
-    // method configured, drop it rather than inventing a rail: the pipeline
-    // will treat the resource as free (or reject it) on its own terms.
+    // createGateway puts provider-backed methods first, so this label matches
+    // the rail selected by the pipeline. Without a method, drop the proof
+    // instead of inventing a rail; the pipeline receives an unpaid request.
     const paymentMethod = resource.paymentMethods[0];
     const payment =
       paymentValue !== undefined && paymentMethod !== undefined

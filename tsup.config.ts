@@ -10,23 +10,17 @@ const pkg = require('./package.json') as {
 };
 
 /**
- * Two builds, four entry points.
+ * Two builds.
  *
- * **Library** — `dist/index.js` plus the three optional-peer subpaths,
- * `dist/ap2.js`, `dist/mcp.js` and `dist/x402.js`. These are built together with
- * `splitting: true` so everything they share — `src/core`, `CommerceError`,
- * the canonical types — lands in one shared chunk that all three import.
- * That is not a size optimisation, it is a correctness requirement: built as
- * independent bundles, each would carry its *own* copy of `CommerceError`, and
- * `err instanceof CommerceError` would be false for an error raised inside the
- * x402 subpath and caught against the main entry's class. Exactly the failure
- * described for two zod majors, self-inflicted.
+ * **Library** - `dist/index.js` plus one entry per optional-peer subpath. These
+ * are built together with `splitting: true`, which emits shared code once.
+ * Separate bundles would each contain `CommerceError`, making an error from a
+ * subpath fail `instanceof CommerceError` against the main entry's class.
  *
- * **CLI** — `dist/cli/index.js`, built separately and deliberately *not*
- * sharing chunks with the library. Chunk sharing is transitive: one shared
- * chunk reaching gateway code would pull `fastify` into the CLI's import list
- * and silently undo the dependency split below. The CLI's imports are asserted
- * in tests/unit/cli/packaging.test.ts.
+ * **CLI** - `dist/cli/index.js`, built separately and deliberately *not*
+ * sharing library chunks. A shared chunk that reaches gateway code would pull
+ * `fastify` into the CLI and undo the dependency split. Packaging tests assert
+ * the CLI's imports.
  *
  * Everything under `src/` is internal to this package, so there is nothing to
  * "bundle in" from elsewhere. What matters is what stays *external*: every
@@ -74,7 +68,13 @@ const shared = {
 export default defineConfig([
   {
     ...shared,
-    entry: { index: 'src/index.ts', ap2: 'src/ap2.ts', mcp: 'src/mcp.ts', x402: 'src/x402.ts' },
+    entry: {
+      index: 'src/index.ts',
+      ap2: 'src/ap2.ts',
+      mcp: 'src/mcp.ts',
+      mpp: 'src/mpp.ts',
+      x402: 'src/x402.ts',
+    },
     clean: true,
     splitting: true,
   },
@@ -86,6 +86,6 @@ export default defineConfig([
     splitting: false,
     // src/cli/index.ts carries its own shebang and esbuild preserves an entry
     // point's. A `banner` here would emit a second one and the output would
-    // not parse — that regression cost a build once already.
+    // not parse.
   },
 ]);

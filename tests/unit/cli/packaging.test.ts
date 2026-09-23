@@ -185,11 +185,10 @@ describe('published package metadata', () => {
   });
 
   it('gates the heavy adapters behind subpaths with optional peers', () => {
-    // Installing `createGateway` used to pull the whole EVM/wallet stack for
-    // a consumer serving a free HTTP resource. None of these is needed by the
-    // main entry or the CLI, so they are optional peers reached by subpath.
+    // Keep protocol-specific peers off the main entry and CLI. Their public
+    // surfaces use subpaths, and the peers remain optional.
     const exportsField = manifest.exports as Record<string, unknown> | undefined;
-    for (const subpath of ['./ap2', './mcp', './x402']) {
+    for (const subpath of ['./ap2', './mcp', './mpp', './x402']) {
       expect(exportsField?.[subpath]).toBeDefined();
     }
     for (const peer of [
@@ -200,6 +199,7 @@ describe('published package metadata', () => {
       '@x402/evm',
       'canonicalize',
       'jose',
+      'mppx',
       'viem',
     ]) {
       expect(manifest.peerDependencies?.[peer]).toBeDefined();

@@ -35,12 +35,10 @@ export const PROTOCOL_NAMES: readonly ProtocolName[] = ['http', 'mcp', 'a2a', 'a
 /**
  * Payment rails a resource can accept.
  *
- * A resource's list is ordered candidates, not a menu for the buyer: the
- * pipeline selects the first method with a configured provider, and that
- * provider challenges, verifies and settles. There is no retry loop, so a
- * rejected payment is never re-offered on another rail. Config load refuses a
- * paid resource unless one of its named rails is enabled, so the list may name
- * a rail this deployment has not configured, but not only such rails.
+ * This is an ordered candidate list, not a buyer-selected menu. The pipeline
+ * uses the first method with a configured provider; a rejection ends the
+ * request instead of trying another rail. Config requires at least one named
+ * rail to be enabled but permits additional unavailable candidates.
  */
 export type PaymentMethodName = 'x402' | 'mpp';
 
@@ -82,10 +80,7 @@ export interface AdapterHealth {
 }
 
 /**
- * Self-description every adapter must expose so diagnostics can report exactly
- * what is supported instead of implying blanket protocol compatibility.
- *
- *
+ * Describes an adapter's supported surface for diagnostics
  */
 export interface AdapterDescriptor {
   readonly name: string;

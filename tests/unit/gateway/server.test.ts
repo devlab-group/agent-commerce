@@ -372,6 +372,38 @@ describe('createGateway HTTP surface', () => {
     expect(captured[0]?.payment).toEqual({ method: 'x402', payload: 'proof-payload' });
   });
 
+  it('labels the proof with the rail the pipeline charges through, not the first one declared', async () => {
+    // MPP is declared first but has no provider, so both ingress and the
+    // pipeline must select x402
+    const base = makeGatewayConfig();
+    const gateway = await buildGateway({
+      config: {
+        ...base,
+        resources: base.resources.map((resource) =>
+          resource.id === 'market_report'
+            ? { ...resource, paymentMethods: ['mpp', 'x402'] as const }
+            : resource,
+        ),
+      },
+      paymentProviders: [createFakePaymentProvider({ name: 'x402' })],
+    });
+    const captured = spyOnPipelineExecute(gateway);
+
+    const res = await gateway.server.inject({
+      method: 'POST',
+      url: '/api/resources/market_report/invoke',
+      headers: { [PAYMENT_HEADER]: 'proof-payload' },
+      payload: {},
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(captured[0]?.payment).toEqual({ method: 'x402', payload: 'proof-payload' });
+    // MCP and A2A read the same ordered registry
+    const listed = (await gateway.server.inject({ method: 'GET', url: '/api/resources' })).json();
+    const report = listed.resources.find((r: { id: string }) => r.id === 'market_report');
+    expect(report.paymentMethods).toEqual(['x402', 'mpp']);
+  });
+
   it('drops an X-PAYMENT proof for a resource with no configured payment methods rather than inventing a rail', async () => {
     const gateway = await buildGateway();
     const captured = spyOnPipelineExecute(gateway);

@@ -1,14 +1,10 @@
 /**
  * Defence-in-depth against accidentally persisting secrets.
  *
- * The gateway and payment providers are expected to never place secrets into
- * `CommerceReceipt.metadata`, `CommerceEvent.data` or `PaymentResult.metadata`
- * (see docs/contracts.md, "Store NO secrets"). This module is a second line
- * of defence at the persistence boundary: any key that *looks* like it holds
- * a private key, an auth header or a raw payment proof is stripped — never
- * persisted — rather than rejecting the whole write, so a logging bug never
- * takes down an otherwise-successful commerce flow (appendEvent especially
- * must never throw into the caller's flow).
+ * Receipt, event and payment metadata must not contain secrets (see
+ * docs/contracts.md, "Store no secrets"). As a persistence-boundary safeguard,
+ * this module strips secret-shaped fields instead of rejecting the write;
+ * event persistence must not break a commerce flow.
  */
 /**
  * The bearer-token family was missing — `token`, `bearerToken`,
