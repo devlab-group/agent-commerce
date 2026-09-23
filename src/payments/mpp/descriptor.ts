@@ -25,7 +25,7 @@ export const MPP_DESCRIPTOR: AdapterDescriptor = {
     'verify-before-settle',
     'payment-receipt',
   ],
-  // No provider implements the profile, so the rail cannot take a payment
+  // The provider verifies but cannot settle, so the rail cannot take a payment
   status: 'planned',
   unsupported: [
     // Name other methods as a class instead of maintaining a second list

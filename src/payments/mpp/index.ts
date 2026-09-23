@@ -1,4 +1,5 @@
-// Public MPP metadata surface
+// Metadata only, with no peer imports, so the main entry and the CLI can read
+// it without `mppx`. The provider is exported from src/mpp.ts.
 
 export {
   MPP_PROFILE,

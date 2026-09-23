@@ -275,6 +275,7 @@ What a consumer actually installs, audited against the published tarball:
 | the package alone                                                   | **0 vulnerabilities**  |
 | plus `@modelcontextprotocol/sdk`, `@x402/core`, `@x402/evm`, `viem` | **0 vulnerabilities**  |
 | plus `@coinbase/x402` (only for `auth.type: cdp`)                   | 2 - 1 high, 1 moderate |
+| plus `mppx` (the `./mpp` subpath)                                   | **0 vulnerabilities**  |
 
 The whole delta is CDP: `@coinbase/x402` → `@coinbase/cdp-sdk` → `axios`, which
 carries a set of high-severity advisories, plus a Solana client tree this
@@ -323,9 +324,10 @@ gateway holds no signing key at all.
 
 ## Adversarial scenarios, and where each is tested
 
-Every row below has an executed test, not a claim. Nothing here is asserted by
-reading a log line: settlement outcomes are read back off the chain, and
-rejection outcomes assert that balances did not move.
+Every row below has an executed test, not a claim, and nothing is asserted by
+reading a log line. Rows covered end to end read settlement back off the chain
+and check that a rejected payment moved no balance; the other rows assert the
+outcome the code under test returns.
 
 | Scenario                                                             | Outcome                                                           | Where                                             |
 | -------------------------------------------------------------------- | ----------------------------------------------------------------- | ------------------------------------------------- |
@@ -386,6 +388,14 @@ rejection outcomes assert that balances did not move.
 | **a settlement whose outcome never came back** (timeout, reset, proxy 502, with or without a transaction hash) | the mandate is *not* handed back; marked uncertain for an operator | same, `tests/unit/core/execution` |
 | **a free resource configured to require a mandate**                   | refused at config load, and again on the execution path           | `tests/unit/config/ap2.test.ts`, `tests/unit/core/execution` |
 | **an oversized `Agent-Authorization` header**                         | `AUTHORIZATION_INVALID` before any decode; nothing echoed back    | `tests/integration/authorization-carrier.test.ts` |
+| **an MPP challenge edited after issue, or signed with another gateway's secret** | `challenge_not_issued`; the HMAC covers the terms, expiry and resource | `tests/unit/payments-mpp/provider.test.ts` |
+| **an MPP challenge issued for another resource, price, recipient, asset or network** | refused on the binding check, one reason per field | same |
+| **an MPP credential presented after its challenge expired** | `challenge_expired`, on the gateway's clock | same |
+| **an MPP authorization whose nonce is not the challenge hash** | `wrong_nonce` | same |
+| **an MPP credential type other than EIP-3009 `authorization`** | `unsupported_credential` | same |
+| **an MPP authorization signed by someone other than the payer, or for another amount or recipient** | `invalid_signature`, `wrong_amount` or `wrong_recipient` | same |
+| **an MPP authorization outside its `validAfter`/`validBefore` window** | `authorization_not_yet_valid` or `authorization_expired` | same |
+| **a valid MPP credential** | verified with no broadcast and no network call; `settle` still returns a rejection | same |
 
 Two of those exist because writing them found a bug. The SDK's `exact`/EVM
 scheme reports an unreachable node as `invalid_exact_evm_signature`, and its

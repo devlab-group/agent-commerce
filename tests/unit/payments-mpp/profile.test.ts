@@ -35,7 +35,7 @@ describe('pinned MPP profile', () => {
 });
 
 describe('MPP descriptor', () => {
-  it('reports planned: no provider implements the profile', () => {
+  it('reports planned while the provider cannot settle', () => {
     expect(MPP_DESCRIPTOR.status).toBe('planned');
   });
 

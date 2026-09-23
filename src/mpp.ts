@@ -2,11 +2,11 @@
  * `@devlab.group/agent-commerce/mpp` - the MPP payment rail
  * (`charge` intent, `evm` method, EIP-3009 `authorization` credential).
  *
- * This metadata-only entry imports no optional peers. The `mppx` pin anchors
- * the planned provider and its profile tests; consumers do not need it to
- * read this surface.
+ *   npm install @devlab.group/agent-commerce mppx viem
+ *   import { mpp } from '@devlab.group/agent-commerce/mpp';
  *
- * import { MPP_DESCRIPTOR } from '@devlab.group/agent-commerce/mpp';
+ * The provider issues challenges and verifies credentials. It does not
+ * settle, so its descriptor reports `planned`.
  */
 
 export {
@@ -18,3 +18,9 @@ export {
   MPP_SUPPORTED_SPEC,
   MPPX_VERSION,
 } from './payments/mpp/index.js';
+export {
+  createMppPaymentProvider,
+  // `mpp` reads well at a call site; the full name reads better in a trace
+  createMppPaymentProvider as mpp,
+  type MppProviderOptions,
+} from './payments/mpp/provider.js';

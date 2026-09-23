@@ -168,9 +168,12 @@ commerce flow.
   fields to core.
 - Config accepts `mpp` beside an enabled x402 rail. At config load, `mpp` alone
   is rejected because no corresponding rail is configured and enabled.
-- The `./mpp` entry exports pinned profile metadata and a planned descriptor.
-  It exports no provider and does not implement challenge, verification, or
-  settlement.
+- The `./mpp` entry exports `createMppPaymentProvider` (also as `mpp`) beside
+  the pinned profile metadata and descriptor. The provider issues HMAC-bound
+  challenges and verifies EIP-3009 credentials locally, without broadcasting.
+  `settle` returns a rejection and `verify` returns no `replayKey`, which the
+  pipeline requires before settlement, so no MPP payment can be charged. The
+  descriptor stays `planned`.
 
 ## Published entry points
 
@@ -179,7 +182,7 @@ commerce flow.
 | `@devlab.group/agent-commerce`      | Core contract, config, gateway, receipt store, ACP adapter | None                                                                            |
 | `@devlab.group/agent-commerce/ap2`  | AP2 verification and checkout signing                      | `jose`, `@sd-jwt/core`, `canonicalize`                                          |
 | `@devlab.group/agent-commerce/mcp`  | MCP adapter                                                | `@modelcontextprotocol/sdk`                                                     |
-| `@devlab.group/agent-commerce/mpp`  | Planned MPP profile metadata                               | None (metadata-only entry)                                                      |
+| `@devlab.group/agent-commerce/mpp`  | MPP challenge and verification, profile metadata           | `mppx`, `viem`                                                                  |
 | `@devlab.group/agent-commerce/x402` | x402 provider and client proof helper                      | `@coinbase/x402` (only for `auth.type: cdp`), `@x402/core`, `@x402/evm`, `viem` |
 
 The main entry and CLI must not import optional peers. `package.json` is the
@@ -253,6 +256,40 @@ export const SUPPORTED_NETWORK_IDS: readonly string[];
 
 Local facilitator keys are for the development chain only and must never hold
 funds. Remote mode holds no facilitator signing key in the gateway.
+
+## MPP
+
+Published as `@devlab.group/agent-commerce/mpp`.
+
+```ts
+export interface MppProviderOptions {
+  /** Merchant-controlled settlement destination. Never gateway-owned */
+  readonly recipient: `0x${string}`;
+  /** EIP-3009 token the charge is paid in */
+  readonly asset: `0x${string}`;
+  readonly assetName: string; // EIP-712 domain name, e.g. 'USDC'
+  readonly assetVersion: string; // EIP-712 domain version, e.g. '2'
+  readonly realm: string;
+  /** Key that binds each challenge to this gateway. Never logged or published */
+  readonly challengeSecret: string;
+  readonly challengeTtlSeconds?: number; // default 300
+  readonly clock?: Clock;
+  readonly ids?: IdGenerator;
+}
+
+export function createMppPaymentProvider(options: MppProviderOptions): PaymentProvider;
+```
+
+Construction fails with `CONFIG_INVALID` for a recipient or asset that is not
+an address, an empty EIP-712 domain name or version, an empty or multi-line
+realm, a challenge secret shorter than 32 characters, or a TTL that is not a
+positive whole number. `createRequirement` refuses a resource priced in anything
+but USDC (`CONFIG_INVALID`) and an amount that is not a positive decimal with
+at most 6 fractional digits (`PAYMENT_INVALID`). Each challenge binds the
+resource id in its HMAC-covered `opaque` field.
+
+`PaymentSubmission.payload` is the serialised credential: the value of an
+`Authorization: Payment ...` header, scheme included.
 
 ## AP2
 
