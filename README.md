@@ -249,20 +249,23 @@ See [docs/configuration.md](docs/configuration.md).
 | **A2A**   | Experimental | A2A v1.0.0, binding `JSONRPC`, method `SendMessage`      |
 | **ACP**   | Experimental | ACP `2026-04-17`, REST checkout + discovery              |
 | **AP2**   | Experimental | AP2 `v0.2.0`, Direct Checkout Mandate verification       |
-| UCP · MPP | Planned      | -                                                        |
+| UCP       | Planned      | -                                                        |
+| MPP       | Planned      | library provider only; no config or adapter integration  |
 
 [AP2](docs/ap2.md) is in that table because people look there, but it is an **authorization**
 method rather than a transport: it gates settlement on a resource that still
 takes a real payment, and it is the verifying half only - the gateway holds no
 signing key and issues no Checkout Receipt.
 
-"Planned" means **no code ships for it**. "Experimental" means the code ships,
-is tested against the protocol's own official artifacts, and serves a narrow
-named subset: [A2A](docs/protocols.md#a2a) and [ACP](docs/protocols.md#acp) are
-both off by default and documented in full there, as are
-[MCP](docs/protocols.md#mcp) and [x402](docs/protocols.md#x402). ACP serves the
-five stable checkout operations and advertises `services: ["checkout"]` and
-nothing more; its `payment_data` stays with the merchant's own checkout and is
+"Planned" means no end-to-end gateway integration. UCP has no implementation;
+MPP ships a library provider that config and protocol adapters cannot enable.
+"Experimental" means the code ships, is tested against the protocol's official
+artifacts, and serves a narrow named subset:
+[A2A](docs/protocols.md#a2a) and [ACP](docs/protocols.md#acp) are both off by
+default and documented in full there, as are [MCP](docs/protocols.md#mcp) and
+[x402](docs/protocols.md#x402). ACP serves the five stable checkout operations
+and advertises `services: ["checkout"]` and nothing more; its `payment_data`
+stays with the merchant's own checkout and is
 never turned into an x402 payment.
 
 Each adapter reports its own `supportedSpec`, `capabilities` and `unsupported`
@@ -404,7 +407,7 @@ INFO  A2A                  disabled
 INFO  ACP                  disabled
 INFO  AP2                  disabled
 PASS  Payments             x402 v2 (scheme=exact) enabled - LOCAL dev chain (eip155:84532, chain id shared with Base Sepolia), destination=0x7099…79C8, facilitator=local
-INFO  Payments (MPP)       planned - not implemented in this release
+INFO  Payments (MPP)       planned - config and adapters cannot enable it
 PASS  Storage              sqlite schema v1 writable; receipts=2
 PASS  Protocol versions    reported by gateway /.well-known/agent-commerce
 
@@ -454,10 +457,10 @@ mainnet, receipts, doctor, deterministic demo, experimental A2A v1.0.0 and ACP
 `2026-04-17` checkout adapters, experimental AP2 v0.2.0 mandate verification,
 and experimental OpenAPI import.
 
-**Next** - a `doctor` GitHub Action · UCP · MPP · autonomous-mode AP2 (open
-mandates, agent key binding, constraint evaluation) · more of ACP (carts, feed,
-delegated payment) · Shopify and WooCommerce examples · PostgreSQL · richer
-observability · multi-file and remote OpenAPI sources.
+**Next** - a `doctor` GitHub Action · UCP · MPP config and adapter integration ·
+autonomous-mode AP2 (open mandates, agent key binding, constraint evaluation) ·
+more of ACP (carts, feed, delegated payment) · Shopify and WooCommerce examples ·
+PostgreSQL · richer observability · multi-file and remote OpenAPI sources.
 
 New protocols land only after the adapter model survives real use. Scope
 discipline is a release requirement, not a mood.

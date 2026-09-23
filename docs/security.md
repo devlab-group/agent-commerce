@@ -395,7 +395,11 @@ outcome the code under test returns.
 | **an MPP credential type other than EIP-3009 `authorization`** | `unsupported_credential` | same |
 | **an MPP authorization signed by someone other than the payer, or for another amount or recipient** | `invalid_signature`, `wrong_amount` or `wrong_recipient` | same |
 | **an MPP authorization outside its `validAfter`/`validBefore` window** | `authorization_not_yet_valid` or `authorization_expired` | same |
-| **a valid MPP credential** | verified with no broadcast and no network call; `settle` still returns a rejection | same |
+| **a valid MPP credential** | verified locally, with no broadcast or network call | same |
+| **an MPP credential presented a second time through the pipeline** | `PAYMENT_REPLAYED`; no second settlement | same |
+| **the supplied x402 provider returns a requirement for another recipient** | `CONFIG_INVALID` before the MPP challenge is issued | same |
+| **the facilitator is unreachable during MPP's pre-settlement x402 verification** | provider returns `settlement_unavailable`; pipeline reports `PAYMENT_SETTLEMENT_FAILED`; no settle call | same |
+| **an MPP settlement times out after a possible broadcast, or a broadcast is never confirmed** | provider throws `PAYMENT_PROVIDER_UNAVAILABLE`; pipeline records `settlement-uncertain` and reports `PAYMENT_SETTLEMENT_FAILED`, including the transaction hash when known | same, `tests/unit/core/execution` |
 
 Two of those exist because writing them found a bug. The SDK's `exact`/EVM
 scheme reports an unreachable node as `invalid_exact_evm_signature`, and its

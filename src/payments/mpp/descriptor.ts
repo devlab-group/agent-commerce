@@ -25,7 +25,8 @@ export const MPP_DESCRIPTOR: AdapterDescriptor = {
     'verify-before-settle',
     'payment-receipt',
   ],
-  // The provider verifies but cannot settle, so the rail cannot take a payment
+  // Config cannot enable the rail, and no protocol adapter translates MPP
+  // challenges or credentials, so the descriptor remains planned
   status: 'planned',
   unsupported: [
     // Name other methods as a class instead of maintaining a second list

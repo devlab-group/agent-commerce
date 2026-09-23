@@ -3,7 +3,9 @@ import { Methods, Types } from 'mppx/evm';
 import { charge as clientCharge } from 'mppx/evm/client';
 import type { LocalAccount } from 'viem';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createExecutionPipeline } from '../../../src/core/execution/pipeline.js';
+import { createResourceRegistry } from '../../../src/core/execution/registry.js';
 import {
   type Clock,
   type CommerceResource,
@@ -15,10 +17,32 @@ import {
   createMppPaymentProvider,
   type MppProviderOptions,
 } from '../../../src/payments/mpp/provider.js';
-import { makeResource } from '../core/execution/helpers.js';
+import { createX402PaymentProvider } from '../../../src/payments/x402/provider.js';
+import { computeReplayKey } from '../../../src/payments/x402/replay-key.js';
+import {
+  createCapturingLogger,
+  createFakeBackendExecutor,
+  createFakeClock,
+  createFakeIdGenerator,
+  createFakeStore,
+  makeResource,
+} from '../core/execution/helpers.js';
 
-// Wraps the real broadcast so the no-funds-moved test can prove verify never
-// reaches it
+// Keep the x402 provider real and replace only its HTTP facilitator client
+const facilitator = vi.hoisted(() => ({ verify: vi.fn(), settle: vi.fn() }));
+vi.mock('@x402/core/http', () => ({
+  FacilitatorResponseError: class extends Error {},
+  HTTPFacilitatorClient: class {
+    verify(...args: unknown[]) {
+      return facilitator.verify(...args);
+    }
+    settle(...args: unknown[]) {
+      return facilitator.settle(...args);
+    }
+  },
+}));
+
+// Keep mppx validation real while exposing whether local verification tries to broadcast
 vi.mock('mppx', async (importOriginal) => {
   const actual = await importOriginal<typeof import('mppx')>();
   return {
@@ -57,6 +81,19 @@ function movableClock(start = Date.now()): Clock & { advance(ms: number): void }
   };
 }
 
+function x402Settlement(payTo = recipient, asset: `0x${string}` = ASSET): PaymentProvider {
+  return createX402PaymentProvider({
+    network: 'eip155:84532',
+    rpcUrl: 'http://127.0.0.1:19321', // not contacted because the HTTP client is mocked
+    asset,
+    assetName: AUTHORIZATION.name,
+    assetVersion: AUTHORIZATION.version,
+    assetDecimals: 6,
+    payTo,
+    facilitator: { mode: 'remote', url: 'https://facilitator.example.com', auth: { type: 'none' } },
+  });
+}
+
 function makeProvider(overrides: Partial<MppProviderOptions> = {}): PaymentProvider {
   return createMppPaymentProvider({
     recipient,
@@ -65,6 +102,7 @@ function makeProvider(overrides: Partial<MppProviderOptions> = {}): PaymentProvi
     assetVersion: AUTHORIZATION.version,
     realm: 'gateway.test',
     challengeSecret: SECRET,
+    settlement: x402Settlement(),
     ...overrides,
   });
 }
@@ -181,6 +219,11 @@ async function verifyWith(
   });
 }
 
+beforeEach(() => {
+  facilitator.verify.mockReset();
+  facilitator.settle.mockReset();
+});
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
@@ -193,6 +236,10 @@ describe('createMppPaymentProvider', () => {
     ['a multi-line realm', { realm: 'gateway.test\r\nX-Evil: 1' }],
     ['a TTL that is not a positive whole number', { challengeTtlSeconds: 0 }],
     ['an asset without its EIP-712 domain name', { assetName: '' }],
+    [
+      'a settlement provider that is not x402',
+      { settlement: { ...x402Settlement(), name: 'mpp' as const } },
+    ],
   ])('refuses %s at construction', (_label, overrides) => {
     expect(() => makeProvider(overrides)).toThrow(
       expect.objectContaining({ code: 'CONFIG_INVALID' }),
@@ -240,6 +287,13 @@ describe('MPP createRequirement', () => {
     );
   });
 
+  it('refuses an x402 settlement provider that pays another recipient', async () => {
+    const provider = makeProvider({ settlement: x402Settlement(stranger.address) });
+    await expect(requirementFor(provider)).rejects.toSatisfy(
+      (error: unknown) => isCommerceError(error) && error.code === 'CONFIG_INVALID',
+    );
+  });
+
   it('refuses a resource priced in anything but USDC', async () => {
     await expect(requirementFor(makeProvider(), paidResource(), '0.01', 'EUR')).rejects.toSatisfy(
       (error: unknown) => isCommerceError(error) && error.code === 'CONFIG_INVALID',
@@ -265,10 +319,12 @@ describe('MPP verify', () => {
       network: 'eip155:84532',
       asset: ASSET,
     });
-    // Without a replay key the pipeline refuses to settle, so this rail
-    // cannot charge
-    expect(result.replayKey).toBeUndefined();
+    const { nonce } = Credential.deserialize(credential).payload as { nonce: `0x${string}` };
+    expect(result.replayKey).toBe(
+      computeReplayKey({ chainId: 84532, asset: ASSET, from: buyer.address, nonce }),
+    );
     expect(Method.broadcastCredential).not.toHaveBeenCalled();
+    expect(facilitator.verify).not.toHaveBeenCalled();
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
@@ -331,7 +387,9 @@ describe('MPP verify', () => {
     });
 
     it('refuses a challenge that pays another recipient', async () => {
-      const elsewhere = await requirementFor(makeProvider({ recipient: stranger.address }));
+      const elsewhere = await requirementFor(
+        makeProvider({ recipient: stranger.address, settlement: x402Settlement(stranger.address) }),
+      );
       const provider = makeProvider();
       const result = await verifyWith(
         provider,
@@ -342,7 +400,9 @@ describe('MPP verify', () => {
     });
 
     it('refuses a challenge in another asset', async () => {
-      const otherAsset = await requirementFor(makeProvider({ asset: OTHER_ASSET }));
+      const otherAsset = await requirementFor(
+        makeProvider({ asset: OTHER_ASSET, settlement: x402Settlement(recipient, OTHER_ASSET) }),
+      );
       const provider = makeProvider();
       const result = await verifyWith(
         provider,
@@ -468,26 +528,213 @@ describe('MPP verify', () => {
   });
 });
 
-describe('MPP settle and health', () => {
-  it('returns a rejection rather than throwing, because nothing was broadcast', async () => {
+const SETTLED = {
+  success: true,
+  transaction: '0xabc',
+  network: 'eip155:84532',
+};
+
+async function verifiedPayment(provider = makeProvider()) {
+  const requirement = await requirementFor(provider);
+  const credential = await clientCredential(requirement);
+  const verification = await verifyWith(provider, requirement, credential);
+  return {
+    provider,
+    credential,
+    settle: () =>
+      provider.settle({
+        requestId: 'req-1',
+        resource: paidResource(),
+        requirement,
+        submission: { method: 'mpp', payload: credential },
+        verification,
+      }),
+  };
+}
+
+describe('MPP settle', () => {
+  it('settles the signed authorization through the x402 facilitator', async () => {
+    const { credential, settle } = await verifiedPayment();
+    facilitator.verify.mockResolvedValueOnce({ isValid: true, payer: buyer.address });
+    facilitator.settle.mockResolvedValueOnce({ ...SETTLED, payer: buyer.address });
+
+    const result = await settle();
+
+    expect(result).toMatchObject({
+      status: 'settled',
+      provider: 'mpp',
+      externalReference: '0xabc',
+      payer: buyer.address,
+      payee: recipient,
+      amount: '0.01',
+      currency: 'USDC',
+      network: 'eip155:84532',
+    });
+    const {
+      type: _type,
+      signature,
+      ...authorization
+    } = Credential.deserialize(credential).payload as Record<string, string>;
+    const [payload, requirements] = facilitator.settle.mock.calls[0] as [
+      Record<string, unknown>,
+      Record<string, unknown>,
+    ];
+    expect(payload['payload']).toEqual({ signature, authorization });
+    expect(requirements).toMatchObject({
+      scheme: 'exact',
+      network: 'eip155:84532',
+      amount: '10000',
+      asset: ASSET,
+      payTo: recipient,
+      extra: { name: AUTHORIZATION.name, version: AUTHORIZATION.version },
+    });
+  });
+
+  it('refuses to settle without a successful verify', async () => {
     const provider = makeProvider();
     const requirement = await requirementFor(provider);
-    const credential = await clientCredential(requirement);
-    const verification = await verifyWith(provider, requirement, credential);
-
-    const result = await provider.settle({
+    const settling = provider.settle({
       requestId: 'req-1',
       resource: paidResource(),
       requirement,
-      submission: { method: 'mpp', payload: credential },
-      verification,
+      submission: { method: 'mpp', payload: 'Payment x' },
+      verification: { status: 'rejected', provider: 'mpp', amount: '0.01', currency: 'USDC' },
     });
-
-    expect(result).toMatchObject({ status: 'rejected', rejectionReason: 'settlement_unavailable' });
-    expect(Method.broadcastCredential).not.toHaveBeenCalled();
+    await expect(settling).rejects.toSatisfy(
+      (error: unknown) => isCommerceError(error) && error.code === 'PAYMENT_INVALID',
+    );
   });
 
-  it('reports fail, which blocks readiness while it cannot settle', async () => {
-    expect((await makeProvider().health()).status).toBe('fail');
+  it('rejects without broadcasting when pre-settlement verification cannot reach the facilitator', async () => {
+    const { settle } = await verifiedPayment();
+    facilitator.verify.mockRejectedValueOnce(new Error('fetch failed'));
+
+    expect(await settle()).toMatchObject({
+      status: 'rejected',
+      provider: 'mpp',
+      rejectionReason: 'settlement_unavailable',
+    });
+    expect(facilitator.settle).not.toHaveBeenCalled();
+  });
+
+  it('returns a facilitator rejection without broadcasting', async () => {
+    const { settle } = await verifiedPayment();
+    facilitator.verify.mockResolvedValueOnce({
+      isValid: false,
+      invalidReason: 'insufficient_funds',
+    });
+
+    expect(await settle()).toMatchObject({
+      status: 'rejected',
+      rejectionReason: 'insufficient_funds',
+    });
+    expect(facilitator.settle).not.toHaveBeenCalled();
+  });
+
+  it('rejects a settlement verification with another replay key', async () => {
+    const settlement = x402Settlement();
+    const { settle } = await verifiedPayment(
+      makeProvider({
+        settlement: {
+          ...settlement,
+          verify: async (context) => ({
+            ...(await settlement.verify(context)),
+            replayKey: '0xanother',
+          }),
+        },
+      }),
+    );
+    facilitator.verify.mockResolvedValueOnce({ isValid: true });
+
+    expect(await settle()).toMatchObject({
+      status: 'rejected',
+      rejectionReason: 'settlement_mismatch',
+    });
+    expect(facilitator.settle).not.toHaveBeenCalled();
+  });
+
+  it('returns a rejection when the settlement transaction fails', async () => {
+    const { settle } = await verifiedPayment();
+    facilitator.verify.mockResolvedValueOnce({ isValid: true });
+    facilitator.settle.mockResolvedValueOnce({
+      success: false,
+      errorReason: 'transaction_failed',
+      transaction: '',
+      network: 'eip155:84532',
+    });
+
+    expect(await settle()).toMatchObject({
+      status: 'rejected',
+      provider: 'mpp',
+      rejectionReason: 'transaction_failed',
+    });
+  });
+
+  it('propagates a timeout after settlement may have broadcast', async () => {
+    const { settle } = await verifiedPayment();
+    facilitator.verify.mockResolvedValueOnce({ isValid: true });
+    facilitator.settle.mockRejectedValueOnce(new Error('The operation timed out'));
+
+    await expect(settle()).rejects.toSatisfy(
+      (error: unknown) => isCommerceError(error) && error.code === 'PAYMENT_PROVIDER_UNAVAILABLE',
+    );
+  });
+
+  it('includes the transaction hash when a broadcast is not confirmed', async () => {
+    const { settle } = await verifiedPayment();
+    facilitator.verify.mockResolvedValueOnce({ isValid: true });
+    facilitator.settle.mockResolvedValueOnce({
+      success: false,
+      errorReason: 'settlement_pending',
+      transaction: '0xpending',
+      network: 'eip155:84532',
+    });
+
+    await expect(settle()).rejects.toSatisfy(
+      (error: unknown) =>
+        isCommerceError(error) && error.details?.['transactionHash'] === '0xpending',
+    );
+  });
+
+  it('returns the settlement provider health unchanged', async () => {
+    const health = { status: 'pass' as const, detail: 'ok', checkedAt: new Date().toISOString() };
+    const provider = makeProvider({
+      settlement: { ...x402Settlement(), health: async () => health },
+    });
+    expect(await provider.health()).toBe(health);
+  });
+});
+
+describe('MPP through the execution pipeline', () => {
+  it('delivers once, then refuses the same credential as a replay', async () => {
+    const provider = makeProvider();
+    const store = createFakeStore();
+    const pipeline = createExecutionPipeline({
+      resources: createResourceRegistry([paidResource()]),
+      paymentProviders: [provider],
+      store,
+      backend: createFakeBackendExecutor(),
+      events: store,
+      logger: createCapturingLogger(),
+      clock: createFakeClock(),
+      ids: createFakeIdGenerator(),
+    });
+    const credential = await clientCredential(await requirementFor(provider));
+    facilitator.verify.mockResolvedValue({ isValid: true });
+    facilitator.settle.mockResolvedValue(SETTLED);
+    const request = {
+      requestId: 'req-1',
+      resourceId: 'market_report',
+      input: {},
+      protocol: 'http' as const,
+      receivedAt: new Date().toISOString(),
+      payment: { method: 'mpp' as const, payload: credential },
+    };
+
+    expect(await pipeline.execute(request)).toMatchObject({ kind: 'delivered' });
+    await expect(pipeline.execute({ ...request, requestId: 'req-2' })).rejects.toSatisfy(
+      (error: unknown) => isCommerceError(error) && error.code === 'PAYMENT_REPLAYED',
+    );
+    expect(facilitator.settle).toHaveBeenCalledTimes(1);
   });
 });

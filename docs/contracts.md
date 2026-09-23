@@ -169,11 +169,10 @@ commerce flow.
 - Config accepts `mpp` beside an enabled x402 rail. At config load, `mpp` alone
   is rejected because no corresponding rail is configured and enabled.
 - The `./mpp` entry exports `createMppPaymentProvider` (also as `mpp`) beside
-  the pinned profile metadata and descriptor. The provider issues HMAC-bound
-  challenges and verifies EIP-3009 credentials locally, without broadcasting.
-  `settle` returns a rejection and `verify` returns no `replayKey`, which the
-  pipeline requires before settlement, so no MPP payment can be charged. The
-  descriptor stays `planned`.
+  the pinned profile metadata and descriptor. The provider verifies locally,
+  uses x402-compatible replay keys, and delegates settlement to a supplied x402
+  provider. It remains planned because config and protocol adapters cannot
+  expose the rail.
 
 ## Published entry points
 
@@ -182,7 +181,7 @@ commerce flow.
 | `@devlab.group/agent-commerce`      | Core contract, config, gateway, receipt store, ACP adapter | None                                                                            |
 | `@devlab.group/agent-commerce/ap2`  | AP2 verification and checkout signing                      | `jose`, `@sd-jwt/core`, `canonicalize`                                          |
 | `@devlab.group/agent-commerce/mcp`  | MCP adapter                                                | `@modelcontextprotocol/sdk`                                                     |
-| `@devlab.group/agent-commerce/mpp`  | MPP challenge and verification, profile metadata           | `mppx`, `viem`                                                                  |
+| `@devlab.group/agent-commerce/mpp`  | MPP provider (settlement via caller-supplied `./x402`), profile metadata | `mppx`, `viem`                                                       |
 | `@devlab.group/agent-commerce/x402` | x402 provider and client proof helper                      | `@coinbase/x402` (only for `auth.type: cdp`), `@x402/core`, `@x402/evm`, `viem` |
 
 The main entry and CLI must not import optional peers. `package.json` is the
@@ -272,6 +271,11 @@ export interface MppProviderOptions {
   readonly realm: string;
   /** Key that binds each challenge to this gateway. Never logged or published */
   readonly challengeSecret: string;
+  /**
+   * x402 provider used for settlement. Each requirement it returns must match
+   * this provider's network, asset, EIP-712 domain and recipient.
+   */
+  readonly settlement: PaymentProvider;
   readonly challengeTtlSeconds?: number; // default 300
   readonly clock?: Clock;
   readonly ids?: IdGenerator;
@@ -282,11 +286,21 @@ export function createMppPaymentProvider(options: MppProviderOptions): PaymentPr
 
 Construction fails with `CONFIG_INVALID` for a recipient or asset that is not
 an address, an empty EIP-712 domain name or version, an empty or multi-line
-realm, a challenge secret shorter than 32 characters, or a TTL that is not a
-positive whole number. `createRequirement` refuses a resource priced in anything
-but USDC (`CONFIG_INVALID`) and an amount that is not a positive decimal with
-at most 6 fractional digits (`PAYMENT_INVALID`). Each challenge binds the
-resource id in its HMAC-covered `opaque` field.
+realm, a challenge secret shorter than 32 characters, a TTL that is not a
+positive whole number, or a `settlement` provider not named `x402`.
+`createRequirement` refuses a resource priced in anything but USDC
+(`CONFIG_INVALID`), a settlement requirement whose network, asset, EIP-712
+domain or recipient differs (`CONFIG_INVALID`), and an amount that is not a
+positive decimal with at most 6 fractional digits (`PAYMENT_INVALID`). Each
+challenge binds the resource id in its HMAC-covered `opaque` field.
+
+`verify` derives the same replay key as x402, so an authorization collides across
+both rails. `settle` rewraps it for x402, verifies it again, checks the replay
+key, then delegates settlement. Errors before the final call return
+`settlement_unavailable`; negative results remain rejections. Throws from x402
+`settle` propagate, so the pipeline records `settlement-uncertain` and returns
+`PAYMENT_SETTLEMENT_FAILED`. Returned results name `mpp`; `health` delegates
+unchanged.
 
 `PaymentSubmission.payload` is the serialised credential: the value of an
 `Authorization: Payment ...` header, scheme included.

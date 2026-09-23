@@ -2,11 +2,13 @@
  * `@devlab.group/agent-commerce/mpp` - the MPP payment rail
  * (`charge` intent, `evm` method, EIP-3009 `authorization` credential).
  *
- *   npm install @devlab.group/agent-commerce mppx viem
+ *   npm install @devlab.group/agent-commerce mppx viem @x402/core @x402/evm
  *   import { mpp } from '@devlab.group/agent-commerce/mpp';
+ *   import { x402 } from '@devlab.group/agent-commerce/x402';
  *
- * The provider issues challenges and verifies credentials. It does not
- * settle, so its descriptor reports `planned`.
+ * MPP verifies locally, then delegates settlement to the x402 provider passed
+ * as `settlement`. The install command covers local, unauthenticated and bearer
+ * facilitator modes; `auth.type: cdp` also requires `@coinbase/x402`.
  */
 
 export {

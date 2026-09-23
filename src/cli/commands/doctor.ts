@@ -660,7 +660,7 @@ export async function runDoctor(
   checks.push({
     name: 'Payments (MPP)',
     status: 'INFO',
-    detail: 'planned — not implemented in this release',
+    detail: 'planned - config and adapters cannot enable it',
   });
 
   // 7. Storage

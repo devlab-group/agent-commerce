@@ -2,13 +2,13 @@
  * MPP payment provider for the `charge` intent, the `evm` method and the
  * EIP-3009 `authorization` credential.
  *
- * It issues challenges and verifies credentials locally: verification recovers
- * a signature and compares terms, and never broadcasts or moves funds. It does
- * not settle. `settle` returns a rejection and `verify` returns no `replayKey`,
- * which the pipeline requires before settling, so no MPP payment is charged.
+ * It issues challenges and verifies credentials locally without moving funds.
+ * Settlement rewraps the signed authorization for the x402 provider passed as
+ * `settlement`. The MPP layer adds no signing key; the supplied provider owns
+ * facilitator configuration and settlement credentials.
  */
 import { Challenge, Credential, Errors, Method, PaymentRequest } from 'mppx';
-import { Methods } from 'mppx/evm';
+import { Methods, type Types } from 'mppx/evm';
 import { charge } from 'mppx/evm/server';
 import { getAddress, isAddress } from 'viem';
 import {
@@ -21,10 +21,12 @@ import {
   type PaymentRequirement,
   type PaymentResult,
   type PaymentSettlementContext,
+  type PaymentSubmission,
   type PaymentVerificationContext,
   systemClock,
 } from '../../core/index.js';
 import { parseCanonicalAmount } from '../x402/amount.js';
+import { computeReplayKey } from '../x402/replay-key.js';
 import { MPP_PROFILE, MPP_SPEC_DRAFTS } from './constants.js';
 import { MPP_DESCRIPTOR } from './descriptor.js';
 
@@ -49,6 +51,11 @@ export interface MppProviderOptions {
   readonly realm: string;
   /** Key that binds each challenge to this gateway. Never logged or published */
   readonly challengeSecret: string;
+  /**
+   * x402 provider used for settlement. Each requirement it returns must match
+   * this provider's network, asset, EIP-712 domain and recipient.
+   */
+  readonly settlement: PaymentProvider;
   /**
    * Seconds a challenge stays valid, 300 by default. The mppx client signs its
    * authorization to expire at the same moment.
@@ -91,6 +98,9 @@ function validateOptions(options: MppProviderOptions): void {
       `MPP challenge secret must be at least ${MIN_CHALLENGE_SECRET_LENGTH} characters`,
     );
   }
+  if (options.settlement?.name !== 'x402') {
+    throw configInvalid('MPP settlement must be an x402 payment provider');
+  }
   const ttl = options.challengeTtlSeconds;
   if (ttl !== undefined && (!Number.isInteger(ttl) || ttl <= 0)) {
     throw configInvalid('MPP challenge TTL must be a positive whole number of seconds');
@@ -116,8 +126,8 @@ export function createMppPaymentProvider(options: MppProviderOptions): PaymentPr
   const asset = getAddress(options.asset);
   const ids = options.ids ?? DEFAULT_IDS;
 
-  // mppx requires a settle callback to build the method, and calls it only
-  // when broadcasting. This provider never broadcasts.
+  // charge() requires a callback even though this provider never invokes the
+  // mppx broadcast path. Settlement is delegated through options.settlement.
   const method = charge({
     currency: asset,
     recipient,
@@ -125,7 +135,7 @@ export function createMppPaymentProvider(options: MppProviderOptions): PaymentPr
     decimals: MPP_PROFILE.assetDecimals,
     authorization: { name: options.assetName, version: options.assetVersion },
     settle: async () => {
-      throw new CommerceError('INTERNAL_ERROR', 'MPP settlement is not implemented');
+      throw new CommerceError('INTERNAL_ERROR', 'MPP direct broadcast is disabled');
     },
   });
 
@@ -154,6 +164,8 @@ export function createMppPaymentProvider(options: MppProviderOptions): PaymentPr
         details: { amount: context.amount },
       });
     }
+    // Reject a mismatched settlement requirement before the buyer signs
+    await settlementRequirement(context);
     const expires = new Date(clock.now().getTime() + ttlSeconds * 1000);
     const challenge = Challenge.fromMethod(Methods.charge, {
       secretKey: options.challengeSecret,
@@ -219,10 +231,10 @@ export function createMppPaymentProvider(options: MppProviderOptions): PaymentPr
     // Local checks only: signature recovery, nonce == challenge hash, the
     // validity window and payload terms. With no network call involved, any
     // failure here is a verdict on the credential, not an outage.
-    let payer: string;
+    let payer: `0x${string}`;
     try {
       const validation = await Method.validateCredential([method], credential);
-      payer = (validation.details as { payer: string }).payer;
+      payer = getAddress((validation.details as { payer: string }).payer);
     } catch (error) {
       return rejected(requirement, verificationReason(error));
     }
@@ -236,17 +248,92 @@ export function createMppPaymentProvider(options: MppProviderOptions): PaymentPr
       currency: requirement.currency,
       network: MPP_PROFILE.network,
       asset,
+      // Match x402's key so the same authorization collides across both rails
+      replayKey: computeReplayKey({
+        chainId: CHAIN_ID,
+        asset,
+        from: payer,
+        // validateCredential proved it equals the 32-byte challenge hash
+        nonce: (credential.payload as Types.AuthorizationPayload).nonce as `0x${string}`,
+      }),
     };
   }
 
-  // A returned rejection states that nothing moved. A throw would be recorded
-  // as a settlement that may have landed.
-  async function settle(context: PaymentSettlementContext): Promise<PaymentResult> {
-    return rejected(context.requirement, 'settlement_unavailable');
+  async function settlementRequirement(context: PaymentContext): Promise<PaymentRequirement> {
+    const x402 = await options.settlement.createRequirement(context);
+    const extra = (x402.challenge.accepts[0]?.['extra'] ?? {}) as Record<string, unknown>;
+    if (
+      x402.network !== MPP_PROFILE.network ||
+      !sameAddress(x402.asset, asset) ||
+      !sameAddress(x402.destination, recipient) ||
+      extra['name'] !== options.assetName ||
+      extra['version'] !== options.assetVersion
+    ) {
+      throw configInvalid(
+        'MPP settlement provider must use the same network, asset, EIP-712 domain and recipient',
+      );
+    }
+    return x402;
   }
 
-  async function health(): Promise<AdapterHealth> {
-    return { status: 'fail', detail: 'settlement-unavailable', checkedAt: clock.nowIso() };
+  async function settle(context: PaymentSettlementContext): Promise<PaymentResult> {
+    const { requestId, requirement, resource, submission, verification } = context;
+    if (verification.status !== 'verified' || verification.replayKey === undefined) {
+      throw new CommerceError(
+        'PAYMENT_INVALID',
+        'MPP settle() called without a successful verify()',
+      );
+    }
+
+    // Nothing before the final settle call can broadcast, so failures here are
+    // rejections that let the pipeline release its reservation
+    let x402Context: PaymentSettlementContext;
+    try {
+      const x402Requirement = await settlementRequirement({
+        requestId,
+        resource,
+        amount: requirement.amount,
+        currency: requirement.currency,
+        requestedAt: clock.nowIso(),
+      });
+      const x402Submission = toX402Submission(x402Requirement, submission);
+      const x402Verification = await options.settlement.verify({
+        requestId,
+        resource,
+        requirement: x402Requirement,
+        submission: x402Submission,
+      });
+      if (x402Verification.status !== 'verified') {
+        return rejected(requirement, x402Verification.rejectionReason ?? 'settlement_rejected');
+      }
+      // A different key would settle an authorization the pipeline did not reserve
+      if (x402Verification.replayKey !== verification.replayKey) {
+        return rejected(requirement, 'settlement_mismatch');
+      }
+      x402Context = {
+        requestId,
+        resource,
+        requirement: x402Requirement,
+        submission: x402Submission,
+        verification: x402Verification,
+      };
+    } catch {
+      return rejected(requirement, 'settlement_unavailable');
+    }
+
+    // A throw from x402 settle may follow a broadcast, so let the pipeline mark it uncertain
+    const settled = await options.settlement.settle(x402Context);
+    return {
+      ...settled,
+      provider: 'mpp',
+      amount: requirement.amount,
+      currency: requirement.currency,
+      replayKey: verification.replayKey,
+    };
+  }
+
+  function health(): Promise<AdapterHealth> {
+    return options.settlement.health();
   }
 
   return { name: 'mpp', descriptor: MPP_DESCRIPTOR, createRequirement, verify, settle, health };
@@ -281,6 +368,22 @@ function bindingMismatch(
   }
   if (canonical(got) !== canonical(want)) return 'wrong_terms';
   return undefined;
+}
+
+// Rewrap the MPP authorization as the x402 `exact` payload expected by settlement
+function toX402Submission(
+  x402Requirement: PaymentRequirement,
+  submission: PaymentSubmission,
+): PaymentSubmission {
+  const { signature, from, to, value, validAfter, validBefore, nonce } = Credential.deserialize(
+    submission.payload,
+  ).payload as Types.AuthorizationPayload;
+  const payment = {
+    x402Version: 2,
+    accepted: x402Requirement.challenge.accepts[0],
+    payload: { signature, authorization: { from, to, value, validAfter, validBefore, nonce } },
+  };
+  return { method: 'x402', payload: Buffer.from(JSON.stringify(payment)).toString('base64') };
 }
 
 interface ChargeRequest {
