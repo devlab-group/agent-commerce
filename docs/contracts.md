@@ -277,6 +277,8 @@ export interface MppProviderOptions {
    */
   readonly settlement: PaymentProvider;
   readonly challengeTtlSeconds?: number; // default 300
+  /** CAIP-2 network: 'eip155:84532' (default) or 'eip155:8453' */
+  readonly network?: string;
   readonly clock?: Clock;
   readonly ids?: IdGenerator;
 }
@@ -287,7 +289,9 @@ export function createMppPaymentProvider(options: MppProviderOptions): PaymentPr
 Construction fails with `CONFIG_INVALID` for a recipient or asset that is not
 an address, an empty EIP-712 domain name or version, an empty or multi-line
 realm, a challenge secret with length below 32, a TTL that is not a
-positive whole number, or a `settlement` provider not named `x402`.
+positive whole number, an unsupported `network`, or a `settlement` provider
+not named `x402`. The supported networks are `eip155:84532` and
+`eip155:8453`.
 `createRequirement` refuses a resource priced in anything but USDC
 (`CONFIG_INVALID`), a settlement requirement whose network, asset, EIP-712
 domain or recipient differs (`CONFIG_INVALID`), and an amount that is not a
@@ -518,6 +522,7 @@ export interface GatewayConfig {
     };
     readonly mpp?: {
       readonly enabled: boolean;
+      readonly network: 'eip155:84532' | 'eip155:8453';
       readonly rpcUrl: string;
       readonly asset: string;
       readonly assetName: string;
@@ -527,6 +532,8 @@ export interface GatewayConfig {
       readonly challengeSecret: string;
       readonly challengeTtlSeconds?: number;
       readonly facilitator: X402FacilitatorConfig;
+      readonly allowMainnet?: boolean;
+      readonly allowUnauthenticatedFacilitator?: boolean;
     };
   };
   readonly authorization?: {

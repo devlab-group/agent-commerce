@@ -374,6 +374,7 @@ describe('runDoctor — degraded scenarios never hang and degrade gracefully', (
   describe('Payments (MPP)', () => {
     const MPP_CONFIG = {
       enabled: true,
+      network: 'eip155:84532' as const,
       rpcUrl: 'https://sepolia.example/v2/RPC-KEY',
       asset: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
       assetName: 'USDC',

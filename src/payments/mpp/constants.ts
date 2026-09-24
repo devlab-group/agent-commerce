@@ -39,18 +39,29 @@ export const MPPX_VERSION = '0.10.1';
  * The pinned profile.
  *
  * `intent`, `method` and `credentialType` copy MPP wire identifiers from
- * `mppx` so this module has no peer import; tests detect drift. `network` is the
- * gateway's CAIP-2 name, and `assetSymbol` is display-only. EVM charge requests
- * carry a numeric `chainId` and token address instead.
+ * `mppx` so this module has no peer import; tests detect drift. `assetSymbol`
+ * is the pricing currency an MPP resource must use. EVM charge requests carry a
+ * numeric `chainId` and token address instead.
  */
 export const MPP_PROFILE = {
   intent: 'charge',
   method: 'evm',
   credentialType: 'authorization',
-  network: 'eip155:84532',
   assetSymbol: 'USDC',
   assetDecimals: 6,
 } as const;
+
+/** Supported CAIP-2 networks; gateway config applies the x402 mainnet guardrails */
+export const MPP_NETWORKS = ['eip155:84532', 'eip155:8453'] as const;
+
+export type MppNetwork = (typeof MPP_NETWORKS)[number];
+
+/** Default network ID, shared by Base Sepolia and the local development chain */
+export const MPP_DEFAULT_NETWORK: MppNetwork = 'eip155:84532';
+
+export function isMppNetwork(value: string): value is MppNetwork {
+  return (MPP_NETWORKS as readonly string[]).includes(value);
+}
 
 /**
  * Compact descriptor value naming the core draft, intent and method

@@ -663,15 +663,15 @@ export async function runDoctor(
   if (mpp === undefined || !mpp.enabled) {
     checks.push({ name: 'Payments (MPP)', status: 'INFO', detail: 'MPP not configured' });
   } else {
-    // Keep a descriptive fallback in case the profile and network registry drift
-    const profile = findNetworkProfile(MPP_PROFILE.network);
+    // parseConfig rejects unknown networks; keep a fallback for callers that bypass it
+    const profile = findNetworkProfile(mpp.network);
     const mode = profile ? resolveDeploymentMode(profile, mpp.facilitator.mode) : undefined;
     const where =
       profile === undefined || mode === undefined
-        ? `unknown network ${MPP_PROFILE.network}`
+        ? `unknown network ${mpp.network}`
         : mode === 'local'
-          ? `LOCAL dev chain (${MPP_PROFILE.network}, chain id shared with ${profile.displayName})`
-          : `${describeDeploymentMode(mode)} on ${profile.displayName} (${MPP_PROFILE.network})`;
+          ? `LOCAL dev chain (${mpp.network}, chain id shared with ${profile.displayName})`
+          : `${describeDeploymentMode(mode)} on ${profile.displayName} (${mpp.network})`;
     const facilitatorDetail =
       mpp.facilitator.mode === 'local' ? 'local' : `remote (auth=${mpp.facilitator.auth.type})`;
     const summary =
@@ -679,7 +679,7 @@ export async function runDoctor(
       `${where}, asset=${MPP_PROFILE.assetSymbol} ${maskMiddle(mpp.asset)}, ` +
       `recipient=${maskMiddle(mpp.recipient)}, facilitator=${facilitatorDetail}, ` +
       `spec ${MPP_SPEC_DRAFTS.core}@${MPP_SPEC_COMMIT.slice(0, 7)}, mppx ${MPPX_VERSION}`;
-    const configured = { asset: mpp.asset, network: MPP_PROFILE.network, payTo: mpp.recipient };
+    const configured = { asset: mpp.asset, network: mpp.network, payTo: mpp.recipient };
     const live = wellKnown?.ok ? extractWellKnownX402(wellKnown.body, 'mpp') : undefined;
     if (live === 'disabled') {
       checks.push({

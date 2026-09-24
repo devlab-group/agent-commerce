@@ -236,6 +236,7 @@ describe('createMppPaymentProvider', () => {
     ['a multi-line realm', { realm: 'gateway.test\r\nX-Evil: 1' }],
     ['a TTL that is not a positive whole number', { challengeTtlSeconds: 0 }],
     ['an asset without its EIP-712 domain name', { assetName: '' }],
+    ['an unsupported network', { network: 'eip155:1' }],
     [
       'a settlement provider that is not x402',
       { settlement: { ...x402Settlement(), name: 'mpp' as const } },
@@ -290,6 +291,38 @@ describe('MPP createRequirement', () => {
   it('refuses an x402 settlement provider that pays another recipient', async () => {
     const provider = makeProvider({ settlement: x402Settlement(stranger.address) });
     await expect(requirementFor(provider)).rejects.toSatisfy(
+      (error: unknown) => isCommerceError(error) && error.code === 'CONFIG_INVALID',
+    );
+  });
+
+  it('issues the challenge for the configured network', async () => {
+    const baseUsdc = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913' as const;
+    const settlement = createX402PaymentProvider({
+      network: 'eip155:8453',
+      rpcUrl: 'https://base.example',
+      asset: baseUsdc,
+      assetName: 'USD Coin',
+      assetVersion: '2',
+      assetDecimals: 6,
+      payTo: recipient,
+      allowMainnet: true,
+      allowUnauthenticatedFacilitator: true,
+      facilitator: { mode: 'remote', url: 'https://facilitator.example', auth: { type: 'none' } },
+    });
+    const provider = makeProvider({
+      network: 'eip155:8453',
+      asset: baseUsdc,
+      assetName: 'USD Coin',
+      settlement,
+    });
+    const requirement = await requirementFor(provider);
+    const request = issuedChallenge(requirement).request as unknown as ChargeRequest;
+    expect(requirement.network).toBe('eip155:8453');
+    expect(request.methodDetails.chainId).toBe(8453);
+  });
+
+  it('refuses an x402 settlement provider on another network', async () => {
+    await expect(requirementFor(makeProvider({ network: 'eip155:8453' }))).rejects.toSatisfy(
       (error: unknown) => isCommerceError(error) && error.code === 'CONFIG_INVALID',
     );
   });

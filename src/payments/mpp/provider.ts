@@ -27,10 +27,16 @@ import {
 } from '../../core/index.js';
 import { parseCanonicalAmount } from '../x402/amount.js';
 import { computeReplayKey } from '../x402/replay-key.js';
-import { MPP_MIN_CHALLENGE_SECRET_LENGTH, MPP_PROFILE, MPP_SPEC_DRAFTS } from './constants.js';
+import {
+  isMppNetwork,
+  MPP_DEFAULT_NETWORK,
+  MPP_MIN_CHALLENGE_SECRET_LENGTH,
+  MPP_NETWORKS,
+  MPP_PROFILE,
+  MPP_SPEC_DRAFTS,
+} from './constants.js';
 import { MPP_DESCRIPTOR } from './descriptor.js';
 
-const CHAIN_ID = Number(MPP_PROFILE.network.split(':')[1]);
 const DEFAULT_IDS: IdGenerator = {
   next: (prefix?: string) => `${prefix ? `${prefix}_` : ''}${crypto.randomUUID()}`,
 };
@@ -59,6 +65,8 @@ export interface MppProviderOptions {
    * authorization to expire at the same moment.
    */
   readonly challengeTtlSeconds?: number;
+  /** CAIP-2 network; accepts `eip155:84532` or `eip155:8453` and defaults to the former */
+  readonly network?: string;
   readonly clock?: Clock;
   readonly ids?: IdGenerator;
 }
@@ -103,6 +111,9 @@ function validateOptions(options: MppProviderOptions): void {
   if (ttl !== undefined && (!Number.isInteger(ttl) || ttl <= 0)) {
     throw configInvalid('MPP challenge TTL must be a positive whole number of seconds');
   }
+  if (options.network !== undefined && !isMppNetwork(options.network)) {
+    throw configInvalid(`MPP network must be one of ${MPP_NETWORKS.join(', ')}`);
+  }
 }
 
 function verificationReason(error: unknown): string {
@@ -118,6 +129,8 @@ function verificationReason(error: unknown): string {
 
 export function createMppPaymentProvider(options: MppProviderOptions): PaymentProvider {
   validateOptions(options);
+  const network = options.network ?? MPP_DEFAULT_NETWORK;
+  const chainId = Number(network.split(':')[1]);
   const clock = options.clock ?? systemClock;
   const ttlSeconds = options.challengeTtlSeconds ?? DEFAULT_CHALLENGE_TTL_SECONDS;
   const recipient = getAddress(options.recipient);
@@ -129,7 +142,7 @@ export function createMppPaymentProvider(options: MppProviderOptions): PaymentPr
   const method = charge({
     currency: asset,
     recipient,
-    chainId: CHAIN_ID,
+    chainId,
     decimals: MPP_PROFILE.assetDecimals,
     authorization: { name: options.assetName, version: options.assetVersion },
     settle: async () => {
@@ -143,7 +156,7 @@ export function createMppPaymentProvider(options: MppProviderOptions): PaymentPr
       provider: 'mpp',
       amount: requirement.amount,
       currency: requirement.currency,
-      network: MPP_PROFILE.network,
+      network,
       asset,
       rejectionReason: reason,
     };
@@ -176,7 +189,7 @@ export function createMppPaymentProvider(options: MppProviderOptions): PaymentPr
         amount: context.amount,
         currency: asset,
         recipient,
-        chainId: CHAIN_ID,
+        chainId,
         decimals: MPP_PROFILE.assetDecimals,
         credentialTypes: [MPP_PROFILE.credentialType],
       },
@@ -189,7 +202,7 @@ export function createMppPaymentProvider(options: MppProviderOptions): PaymentPr
       amount: context.amount,
       currency: context.currency,
       destination: recipient,
-      network: MPP_PROFILE.network,
+      network,
       asset,
       expiresAt: expires.toISOString(),
       challenge: {
@@ -251,11 +264,11 @@ export function createMppPaymentProvider(options: MppProviderOptions): PaymentPr
       payee: recipient,
       amount: requirement.amount,
       currency: requirement.currency,
-      network: MPP_PROFILE.network,
+      network,
       asset,
       // Match x402's key so the same authorization collides across both rails
       replayKey: computeReplayKey({
-        chainId: CHAIN_ID,
+        chainId,
         asset,
         from: payer,
         // validateCredential proved it equals the 32-byte challenge hash
@@ -268,7 +281,7 @@ export function createMppPaymentProvider(options: MppProviderOptions): PaymentPr
     const x402 = await options.settlement.createRequirement(context);
     const extra = (x402.challenge.accepts[0]?.['extra'] ?? {}) as Record<string, unknown>;
     if (
-      x402.network !== MPP_PROFILE.network ||
+      x402.network !== network ||
       !sameAddress(x402.asset, asset) ||
       !sameAddress(x402.destination, recipient) ||
       extra['name'] !== options.assetName ||

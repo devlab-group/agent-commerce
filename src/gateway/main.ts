@@ -24,7 +24,6 @@ import { createAp2AuthorizationProvider } from '../authorization/ap2/index.js';
 import { loadConfig } from '../config/index.js';
 import type { ProtocolAdapter, ReceiptStore } from '../core/index.js';
 import { CommerceError, isCommerceError } from '../core/index.js';
-import { MPP_PROFILE } from '../payments/mpp/constants.js';
 import { createA2aAdapter } from '../protocols/a2a/index.js';
 import { createAcpAdapter } from '../protocols/acp/index.js';
 import { createMcpAdapter } from '../protocols/mcp/index.js';
@@ -156,7 +155,7 @@ async function main(): Promise<void> {
   if (mpp?.enabled) {
     console.log('');
     console.log('  MPP settlement (charge, evm, authorization)');
-    console.log(`    network      ${MPP_PROFILE.network}  via ${rpcOrigin(mpp.rpcUrl)}`);
+    console.log(`    network      ${mpp.network}  via ${rpcOrigin(mpp.rpcUrl)}`);
     console.log(`    asset        ${mpp.asset} (${mpp.assetName} v${mpp.assetVersion})`);
     console.log(`    pays to      ${mpp.recipient}   (merchant-controlled; not gateway-owned)`);
     console.log(`    facilitator  ${mpp.facilitator.mode}`);

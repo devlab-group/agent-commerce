@@ -407,6 +407,8 @@ outcome the code under test returns.
 | **an MPP broadcast that is never confirmed** | `settlement-uncertain` with the transaction hash and no delivery; the transfer lands once the block is mined | same |
 | **an MPP buyer with no funds** | refused by the facilitator before broadcast: `PAYMENT_SETTLEMENT_FAILED`, nothing moved | same |
 | **an AP2-gated MPP payment with no mandate, or a mandate approved for x402** | `AUTHORIZATION_REQUIRED` or `AUTHORIZATION_INVALID`; nothing settles | `tests/e2e/authorization/ap2-mpp.e2e.test.ts` |
+| **an MPP config on Base mainnet without `allowMainnet`, with a local facilitator, a noncanonical asset or Base Sepolia's EIP-712 name** | `CONFIG_INVALID` at load under the relevant `payments.mpp` field | `tests/unit/config/schema.test.ts` |
+| **a valid MPP payment on Base mainnet, then the same credential again** | settled once on chain; the replay is refused with `409` and moves nothing | `tests/mainnet/mpp-base.smoke.test.ts` (real funds, run by hand) |
 
 Two of those exist because writing them found a bug. The SDK's `exact`/EVM
 scheme reports an unreachable node as `invalid_exact_evm_signature`, and its

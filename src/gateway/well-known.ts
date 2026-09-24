@@ -203,7 +203,7 @@ export async function buildWellKnownDocument(
         ? {
             mpp: {
               enabled: mpp.enabled,
-              network: MPP_PROFILE.network,
+              network: mpp.network,
               asset: mpp.asset,
               assetName: mpp.assetName,
               assetVersion: mpp.assetVersion,
@@ -211,7 +211,7 @@ export async function buildWellKnownDocument(
               recipient: mpp.recipient,
               facilitator: { mode: mpp.facilitator.mode },
               mode: resolveDeploymentMode(
-                requireNetworkProfile(MPP_PROFILE.network, 'payments.mpp'),
+                requireNetworkProfile(mpp.network, 'payments.mpp.network'),
                 mpp.facilitator.mode,
               ),
             },

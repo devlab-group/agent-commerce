@@ -8,7 +8,7 @@
  */
 import type { AdapterDescriptor } from '../../core/public-types.js';
 import { PACKAGE_VERSION } from '../../version.js';
-import { MPP_PROFILE, MPP_SUPPORTED_SPEC } from './constants.js';
+import { MPP_NETWORKS, MPP_PROFILE, MPP_SUPPORTED_SPEC } from './constants.js';
 
 export const MPP_DESCRIPTOR: AdapterDescriptor = {
   name: 'mpp',
@@ -20,12 +20,12 @@ export const MPP_DESCRIPTOR: AdapterDescriptor = {
     `method=${MPP_PROFILE.method}`,
     `credential=${MPP_PROFILE.credentialType}`,
     'eip-3009',
-    `network=${MPP_PROFILE.network}`,
+    ...MPP_NETWORKS.map((network) => `network=${network}`),
     `asset=${MPP_PROFILE.assetSymbol}`,
     'verify-before-settle',
     'payment-receipt',
   ],
-  // Experimental: one profile on one network, off by default
+  // One experimental profile, disabled by default in gateway config
   status: 'experimental',
   unsupported: [
     // Name other methods as a class instead of maintaining a second list

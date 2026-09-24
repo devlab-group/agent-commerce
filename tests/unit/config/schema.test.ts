@@ -2033,7 +2033,56 @@ describe('payments.mpp', () => {
   });
 
   it('refuses an unknown key in the MPP block', () => {
-    expectConfigInvalid(() => parseConfig(mppConfig({ network: 'eip155:8453' }), {}));
+    expectConfigInvalid(() => parseConfig(mppConfig({ currency: 'EUR' }), {}));
+  });
+
+  it('refuses an unsupported MPP network', () => {
+    expect(refusal(mppConfig({ network: 'eip155:1' })).path).toBe('payments.mpp.network');
+  });
+
+  describe('on Base mainnet', () => {
+    const MAINNET = {
+      network: 'eip155:8453',
+      asset: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+      assetName: 'USD Coin',
+      allowMainnet: true,
+      facilitator: {
+        mode: 'remote',
+        url: 'https://facilitator.example',
+        auth: { type: 'bearer', token: 'facilitator-token' },
+      },
+    };
+
+    it('loads with an explicit opt-in, canonical USDC and an authenticated remote facilitator', () => {
+      expect(parseConfig(mppConfig(MAINNET), {}).payments.mpp).toMatchObject({
+        network: 'eip155:8453',
+        allowMainnet: true,
+      });
+    });
+
+    it.each([
+      ['no allowMainnet', { allowMainnet: undefined }, 'payments.mpp.allowMainnet'],
+      [
+        'a local facilitator',
+        { facilitator: { mode: 'local', signerPrivateKey: `0x${'1'.repeat(64)}` } },
+        'payments.mpp.facilitator.mode',
+      ],
+      [
+        'an asset other than canonical USDC',
+        { asset: '0x2222222222222222222222222222222222222222' },
+        'payments.mpp.asset',
+      ],
+      ["Base Sepolia's EIP-712 name", { assetName: 'USDC' }, 'payments.mpp.assetName'],
+      [
+        'a facilitator with no credential and no explicit acceptance',
+        { facilitator: { mode: 'remote', url: 'https://facilitator.example' } },
+        'payments.mpp.allowUnauthenticatedFacilitator',
+      ],
+    ])('refuses %s', (_label, change, path) => {
+      const mpp = { ...MAINNET, ...change };
+      if (mpp.allowMainnet === undefined) delete (mpp as Record<string, unknown>)['allowMainnet'];
+      expect(refusal(mppConfig(mpp)).path).toBe(path);
+    });
   });
 
   it('refuses an MPP resource priced in anything but USDC', () => {

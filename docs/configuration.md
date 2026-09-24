@@ -299,17 +299,17 @@ presenter can confirm where money goes.
 
 ### `payments.mpp`
 
-The built-in MPP profile fixes the network identifier to `eip155:84532`,
-shared by Base Sepolia and the local development chain, and fixes the currency
-label to `USDC`. The block therefore has no `network` field; `asset` selects
-the token contract. No `payments.x402` block is required: the gateway builds
-an internal x402 provider for settlement without offering x402 as a resource
-rail.
+MPP supports the `USDC` currency label on two networks: `eip155:84532`, shared
+by Base Sepolia and the local development chain, and Base mainnet
+`eip155:8453`. The default is `eip155:84532`; `asset` selects the token
+contract. A `payments.x402` block is not required because the gateway builds an
+internal x402 provider for settlement without offering x402 as a resource rail.
 
 ```yaml
 payments:
   mpp:
     enabled: true
+    network: eip155:84532 # optional; eip155:8453 is Base mainnet
     rpcUrl: ${MPP_RPC_URL}
     asset: ${MPP_ASSET} # token contract on the selected RPC
     assetName: USDC # EIP-712 domain name
@@ -327,9 +327,15 @@ payments:
 facilitator checks at config load report errors under `payments.mpp`. Checks at
 startup, such as a development key or recipient used with a public RPC, come
 from the internal x402 provider and report as `x402 provider`, naming `payTo`
-for the recipient. A resource
-that names an enabled MPP rail must use the `USDC` currency label and no more
-than 6 fractional digits.
+for the recipient. A resource that names an enabled MPP rail must use the
+`USDC` currency label and no more than 6 fractional digits.
+
+On `eip155:8453`, `payments.mpp` uses the same
+[mainnet guardrails](#mainnet-guardrails) as x402. It requires
+`allowMainnet: true`, a remote facilitator over HTTPS, canonical USDC with
+`assetName: USD Coin` and `assetVersion: '2'`, a recipient that is not an Anvil
+development address, and either a facilitator credential or
+`allowUnauthenticatedFacilitator: true`.
 
 ## Network and facilitator
 

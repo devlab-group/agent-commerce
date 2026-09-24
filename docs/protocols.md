@@ -449,7 +449,9 @@ one. What guards mainnet is in [configuration.md](configuration.md).
 unless `payments.mpp.enabled` is `true`.
 
 - The `charge` intent, the `evm` method and the EIP-3009 `authorization`
-  credential, on `eip155:84532` in USDC.
+  credential, in USDC on `eip155:84532` or Base mainnet `eip155:8453`.
+- Gateway config for mainnet requires the guardrails in
+  [configuration.md](configuration.md#mainnet-guardrails).
 - Settlement goes through an x402 facilitator; see
   [configuration.md](configuration.md).
 - Carriers are in [Payment over MCP](#payment-over-mcp) and the

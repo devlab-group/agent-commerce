@@ -44,6 +44,7 @@ export function createConfiguredPaymentProviders(
         asset,
         assetName: mpp.assetName,
         assetVersion: mpp.assetVersion,
+        network: mpp.network,
         realm: mpp.realm,
         challengeSecret: mpp.challengeSecret,
         ...(mpp.challengeTtlSeconds !== undefined
@@ -52,7 +53,7 @@ export function createConfiguredPaymentProviders(
         // Built from the MPP block alone and never registered as a rail, so an
         // MPP-only deployment needs no `payments.x402`
         settlement: createX402PaymentProvider({
-          network: MPP_PROFILE.network,
+          network: mpp.network,
           rpcUrl: mpp.rpcUrl,
           asset,
           assetName: mpp.assetName,
@@ -60,6 +61,10 @@ export function createConfiguredPaymentProviders(
           assetDecimals: MPP_PROFILE.assetDecimals,
           payTo: recipient,
           facilitator: mpp.facilitator,
+          ...(mpp.allowMainnet !== undefined ? { allowMainnet: mpp.allowMainnet } : {}),
+          ...(mpp.allowUnauthenticatedFacilitator !== undefined
+            ? { allowUnauthenticatedFacilitator: mpp.allowUnauthenticatedFacilitator }
+            : {}),
           logger,
         }),
       }),

@@ -55,7 +55,14 @@ import {
   type Pricing,
   RESERVED_INPUT_FIELDS,
 } from '../core/index.js';
-import { MPP_MIN_CHALLENGE_SECRET_LENGTH, MPP_PROFILE } from '../payments/mpp/constants.js';
+import {
+  isMppNetwork,
+  MPP_DEFAULT_NETWORK,
+  MPP_MIN_CHALLENGE_SECRET_LENGTH,
+  MPP_NETWORKS,
+  MPP_PROFILE,
+  type MppNetwork,
+} from '../payments/mpp/constants.js';
 import { resolveX402Deployment, type X402FacilitatorConfig } from '../payments/x402/guardrails.js';
 import {
   ACP_CHECKOUT_OPERATIONS,
@@ -388,10 +395,10 @@ const X402Schema = z
   })
   .strict();
 
-// No `network` field: MPP_PROFILE fixes it
 const MppSchema = z
   .object({
     enabled: BooleanOrString,
+    network: z.string().min(1).optional(),
     rpcUrl: z.string().min(1),
     asset: z.string().min(1),
     assetName: z.string().min(1),
@@ -401,6 +408,10 @@ const MppSchema = z
     challengeSecret: z.string().min(1),
     challengeTtlSeconds: NumberOrString.optional(),
     facilitator: FacilitatorSchema,
+    // Real funds. Never defaulted - see src/payments/x402/guardrails.ts
+    allowMainnet: BooleanOrString.optional(),
+    // Accepts a mainnet facilitator that takes no credential. Never defaulted
+    allowUnauthenticatedFacilitator: BooleanOrString.optional(),
   })
   .strict();
 
@@ -550,6 +561,7 @@ export interface GatewayConfig {
     };
     readonly mpp?: {
       readonly enabled: boolean;
+      readonly network: MppNetwork;
       readonly rpcUrl: string;
       readonly asset: string;
       readonly assetName: string;
@@ -559,6 +571,8 @@ export interface GatewayConfig {
       readonly challengeSecret: string;
       readonly challengeTtlSeconds?: number;
       readonly facilitator: X402FacilitatorConfig;
+      readonly allowMainnet?: boolean;
+      readonly allowUnauthenticatedFacilitator?: boolean;
     };
   };
   /**
@@ -1344,8 +1358,17 @@ type NormalisedMpp = NonNullable<GatewayConfig['payments']['mpp']>;
 
 function normaliseMpp(raw: RawConfig['payments']['mpp']): NormalisedMpp | undefined {
   if (raw === undefined) return undefined;
+  const network = raw.network ?? MPP_DEFAULT_NETWORK;
+  if (!isMppNetwork(network)) {
+    throw new CommerceError(
+      'CONFIG_INVALID',
+      `payments.mpp.network must be one of ${MPP_NETWORKS.join(', ')}`,
+      { details: { path: 'payments.mpp.network' } },
+    );
+  }
   const mpp: NormalisedMpp = {
     enabled: toBoolean(raw.enabled, 'payments.mpp.enabled'),
+    network,
     rpcUrl: raw.rpcUrl,
     asset: raw.asset,
     assetName: raw.assetName,
@@ -1363,6 +1386,17 @@ function normaliseMpp(raw: RawConfig['payments']['mpp']): NormalisedMpp | undefi
         }
       : {}),
     facilitator: normaliseFacilitator(raw.facilitator),
+    ...(raw.allowMainnet !== undefined
+      ? { allowMainnet: toBoolean(raw.allowMainnet, 'payments.mpp.allowMainnet') }
+      : {}),
+    ...(raw.allowUnauthenticatedFacilitator !== undefined
+      ? {
+          allowUnauthenticatedFacilitator: toBoolean(
+            raw.allowUnauthenticatedFacilitator,
+            'payments.mpp.allowUnauthenticatedFacilitator',
+          ),
+        }
+      : {}),
   };
   validateAddress('payments.mpp.recipient', mpp.recipient);
   validateAddress('payments.mpp.asset', mpp.asset);
@@ -1380,14 +1414,19 @@ function normaliseMpp(raw: RawConfig['payments']['mpp']): NormalisedMpp | undefi
       { details: { path: 'payments.mpp.challengeSecret' } },
     );
   }
-  // Apply the shared x402 address and facilitator guards under the MPP config path
+  // Apply the shared x402 address, facilitator and mainnet guards under the MPP
+  // config path
   resolveX402Deployment({
-    network: MPP_PROFILE.network,
+    network: mpp.network,
     payTo: mpp.recipient,
     asset: mpp.asset,
     assetName: mpp.assetName,
     assetVersion: mpp.assetVersion,
     facilitator: mpp.facilitator,
+    ...(mpp.allowMainnet !== undefined ? { allowMainnet: mpp.allowMainnet } : {}),
+    ...(mpp.allowUnauthenticatedFacilitator !== undefined
+      ? { allowUnauthenticatedFacilitator: mpp.allowUnauthenticatedFacilitator }
+      : {}),
     configPath: 'payments.mpp',
     payToField: 'recipient',
   });
