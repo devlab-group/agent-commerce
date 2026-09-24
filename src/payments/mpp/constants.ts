@@ -26,6 +26,12 @@ export const MPP_SPEC_DRAFTS = {
   method: 'draft-evm-charge-00',
 } as const;
 
+/**
+ * Minimum accepted `challengeSecret.length`. This is a configuration floor,
+ * not an entropy check.
+ */
+export const MPP_MIN_CHALLENGE_SECRET_LENGTH = 32;
+
 /** Exact `mppx` release the rail is pinned to */
 export const MPPX_VERSION = '0.10.1';
 

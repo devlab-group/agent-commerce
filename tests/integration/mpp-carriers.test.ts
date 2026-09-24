@@ -10,12 +10,18 @@ import { charge as clientCharge } from 'mppx/evm/client';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { GatewayConfig } from '../../src/config/index.js';
-import { type BackendExecutor, PAYMENT_HEADER, PAYMENT_INPUT_FIELD } from '../../src/core/index.js';
+import {
+  type BackendExecutor,
+  PAYMENT_HEADER,
+  PAYMENT_INPUT_FIELD,
+  type ReceiptStore,
+} from '../../src/core/index.js';
 import { createGateway, type GatewayInstance } from '../../src/gateway/index.js';
 import { createMppPaymentProvider } from '../../src/payments/mpp/provider.js';
 import { createX402PaymentProvider } from '../../src/payments/x402/provider.js';
 import { createA2aAdapter } from '../../src/protocols/a2a/index.js';
 import { createMcpAdapter } from '../../src/protocols/mcp/index.js';
+import { createSqliteReceiptStore } from '../../src/storage/receipts/index.js';
 import { createFakeStore } from '../unit/gateway/helpers.js';
 
 process.env['NODE_ENV'] = 'test';
@@ -89,7 +95,7 @@ const backend: BackendExecutor = {
   },
 };
 
-async function startGateway(): Promise<GatewayInstance> {
+async function startGateway(store: ReceiptStore = createFakeStore()): Promise<GatewayInstance> {
   const settlement = createX402PaymentProvider({
     network: 'eip155:84532',
     rpcUrl: 'http://127.0.0.1:19321', // never contacted: the facilitator client is mocked
@@ -102,7 +108,7 @@ async function startGateway(): Promise<GatewayInstance> {
   });
   gateway = await createGateway({
     config: config(),
-    store: createFakeStore(),
+    store,
     paymentProviders: [
       createMppPaymentProvider({
         recipient,
@@ -207,6 +213,27 @@ describe('MPP over HTTP', () => {
     expect(paid.json()).toEqual(REPORT);
     const receipt = Receipt.deserialize(String(paid.headers['payment-receipt']));
     expect(receipt).toMatchObject({ method: 'evm', reference: '0xabc', status: 'success' });
+  });
+
+  it('persists a settled payment and rejects the credential replay', async () => {
+    const store = createSqliteReceiptStore({ path: ':memory:' });
+    await store.init();
+    const gw = await startGateway(store);
+    const credential = await credentialFor((await invokeHttp(gw)).headers['www-authenticate']);
+
+    expect((await invokeHttp(gw, { authorization: credential })).statusCode).toBe(200);
+    const replayed = await invokeHttp(gw, { authorization: credential });
+
+    expect(replayed.json()).toMatchObject({ code: 'PAYMENT_REPLAYED' });
+    const [receipt] = await store.listReceipts();
+    expect(receipt?.payment).toMatchObject({
+      provider: 'mpp',
+      status: 'settled',
+      externalReference: '0xabc',
+      network: 'eip155:84532',
+    });
+    expect(facilitator.settle).toHaveBeenCalledTimes(1);
+    await store.close();
   });
 
   it('treats an Authorization header in another scheme as no payment', async () => {

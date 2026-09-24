@@ -32,8 +32,9 @@ Never logged, never persisted, never returned:
 - the `PAYMENT-SIGNATURE` header and raw payment authorisation payloads
 - the `Agent-Authorization` header, AP2 presentations, their disclosures, and
   the merchant checkout JWT they bind
-- `signature`, `secret`, `apiKey`, `signerPrivateKey`, `adminToken` and `token`
-  fields, **at the top level and one level deep** (see below)
+- `signature`, `secret`, `challengeSecret`, `apiKey`, `signerPrivateKey`,
+  `adminToken` and `token` fields, **at the top level and one level deep**
+  (see below)
 
 Enforcement is pino redaction on the logger plus explicit exclusion in the
 receipt store.

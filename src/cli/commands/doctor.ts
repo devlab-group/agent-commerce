@@ -13,6 +13,12 @@ import { AP2_UNSUPPORTED } from '../../authorization/ap2/descriptor.js';
 import { extractPathParameterNames } from '../../core/execution/index.js';
 import { type CommerceResource, isCommerceError, type ReceiptStore } from '../../core/index.js';
 import {
+  MPP_PROFILE,
+  MPP_SPEC_COMMIT,
+  MPP_SPEC_DRAFTS,
+  MPPX_VERSION,
+} from '../../payments/mpp/constants.js';
+import {
   describeDeploymentMode,
   findNetworkProfile,
   resolveDeploymentMode,
@@ -110,60 +116,56 @@ function substitutePathParams(url: string): string {
   return filled;
 }
 
+// Shared settlement fields; payTo contains x402 `payTo` or MPP `recipient`
 interface LiveX402 {
   readonly asset: string;
   readonly network: string;
   readonly payTo: string;
 }
 
-/**
- * Pulls the gateway's *effective* x402 settlement config out of
- * `/.well-known/agent-commerce` (src/gateway/well-known.ts). Returns
- * undefined for anything short of "the gateway confirms x402 is enabled and
- * reports all three fields" — a doctor cross-check must never itself become
- * an unchecked cast on network-supplied JSON.
- */
-/**
- * `undefined` must not be allowed to mean three different things — gateway
- * down, document malformed, and *the gateway positively reporting x402
- * disabled*. The third is not an absence of information, it is a
- * disagreement: local config enables x402, the running gateway says it does
- * not, which is exactly the deployment-mismatch this cross-check was built to
- * catch. Reporting it as "could not be verified" turned the finding into a
- * shrug. `'disabled'` separates it out.
- */
+// Result of reading a live x402 or MPP settlement block
 type LiveX402Result = LiveX402 | 'disabled' | undefined;
 
-function extractWellKnownX402(body: Record<string, unknown> | undefined): LiveX402Result {
+/**
+ * Extracts the effective settlement fields from the well-known document.
+ * Explicit `enabled: false` is a mismatch; absent, malformed, or incomplete
+ * data leaves the comparison inconclusive.
+ */
+function extractWellKnownX402(
+  body: Record<string, unknown> | undefined,
+  rail: 'x402' | 'mpp' = 'x402',
+): LiveX402Result {
   const payments = body?.['payments'];
   if (typeof payments !== 'object' || payments === null) return undefined;
-  const x402 = (payments as Record<string, unknown>)['x402'];
-  if (typeof x402 !== 'object' || x402 === null) return undefined;
-  const rec = x402 as Record<string, unknown>;
+  const block = (payments as Record<string, unknown>)[rail];
+  if (typeof block !== 'object' || block === null) return undefined;
+  const rec = block as Record<string, unknown>;
   // Only an explicit `false` is a positive statement. Anything else (absent,
   // null, a non-boolean) is still "cannot tell".
   if (rec['enabled'] === false) return 'disabled';
   if (rec['enabled'] !== true) return undefined;
-  const { asset, network, payTo } = rec;
+  const { asset, network } = rec;
+  const payTo = rec[rail === 'mpp' ? 'recipient' : 'payTo'];
   if (typeof asset !== 'string' || typeof network !== 'string' || typeof payTo !== 'string') {
     return undefined;
   }
   return { asset, network, payTo };
 }
 
-/** Addresses are checksum-insensitive throughout this project (src/config/schema.ts). */
+// Address comparisons are checksum-insensitive throughout the project
 function sameAddress(a: string, b: string): boolean {
   return a.toLowerCase() === b.toLowerCase();
 }
 
 /**
- * A doctor that reports healthy against a mismatched deployment is worse
- * than no diagnostic at all false-green finding). Compares
- * the gateway's live settlement config against what the local config
- * resolved to, and names both values so the operator knows exactly what to
- * check rather than just that something disagrees.
+ * Compares live settlement fields with local config. A mismatch names both
+ * values so the operator knows what to fix.
  */
-function findX402Mismatch(configured: LiveX402, live: LiveX402): string | undefined {
+function findX402Mismatch(
+  configured: LiveX402,
+  live: LiveX402,
+  payToField = 'payTo',
+): string | undefined {
   const diffs: string[] = [];
   if (!sameAddress(configured.asset, live.asset)) {
     diffs.push(
@@ -177,11 +179,11 @@ function findX402Mismatch(configured: LiveX402, live: LiveX402): string | undefi
   }
   if (!sameAddress(configured.payTo, live.payTo)) {
     diffs.push(
-      `payTo: gateway is using ${live.payTo} but local config resolves to ${configured.payTo}`,
+      `${payToField}: gateway is using ${live.payTo} but local config resolves to ${configured.payTo}`,
     );
   }
   if (diffs.length === 0) return undefined;
-  return `${diffs.join('; ')} — the gateway may be running against an older deployment; restart it or re-run chain:deploy`;
+  return `${diffs.join('; ')}; the gateway may be running against an older deployment - restart it or re-run chain:deploy`;
 }
 
 // Issuer ids and how many keys each carries. Never a key
@@ -657,11 +659,49 @@ export async function runDoctor(
       });
     }
   }
-  checks.push({
-    name: 'Payments (MPP)',
-    status: 'INFO',
-    detail: 'planned - config and adapters cannot enable it',
-  });
+  const mpp = config?.payments.mpp;
+  if (mpp === undefined || !mpp.enabled) {
+    checks.push({ name: 'Payments (MPP)', status: 'INFO', detail: 'MPP not configured' });
+  } else {
+    // Keep a descriptive fallback in case the profile and network registry drift
+    const profile = findNetworkProfile(MPP_PROFILE.network);
+    const mode = profile ? resolveDeploymentMode(profile, mpp.facilitator.mode) : undefined;
+    const where =
+      profile === undefined || mode === undefined
+        ? `unknown network ${MPP_PROFILE.network}`
+        : mode === 'local'
+          ? `LOCAL dev chain (${MPP_PROFILE.network}, chain id shared with ${profile.displayName})`
+          : `${describeDeploymentMode(mode)} on ${profile.displayName} (${MPP_PROFILE.network})`;
+    const facilitatorDetail =
+      mpp.facilitator.mode === 'local' ? 'local' : `remote (auth=${mpp.facilitator.auth.type})`;
+    const summary =
+      `MPP ${MPP_PROFILE.intent}/${MPP_PROFILE.method}/${MPP_PROFILE.credentialType} enabled - ` +
+      `${where}, asset=${MPP_PROFILE.assetSymbol} ${maskMiddle(mpp.asset)}, ` +
+      `recipient=${maskMiddle(mpp.recipient)}, facilitator=${facilitatorDetail}, ` +
+      `spec ${MPP_SPEC_DRAFTS.core}@${MPP_SPEC_COMMIT.slice(0, 7)}, mppx ${MPPX_VERSION}`;
+    const configured = { asset: mpp.asset, network: MPP_PROFILE.network, payTo: mpp.recipient };
+    const live = wellKnown?.ok ? extractWellKnownX402(wellKnown.body, 'mpp') : undefined;
+    if (live === 'disabled') {
+      checks.push({
+        name: 'Payments (MPP)',
+        status: 'FAIL',
+        detail: `Local config enables MPP, but ${gatewayUrl} reports it disabled`,
+      });
+    } else if (live === undefined) {
+      checks.push({
+        name: 'Payments (MPP)',
+        status: 'INFO',
+        detail: `${summary} (live MPP settlement config unavailable for comparison)`,
+      });
+    } else {
+      const mismatch = findX402Mismatch(configured, live, 'recipient');
+      checks.push(
+        mismatch === undefined
+          ? { name: 'Payments (MPP)', status: 'PASS', detail: summary }
+          : { name: 'Payments (MPP)', status: 'FAIL', detail: mismatch },
+      );
+    }
+  }
 
   // 7. Storage
   if (config === undefined) {

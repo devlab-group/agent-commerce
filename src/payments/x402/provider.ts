@@ -244,12 +244,7 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
       `mode=${mode}`,
     ],
     status: 'stable',
-    unsupported: [
-      'svm',
-      'permit2',
-      'upto scheme',
-      'per-request signed facilitator credentials (e.g. CDP JWT)',
-    ],
+    unsupported: ['svm', 'permit2', 'upto scheme'],
   };
 
   async function createRequirement(context: PaymentContext): Promise<PaymentRequirement> {

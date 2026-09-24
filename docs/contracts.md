@@ -166,13 +166,13 @@ commerce flow.
 - `PaymentMethodName` gained `mpp`, and `PAYMENT_METHOD_NAMES` exposes payment
   names at runtime. This changes the frozen union but adds no MPP-specific wire
   fields to core.
-- Config accepts `mpp` beside an enabled x402 rail. At config load, `mpp` alone
-  is rejected because no corresponding rail is configured and enabled.
+- `GatewayConfig.payments` gained an optional `mpp` block. A paid resource still
+  needs at least one of its named rails enabled, so a resource that names only
+  `mpp` needs `payments.mpp` enabled but no x402 block.
 - The `./mpp` entry exports `createMppPaymentProvider` (also as `mpp`) beside
   the pinned profile metadata and descriptor. The provider verifies locally,
   uses x402-compatible replay keys, and delegates settlement to a supplied x402
-  provider. It remains planned because config and protocol adapters cannot
-  expose the rail.
+  provider.
 
 ## Published entry points
 
@@ -181,7 +181,7 @@ commerce flow.
 | `@devlab.group/agent-commerce`      | Core contract, config, gateway, receipt store, ACP adapter | None                                                                            |
 | `@devlab.group/agent-commerce/ap2`  | AP2 verification and checkout signing                      | `jose`, `@sd-jwt/core`, `canonicalize`                                          |
 | `@devlab.group/agent-commerce/mcp`  | MCP adapter                                                | `@modelcontextprotocol/sdk`                                                     |
-| `@devlab.group/agent-commerce/mpp`  | MPP provider (settlement via caller-supplied `./x402`), profile metadata | `mppx`, `viem`                                                       |
+| `@devlab.group/agent-commerce/mpp`  | MPP provider with caller-supplied x402 settlement, profile metadata | `mppx`, `viem`                                                       |
 | `@devlab.group/agent-commerce/x402` | x402 provider and client proof helper                      | `@coinbase/x402` (only for `auth.type: cdp`), `@x402/core`, `@x402/evm`, `viem` |
 
 The main entry and CLI must not import optional peers. `package.json` is the
@@ -286,7 +286,7 @@ export function createMppPaymentProvider(options: MppProviderOptions): PaymentPr
 
 Construction fails with `CONFIG_INVALID` for a recipient or asset that is not
 an address, an empty EIP-712 domain name or version, an empty or multi-line
-realm, a challenge secret shorter than 32 characters, a TTL that is not a
+realm, a challenge secret with length below 32, a TTL that is not a
 positive whole number, or a `settlement` provider not named `x402`.
 `createRequirement` refuses a resource priced in anything but USDC
 (`CONFIG_INVALID`), a settlement requirement whose network, asset, EIP-712
@@ -515,6 +515,18 @@ export interface GatewayConfig {
       readonly facilitator: X402FacilitatorConfig;
       readonly allowMainnet?: boolean;
       readonly allowUnauthenticatedFacilitator?: boolean;
+    };
+    readonly mpp?: {
+      readonly enabled: boolean;
+      readonly rpcUrl: string;
+      readonly asset: string;
+      readonly assetName: string;
+      readonly assetVersion: string;
+      readonly recipient: string;
+      readonly realm: string;
+      readonly challengeSecret: string;
+      readonly challengeTtlSeconds?: number;
+      readonly facilitator: X402FacilitatorConfig;
     };
   };
   readonly authorization?: {

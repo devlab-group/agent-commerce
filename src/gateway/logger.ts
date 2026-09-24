@@ -62,6 +62,7 @@ const SECRET_FIELD_NAMES = [
   'seed',
   'mnemonic',
   'secret',
+  'challengeSecret',
   'apiKey',
   'adminToken',
   'token',

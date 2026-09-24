@@ -27,7 +27,7 @@ import {
 } from '../../core/index.js';
 import { parseCanonicalAmount } from '../x402/amount.js';
 import { computeReplayKey } from '../x402/replay-key.js';
-import { MPP_PROFILE, MPP_SPEC_DRAFTS } from './constants.js';
+import { MPP_MIN_CHALLENGE_SECRET_LENGTH, MPP_PROFILE, MPP_SPEC_DRAFTS } from './constants.js';
 import { MPP_DESCRIPTOR } from './descriptor.js';
 
 const CHAIN_ID = Number(MPP_PROFILE.network.split(':')[1]);
@@ -35,8 +35,6 @@ const DEFAULT_IDS: IdGenerator = {
   next: (prefix?: string) => `${prefix ? `${prefix}_` : ''}${crypto.randomUUID()}`,
 };
 const DEFAULT_CHALLENGE_TTL_SECONDS = 300;
-// An HMAC key shorter than its 32-byte output weakens every challenge it signs
-const MIN_CHALLENGE_SECRET_LENGTH = 32;
 
 export interface MppProviderOptions {
   /** Merchant-controlled settlement destination. Never gateway-owned */
@@ -93,9 +91,9 @@ function validateOptions(options: MppProviderOptions): void {
   if (options.realm.length === 0 || /[\r\n]/.test(options.realm)) {
     throw configInvalid('MPP realm must be a non-empty single-line string');
   }
-  if (options.challengeSecret.length < MIN_CHALLENGE_SECRET_LENGTH) {
+  if (options.challengeSecret.length < MPP_MIN_CHALLENGE_SECRET_LENGTH) {
     throw configInvalid(
-      `MPP challenge secret must be at least ${MIN_CHALLENGE_SECRET_LENGTH} characters`,
+      `MPP challenge secret must have length at least ${MPP_MIN_CHALLENGE_SECRET_LENGTH}`,
     );
   }
   if (options.settlement?.name !== 'x402') {

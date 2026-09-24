@@ -297,6 +297,40 @@ Startup rejects a `payTo` that is not a plausible address or is the zero
 address, and the effective destination is printed in a safe, visible form so a
 presenter can confirm where money goes.
 
+### `payments.mpp`
+
+The built-in MPP profile fixes the network identifier to `eip155:84532`,
+shared by Base Sepolia and the local development chain, and fixes the currency
+label to `USDC`. The block therefore has no `network` field; `asset` selects
+the token contract. No `payments.x402` block is required: the gateway builds
+an internal x402 provider for settlement without offering x402 as a resource
+rail.
+
+```yaml
+payments:
+  mpp:
+    enabled: true
+    rpcUrl: ${MPP_RPC_URL}
+    asset: ${MPP_ASSET} # token contract on the selected RPC
+    assetName: USDC # EIP-712 domain name
+    assetVersion: '2'
+    recipient: ${MERCHANT_WALLET} # merchant-controlled; not gateway-owned
+    realm: api.example.com # the challenge realm, single line
+    challengeSecret: ${MPP_CHALLENGE_SECRET} # minimum length 32
+    challengeTtlSeconds: 300 # optional
+    facilitator:
+      mode: remote
+      url: ${MPP_FACILITATOR_URL}
+```
+
+`facilitator` accepts the same local and remote forms as x402. Address and
+facilitator checks at config load report errors under `payments.mpp`. Checks at
+startup, such as a development key or recipient used with a public RPC, come
+from the internal x402 provider and report as `x402 provider`, naming `payTo`
+for the recipient. A resource
+that names an enabled MPP rail must use the `USDC` currency label and no more
+than 6 fractional digits.
+
 ## Network and facilitator
 
 `network` is a CAIP-2 identifier and must be one this build knows:
@@ -322,13 +356,13 @@ facilitator:
   mode: remote # HTTP; this gateway holds no key at all
   url: ${X402_FACILITATOR_URL}
   auth:
-    type: none # or: type: bearer, token: ${X402_FACILITATOR_TOKEN}
+    type: none # bearer and cdp are also supported
 ```
 
 `auth` may be omitted, which means the same as `type: none` - an explicit
-statement that this facilitator takes no credential, not a fallback. Only
-`none` and `bearer` exist; a facilitator requiring per-request signed
-credentials (a CDP JWT, for instance) is refused rather than sent nothing.
+statement that this facilitator takes no credential, not a fallback. Supported
+types are `none`, `bearer` (a static token) and `cdp` (a fresh JWT per request).
+The `cdp` type requires the optional `@coinbase/x402` peer.
 
 **What this deployment is** - `local`, `testnet` or `mainnet` - is derived
 from the pair, not from the network alone, because chain id 84532 is shared
@@ -357,11 +391,6 @@ refused on testnet too.
 `agent-commerce validate` and `agent-commerce doctor` run exactly the checks
 the gateway runs at startup - the same function, not a second copy of the
 rules.
-
-`facilitator.auth` has three types: `none`, `bearer` (a static token, needs
-nothing installed) and `cdp` (Coinbase Developer Platform, which signs a fresh
-JWT per request and needs the optional peer `@coinbase/x402`). Anything else is
-refused at config load rather than sent nothing.
 
 ### `assetName` is the EIP-712 domain, not the symbol
 
@@ -410,7 +439,8 @@ protocol mounts that overlap · a mount that claims a route the gateway already
 serves, including the A2A Agent Card and ACP discovery paths · an ACP checkout
 mapping that is incomplete, names a missing or non-`acp` resource, reuses one
 resource for two operations, or maps a paid one · an ACP idempotency retention
-below 24 hours · an invalid or zero `payTo`/`asset`.
+below 24 hours · an invalid or zero `payTo`/`asset`/`recipient` · an MPP
+`challengeSecret` with length below 32 or a multi-line `realm`.
 
 It exits non-zero on any of them.
 

@@ -250,7 +250,7 @@ See [docs/configuration.md](docs/configuration.md).
 | **ACP**   | Experimental | ACP `2026-04-17`, REST checkout + discovery              |
 | **AP2**   | Experimental | AP2 `v0.2.0`, Direct Checkout Mandate verification       |
 | UCP       | Planned      | -                                                        |
-| MPP       | Planned      | library provider only; no config or adapter integration  |
+| **MPP**   | Experimental | `mppx@0.10.1`, `charge` intent, `evm` method, EIP-3009   |
 
 [AP2](docs/ap2.md) is in that table because people look there, but it is an **authorization**
 method rather than a transport: it gates settlement on a resource that still
@@ -407,7 +407,7 @@ INFO  A2A                  disabled
 INFO  ACP                  disabled
 INFO  AP2                  disabled
 PASS  Payments             x402 v2 (scheme=exact) enabled - LOCAL dev chain (eip155:84532, chain id shared with Base Sepolia), destination=0x7099…79C8, facilitator=local
-INFO  Payments (MPP)       planned - config and adapters cannot enable it
+INFO  Payments (MPP)       MPP not configured
 PASS  Storage              sqlite schema v1 writable; receipts=2
 PASS  Protocol versions    reported by gateway /.well-known/agent-commerce
 

@@ -232,7 +232,7 @@ describe('createMppPaymentProvider', () => {
   it.each([
     ['a recipient that is not an address', { recipient: '0xnope' as `0x${string}` }],
     ['an asset that is not an address', { asset: '0x1234' as `0x${string}` }],
-    ['a challenge secret shorter than the HMAC output', { challengeSecret: 'short' }],
+    ['a challenge secret with length below 32', { challengeSecret: 'short' }],
     ['a multi-line realm', { realm: 'gateway.test\r\nX-Evil: 1' }],
     ['a TTL that is not a positive whole number', { challengeTtlSeconds: 0 }],
     ['an asset without its EIP-712 domain name', { assetName: '' }],

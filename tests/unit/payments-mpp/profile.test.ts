@@ -35,8 +35,8 @@ describe('pinned MPP profile', () => {
 });
 
 describe('MPP descriptor', () => {
-  it('stays planned until config and protocol adapters expose it', () => {
-    expect(MPP_DESCRIPTOR.status).toBe('planned');
+  it('is experimental because settlement tests use a mocked facilitator', () => {
+    expect(MPP_DESCRIPTOR.status).toBe('experimental');
   });
 
   it('names the pinned core draft in supportedSpec', () => {

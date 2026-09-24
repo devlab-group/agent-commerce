@@ -1954,3 +1954,107 @@ describe('parseConfig backend.inputBindings', () => {
     ).not.toThrow();
   });
 });
+
+describe('payments.mpp', () => {
+  const SECRET = 'mpp-challenge-secret-'.padEnd(32, 'x');
+
+  // MPP-only config with no x402 block
+  function mppConfig(mpp: Record<string, unknown> = {}): Record<string, unknown> {
+    const raw = validRawConfig();
+    raw['payments'] = {
+      mpp: {
+        enabled: true,
+        rpcUrl: 'https://sepolia.example/v2/key',
+        asset: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+        assetName: 'USDC',
+        assetVersion: '2',
+        recipient: '0x1111111111111111111111111111111111111111',
+        realm: 'api.example.com',
+        challengeSecret: SECRET,
+        facilitator: { mode: 'remote', url: 'https://facilitator.example' },
+        ...mpp,
+      },
+    };
+    (raw['resources'] as { market_report: { payments: string[] } }).market_report.payments = [
+      'mpp',
+    ];
+    return raw;
+  }
+
+  function refusal(raw: Record<string, unknown>): { path?: unknown; message: string } {
+    try {
+      parseConfig(raw, {});
+    } catch (error) {
+      if (isCommerceError(error) && error.code === 'CONFIG_INVALID') {
+        return { path: error.details?.['path'], message: error.message };
+      }
+      throw error;
+    }
+    return expect.unreachable();
+  }
+
+  it('loads an MPP-only deployment without any x402 block', () => {
+    const config = parseConfig(mppConfig({ challengeTtlSeconds: '120' }), {});
+    expect(config.payments.x402).toBeUndefined();
+    expect(config.payments.mpp).toMatchObject({
+      enabled: true,
+      challengeTtlSeconds: 120,
+      facilitator: { mode: 'remote', auth: { type: 'none' } },
+    });
+    expect(config.resources.find((r) => r.id === 'market_report')?.paymentMethods).toEqual(['mpp']);
+  });
+
+  it('refuses a resource whose only rail is a disabled MPP block', () => {
+    expect(refusal(mppConfig({ enabled: false })).path).toBe('resources.market_report.payments');
+  });
+
+  it('refuses a challenge secret with length below 32 without echoing it', () => {
+    const { path, message } = refusal(mppConfig({ challengeSecret: 'short-secret' }));
+    expect(path).toBe('payments.mpp.challengeSecret');
+    expect(message).not.toContain('short-secret');
+  });
+
+  it.each([
+    ['a multi-line realm', { realm: 'api.example.com\nX-Evil: 1' }, 'payments.mpp.realm'],
+    ['a recipient that is not an address', { recipient: '0x1234' }, 'payments.mpp.recipient'],
+    ['a zero TTL', { challengeTtlSeconds: 0 }, 'payments.mpp.challengeTtlSeconds'],
+    [
+      'a well-known dev recipient on a public deployment',
+      { recipient: '0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266' },
+      'payments.mpp.recipient',
+    ],
+    [
+      'a plain-HTTP public facilitator',
+      { facilitator: { mode: 'remote', url: 'http://facilitator.example' } },
+      'payments.mpp.facilitator.url',
+    ],
+  ])('refuses %s, naming the MPP field', (_label, mpp, path) => {
+    expect(refusal(mppConfig(mpp)).path).toBe(path);
+  });
+
+  it('refuses an unknown key in the MPP block', () => {
+    expectConfigInvalid(() => parseConfig(mppConfig({ network: 'eip155:8453' }), {}));
+  });
+
+  it('refuses an MPP resource priced in anything but USDC', () => {
+    const raw = mppConfig();
+    const report = (raw['resources'] as Record<string, Record<string, unknown>>)['market_report'];
+    (report as Record<string, unknown>)['pricing'] = {
+      type: 'fixed',
+      amount: '0.01',
+      currency: 'EUR',
+    };
+    expect(refusal(raw).path).toBe('resources.market_report.pricing.currency');
+  });
+
+  it('refuses an MPP price with more precision than USDC has', () => {
+    const raw = mppConfig();
+    const report = (raw['resources'] as Record<string, Record<string, unknown>>)['market_report'];
+    (report as Record<string, unknown>)['pricing'] = {
+      type: 'fixed',
+      amount: '0.0000001',
+      currency: 'USDC',
+    };
+    expect(refusal(raw).path).toBe('resources.market_report.pricing.amount');
+  });
+});

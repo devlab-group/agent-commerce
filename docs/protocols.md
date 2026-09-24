@@ -9,20 +9,18 @@ implemented, exactly what is not, and pins the revisions.
 | -------- | --------- | ------------------------------------------------------------------------------------ | ------------------------------------------------------------------- |
 | **MCP**  | Supported | `@modelcontextprotocol/sdk@1.30.0`                                                   | tool discovery, tool invocation, payment-required and error mapping |
 | **x402** | Supported | x402 **v2** (`@x402/core@2.23.0`, `@x402/evm@2.23.0`), scheme `exact`, EVM, EIP-3009 | challenge, verification, settlement, replay binding                 |
-| **HTTP** | Supported | —                                                                                    | native resource routes with `PAYMENT-SIGNATURE`                     |
+| **HTTP** | Supported | -                                                                                    | native resource routes, payment headers per rail                    |
 | **A2A**  | Experimental | A2A **v1.0.0**, negotiation version `1.0`, binding `JSONRPC`                     | Agent Card discovery, `SendMessage`, terminal tasks, paid flow      |
 | **ACP**  | Experimental | ACP stable snapshot **2026-04-17**, REST binding                                 | discovery, the five checkout operations, bearer auth, idempotency   |
 | **AP2**  | Experimental | AP2 **v0.2.0**, tagged 2026-04-28, commit `b4587ac`, Direct mode               | closed Checkout Mandate verification before settlement                         |
 | UCP      | Planned   | —                                                                                    | planned, no code ships                                                         |
-| MPP      | Planned   | —                                                                                    | planned, no code ships                                                         |
+| **MPP**  | Experimental | MPP drafts at `tempoxyz/mpp-specs@806fdb8`, `mppx@0.10.1`, `charge`/`evm`/EIP-3009 | challenge, verification, settlement, HTTP/MCP/A2A carriers |
 
 "Planned" means **no code ships for it**. There is no partial adapter, no
 endpoint and no diagnostic pretending otherwise.
 
-"Experimental" means the opposite of planned and short of supported: the code
-ships, it is tested against the protocol's own official artifacts - the A2A SDK,
-the ACP schema and examples - and the supported subset is narrow and named
-below. Both are off by default.
+"Experimental" means the code ships but is off by default and supports only the
+subset named below.
 
 AP2 is listed here because this is where people look, but it is not a
 transport and has no adapter, no mount path and no discovery document. It is an
@@ -444,6 +442,21 @@ at config load rather than sent nothing.
 A remote HTTP facilitator **is** supported (`facilitator.mode: remote`), and
 so are Base Sepolia and Base mainnet — both have settled real payments through
 one. What guards mainnet is in [configuration.md](configuration.md).
+
+## MPP
+
+**Experimental - drafts at `tempoxyz/mpp-specs@806fdb8`, `mppx@0.10.1`.** Off
+unless `payments.mpp.enabled` is `true`.
+
+- The `charge` intent, the `evm` method and the EIP-3009 `authorization`
+  credential, on `eip155:84532` in USDC.
+- Settlement goes through an x402 facilitator; see
+  [configuration.md](configuration.md).
+- Carriers are in [Payment over MCP](#payment-over-mcp) and the
+  [HTTP surface](#http-surface) header table.
+
+The unsupported list lives in `src/payments/mpp/descriptor.ts`. When MPP is
+enabled, `/.well-known/agent-commerce` publishes it with the MPP descriptor.
 
 ## HTTP surface
 

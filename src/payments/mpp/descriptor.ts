@@ -1,5 +1,5 @@
 /**
- * Describes the planned MPP profile and its unsupported variants.
+ * Describes the MPP profile and its unsupported variants.
  *
  * The protocol name alone cannot identify a compatible intent, method and
  * extension set, so the descriptor lists both the target and its gaps.
@@ -25,8 +25,8 @@ export const MPP_DESCRIPTOR: AdapterDescriptor = {
     'verify-before-settle',
     'payment-receipt',
   ],
-  // Config cannot enable the rail, so the descriptor remains planned
-  status: 'planned',
+  // Experimental because MPP settlement tests use a mock rather than a chain
+  status: 'experimental',
   unsupported: [
     // Name other methods as a class instead of maintaining a second list
     'methods other than evm',
