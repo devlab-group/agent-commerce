@@ -45,8 +45,7 @@ Canonical resources exposed with `expose: [mcp]` become **MCP tools**.
 - Input schema = the canonical `CommerceResource.inputSchema`, property
   descriptions preserved.
 - A paid resource's schema carries one extra optional string property,
-  `_payment`, documented as the x402 proof returned by a previous
-  payment-required response.
+  `_payment`, for the proof of the resource's first payment method.
 
 ### Payment over MCP
 
@@ -82,6 +81,11 @@ client SDK consumes directly. `accepts` is the same list it contains, kept as a
 separate field because it is provider-agnostic. The client signs the offer and
 retries the same tool call with `_payment` set to the base64 payment payload;
 over HTTP the same value goes in the `PAYMENT-SIGNATURE` header.
+
+For an MPP resource, `provider` is `mpp`, `accepts` holds the MPP challenge,
+and `envelope.wwwAuthenticate` is that challenge as a `WWW-Authenticate` value.
+The client retries with `_payment` set to its credential, the full
+`Authorization: Payment ...` value.
 
 Errors map to the same envelope shape with `status: "error"` and a
 `CommerceErrorCode`. Stack traces and internal messages never cross the
@@ -449,7 +453,7 @@ one. What guards mainnet is in [configuration.md](configuration.md).
 | `GET /ready`                           | readiness — config, store, required adapters and configured payment providers                                           |
 | `GET /.well-known/agent-commerce`      | merchant info, adapter descriptors, pinned versions, effective settlement destination                                   |
 | `GET /api/resources`                   | canonical resource list                                                                                                 |
-| `POST /api/resources/:id/invoke`       | invoke; `PAYMENT-SIGNATURE` in, `402` + body envelope and `PAYMENT-REQUIRED` header when unpaid, `PAYMENT-RESPONSE` out |
+| `POST /api/resources/:id/invoke`       | invoke; `402` + body envelope when unpaid, with the payment headers below                                               |
 | `GET /api/receipts`, `GET /api/events` | audit                                                                                                                   |
 | `GET /api/events/stream`               | SSE event feed                                                                                                          |
 | `/mcp`                                 | MCP Streamable HTTP                                                                                                     |
@@ -457,6 +461,15 @@ one. What guards mainnet is in [configuration.md](configuration.md).
 | `/a2a`                                 | A2A JSON-RPC `SendMessage` (only when A2A is enabled)                                                                   |
 | `/.well-known/acp.json`                | ACP seller discovery (only when ACP is enabled)                                                                         |
 | `/acp/checkout_sessions…`              | ACP checkout, bearer-authenticated (only when ACP is enabled)                                                           |
+
+The invoke route uses the headers of the resource's first payment method:
+
+| Method | Proof                        | Challenge on `402`              | On delivery                              |
+| ------ | ---------------------------- | ------------------------------- | ---------------------------------------- |
+| x402   | `PAYMENT-SIGNATURE`          | `PAYMENT-REQUIRED`              | `PAYMENT-RESPONSE`                       |
+| MPP    | `Authorization: Payment ...` | `WWW-Authenticate: Payment ...` | `Payment-Receipt` and `PAYMENT-RESPONSE` |
+
+`PAYMENT-RESPONSE` is also sent when the backend fails after settlement.
 
 ## Adding a protocol
 

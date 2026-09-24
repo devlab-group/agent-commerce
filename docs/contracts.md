@@ -303,7 +303,9 @@ key, then delegates settlement. Errors before the final call return
 unchanged.
 
 `PaymentSubmission.payload` is the serialised credential: the value of an
-`Authorization: Payment ...` header, scheme included.
+`Authorization: Payment ...` header, scheme included. `PaymentChallenge.envelope`
+is `{ wwwAuthenticate }`, the challenge as a `WWW-Authenticate` value, and a
+settled result's `metadata.receipt` is the `Payment-Receipt` value.
 
 ## AP2
 

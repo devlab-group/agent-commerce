@@ -33,10 +33,10 @@ export interface PaymentChallenge {
    *
    * `accepts` alone is not that document: v2 moves the resource description
    * out of the individual requirements and up onto the envelope, and the
-   * protocol version rides there too. Protocol adapters that have a native
-   * channel for it (the HTTP `PAYMENT-REQUIRED` header) emit this as-is
-   * rather than reassembling it, so every surface offers the same challenge
-   * instead of each building its own from parts. Opaque to core.
+   * protocol version rides there too. Protocol adapters with a native channel
+   * for it (x402's `PAYMENT-REQUIRED` header, MPP's `WWW-Authenticate`) send
+   * it there rather than reassembling it, so every surface offers the same
+   * challenge instead of each building its own from parts. Opaque to core.
    */
   readonly envelope?: Readonly<Record<string, unknown>>;
 }

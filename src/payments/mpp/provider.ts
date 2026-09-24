@@ -7,7 +7,7 @@
  * `settlement`. The MPP layer adds no signing key; the supplied provider owns
  * facilitator configuration and settlement credentials.
  */
-import { Challenge, Credential, Errors, Method, PaymentRequest } from 'mppx';
+import { Challenge, Credential, Errors, Method, PaymentRequest, Receipt } from 'mppx';
 import { Methods, type Types } from 'mppx/evm';
 import { charge } from 'mppx/evm/server';
 import { getAddress, isAddress } from 'viem';
@@ -194,7 +194,14 @@ export function createMppPaymentProvider(options: MppProviderOptions): PaymentPr
       network: MPP_PROFILE.network,
       asset,
       expiresAt: expires.toISOString(),
-      challenge: { provider: 'mpp', version: MPP_SPEC_DRAFTS.core, accepts: [challenge] },
+      challenge: {
+        provider: 'mpp',
+        version: MPP_SPEC_DRAFTS.core,
+        accepts: [challenge],
+        // Serialised here because the HTTP route, which sends it as
+        // `WWW-Authenticate`, is in the main entry and cannot import mppx
+        envelope: { wwwAuthenticate: Challenge.serialize(challenge) },
+      },
     };
   }
 
@@ -323,13 +330,22 @@ export function createMppPaymentProvider(options: MppProviderOptions): PaymentPr
 
     // A throw from x402 settle may follow a broadcast, so let the pipeline mark it uncertain
     const settled = await options.settlement.settle(x402Context);
-    return {
+    const result: PaymentResult = {
       ...settled,
       provider: 'mpp',
       amount: requirement.amount,
       currency: requirement.currency,
       replayKey: verification.replayKey,
     };
+    if (settled.status !== 'settled' || settled.externalReference === undefined) return result;
+    // Serialised for the HTTP route's `Payment-Receipt` header
+    const receipt = Receipt.from({
+      method: MPP_PROFILE.method,
+      reference: settled.externalReference,
+      status: 'success',
+      timestamp: settled.settledAt ?? clock.nowIso(),
+    });
+    return { ...result, metadata: { ...settled.metadata, receipt: Receipt.serialize(receipt) } };
   }
 
   function health(): Promise<AdapterHealth> {

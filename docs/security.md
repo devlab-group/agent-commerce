@@ -400,6 +400,8 @@ outcome the code under test returns.
 | **the supplied x402 provider returns a requirement for another recipient** | `CONFIG_INVALID` before the MPP challenge is issued | same |
 | **the facilitator is unreachable during MPP's pre-settlement x402 verification** | provider returns `settlement_unavailable`; pipeline reports `PAYMENT_SETTLEMENT_FAILED`; no settle call | same |
 | **an MPP settlement times out after a possible broadcast, or a broadcast is never confirmed** | provider throws `PAYMENT_PROVIDER_UNAVAILABLE`; pipeline records `settlement-uncertain` and reports `PAYMENT_SETTLEMENT_FAILED`, including the transaction hash when known | same, `tests/unit/core/execution` |
+| **an `Authorization` header in another scheme on an MPP resource** | no payment: `402` with a challenge | `tests/integration/mpp-carriers.test.ts` |
+| **an MPP credential in the x402 `PAYMENT-SIGNATURE` header** | ignored: `402` | same |
 
 Two of those exist because writing them found a bug. The SDK's `exact`/EVM
 scheme reports an unreachable node as `invalid_exact_evm_signature`, and its

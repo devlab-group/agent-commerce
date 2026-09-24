@@ -17,6 +17,7 @@ import {
   PAYMENT_HEADER,
   PAYMENT_REQUIRED_HEADER,
   PAYMENT_RESPONSE_HEADER,
+  type PaymentMethodName,
   type PaymentProvider,
   parseAuthorizationHeader,
   type ReceiptStore,
@@ -213,13 +214,11 @@ async function handleInvoke(
       });
     }
 
-    const paymentHeader = request.headers[PAYMENT_HEADER];
-    const paymentValue = Array.isArray(paymentHeader) ? paymentHeader[0] : paymentHeader;
-
     // createGateway puts provider-backed methods first, so this label matches
     // the rail selected by the pipeline. Without a method, drop the proof
     // instead of inventing a rail; the pipeline receives an unpaid request.
     const paymentMethod = resource.paymentMethods[0];
+    const paymentValue = paymentProof(request, paymentMethod);
     const payment =
       paymentValue !== undefined && paymentMethod !== undefined
         ? { method: paymentMethod, payload: paymentValue }
@@ -247,7 +246,10 @@ async function handleInvoke(
 
     if (outcome.kind === 'payment-required') {
       const envelope = toPaymentRequiredEnvelope(outcome);
-      if (envelope.payment.envelope !== undefined) {
+      if (envelope.payment.provider === 'mpp') {
+        const challenge = envelope.payment.envelope?.['wwwAuthenticate'];
+        if (typeof challenge === 'string') reply.header('www-authenticate', challenge);
+      } else if (envelope.payment.envelope !== undefined) {
         // x402 v2 clients read the challenge from this header and never look
         // at the body. The body is still sent — it is richer, and it is the
         // only channel the MCP surface has — but the header is what makes an
@@ -263,6 +265,10 @@ async function handleInvoke(
 
     if (outcome.payment) {
       reply.header(PAYMENT_RESPONSE_HEADER, encodePaymentSummary(outcome.payment));
+      const receipt = outcome.payment.metadata?.['receipt'];
+      if (outcome.payment.provider === 'mpp' && typeof receipt === 'string') {
+        reply.header('payment-receipt', receipt);
+      }
     }
     reply.status(outcome.backendStatus).send(outcome.body);
   } catch (error) {
@@ -277,6 +283,20 @@ async function handleInvoke(
     }
     reply.status(commerceError.httpStatus).send(toErrorEnvelope(commerceError));
   }
+}
+
+// Each rail has its own proof header. MPP uses HTTP authentication, and an
+// `Authorization` value in another scheme is not a payment proof.
+function paymentProof(
+  request: FastifyRequest,
+  method: PaymentMethodName | undefined,
+): string | undefined {
+  if (method === 'mpp') {
+    const value = request.headers.authorization;
+    return value !== undefined && /^Payment\s+\S/i.test(value) ? value : undefined;
+  }
+  const value = request.headers[PAYMENT_HEADER];
+  return Array.isArray(value) ? value[0] : value;
 }
 
 interface PaymentSummary {
