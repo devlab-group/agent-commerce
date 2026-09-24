@@ -25,7 +25,7 @@ export const MPP_DESCRIPTOR: AdapterDescriptor = {
     'verify-before-settle',
     'payment-receipt',
   ],
-  // Experimental because MPP settlement tests use a mock rather than a chain
+  // Experimental: one profile on one network, off by default
   status: 'experimental',
   unsupported: [
     // Name other methods as a class instead of maintaining a second list

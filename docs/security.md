@@ -403,6 +403,10 @@ outcome the code under test returns.
 | **an MPP settlement times out after a possible broadcast, or a broadcast is never confirmed** | provider throws `PAYMENT_PROVIDER_UNAVAILABLE`; pipeline records `settlement-uncertain` and reports `PAYMENT_SETTLEMENT_FAILED`, including the transaction hash when known | same, `tests/unit/core/execution` |
 | **an `Authorization` header in another scheme on an MPP resource** | no payment: `402` with a challenge | `tests/integration/mpp-carriers.test.ts` |
 | **an MPP credential in the x402 `PAYMENT-SIGNATURE` header** | ignored: `402` | same |
+| **a valid MPP credential from the mppx client** | settled on chain once: buyer down and merchant up by the price, and `Payment-Receipt` names the transaction | `tests/e2e/payment/mpp-settlement.e2e.test.ts` |
+| **an MPP broadcast that is never confirmed** | `settlement-uncertain` with the transaction hash and no delivery; the transfer lands once the block is mined | same |
+| **an MPP buyer with no funds** | refused by the facilitator before broadcast: `PAYMENT_SETTLEMENT_FAILED`, nothing moved | same |
+| **an AP2-gated MPP payment with no mandate, or a mandate approved for x402** | `AUTHORIZATION_REQUIRED` or `AUTHORIZATION_INVALID`; nothing settles | `tests/e2e/authorization/ap2-mpp.e2e.test.ts` |
 
 Two of those exist because writing them found a bug. The SDK's `exact`/EVM
 scheme reports an unreachable node as `invalid_exact_evm_signature`, and its

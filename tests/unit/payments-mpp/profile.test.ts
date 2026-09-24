@@ -35,7 +35,7 @@ describe('pinned MPP profile', () => {
 });
 
 describe('MPP descriptor', () => {
-  it('is experimental because settlement tests use a mocked facilitator', () => {
+  it('is experimental: one profile on one network, off by default', () => {
     expect(MPP_DESCRIPTOR.status).toBe('experimental');
   });
 

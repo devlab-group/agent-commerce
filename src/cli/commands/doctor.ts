@@ -152,7 +152,7 @@ function extractWellKnownX402(
   return { asset, network, payTo };
 }
 
-// Address comparisons are checksum-insensitive throughout the project
+// Checksum-insensitive, as config validation treats addresses
 function sameAddress(a: string, b: string): boolean {
   return a.toLowerCase() === b.toLowerCase();
 }

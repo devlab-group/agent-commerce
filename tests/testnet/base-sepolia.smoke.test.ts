@@ -39,6 +39,7 @@ import {
   assertBalanceDelta,
   assertTransactionSucceeded,
   type BalanceSnapshot,
+  waitForBalances as pollBalances,
   readBalances,
 } from '../fixtures/x402/settlement.js';
 
@@ -117,39 +118,14 @@ payments:
 `;
 }
 
-/**
- * Read-your-writes does not hold across independent RPC nodes.
- *
- * The facilitator confirms the transfer against *its* node and returns; the
- * node this suite reads from is a different one and can be a block or two
- * behind. Reading once immediately after settlement therefore sees the old
- * balances and reports "nothing moved" for a payment that plainly did — which
- * is exactly what happened on the first real run here.
- *
- * Polling is the fix for the lag, not a way to soften the assertion: the
- * expected delta is still exact, the timeout is bounded, and a settlement that
- * never lands still fails.
- */
-async function waitForBalances(
+// This suite's balances, polled because our RPC node can lag the facilitator's
+function waitForBalances(
   predicate: (snapshot: BalanceSnapshot) => boolean,
-  timeoutMs = 90_000,
 ): Promise<BalanceSnapshot> {
-  const deadline = Date.now() + timeoutMs;
-  let snapshot: BalanceSnapshot | undefined;
-  let lastError: unknown;
-  while (Date.now() < deadline) {
-    try {
-      snapshot = await balances();
-      lastError = undefined;
-      if (predicate(snapshot)) return snapshot;
-    } catch (err) {
-      // A public RPC rate-limiting the poll is not evidence about the payment.
-      lastError = err;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 3_000));
-  }
-  if (snapshot) return snapshot;
-  throw lastError ?? new Error('no balance snapshot was ever read');
+  return pollBalances(
+    { rpcUrl: RPC_URL, asset: USDC, buyer, merchant: MERCHANT as `0x${string}` },
+    predicate,
+  );
 }
 
 function balances(): Promise<BalanceSnapshot> {
