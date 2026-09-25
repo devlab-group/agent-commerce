@@ -49,12 +49,11 @@ const PINO_PRETTY_PATH: string | undefined = (() => {
 
 // pino/fast-redact paths below are single-level wildcards: '*.privateKey'
 // matches privateKey one level deep (e.g. `wallet.privateKey`), not at
-// arbitrary nesting (`a.b.privateKey` is not covered). Nothing leaks today
-// because every call site funnels through describeError(), which extracts
-// only {message, name} before logging — never a raw caught object — but that
-// is a property of current call sites, not of this redact config. Do not log
-// a raw object that might carry a secret at depth > 1 without either
-// extending these paths or hand-picking safe fields first.
+// arbitrary nesting (`a.b.privateKey` is not covered). Call sites narrow
+// errors in different ways: some use describeError(), while protocol adapters
+// may log CommerceError details. Do not put secrets in error details or log a
+// raw object that might carry a secret at depth > 1 without extending these
+// paths or selecting safe fields first.
 const SECRET_FIELD_NAMES = [
   'privateKey',
   'signerPrivateKey',
@@ -62,6 +61,7 @@ const SECRET_FIELD_NAMES = [
   'seed',
   'mnemonic',
   'secret',
+  'challengeSecret',
   'apiKey',
   'adminToken',
   'token',

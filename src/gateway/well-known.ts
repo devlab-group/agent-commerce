@@ -38,6 +38,7 @@ import type {
   PaymentProvider,
   ReceiptStore,
 } from '../core/index.js';
+import { MPP_PROFILE } from '../payments/mpp/constants.js';
 import {
   type DeploymentMode,
   requireNetworkProfile,
@@ -98,6 +99,18 @@ export interface WellKnownDocument {
       /** What this deployment actually is. */
       readonly mode: DeploymentMode;
     };
+    /** Public settlement fields; excludes the challenge secret and facilitator credentials */
+    readonly mpp?: {
+      readonly enabled: boolean;
+      readonly network: string;
+      readonly asset: string;
+      readonly assetName: string;
+      readonly assetVersion: string;
+      readonly assetDecimals: number;
+      readonly recipient: string;
+      readonly facilitator: { readonly mode: 'local' | 'remote' };
+      readonly mode: DeploymentMode;
+    };
   };
 }
 
@@ -146,7 +159,7 @@ export async function buildWellKnownDocument(
     }),
   );
 
-  const x402 = options.config.payments.x402;
+  const { x402, mpp } = options.config.payments;
 
   return {
     gateway: {
@@ -182,6 +195,24 @@ export async function buildWellKnownDocument(
               mode: resolveDeploymentMode(
                 requireNetworkProfile(x402.network, 'payments.x402.network'),
                 x402.facilitator.mode,
+              ),
+            },
+          }
+        : {}),
+      ...(mpp !== undefined
+        ? {
+            mpp: {
+              enabled: mpp.enabled,
+              network: mpp.network,
+              asset: mpp.asset,
+              assetName: mpp.assetName,
+              assetVersion: mpp.assetVersion,
+              assetDecimals: MPP_PROFILE.assetDecimals,
+              recipient: mpp.recipient,
+              facilitator: { mode: mpp.facilitator.mode },
+              mode: resolveDeploymentMode(
+                requireNetworkProfile(mpp.network, 'payments.mpp.network'),
+                mpp.facilitator.mode,
               ),
             },
           }

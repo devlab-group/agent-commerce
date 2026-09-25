@@ -15,7 +15,7 @@
 export type JsonSchema = Record<string, unknown>;
 
 /**
- * Protocol surfaces a resource can be exposed through in this release.
+ * Protocol surfaces a resource can be exposed through.
  *
  * The runtime list is the definition and the type is derived from it, so a
  * caller that has to *check* a name (config validation, the OpenAPI
@@ -32,11 +32,26 @@ export type ProtocolName = 'http' | 'mcp' | 'a2a' | 'acp';
  */
 export const PROTOCOL_NAMES: readonly ProtocolName[] = ['http', 'mcp', 'a2a', 'acp'];
 
-/** Payment methods a resource can accept in this release. */
-export type PaymentMethodName = 'x402';
+/**
+ * Payment rails a resource can accept.
+ *
+ * This is an ordered candidate list, not a buyer-selected menu. The pipeline
+ * uses the first method with a configured provider; a rejection ends the
+ * request instead of trying another rail. Config requires at least one named
+ * rail to be enabled but permits additional unavailable candidates.
+ */
+export type PaymentMethodName = 'x402' | 'mpp';
 
 /**
- * Authorization methods a resource can require in this release.
+ * The same names as a value, for config validation, which checks a name at
+ * runtime. The annotation rejects an entry that is not a
+ * `PaymentMethodName`, but nothing makes the list exhaustive, so a new rail
+ * has to be added here as well as to the type.
+ */
+export const PAYMENT_METHOD_NAMES: readonly PaymentMethodName[] = ['x402', 'mpp'];
+
+/**
+ * Authorization methods a resource can require.
  *
  * Deliberately not a `ProtocolName` and not a `PaymentMethodName`: an
  * authorization method is neither a transport nor a payment rail. It proves
@@ -65,10 +80,7 @@ export interface AdapterHealth {
 }
 
 /**
- * Self-description every adapter must expose so diagnostics can report exactly
- * what is supported instead of implying blanket protocol compatibility.
- *
- *
+ * Describes an adapter's supported surface for diagnostics
  */
 export interface AdapterDescriptor {
   readonly name: string;

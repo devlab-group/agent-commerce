@@ -356,7 +356,7 @@ describe('runDoctor — degraded scenarios never hang and degrade gracefully', (
     expect(backend?.status).toBe('INFO');
   });
 
-  it('reports Payments as INFO when x402 is not configured, plus the planned-MPP INFO line', async () => {
+  it('reports Payments and Payments (MPP) as INFO when neither rail is configured', async () => {
     const report = await runDoctor(
       { gatewayUrl: GATEWAY },
       {
@@ -368,8 +368,76 @@ describe('runDoctor — degraded scenarios never hang and degrade gracefully', (
     const payments = report.checks.find((c) => c.name === 'Payments');
     const mpp = report.checks.find((c) => c.name === 'Payments (MPP)');
     expect(payments?.status).toBe('INFO');
-    expect(mpp?.status).toBe('INFO');
-    expect(mpp?.detail).toMatch(/planned/);
+    expect(mpp).toMatchObject({ status: 'INFO', detail: 'MPP not configured' });
+  });
+
+  describe('Payments (MPP)', () => {
+    const MPP_CONFIG = {
+      enabled: true,
+      network: 'eip155:84532' as const,
+      rpcUrl: 'https://sepolia.example/v2/RPC-KEY',
+      asset: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+      assetName: 'USDC',
+      assetVersion: '2',
+      recipient: '0x1111111111111111111111111111111111111111',
+      realm: 'api.example.com',
+      challengeSecret: 'CHALLENGE-SECRET-'.padEnd(32, 'x'),
+      facilitator: {
+        mode: 'remote' as const,
+        url: 'https://facilitator.example/tenant',
+        auth: { type: 'bearer' as const, token: 'FACILITATOR-TOKEN' },
+      },
+    };
+    const liveMpp = (overrides: Record<string, unknown> = {}) => ({
+      merchant: { id: 'demo-merchant' },
+      payments: {
+        mpp: {
+          enabled: true,
+          network: 'eip155:84532',
+          asset: MPP_CONFIG.asset,
+          recipient: MPP_CONFIG.recipient,
+          ...overrides,
+        },
+      },
+    });
+    const mppCheck = async (live: Record<string, unknown>) => {
+      const report = await runDoctor(
+        { gatewayUrl: GATEWAY },
+        {
+          fetchImpl: healthyFetch({
+            [`${GATEWAY}/.well-known/agent-commerce`]: () => jsonResponse(live),
+          }),
+          loadConfig: async () => makeGatewayConfig({ payments: { mpp: MPP_CONFIG } }),
+          createStore: () => makeFakeReceiptStore(),
+        },
+      );
+      return report.checks.find((c) => c.name === 'Payments (MPP)');
+    };
+
+    it('passes on matching config while masking addresses and secrets', async () => {
+      const check = await mppCheck(liveMpp());
+      expect(check?.status).toBe('PASS');
+      expect(check?.detail).toMatch(/charge\/evm\/authorization/);
+      expect(check?.detail).toMatch(/Base Sepolia/);
+      expect(check?.detail).toMatch(/draft-httpauth-payment-00@806fdb8/);
+      expect(check?.detail).toMatch(/mppx 0\.10\.1/);
+      expect(check?.detail).not.toContain(MPP_CONFIG.recipient);
+      for (const secret of ['CHALLENGE-SECRET', 'FACILITATOR-TOKEN', 'RPC-KEY', '/tenant']) {
+        expect(check?.detail).not.toContain(secret);
+      }
+    });
+
+    it('fails when the running gateway pays another recipient', async () => {
+      const check = await mppCheck(
+        liveMpp({ recipient: '0x2222222222222222222222222222222222222222' }),
+      );
+      expect(check?.status).toBe('FAIL');
+      expect(check?.detail).toMatch(/^recipient: gateway is using 0x2222/);
+    });
+
+    it('fails when the running gateway reports MPP disabled', async () => {
+      expect((await mppCheck(liveMpp({ enabled: false })))?.status).toBe('FAIL');
+    });
   });
 
   it('reports Payments as PASS with a masked destination when x402 is enabled and matches the gateway', async () => {

@@ -193,6 +193,32 @@ describe('provider — SDK-boundary branches (mocked x402/facilitator)', () => {
     expect(result.rejectionReason).toBe('invalid_payment');
   });
 
+  it.each([
+    ['unsupported characters', 'do not expose: secret', 'invalid_payment'],
+    ['more than 64 characters', 'x'.repeat(65), 'invalid_payment'],
+    ['an empty value', '', 'invalid_payment'],
+    ['only whitespace', '   ', 'invalid_payment'],
+    ['surrounding whitespace', '  insufficient_funds  ', 'insufficient_funds'],
+  ])('verify() normalizes a facilitator reason with %s', async (_case, invalidReason, expected) => {
+    const provider = makeProvider();
+    const requirement = await provider.createRequirement(paymentContext());
+    const proof = await createPaymentProof({
+      buyerPrivateKey: BUYER_PRIVATE_KEY,
+      rpcUrl: RPC_URL,
+      accepts: requirement.challenge.accepts[0] as Record<string, unknown>,
+    });
+    verifyMock.mockResolvedValueOnce({ isValid: false, invalidReason });
+
+    const result = await provider.verify({
+      requestId: 'req-1',
+      resource: RESOURCE,
+      requirement,
+      submission: { method: 'x402', payload: proof },
+    });
+    expect(result.status).toBe('rejected');
+    expect(result.rejectionReason).toBe(expected);
+  });
+
   it('verify() returns rejected("unexpected_verify_error") when the SDK throws a non-connection error', async () => {
     const provider = makeProvider();
     const requirement = await provider.createRequirement(paymentContext());
@@ -346,6 +372,37 @@ describe('provider — SDK-boundary branches (mocked x402/facilitator)', () => {
     expect(withoutReason.rejectionReason).toBe('settlement_failed');
   });
 
+  it.each([
+    ['unsupported characters', 'do not expose: secret', 'settlement_failed'],
+    ['more than 64 characters', 'x'.repeat(65), 'settlement_failed'],
+    ['an empty value', '', 'settlement_failed'],
+    ['only whitespace', '   ', 'settlement_failed'],
+    ['surrounding whitespace', '  insufficient_funds  ', 'insufficient_funds'],
+  ])('settle() normalizes a facilitator reason with %s', async (_case, errorReason, expected) => {
+    const provider = makeProvider();
+    const requirement = await provider.createRequirement(paymentContext());
+    const proof = await createPaymentProof({
+      buyerPrivateKey: BUYER_PRIVATE_KEY,
+      rpcUrl: RPC_URL,
+      accepts: requirement.challenge.accepts[0] as Record<string, unknown>,
+    });
+    settleMock.mockResolvedValueOnce({
+      success: false,
+      network: 'eip155:84532',
+      errorReason,
+    });
+
+    const result = await provider.settle({
+      requestId: 'req-1',
+      resource: RESOURCE,
+      requirement,
+      submission: { method: 'x402', payload: proof },
+      verification: { status: 'verified', provider: 'x402', amount: '0.01', currency: 'USD' },
+    });
+    expect(result.status).toBe('rejected');
+    expect(result.rejectionReason).toBe(expected);
+  });
+
   it('settle() rejects an on-chain revert but reports an unclassified throw as unavailable', async () => {
     const provider = makeProvider();
     const requirement = await provider.createRequirement(paymentContext());
@@ -418,6 +475,45 @@ describe('provider — SDK-boundary branches (mocked x402/facilitator)', () => {
       (err: unknown) => isCommerceError(err) && err.code === 'PAYMENT_PROVIDER_UNAVAILABLE',
     );
   });
+
+  it.each([
+    ['without a hash, as an unknown outcome', '', 'throws'],
+    ['with a value that is not a hash, as an unknown outcome', 'not-a-hash', 'throws'],
+    ['with a hash, as a mined revert', `0x${'cd'.repeat(32)}`, 'rejected'],
+  ])(
+    'settle() treats the SDK catch-all transaction failure %s',
+    async (_label, transaction, outcome) => {
+      const provider = makeProvider();
+      const requirement = await provider.createRequirement(paymentContext());
+      const proof = await createPaymentProof({
+        buyerPrivateKey: BUYER_PRIVATE_KEY,
+        rpcUrl: RPC_URL,
+        accepts: requirement.challenge.accepts[0] as Record<string, unknown>,
+      });
+      settleMock.mockResolvedValueOnce({
+        success: false,
+        errorReason: 'invalid_exact_evm_transaction_failed',
+        transaction,
+        network: 'eip155:84532',
+      });
+
+      const settled = provider.settle({
+        requestId: 'req-1',
+        resource: RESOURCE,
+        requirement,
+        submission: { method: 'x402', payload: proof },
+        verification: { status: 'verified', provider: 'x402', amount: '0.01', currency: 'USD' },
+      });
+
+      if (outcome === 'throws') {
+        await expect(settled).rejects.toSatisfy(
+          (err: unknown) => isCommerceError(err) && err.code === 'PAYMENT_PROVIDER_UNAVAILABLE',
+        );
+      } else {
+        await expect(settled).resolves.toMatchObject({ status: 'rejected' });
+      }
+    },
+  );
 
   it('settle() attaches transactionHash to PAYMENT_PROVIDER_UNAVAILABLE when the broadcast succeeded but confirmation timed out', async () => {
     // The SDK bounds its own receipt wait and reports the outcome rather than

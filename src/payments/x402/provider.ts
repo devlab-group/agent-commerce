@@ -57,7 +57,11 @@ import {
   createLocalPublicClient,
   type LocalFacilitatorClient,
 } from './chain.js';
-import { assertDevKeyIsLocalOnly, assertPayToIsNotDevAddress } from './dev-key-guard.js';
+import {
+  assertDevKeyIsLocalOnly,
+  assertPayToIsNotDevAddress,
+  describeRpc,
+} from './dev-key-guard.js';
 import {
   createLocalFacilitatorBinding,
   createRemoteFacilitatorBinding,
@@ -75,6 +79,12 @@ const DEFAULT_MIME_TYPE = 'application/json';
 const HEALTH_TIMEOUT_MS = 4_000;
 /** `SettleResponse.errorReason` the SDK uses for "broadcast, not confirmed". */
 const SETTLEMENT_PENDING_REASON = 'settlement_pending';
+/**
+ * The SDK's catch-all for a throw from the broadcast call, and its reason for
+ * a mined transaction that reverted. Only the second carries a hash. A revert
+ * the SDK recognises during gas estimation gets its own reason instead.
+ */
+const TRANSACTION_FAILED_REASON = 'invalid_exact_evm_transaction_failed';
 /**
  * `invalidReason`/`errorReason` are `z.string()` in the SDK schema — no length
  * or charset bound. They become the message a buyer is told about their own
@@ -220,6 +230,8 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
   // createLocalPublicClient's doc comment). Verification and settlement read
   // the chain through the facilitator signer instead, so this is the only
   // public client the provider builds.
+  // Health details are logged, so they name the RPC by origin only
+  const rpcOrigin = describeRpc(options.rpcUrl);
   const healthPublicClient = createLocalPublicClient(
     options.rpcUrl,
     HEALTH_TIMEOUT_MS,
@@ -244,12 +256,7 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
       `mode=${mode}`,
     ],
     status: 'stable',
-    unsupported: [
-      'svm',
-      'permit2',
-      'upto scheme',
-      'per-request signed facilitator credentials (e.g. CDP JWT)',
-    ],
+    unsupported: ['svm', 'permit2', 'upto scheme'],
   };
 
   async function createRequirement(context: PaymentContext): Promise<PaymentRequirement> {
@@ -447,10 +454,15 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
     if (!sdkResult.isValid) {
       // An RPC that never answered is not a payment that failed a check.
       if (scope.transportFailed()) {
+        if (sdkResult.invalidReason !== undefined) {
+          logger.debug(
+            { reportedReason: sdkResult.invalidReason },
+            'x402 verify(): local facilitator transport failure reason',
+          );
+        }
         throw new CommerceError(
           'PAYMENT_PROVIDER_UNAVAILABLE',
           `x402 provider: ${binding.kind} facilitator unreachable during verify()`,
-          { details: { reportedReason: sdkResult.invalidReason ?? 'invalid_payment' } },
         );
       }
       // The raw string still reaches the operator's logs below; only what is
@@ -567,10 +579,24 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
     if (!sdkResult.success) {
       // "Broadcast, never confirmed" is not "did not happen": the transfer may
       // already be on-chain, so it surfaces as an *unavailable* provider
-      // carrying the hash, letting the pipeline record
-      // the attempt `settlement-uncertain` rather than `failed` and the payer
-      // is told which transaction to check. Everything else is a real
-      // rejection.
+      // carrying the hash, letting the pipeline record the attempt
+      // `settlement-uncertain` rather than `failed`. The SDK's catch-all with
+      // no hash is treated the same way: its throw may have followed a
+      // broadcast, and the message cannot tell, because viem reports an RPC
+      // error on the send as a revert. Everything else is a real rejection.
+      if (
+        sdkResult.errorReason === TRANSACTION_FAILED_REASON &&
+        !/^0x[0-9a-f]{64}$/i.test(sdkResult.transaction)
+      ) {
+        logger.warn(
+          { reportedReason: sdkResult.errorReason },
+          'x402 settle(): the broadcast failed without a transaction hash; outcome unknown',
+        );
+        throw new CommerceError(
+          'PAYMENT_PROVIDER_UNAVAILABLE',
+          'x402 provider: settlement failed with an unclassified error; outcome unknown',
+        );
+      }
       if (sdkResult.errorReason === SETTLEMENT_PENDING_REASON || scope.transportFailed()) {
         throw new CommerceError(
           'PAYMENT_PROVIDER_UNAVAILABLE',
@@ -619,7 +645,7 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
       if (chainId !== profile.chainId) {
         return {
           status: 'fail',
-          detail: `RPC at ${options.rpcUrl} reports chain id ${chainId}, expected ${profile.chainId} (${profile.displayName})`,
+          detail: `RPC at ${rpcOrigin} reports chain id ${chainId}, expected ${profile.chainId} (${profile.displayName})`,
           checkedAt,
           durationMs: clock.monotonicMs() - startedAt,
         };
@@ -659,7 +685,7 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
         return {
           status: 'pass',
           detail:
-            `${describeDeploymentMode(mode)} — RPC ${options.rpcUrl} reachable, chain id ` +
+            `${describeDeploymentMode(mode)} — RPC ${rpcOrigin} reachable, chain id ` +
             `${profile.chainId} (${profile.displayName}), asset ${options.asset} has code, ` +
             `facilitator ${binding.describe} supports exact/${options.network}`,
           checkedAt,
@@ -676,7 +702,7 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
         return {
           status: 'fail',
           detail:
-            `RPC at ${options.rpcUrl} reports chain id ${profile.chainId} but does not answer ` +
+            `RPC at ${rpcOrigin} reports chain id ${profile.chainId} but does not answer ` +
             '"anvil_nodeInfo" — it does not look like a local Anvil dev node. Refusing to treat it ' +
             'as safe for a local-facilitator dev key.',
           checkedAt,
@@ -687,7 +713,7 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
       return {
         status: 'pass',
         detail:
-          `${describeDeploymentMode(mode)} — RPC ${options.rpcUrl} reachable, chain id ` +
+          `${describeDeploymentMode(mode)} — RPC ${rpcOrigin} reachable, chain id ` +
           `${profile.chainId}, asset ${options.asset} has code, confirmed Anvil dev node`,
         checkedAt,
         durationMs: clock.monotonicMs() - startedAt,
@@ -802,10 +828,11 @@ function isProviderUnavailableError(err: unknown): boolean {
   );
 }
 
-/** Never includes secrets: only error class name + message, never raw payloads or keys. */
+// Error class name and message. viem puts the request URL in its messages and
+// an RPC URL often carries an API key, so each URL is cut to its origin.
 function describeError(err: unknown): string {
-  if (err instanceof Error) return `${err.name}: ${err.message}`;
-  return String(err);
+  const text = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+  return text.replace(/\bhttps?:\/\/[^\s"'<>]+/gi, (url) => describeRpc(url));
 }
 
 /**

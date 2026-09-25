@@ -1,21 +1,18 @@
 # OpenAPI import
 
-`agent-commerce import openapi` reads an OpenAPI description and writes Agent
-Commerce resource drafts. The output is configuration. You review it, fill in
-the parts OpenAPI cannot tell us, and merge it into `config.yaml`; from there
-an imported resource is handled exactly like one you typed by hand.
+`agent-commerce import openapi` converts a local OpenAPI document into
+reviewable Agent Commerce resource drafts:
 
 ```text
 OpenAPI document -> importer -> resource drafts -> config.yaml -> canonical model
 ```
 
-The importer stops at that boundary. There is no second executor, `src/core`
-contains no OpenAPI type, and once the drafts are written nothing reads the
-document again.
+The generated file is configuration, not a second runtime path. Review it, add
+commerce policy and credentials, then merge it into `config.yaml`. The gateway
+does not read the OpenAPI document again.
 
-The feature is experimental. It handles the shapes most REST APIs are built
-from and refuses the rest instead of approximating them, so check the
-[support matrix](#support-matrix) before assuming a document will import whole.
+The importer is experimental. It supports common REST shapes and skips or
+refuses shapes the gateway cannot represent safely.
 
 ## Workflow
 
@@ -23,77 +20,90 @@ from and refuses the rest instead of approximating them, so check the
 agent-commerce import openapi openapi.yaml
 ```
 
-Then work through the generated file:
+Then:
 
-1. read the resources it produced, which describe the API shape and nothing else;
-2. decide pricing, free or a fixed amount and currency;
-3. decide exposure: `http`, `mcp`, `a2a`;
-4. add backend authentication under `backend.headers`, using `${ENV_VAR}`
-   placeholders rather than a literal credential;
-5. merge the resources into `config.yaml` under `resources:`;
-6. run `agent-commerce validate`;
-7. run `agent-commerce doctor`.
+1. Review the generated resources.
+2. Add `pricing`, unless you passed `--free`.
+3. Add `expose`, unless you passed `--expose`.
+4. Add backend credentials under `backend.headers` using `${ENV_VAR}`
+   placeholders.
+5. Merge the fragment under `resources:` in `config.yaml`.
+6. Run `agent-commerce validate`.
+7. Run `agent-commerce doctor`.
 
-The generated file is a `resources:` fragment with review comments above each
-entry. Unless you passed `--free` and `--expose`, it has no `pricing` or
-`expose` keys at all and will not load until steps 2 and 3 have happened. An
-OpenAPI document says nothing about what an operation costs or who should see
-it, and a wrong guess either gives a merchant's endpoint away or publishes it
-to an agent network.
+Without both pricing and exposure, the draft does not pass config validation.
+OpenAPI does not say what an operation costs or which agent surfaces should
+publish it.
 
 ### Options
 
 | Option | Effect |
 | --- | --- |
-| `--output <path>` | default `<source-stem>.agent-commerce.yaml` in the working directory |
-| `--force` | overwrite an existing output file; without it, an existing file stops the run |
-| `--base-url <url>` | backend base URL, overriding every `servers` entry. Must be absolute `http(s)` with no query or fragment |
-| `--operation <id>` | import only this operation (repeatable; matches `operationId` or the generated id). One that matches nothing fails the run |
-| `--tag <tag>` | import only operations carrying this tag (repeatable, OR-ed) |
-| `--free` | write `pricing: { type: free }` |
-| `--expose <list>` | write `expose:`, comma-separated `http,mcp,a2a` |
-| `--strict` | any warning fails the run |
-| `--json` | machine-readable summary instead of the report |
+| `--output <path>` | Write to this path. The default is `<source-stem>.agent-commerce.yaml` in the working directory |
+| `--force` | Replace an existing output file. Without it, an existing file stops the run |
+| `--base-url <url>` | Override document `servers` entries. The value must be absolute HTTP(S), with no query or fragment |
+| `--operation <id>` | Import a matching `operationId` or generated resource id. Repeatable; an unmatched value fails the run |
+| `--tag <tag>` | Import operations carrying any named tag. Repeatable |
+| `--free` | Add `pricing: { type: free }` |
+| `--expose <list>` | Add a comma-separated `expose` list from `http,mcp,a2a,acp` |
+| `--strict` | Treat any warning as a failed run |
+| `--json` | Print a machine-readable summary |
 
-The command exits `0` on success, warnings included. It exits `1` on a fatal
-load, import or write error, on an `--operation` that matched nothing, when no
-supported operation was imported, and on any warning under `--strict`. A failed
-run writes no file, so the next command cannot pick up half an import.
+To use an imported resource for ACP, enable `protocols.acp` and map the resource
+to one checkout operation. Each mapped resource must be free at the Agent
+Commerce layer; `--expose acp` only adds the exposure.
 
-## What a draft looks like
+The command exits `0` after a successful import, including one with warnings.
+It exits `1` for load, import or write errors; an invalid `--expose` value;
+unmatched `--operation` values; no supported operations; an existing output
+without `--force`; or warnings under `--strict`. Failed runs do not write an
+output file.
 
-`POST /users/{userId}/orders?notify=true` with a JSON body becomes:
+## Generated shape
+
+For example, `POST /users/{userId}/orders?notify=true` with a JSON body becomes:
 
 ```yaml
 resources:
   # REVIEW: pricing and exposure are not inferred from OpenAPI. Add e.g.
-  #   pricing: { type: free }
-  #   expose: [http]
+  #   pricing: { type: free }   # or { type: fixed, amount: "0.01", currency: USDC } with payments: [x402]
+  #   expose: [http]           # http | mcp | a2a | acp
   createOrder:
     name: Create an order
+    description: Create an order
     input:
       type: object
       properties:
         path:
           type: object
           properties:
-            userId: { type: string }
-          required: [userId]
+            userId:
+              type: string
+          required:
+            - userId
           additionalProperties: false
         query:
           type: object
           properties:
-            notify: { type: boolean }
-          required: [notify]
+            notify:
+              type: boolean
+          required:
+            - notify
           additionalProperties: false
         body:
           type: object
           properties:
-            productId: { type: string }
-            quantity: { type: integer }
-          required: [productId]
+            productId:
+              type: string
+            quantity:
+              type: integer
+          required:
+            - productId
           additionalProperties: false
-      required: [path, query, body]
+      required:
+        - path
+        - query
+        - body
       additionalProperties: false
     backend:
       type: http
@@ -105,122 +115,133 @@ resources:
         body: body
 ```
 
-Each location gets its own namespace, so a `?id=` and a `{id}` in the same
-operation cannot collide, and `backend.inputBindings` tells the executor where
-to read each part of the request from. See
-[configuration.md](configuration.md#backendinputbindings).
+Path, query and body fields use separate namespaces, so equal parameter names
+cannot collide. `backend.inputBindings` tells the executor how to build the
+request; see [configuration.md](configuration.md#backendinputbindings).
 
-Resource ids are stable across runs. An id comes from `operationId`, normalised
-to the allowed character set, or from `<method>_<path>` when the operation has
-none. Counters and random suffixes are never used, because an agent discovers
-an id and then hard-codes it. If two operations resolve to the same id the
-import fails and names both, rather than quietly renaming one of them.
+Resource ids come from normalized `operationId` values, or from
+`<method>_<path>` when no usable operation id exists. They do not use counters
+or random suffixes. If two operations produce the same id, import fails and
+names both operations.
 
 ## Support matrix
 
 | Feature | Status |
 | --- | --- |
-| OpenAPI 3.0 | supported |
-| OpenAPI 3.1 | supported |
-| OpenAPI 3.2 | supported |
-| Swagger 2.0 | unsupported, convert first |
-| YAML source | supported |
-| JSON source | supported |
-| internal `$ref` | supported |
-| external `$ref` (file or URL) | unsupported, refused |
+| OpenAPI 3.0, 3.1 and 3.2 | supported |
+| Swagger 2.0 | unsupported; convert first |
+| local YAML or JSON source | supported |
 | remote URL source | unsupported |
+| internal `$ref` | supported for path items, parameters, request bodies, schemas, responses and servers; OpenAPI 3.2 media-type object references are also supported |
+| external file or URL `$ref` | refused |
 | GET, POST, PUT, PATCH, DELETE | supported |
-| HEAD, OPTIONS, TRACE, QUERY, other | skipped with a warning |
-| path parameters | supported subset: primitive, default (`simple`) style |
-| query parameters | supported subset: primitive, default (`form`) style |
+| HEAD, OPTIONS, TRACE, QUERY and other methods | skipped with a warning |
+| path parameters | primitive values using default `simple` style |
+| query parameters | primitive values using default `form` style |
 | `deepObject`, `spaceDelimited`, `pipeDelimited` | unsupported |
-| object/array parameters, parameter `content` form | unsupported |
-| `application/json` body | supported |
-| `application/*+json` body | supported, with a static `Content-Type` header |
-| multipart, form-urlencoded, binary, streaming bodies | unsupported |
-| body on GET/DELETE | omitted with a warning; the gateway sends none |
-| dynamic header parameters | unsupported |
-| cookie parameters | unsupported |
-| security credential import | unsupported, deliberately |
-| output schema | one deterministic 2xx JSON response |
+| object/array parameters or parameter `content` | unsupported |
+| `application/json` request body | supported |
+| `application/*+json` request body | supported with a static `Content-Type` header |
+| multipart, form-urlencoded, binary or streaming bodies | unsupported |
+| body on GET or DELETE | omitted with a warning |
+| dynamic header or cookie parameters | unsupported |
+| security credential import | unsupported |
+| output schema | one deterministically selected explicit 2xx JSON response |
 
-When an operation requires something from that list that the gateway cannot
-represent, the whole operation is skipped. When the same thing is optional, it
-is left out and you get a warning. Approximating it would produce a resource
-that looks importable, takes payment, and then calls the backend wrongly, which
-on a paid resource means a buyer pays for a request the merchant never receives
-correctly.
+An unsupported required parameter or body normally skips the operation. GET and
+DELETE bodies are always omitted with a warning, even when marked required. An
+unsupported optional feature is also omitted with a warning. This avoids
+producing a paid resource that calls the merchant with the wrong request shape.
 
 ### Schemas
 
-Schemas are converted to the subset the gateway enforces: `type` (with 3.0
-`nullable` folded into a union type), `properties`, `required`,
-`additionalProperties`, `enum` and `items`, plus the descriptive `title`,
-`description`, `default` and `example`/`examples`.
+The importer carries this structural subset:
+`type` (including OpenAPI 3.0 `nullable`), `properties`, `required`,
+`additionalProperties`, `enum` and `items`, plus `title`, `description`,
+`default`, `example`, `examples` and `deprecated`.
 
-Anything else is dropped and listed in the import warnings. That includes
-`pattern`, `format`, `minimum`, `maxLength` and tuple-form `items`. Copying
-them through would advertise validation to agents that no code performs; see
-[configuration.md](configuration.md#unsupported-json-schema-keywords-have-a-cost)
-for what that costs you.
+An object with `properties` is closed unless the source sets
+`additionalProperties`; a bare `type: object` stays open. A body with no schema
+is explicitly open. A merged `allOf` object is closed unless a branch sets
+`additionalProperties: true`, which keeps the merge open. The config loader
+later closes schema nodes that still omit `additionalProperties`, so the loaded
+resource can be stricter than the generated draft and the OpenAPI source.
 
-An `allOf` of compatible object schemas is merged. A branch conflict,
-`oneOf`, `anyOf`, `not`, `discriminator` or a reference cycle makes a request
-schema unsupported and skips the operation. In an output schema the same cases
-only omit the schema, since output is descriptive and carries no request
-safety.
+Unenforced constraints such as `pattern`, `format`, `minimum`,
+`maxLength` and tuple-form `items` are dropped and reported. See
+[configuration.md](configuration.md#unsupported-json-schema-keywords-have-a-cost).
 
-## Security model
+Compatible object branches in `allOf` are merged. A branch with a schema-valued
+`additionalProperties`, conflicting branches, `oneOf`, `anyOf`, `not`,
+`discriminator` and reference cycles make a schema unsupported. A required
+parameter or required request body then causes the operation to be skipped,
+except that GET and DELETE bodies are always omitted with a warning. An optional
+unsupported input is omitted with a warning. An unsupported output schema is
+omitted without dropping the operation.
 
-The importer reads a local document that the operator supplied. There is no
-remote source option, and it makes no network requests of its own. Every `$ref`
-is checked before the validator sees the document, and an external one
-(`https://example.com/types.yaml`, `./types.yaml`, `file:///tmp/types.yaml`) is
-refused by name. Internal references resolve lazily with cycle detection, so a
-recursive schema produces a diagnostic instead of expanding until the process
-runs out of memory.
+## Security properties
 
-Backend hosts come from the document's `servers` or from `--base-url`, both
-operator input at import time. A relative or unresolvable server URL is refused
-rather than guessed from the filename, and agent input never contributes to a
-backend host. See [security.md](security.md#ssrf).
+The importer accepts local files only, executes nothing from a document, and
+makes no network requests. It refuses sources larger than 10 MiB before parsing
+and rejects every external `$ref`
+before the OpenAPI validator runs. Internal references are resolved lazily with
+cycle and depth checks.
 
-No credential is ever imported. An operation that declares OpenAPI security
-gets a warning and a review comment asking you to add
-`backend.headers: { Authorization: Bearer ${BACKEND_TOKEN} }` yourself. The
-scheme name, the header name and any example value stay out of the generated
-file, and a security scheme never becomes agent-supplied input. Header
-parameters named `Accept`, `Content-Type` or `Authorization` are ignored, as
-the OpenAPI specification requires; they are transport and operator concerns.
+Backend hosts come from operator-supplied `servers` entries or `--base-url`.
+A relative or malformed server URL, a non-HTTP(S) URL, or one with a query or
+fragment skips that operation with a diagnostic for that condition. Other
+supported operations may still be written and the run may exit `0`; request
+input never selects the backend host.
 
-Descriptions, examples and vendor `x-` extensions are data. They are either
-serialised into YAML or dropped, nothing in a document is executed, and no `x-`
-extension can change pricing, payments, the backend URL or protocol exposure.
-The output file is never overwritten without `--force`, and `config.yaml` is
-never modified.
+OpenAPI security declarations produce a warning and a review comment. The
+importer does not copy credentials or security-scheme data. Schema examples
+are retained as data where supported. Add operator credentials yourself, for
+example:
 
-## Limitations worth knowing before you start
+```yaml
+backend:
+  headers:
+    Authorization: Bearer ${BACKEND_TOKEN}
+```
 
-Multi-file descriptions do not work. Bundle them first with `redocly bundle` or
-`swagger-cli bundle`, then import the single file.
+OpenAPI header parameters named `Accept`, `Content-Type` or `Authorization`
+are ignored as transport or operator concerns. Security schemes never become
+agent input.
 
-Only one success response is used: `200`, then `201`, `202`, then the remaining
-explicit 2xx codes in ascending order. Status-dependent unions are not
-modelled, and when several responses carry a JSON body the import warns and
-names the one it took.
+Descriptions and examples are serialized as data where supported. Vendor
+extensions are ignored and cannot alter pricing, payments, backend URLs or
+exposure. The importer does not merge output into `config.yaml`, but
+`--output config.yaml --force` can deliberately replace that file. Output
+replacement requires `--force`, and writes use a temporary sibling followed by
+rename.
 
-The only pricing the CLI writes is `--free`. Per-operation prices are a manual
-edit.
+See [security.md](security.md#openapi-import) for the threat model.
 
-Re-importing overwrites, it never merges. The importer does not edit an
-existing file, so run it into a new path and diff the two.
+## Operational limits
 
-## Where the code lives
+- Multi-file documents must be bundled before import.
+- For output discovery, the importer first keeps explicit 2xx responses with
+  JSON content, then selects `200`, `201`, `202`, or another status in ascending
+  order. If that response has no schema, the importer warns and omits the
+  output. If its schema cannot be converted, it also warns and omits the output.
+  It does not fall back to another response. The warning about other JSON
+  success responses is emitted only when the selected schema converts.
+- The CLI can generate only free pricing. Fixed prices are a manual edit.
+- Re-import replaces an output file when `--force` is present; it never merges.
+  Generate to a new path when you want a reviewable diff.
 
-Everything lives under `src/openapi/`: `load.ts` reads and validates the
-document and refuses external refs, `refs.ts` resolves internal references,
-`discover.ts` finds operations and works out ids and server URLs, `schema.ts`
-converts schemas, `request.ts` turns parameters and the request body into an
-input schema plus bindings, and `draft.ts` builds the resource drafts and
-renders the YAML. The command itself is
-`src/cli/commands/import-openapi.ts`.
+## Code map
+
+Core importer code is under `src/openapi/`; command registration and handling
+live under `src/cli/`:
+
+| File | Responsibility |
+| --- | --- |
+| `load.ts` | read, parse and validate the local document; reject external references |
+| `refs.ts` | resolve internal references |
+| `discover.ts` | find operations, ids and server URLs |
+| `schema.ts` | convert schemas |
+| `request.ts` | map parameters and JSON bodies |
+| `draft.ts` | build drafts and render YAML |
+| `src/cli/program.ts` | register the command and define its flags |
+| `src/cli/commands/import-openapi.ts` | handle the command |

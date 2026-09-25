@@ -22,15 +22,15 @@
 import type { Ap2AuthorizationProvider } from '../authorization/ap2/index.js';
 import { createAp2AuthorizationProvider } from '../authorization/ap2/index.js';
 import { loadConfig } from '../config/index.js';
-import type { PaymentProvider, ProtocolAdapter, ReceiptStore } from '../core/index.js';
+import type { ProtocolAdapter, ReceiptStore } from '../core/index.js';
 import { CommerceError, isCommerceError } from '../core/index.js';
-import { createX402PaymentProvider } from '../payments/x402/index.js';
 import { createA2aAdapter } from '../protocols/a2a/index.js';
 import { createAcpAdapter } from '../protocols/acp/index.js';
 import { createMcpAdapter } from '../protocols/mcp/index.js';
 import { createSqliteReceiptStore } from '../storage/receipts/index.js';
 
 import { createGatewayLogger } from './logger.js';
+import { createConfiguredPaymentProviders } from './payment-providers.js';
 import { createGateway } from './server.js';
 
 /** The host a presenter needs, without the credential a provider puts in the path. */
@@ -53,28 +53,7 @@ async function main(): Promise<void> {
   });
   await store.init();
 
-  const paymentProviders: PaymentProvider[] = [];
-  const x402 = config.payments.x402;
-  if (x402?.enabled) {
-    paymentProviders.push(
-      createX402PaymentProvider({
-        network: x402.network,
-        rpcUrl: x402.rpcUrl,
-        asset: x402.asset as `0x${string}`,
-        assetName: x402.assetName,
-        assetVersion: x402.assetVersion,
-        assetDecimals: x402.assetDecimals,
-        payTo: x402.payTo as `0x${string}`,
-        maxTimeoutSeconds: x402.maxTimeoutSeconds,
-        facilitator: x402.facilitator,
-        ...(x402.allowMainnet !== undefined ? { allowMainnet: x402.allowMainnet } : {}),
-        ...(x402.allowUnauthenticatedFacilitator !== undefined
-          ? { allowUnauthenticatedFacilitator: x402.allowUnauthenticatedFacilitator }
-          : {}),
-        logger,
-      }),
-    );
-  }
+  const paymentProviders = createConfiguredPaymentProviders(config.payments, logger);
 
   // Built only when enabled: the replay database is opened by the constructor,
   // so a disabled AP2 block creates no file and holds no handle.
@@ -157,6 +136,7 @@ async function main(): Promise<void> {
   // Printed, not just logged: a presenter must be able to see the settlement
   // destination without reading JSON logs. Public values only — never the
   // facilitator signer.
+  const { x402, mpp } = config.payments;
   if (x402?.enabled) {
     console.log('');
     console.log('  x402 settlement');
@@ -170,6 +150,15 @@ async function main(): Promise<void> {
     console.log(`    asset        ${x402.asset} (${x402.assetName} v${x402.assetVersion})`);
     console.log(`    pays to      ${x402.payTo}   <- merchant-controlled, not the gateway`);
     console.log(`    facilitator  ${x402.facilitator.mode}`);
+    console.log('');
+  }
+  if (mpp?.enabled) {
+    console.log('');
+    console.log('  MPP settlement (charge, evm, authorization)');
+    console.log(`    network      ${mpp.network}  via ${rpcOrigin(mpp.rpcUrl)}`);
+    console.log(`    asset        ${mpp.asset} (${mpp.assetName} v${mpp.assetVersion})`);
+    console.log(`    pays to      ${mpp.recipient}   (merchant-controlled; not gateway-owned)`);
+    console.log(`    facilitator  ${mpp.facilitator.mode}`);
     console.log('');
   }
 

@@ -17,6 +17,7 @@ import {
   PAYMENT_HEADER,
   PAYMENT_REQUIRED_HEADER,
   PAYMENT_RESPONSE_HEADER,
+  type PaymentMethodName,
   type PaymentProvider,
   parseAuthorizationHeader,
   type ReceiptStore,
@@ -213,16 +214,11 @@ async function handleInvoke(
       });
     }
 
-    const paymentHeader = request.headers[PAYMENT_HEADER];
-    const paymentValue = Array.isArray(paymentHeader) ? paymentHeader[0] : paymentHeader;
-
-    // The gateway does not decide which rail a resource uses — that's the
-    // canonical resource's job (mirrors the protocol-side fix in the MCP
-    // adapter). Derive the method from resource.paymentMethods instead of
-    // hard-coding 'x402'. If a proof arrives for a resource with no payment
-    // method configured, drop it rather than inventing a rail: the pipeline
-    // will treat the resource as free (or reject it) on its own terms.
+    // createGateway puts provider-backed methods first, so this label matches
+    // the rail selected by the pipeline. Without a method, drop the proof
+    // instead of inventing a rail; the pipeline receives an unpaid request.
     const paymentMethod = resource.paymentMethods[0];
+    const paymentValue = paymentProof(request, paymentMethod);
     const payment =
       paymentValue !== undefined && paymentMethod !== undefined
         ? { method: paymentMethod, payload: paymentValue }
@@ -250,7 +246,10 @@ async function handleInvoke(
 
     if (outcome.kind === 'payment-required') {
       const envelope = toPaymentRequiredEnvelope(outcome);
-      if (envelope.payment.envelope !== undefined) {
+      if (envelope.payment.provider === 'mpp') {
+        const challenge = envelope.payment.envelope?.['wwwAuthenticate'];
+        if (typeof challenge === 'string') reply.header('www-authenticate', challenge);
+      } else if (envelope.payment.envelope !== undefined) {
         // x402 v2 clients read the challenge from this header and never look
         // at the body. The body is still sent — it is richer, and it is the
         // only channel the MCP surface has — but the header is what makes an
@@ -266,6 +265,10 @@ async function handleInvoke(
 
     if (outcome.payment) {
       reply.header(PAYMENT_RESPONSE_HEADER, encodePaymentSummary(outcome.payment));
+      const receipt = outcome.payment.metadata?.['receipt'];
+      if (outcome.payment.provider === 'mpp' && typeof receipt === 'string') {
+        reply.header('payment-receipt', receipt);
+      }
     }
     reply.status(outcome.backendStatus).send(outcome.body);
   } catch (error) {
@@ -277,9 +280,35 @@ async function handleInvoke(
     const settledPayment = errorPaymentSummary(commerceError);
     if (settledPayment !== undefined) {
       reply.header(PAYMENT_RESPONSE_HEADER, encodePaymentSummary(settledPayment));
+      if (settledPayment.provider === 'mpp' && settledPayment.receipt !== undefined) {
+        reply.header('payment-receipt', settledPayment.receipt);
+      }
+    }
+    // An MPP client pays again only from a fresh WWW-Authenticate challenge
+    const challenge = commerceError.details?.['challenge'] as Record<string, unknown> | undefined;
+    if (
+      commerceError.code === 'PAYMENT_INVALID' &&
+      typeof challenge?.['wwwAuthenticate'] === 'string'
+    ) {
+      reply.header('www-authenticate', challenge['wwwAuthenticate']);
+      reply.header('cache-control', 'no-store');
     }
     reply.status(commerceError.httpStatus).send(toErrorEnvelope(commerceError));
   }
+}
+
+// Each rail has its own proof header. MPP uses HTTP authentication, and an
+// `Authorization` value in another scheme is not a payment proof.
+function paymentProof(
+  request: FastifyRequest,
+  method: PaymentMethodName | undefined,
+): string | undefined {
+  if (method === 'mpp') {
+    const value = request.headers.authorization;
+    return value !== undefined && /^Payment\s+\S/i.test(value) ? value : undefined;
+  }
+  const value = request.headers[PAYMENT_HEADER];
+  return Array.isArray(value) ? value[0] : value;
 }
 
 interface PaymentSummary {
@@ -289,6 +318,8 @@ interface PaymentSummary {
   readonly currency: string;
   readonly network?: string;
   readonly externalReference?: string;
+  // Serialised MPP `Payment-Receipt`, when the provider issued one
+  readonly receipt?: string;
 }
 
 function errorPaymentSummary(
@@ -297,7 +328,7 @@ function errorPaymentSummary(
   const payment = error.details?.['payment'];
   if (typeof payment !== 'object' || payment === null) return undefined;
   const rec = payment as Record<string, unknown>;
-  const { status, provider, amount, currency, network, externalReference } = rec;
+  const { status, provider, amount, currency, network, externalReference, receipt } = rec;
   if (
     typeof status !== 'string' ||
     typeof provider !== 'string' ||
@@ -313,6 +344,7 @@ function errorPaymentSummary(
     currency,
     ...(typeof network === 'string' ? { network } : {}),
     ...(typeof externalReference === 'string' ? { externalReference } : {}),
+    ...(typeof receipt === 'string' ? { receipt } : {}),
   };
 }
 

@@ -4,7 +4,11 @@ import {
   compileJsonSchema,
   validateBackendRequestShape,
 } from '../../../src/core/execution/index.js';
-import { isCommerceError, RESERVED_INPUT_FIELDS } from '../../../src/core/index.js';
+import {
+  isCommerceError,
+  PAYMENT_METHOD_NAMES,
+  RESERVED_INPUT_FIELDS,
+} from '../../../src/core/index.js';
 import { validRawConfig } from './fixtures.js';
 
 function expectConfigInvalid(fn: () => unknown): void {
@@ -920,6 +924,52 @@ describe('parseConfig', () => {
     weather['payments'] = ['x402'];
     const config = parseConfig(raw, {});
     expect(config.resources.some((r) => r.id === 'weather_basic')).toBe(true);
+  });
+
+  it('accepts a resource declaring both rails, in its own order', () => {
+    const raw = validRawConfig();
+    (raw['resources'] as { market_report: { payments: string[] } }).market_report.payments = [
+      'x402',
+      'mpp',
+    ];
+    const config = parseConfig(raw, {});
+    const report = config.resources.find((r) => r.id === 'market_report');
+    expect(report?.paymentMethods).toEqual(['x402', 'mpp']);
+  });
+
+  it('rejects a paid resource whose only named rail has no provider behind it', () => {
+    const raw = validRawConfig();
+    (raw['resources'] as { market_report: { payments: string[] } }).market_report.payments = [
+      'mpp',
+    ];
+    expectConfigInvalid(() => parseConfig(raw, {}));
+  });
+
+  it('accepts a resource naming a rail with no provider as long as one named rail is enabled', () => {
+    const raw = validRawConfig();
+    (raw['resources'] as { market_report: { payments: string[] } }).market_report.payments = [
+      'mpp',
+      'x402',
+    ];
+    const config = parseConfig(raw, {});
+    expect(config.resources.find((r) => r.id === 'market_report')?.paymentMethods).toEqual([
+      'mpp',
+      'x402',
+    ]);
+  });
+
+  it('names every supported rail when rejecting an unknown one', () => {
+    const raw = validRawConfig();
+    (raw['resources'] as { market_report: { payments: string[] } }).market_report.payments = [
+      'stripe',
+    ];
+    try {
+      parseConfig(raw, {});
+      expect.unreachable();
+    } catch (error) {
+      if (!isCommerceError(error)) throw error;
+      for (const name of PAYMENT_METHOD_NAMES) expect(error.message).toContain(name);
+    }
   });
 
   it('rejects a resource naming an unsupported payment method', () => {
@@ -1902,5 +1952,158 @@ describe('parseConfig backend.inputBindings', () => {
         { requestId: 'r', resourceId: resource.id },
       ),
     ).not.toThrow();
+  });
+});
+
+describe('payments.mpp', () => {
+  const SECRET = 'mpp-challenge-secret-'.padEnd(32, 'x');
+
+  // MPP-only config with no x402 block
+  function mppConfig(mpp: Record<string, unknown> = {}): Record<string, unknown> {
+    const raw = validRawConfig();
+    raw['payments'] = {
+      mpp: {
+        enabled: true,
+        rpcUrl: 'https://sepolia.example/v2/key',
+        asset: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+        assetName: 'USDC',
+        assetVersion: '2',
+        recipient: '0x1111111111111111111111111111111111111111',
+        realm: 'api.example.com',
+        challengeSecret: SECRET,
+        facilitator: { mode: 'remote', url: 'https://facilitator.example' },
+        ...mpp,
+      },
+    };
+    (raw['resources'] as { market_report: { payments: string[] } }).market_report.payments = [
+      'mpp',
+    ];
+    return raw;
+  }
+
+  function refusal(raw: Record<string, unknown>): { path?: unknown; message: string } {
+    try {
+      parseConfig(raw, {});
+    } catch (error) {
+      if (isCommerceError(error) && error.code === 'CONFIG_INVALID') {
+        return { path: error.details?.['path'], message: error.message };
+      }
+      throw error;
+    }
+    return expect.unreachable();
+  }
+
+  it('loads an MPP-only deployment without any x402 block', () => {
+    const config = parseConfig(mppConfig({ challengeTtlSeconds: '120' }), {});
+    expect(config.payments.x402).toBeUndefined();
+    expect(config.payments.mpp).toMatchObject({
+      enabled: true,
+      challengeTtlSeconds: 120,
+      facilitator: { mode: 'remote', auth: { type: 'none' } },
+    });
+    expect(config.resources.find((r) => r.id === 'market_report')?.paymentMethods).toEqual(['mpp']);
+  });
+
+  it('refuses a resource whose only rail is a disabled MPP block', () => {
+    expect(refusal(mppConfig({ enabled: false })).path).toBe('resources.market_report.payments');
+  });
+
+  it('refuses a challenge secret with length below 32 without echoing it', () => {
+    const { path, message } = refusal(mppConfig({ challengeSecret: 'short-secret' }));
+    expect(path).toBe('payments.mpp.challengeSecret');
+    expect(message).not.toContain('short-secret');
+  });
+
+  it.each([
+    ['a multi-line realm', { realm: 'api.example.com\nX-Evil: 1' }, 'payments.mpp.realm'],
+    ['a recipient that is not an address', { recipient: '0x1234' }, 'payments.mpp.recipient'],
+    ['a zero TTL', { challengeTtlSeconds: 0 }, 'payments.mpp.challengeTtlSeconds'],
+    [
+      'a well-known dev recipient on a public deployment',
+      { recipient: '0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266' },
+      'payments.mpp.recipient',
+    ],
+    [
+      'a plain-HTTP public facilitator',
+      { facilitator: { mode: 'remote', url: 'http://facilitator.example' } },
+      'payments.mpp.facilitator.url',
+    ],
+  ])('refuses %s, naming the MPP field', (_label, mpp, path) => {
+    expect(refusal(mppConfig(mpp)).path).toBe(path);
+  });
+
+  it('refuses an unknown key in the MPP block', () => {
+    expectConfigInvalid(() => parseConfig(mppConfig({ currency: 'EUR' }), {}));
+  });
+
+  it('refuses an unsupported MPP network', () => {
+    expect(refusal(mppConfig({ network: 'eip155:1' })).path).toBe('payments.mpp.network');
+  });
+
+  describe('on Base mainnet', () => {
+    const MAINNET = {
+      network: 'eip155:8453',
+      asset: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+      assetName: 'USD Coin',
+      allowMainnet: true,
+      facilitator: {
+        mode: 'remote',
+        url: 'https://facilitator.example',
+        auth: { type: 'bearer', token: 'facilitator-token' },
+      },
+    };
+
+    it('loads with an explicit opt-in, canonical USDC and an authenticated remote facilitator', () => {
+      expect(parseConfig(mppConfig(MAINNET), {}).payments.mpp).toMatchObject({
+        network: 'eip155:8453',
+        allowMainnet: true,
+      });
+    });
+
+    it.each([
+      ['no allowMainnet', { allowMainnet: undefined }, 'payments.mpp.allowMainnet'],
+      [
+        'a local facilitator',
+        { facilitator: { mode: 'local', signerPrivateKey: `0x${'1'.repeat(64)}` } },
+        'payments.mpp.facilitator.mode',
+      ],
+      [
+        'an asset other than canonical USDC',
+        { asset: '0x2222222222222222222222222222222222222222' },
+        'payments.mpp.asset',
+      ],
+      ["Base Sepolia's EIP-712 name", { assetName: 'USDC' }, 'payments.mpp.assetName'],
+      [
+        'a facilitator with no credential and no explicit acceptance',
+        { facilitator: { mode: 'remote', url: 'https://facilitator.example' } },
+        'payments.mpp.allowUnauthenticatedFacilitator',
+      ],
+    ])('refuses %s', (_label, change, path) => {
+      const mpp = { ...MAINNET, ...change };
+      if (mpp.allowMainnet === undefined) delete (mpp as Record<string, unknown>)['allowMainnet'];
+      expect(refusal(mppConfig(mpp)).path).toBe(path);
+    });
+  });
+
+  it('refuses an MPP resource priced in anything but USDC', () => {
+    const raw = mppConfig();
+    const report = (raw['resources'] as Record<string, Record<string, unknown>>)['market_report'];
+    (report as Record<string, unknown>)['pricing'] = {
+      type: 'fixed',
+      amount: '0.01',
+      currency: 'EUR',
+    };
+    expect(refusal(raw).path).toBe('resources.market_report.pricing.currency');
+  });
+
+  it('refuses an MPP price with more precision than USDC has', () => {
+    const raw = mppConfig();
+    const report = (raw['resources'] as Record<string, Record<string, unknown>>)['market_report'];
+    (report as Record<string, unknown>)['pricing'] = {
+      type: 'fixed',
+      amount: '0.0000001',
+      currency: 'USDC',
+    };
+    expect(refusal(raw).path).toBe('resources.market_report.pricing.amount');
   });
 });

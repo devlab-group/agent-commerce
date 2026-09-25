@@ -27,7 +27,8 @@ const CORS_HEADERS = 'content-type,payment-signature,x-request-id,authorization'
  * settlement result: cross-origin JS only sees the CORS-safelisted response
  * headers unless they are named here.
  */
-const CORS_EXPOSED_HEADERS = 'payment-required,payment-response,x-request-id';
+const CORS_EXPOSED_HEADERS =
+  'payment-required,payment-response,www-authenticate,payment-receipt,x-request-id';
 
 export interface AccessControlOptions {
   readonly publicBaseUrl: string;

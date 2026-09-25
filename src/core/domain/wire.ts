@@ -340,11 +340,10 @@ export function parseAuthorizationHeader(
  * (MCP tool arguments, A2A message data). HTTP carries both in headers and
  * uses the two parse helpers directly.
  *
- * The payment method comes from the resource's own declaration. This is not
- * the place that decides which rail a resource uses, so a proof for a
- * resource with no configured rail is dropped rather than forwarded under an
- * invented method. The pipeline then treats the request as unpaid and decides
- * on its own terms.
+ * A payment proof is labelled with the resource's first method. `createGateway`
+ * puts provider-backed methods first so the label matches pipeline selection;
+ * custom registries must preserve that ordering. Without a method, the proof is
+ * dropped and the pipeline receives an unpaid request.
  */
 export function extractReservedInputFields(
   rawInput: Record<string, unknown>,

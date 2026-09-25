@@ -69,9 +69,6 @@ describe('descriptor', () => {
     // Alpha honesty: things this provider does NOT implement must be listed.
     expect(provider.descriptor.unsupported).toContain('svm');
     expect(provider.descriptor.unsupported).toContain('permit2');
-    expect(provider.descriptor.unsupported).toContain(
-      'per-request signed facilitator credentials (e.g. CDP JWT)',
-    );
     // The deployment this provider is configured for is part of its
     // description: chain id 84532 alone cannot say local from Base Sepolia.
     expect(provider.descriptor.capabilities).toContain('local-facilitator');

@@ -75,7 +75,8 @@ function parseHostnameOrThrow(rpcUrl: string): string {
 }
 
 /** Host only, for diagnostics. An RPC URL's path routinely carries a key. */
-function describeRpc(rpcUrl: string): string {
+/** Origin only: RPC URLs often carry an API key in the path or query */
+export function describeRpc(rpcUrl: string): string {
   try {
     return new URL(rpcUrl).origin;
   } catch {

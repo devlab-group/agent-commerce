@@ -13,11 +13,11 @@
  * every resource that requires payment, exactly like a store that cannot
  * record or a required adapter that cannot route.
  *
- * The raw `detail` a store/adapter/provider health() implementation
- * returns (or a raw thrown Error's message) is exactly the kind of internal
- * detail exists to keep off a client-visible field — and this is an
- * unauthenticated route. The client only ever sees one of a small fixed
- * vocabulary; the raw detail is logged for the operator.
+ * A health result's raw `detail`, or a thrown error's message, is internal and
+ * must stay off this unauthenticated route. The client sees a small fixed
+ * vocabulary. Returned details are logged at debug; store and provider throws
+ * are logged at error, while adapter throws become failed results logged at
+ * debug.
  *
  * `/ready` is itself unauthenticated, with no cache and no rate
  * limit, and `checkReadiness` calls every dependency's `health()` fresh on

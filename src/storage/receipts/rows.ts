@@ -2,7 +2,7 @@
  * SQLite row shapes and mapping to/from the canonical domain model.
  *
  * `exactOptionalPropertyTypes` is on: optional fields are only assigned when
- * present (see docs/contracts.md, assumption 8).
+ * present (see docs/contracts.md, invariant 8).
  */
 import type {
   AuthorizationRecord,

@@ -12,6 +12,7 @@
 import { Document, type Node, type Pair, type YAMLMap } from 'yaml';
 import type { JsonSchema } from '../core/domain/common.js';
 import { discoverOperations } from './discover.js';
+import { dereference } from './refs.js';
 import { mapRequest, pickJsonMediaType } from './request.js';
 import { convertSchema } from './schema.js';
 import type {
@@ -68,12 +69,13 @@ export function buildResourceDrafts(
     loaded,
     options.baseUrl !== undefined ? { baseUrl: options.baseUrl } : {},
   );
-  const diagnostics: ImportDiagnostic[] = [...discovery.diagnostics];
+  const diagnostics: ImportDiagnostic[] = [];
   const drafts: ResourceDraft[] = [];
 
   const wanted = options.include?.operationIds;
   const wantedTags = options.include?.tags;
   const matched = new Set<string>();
+  const selected = new Set<string>();
 
   for (const candidate of discovery.operations) {
     if (wanted !== undefined && !selects(wanted, candidate)) continue;
@@ -83,6 +85,7 @@ export function buildResourceDrafts(
     if (wanted !== undefined) {
       for (const id of wanted) if (selects([id], candidate)) matched.add(id);
     }
+    selected.add(candidate.resourceId);
 
     const mapping = mapRequest(loaded, candidate);
     diagnostics.push(...mapping.diagnostics);
@@ -115,8 +118,8 @@ export function buildResourceDrafts(
     if (options.policy?.pricing === undefined || options.policy.expose === undefined) {
       review.push(
         'REVIEW: pricing and exposure are not inferred from OpenAPI. Add e.g.',
-        '  pricing: { type: free }   # or { type: fixed, amount: "0.01", currency: USDC }',
-        '  expose: [http]           # http | mcp | a2a',
+        '  pricing: { type: free }   # or { type: fixed, amount: "0.01", currency: USDC } with payments: [x402]',
+        '  expose: [http]           # http | mcp | a2a | acp',
       );
     }
 
@@ -158,12 +161,31 @@ export function buildResourceDrafts(
     version: loaded.version,
     sourcePath: loaded.sourcePath,
     drafts,
-    diagnostics,
+    diagnostics: [
+      ...selectDiscoveryDiagnostics(discovery.diagnostics, options.include, selected),
+      ...diagnostics,
+    ],
     unmatchedOperationIds: (wanted ?? []).filter((id) => !matched.has(id)),
   };
 }
 
 /** `--operation` accepts the OpenAPI operationId or the generated resource id. */
+// With a selection, a discovery finding counts only for a selected operation
+// or one named by `--operation`, so an unrelated one cannot fail `--strict`
+function selectDiscoveryDiagnostics(
+  found: readonly ImportDiagnostic[],
+  include: ImportOptions['include'],
+  selected: ReadonlySet<string>,
+): readonly ImportDiagnostic[] {
+  if (include?.operationIds === undefined && include?.tags === undefined) return found;
+  return found.filter(
+    ({ operation }) =>
+      operation === undefined ||
+      selected.has(operation) ||
+      include.operationIds?.includes(operation) === true,
+  );
+}
+
 function selects(ids: readonly string[], candidate: OpenApiOperationCandidate): boolean {
   return (
     ids.includes(candidate.resourceId) ||
@@ -202,20 +224,29 @@ function selectOutputSchema(
     .sort((a, b) => rank(a) - rank(b));
   if (successes.length === 0) return undefined;
 
-  const withBody = successes.filter((status) => {
-    const response = responses[status];
-    const content = isRecord(response) ? response['content'] : undefined;
-    return isRecord(content) && pickJsonMediaType(Object.keys(content)) !== undefined;
+  const withBody = successes.flatMap((status) => {
+    const response = dereference(document, responses[status]);
+    if (!isRecord(response.value)) return [];
+    const content = response.value['content'];
+    if (!isRecord(content)) return [];
+    const mediaType = pickJsonMediaType(Object.keys(content));
+    if (mediaType === undefined) return [];
+    const media = dereference(document, content[mediaType], response.stack).value;
+    return isRecord(media) ? [{ status, media }] : [];
   });
   const chosen = withBody[0];
   if (chosen === undefined) return undefined; // 204, or no JSON representation
 
-  const response = responses[chosen] as Record<string, unknown>;
-  const content = response['content'] as Record<string, unknown>;
-  const mediaType = pickJsonMediaType(Object.keys(content)) as string;
-  const media = content[mediaType];
-  const schemaNode = isRecord(media) ? media['schema'] : undefined;
-  if (schemaNode === undefined) return undefined;
+  const schemaNode = chosen.media['schema'];
+  if (schemaNode === undefined) {
+    diagnostics.push({
+      severity: 'warning',
+      code: 'missing-output-schema',
+      operation: candidate.resourceId,
+      message: `${candidate.resourceId}: response ${chosen.status} has JSON content without a schema; omitted the output schema`,
+    });
+    return undefined;
+  }
 
   const converted = convertSchema(document, schemaNode);
   if (!converted.supported) {
@@ -236,7 +267,7 @@ function selectOutputSchema(
       severity: 'warning',
       code: 'multiple-success-responses',
       operation: candidate.resourceId,
-      message: `${candidate.resourceId}: responses ${withBody.join(', ')} all carry a JSON body; used ${chosen}`,
+      message: `${candidate.resourceId}: responses ${withBody.map(({ status }) => status).join(', ')} all carry a JSON body; used ${chosen.status}`,
     });
   }
   return converted.schema;

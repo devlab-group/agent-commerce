@@ -24,9 +24,9 @@ import type { PaymentRequirement } from './payment.js';
  * header; over MCP and A2A it is the same `{ method, payload }` object carried
  * in the reserved `_authorization` input field.
  *
- * `payload` is preserved byte-for-byte from the wire. Providers derive replay
- * identities by hashing it, so decoding and reserialising it before it reaches
- * the provider would change the identity of an otherwise identical proof.
+ * `payload` is preserved byte-for-byte from the wire. It is opaque to transport
+ * adapters and may contain signed or encoding-sensitive provider data, so they
+ * must not normalise it before passing it to the provider.
  */
 export interface AuthorizationSubmission {
   readonly method: AuthorizationMethodName;

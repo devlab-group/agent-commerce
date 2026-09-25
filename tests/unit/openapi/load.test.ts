@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdtemp, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -81,6 +81,17 @@ describe('loadOpenApiDocument', () => {
     const message = await expectConfigInvalid(loadOpenApiDocument(path));
     expect(message).toContain('over the');
   });
+
+  it.skipIf(process.platform === 'win32')(
+    'caps the read of a file whose size stat does not report',
+    async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'oac-openapi-'));
+      const path = join(dir, 'endless.yaml');
+      await symlink('/dev/zero', path);
+      const message = await expectConfigInvalid(loadOpenApiDocument(path));
+      expect(message).toContain('over the');
+    },
+  );
 
   it('rejects invalid YAML', async () => {
     const message = await expectConfigInvalid(loadOpenApiDocument(fixture('invalid.yaml')));

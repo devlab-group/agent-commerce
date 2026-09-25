@@ -135,6 +135,7 @@ describe('createAp2AuthorizationProvider', () => {
     // The two an operator is most likely to assume they have
     expect(AP2_UNSUPPORTED).toContain('autonomous mode');
     expect(AP2_UNSUPPORTED).toContain('open checkout mandates (mandate.checkout.open.1)');
+    expect(AP2_UNSUPPORTED).not.toContain('merchant checkout JWT issuance');
     provider.close();
   });
 

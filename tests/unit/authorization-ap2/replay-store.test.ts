@@ -101,6 +101,30 @@ describe('reserving', () => {
     });
   });
 
+  it('refuses a released mandate once another mandate has spent its checkout', () => {
+    store.reserve(request());
+    store.release('sha256:AAAA');
+    store.reserve(request({ reference: 'sha256:BBBB', requestId: 'req-2' }));
+    store.consume('sha256:BBBB');
+
+    expect(store.reserve(request({ requestId: 'req-3' }))).toEqual({
+      kind: 'replayed',
+      state: 'consumed',
+    });
+    expect(store.stateOf('sha256:AAAA')).toBe('released');
+  });
+
+  it('refuses a released mandate while another mandate holds its checkout', () => {
+    store.reserve(request());
+    store.release('sha256:AAAA');
+    store.reserve(request({ reference: 'sha256:BBBB', requestId: 'req-2' }));
+
+    expect(store.reserve(request({ requestId: 'req-3' }))).toEqual({
+      kind: 'replayed',
+      state: 'reserved',
+    });
+  });
+
   it('keeps unrelated mandates independent', () => {
     expect(store.reserve(request())).toEqual({ kind: 'reserved' });
     expect(

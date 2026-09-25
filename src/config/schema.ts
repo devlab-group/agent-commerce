@@ -50,10 +50,19 @@ import {
   type AuthorizationMethodName,
   CommerceError,
   type CommerceResource,
+  PAYMENT_METHOD_NAMES,
   PROTOCOL_NAMES,
   type Pricing,
   RESERVED_INPUT_FIELDS,
 } from '../core/index.js';
+import {
+  isMppNetwork,
+  MPP_DEFAULT_NETWORK,
+  MPP_MIN_CHALLENGE_SECRET_LENGTH,
+  MPP_NETWORKS,
+  MPP_PROFILE,
+  type MppNetwork,
+} from '../payments/mpp/constants.js';
 import { resolveX402Deployment, type X402FacilitatorConfig } from '../payments/x402/guardrails.js';
 import {
   ACP_CHECKOUT_OPERATIONS,
@@ -189,7 +198,7 @@ const MountPathSchema = z
     },
   );
 
-/** Bearer is the only ACP auth scheme in this release - `none` is not offered. */
+/** Bearer is the only ACP auth scheme - `none` is not offered. */
 const AcpAuthSchema = z.object({ type: z.literal('bearer'), token: z.string().min(1) }).strict();
 
 const AcpIdempotencySchema = z
@@ -330,8 +339,8 @@ const ResourcesMapSchema = z.record(z.string().min(1), ResourceEntrySchema);
 /**
  * Facilitator credentials, kept generic on purpose: x402 facilitators are not
  * a single-vendor category, and an auth block shaped around one provider's
- * credentials would make the abstraction a fiction. A facilitator needing
- * per-request signed credentials is refused rather than sent nothing.
+ * credentials would make the abstraction a fiction. A facilitator needing a
+ * credential type outside this union is refused rather than sent nothing.
  */
 const FacilitatorAuthSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('none') }).strict(),
@@ -386,9 +395,30 @@ const X402Schema = z
   })
   .strict();
 
+const MppSchema = z
+  .object({
+    enabled: BooleanOrString,
+    network: z.string().min(1).optional(),
+    rpcUrl: z.string().min(1),
+    asset: z.string().min(1),
+    assetName: z.string().min(1),
+    assetVersion: z.string().min(1),
+    recipient: z.string().min(1),
+    realm: z.string().min(1),
+    challengeSecret: z.string().min(1),
+    challengeTtlSeconds: NumberOrString.optional(),
+    facilitator: FacilitatorSchema,
+    // Real funds. Never defaulted - see src/payments/x402/guardrails.ts
+    allowMainnet: BooleanOrString.optional(),
+    // Accepts a mainnet facilitator that takes no credential. Never defaulted
+    allowUnauthenticatedFacilitator: BooleanOrString.optional(),
+  })
+  .strict();
+
 const PaymentsSchema = z
   .object({
     x402: X402Schema.optional(),
+    mpp: MppSchema.optional(),
   })
   .strict();
 
@@ -525,6 +555,21 @@ export interface GatewayConfig {
       readonly assetDecimals: number;
       readonly payTo: string;
       readonly maxTimeoutSeconds: number;
+      readonly facilitator: X402FacilitatorConfig;
+      readonly allowMainnet?: boolean;
+      readonly allowUnauthenticatedFacilitator?: boolean;
+    };
+    readonly mpp?: {
+      readonly enabled: boolean;
+      readonly network: MppNetwork;
+      readonly rpcUrl: string;
+      readonly asset: string;
+      readonly assetName: string;
+      readonly assetVersion: string;
+      readonly recipient: string;
+      readonly realm: string;
+      readonly challengeSecret: string;
+      readonly challengeTtlSeconds?: number;
       readonly facilitator: X402FacilitatorConfig;
       readonly allowMainnet?: boolean;
       readonly allowUnauthenticatedFacilitator?: boolean;
@@ -669,7 +714,7 @@ function toBoolean(value: boolean | string, path: string): boolean {
 // ---------------------------------------------------------------------------
 
 const SUPPORTED_PROTOCOLS: ReadonlySet<string> = new Set(PROTOCOL_NAMES);
-const SUPPORTED_PAYMENT_METHODS = new Set(['x402']);
+const SUPPORTED_PAYMENT_METHODS: ReadonlySet<string> = new Set(PAYMENT_METHOD_NAMES);
 const SUPPORTED_AUTHORIZATION_METHODS: ReadonlySet<string> = new Set(['ap2']);
 
 function normalise(raw: RawConfig): GatewayConfig {
@@ -688,18 +733,8 @@ function normalise(raw: RawConfig): GatewayConfig {
   validateMountPaths(protocols);
 
   const x402Raw = raw.payments.x402;
-  const facilitator: X402FacilitatorConfig | undefined =
-    x402Raw === undefined
-      ? undefined
-      : x402Raw.facilitator.mode === 'local'
-        ? { mode: 'local', signerPrivateKey: x402Raw.facilitator.signerPrivateKey }
-        : {
-            mode: 'remote',
-            url: x402Raw.facilitator.url,
-            auth: x402Raw.facilitator.auth ?? { type: 'none' },
-          };
   const x402 =
-    x402Raw && facilitator
+    x402Raw !== undefined
       ? {
           enabled: toBoolean(x402Raw.enabled, 'payments.x402.enabled'),
           network: x402Raw.network,
@@ -719,7 +754,7 @@ function normalise(raw: RawConfig): GatewayConfig {
               min: 1,
             },
           ),
-          facilitator,
+          facilitator: normaliseFacilitator(x402Raw.facilitator),
           ...(x402Raw.allowMainnet !== undefined
             ? { allowMainnet: toBoolean(x402Raw.allowMainnet, 'payments.x402.allowMainnet') }
             : {}),
@@ -754,13 +789,15 @@ function normalise(raw: RawConfig): GatewayConfig {
     });
   }
 
+  const mpp = normaliseMpp(raw.payments.mpp);
+
   const ap2 = normaliseAp2(raw.authorization?.ap2);
   if (ap2?.enabled) {
     validateReplayStoreIsolated(ap2.replay.path, raw.storage.receipts.path, protocols.acp);
   }
 
   const resources = Object.entries(raw.resources).map(([id, entry]) =>
-    normaliseResource(id, entry, protocols, x402, ap2),
+    normaliseResource(id, entry, protocols, x402, mpp, ap2),
   );
   if (protocols.acp.enabled) validateAcpCheckoutMapping(protocols.acp, resources);
 
@@ -784,6 +821,7 @@ function normalise(raw: RawConfig): GatewayConfig {
     resources,
     payments: {
       ...(x402 !== undefined ? { x402 } : {}),
+      ...(mpp !== undefined ? { mpp } : {}),
     },
     ...(ap2 !== undefined ? { authorization: { ap2 } } : {}),
   };
@@ -1310,11 +1348,97 @@ interface NormalisedX402 {
   readonly assetDecimals: number;
 }
 
+function normaliseFacilitator(raw: z.infer<typeof FacilitatorSchema>): X402FacilitatorConfig {
+  return raw.mode === 'local'
+    ? { mode: 'local', signerPrivateKey: raw.signerPrivateKey }
+    : { mode: 'remote', url: raw.url, auth: raw.auth ?? { type: 'none' } };
+}
+
+type NormalisedMpp = NonNullable<GatewayConfig['payments']['mpp']>;
+
+function normaliseMpp(raw: RawConfig['payments']['mpp']): NormalisedMpp | undefined {
+  if (raw === undefined) return undefined;
+  const network = raw.network ?? MPP_DEFAULT_NETWORK;
+  if (!isMppNetwork(network)) {
+    throw new CommerceError(
+      'CONFIG_INVALID',
+      `payments.mpp.network must be one of ${MPP_NETWORKS.join(', ')}`,
+      { details: { path: 'payments.mpp.network' } },
+    );
+  }
+  const mpp: NormalisedMpp = {
+    enabled: toBoolean(raw.enabled, 'payments.mpp.enabled'),
+    network,
+    rpcUrl: raw.rpcUrl,
+    asset: raw.asset,
+    assetName: raw.assetName,
+    assetVersion: raw.assetVersion,
+    recipient: raw.recipient,
+    realm: raw.realm,
+    challengeSecret: raw.challengeSecret,
+    ...(raw.challengeTtlSeconds !== undefined
+      ? {
+          challengeTtlSeconds: toNumber(
+            raw.challengeTtlSeconds,
+            'payments.mpp.challengeTtlSeconds',
+            { min: 1 },
+          ),
+        }
+      : {}),
+    facilitator: normaliseFacilitator(raw.facilitator),
+    ...(raw.allowMainnet !== undefined
+      ? { allowMainnet: toBoolean(raw.allowMainnet, 'payments.mpp.allowMainnet') }
+      : {}),
+    ...(raw.allowUnauthenticatedFacilitator !== undefined
+      ? {
+          allowUnauthenticatedFacilitator: toBoolean(
+            raw.allowUnauthenticatedFacilitator,
+            'payments.mpp.allowUnauthenticatedFacilitator',
+          ),
+        }
+      : {}),
+  };
+  validateAddress('payments.mpp.recipient', mpp.recipient);
+  validateAddress('payments.mpp.asset', mpp.asset);
+  // mppx refuses CR or LF in a quoted challenge parameter
+  if (/[\r\n]/.test(mpp.realm)) {
+    throw new CommerceError('CONFIG_INVALID', 'payments.mpp.realm must be a single line', {
+      details: { path: 'payments.mpp.realm' },
+    });
+  }
+  // Length only: the secret itself never appears in an error
+  if (mpp.challengeSecret.length < MPP_MIN_CHALLENGE_SECRET_LENGTH) {
+    throw new CommerceError(
+      'CONFIG_INVALID',
+      `payments.mpp.challengeSecret must have length at least ${MPP_MIN_CHALLENGE_SECRET_LENGTH}`,
+      { details: { path: 'payments.mpp.challengeSecret' } },
+    );
+  }
+  // Apply the shared x402 address, facilitator and mainnet guards under the MPP
+  // config path
+  resolveX402Deployment({
+    network: mpp.network,
+    payTo: mpp.recipient,
+    asset: mpp.asset,
+    assetName: mpp.assetName,
+    assetVersion: mpp.assetVersion,
+    facilitator: mpp.facilitator,
+    ...(mpp.allowMainnet !== undefined ? { allowMainnet: mpp.allowMainnet } : {}),
+    ...(mpp.allowUnauthenticatedFacilitator !== undefined
+      ? { allowUnauthenticatedFacilitator: mpp.allowUnauthenticatedFacilitator }
+      : {}),
+    configPath: 'payments.mpp',
+    payToField: 'recipient',
+  });
+  return mpp;
+}
+
 function normaliseResource(
   id: string,
   entry: RawResourceEntry,
   protocols: NormalisedProtocols,
   x402: NormalisedX402 | undefined,
+  mpp: NormalisedMpp | undefined,
   ap2: Ap2AuthorizationConfig | undefined,
 ): CommerceResource {
   if (entry.input !== undefined) validateResourceSchemaKeywords(id, 'input', entry.input);
@@ -1397,7 +1521,7 @@ function normaliseResource(
   }
 
   if (entry.pricing.type === 'fixed') {
-    validatePricingAmount(id, entry.pricing.amount, x402);
+    validatePricingAmount(id, entry.pricing.amount, x402?.assetDecimals);
   }
 
   const paymentMethods = entry.payments ?? [];
@@ -1414,17 +1538,32 @@ function normaliseResource(
       if (!SUPPORTED_PAYMENT_METHODS.has(method)) {
         throw new CommerceError(
           'CONFIG_INVALID',
-          `Resource "${id}" names unsupported payment method "${method}". Supported: x402.`,
+          `Resource "${id}" names unsupported payment method "${method}". Supported: ${PAYMENT_METHOD_NAMES.join(', ')}.`,
           { details: { path: `resources.${id}.payments`, resourceId: id, method } },
         );
       }
-      if (method === 'x402' && (!x402 || !x402.enabled)) {
+    }
+    // A paid resource needs at least one named rail enabled, but not every
+    // named rail. Rejecting it here leaves the composition-root check as a
+    // drift detector rather than the first enforceable guard.
+    const enabledRails = [...(x402?.enabled ? ['x402'] : []), ...(mpp?.enabled ? ['mpp'] : [])];
+    if (!paymentMethods.some((method) => enabledRails.includes(method))) {
+      throw new CommerceError(
+        'CONFIG_INVALID',
+        `Resource "${id}" names payment method(s) "${paymentMethods.join(', ')}", none of which is configured and enabled under "payments"`,
+        { details: { path: `resources.${id}.payments`, resourceId: id, paymentMethods } },
+      );
+    }
+    // MPP fixes the currency label and decimal precision for every resource it serves
+    if (mpp?.enabled && paymentMethods.includes('mpp')) {
+      if (entry.pricing.currency !== MPP_PROFILE.assetSymbol) {
         throw new CommerceError(
           'CONFIG_INVALID',
-          `Resource "${id}" names payment method "x402" which is not configured or not enabled under payments.x402`,
-          { details: { path: `resources.${id}.payments`, resourceId: id, method } },
+          `Resource "${id}" is priced in ${entry.pricing.currency}, but MPP charges ${MPP_PROFILE.assetSymbol}`,
+          { details: { path: `resources.${id}.pricing.currency`, resourceId: id } },
         );
       }
+      validatePricingAmount(id, entry.pricing.amount, MPP_PROFILE.assetDecimals);
     }
   }
 
@@ -1699,7 +1838,7 @@ function validateResourceSchemaKeywords(
 const PRICING_AMOUNT_PATTERN = /^\d+(?:\.\d+)?$/;
 const ZERO_AMOUNT_PATTERN = /^0(?:\.0+)?$/;
 
-function validatePricingAmount(id: string, amount: string, x402: NormalisedX402 | undefined): void {
+function validatePricingAmount(id: string, amount: string, decimals: number | undefined): void {
   const path = `resources.${id}.pricing.amount`;
   if (!PRICING_AMOUNT_PATTERN.test(amount)) {
     throw new CommerceError(
@@ -1717,12 +1856,12 @@ function validatePricingAmount(id: string, amount: string, x402: NormalisedX402 
       { details: { path, resourceId: id } },
     );
   }
-  if (x402 !== undefined) {
+  if (decimals !== undefined) {
     const fractionalDigits = amount.includes('.') ? (amount.split('.')[1]?.length ?? 0) : 0;
-    if (fractionalDigits > x402.assetDecimals) {
+    if (fractionalDigits > decimals) {
       throw new CommerceError(
         'CONFIG_INVALID',
-        `Resource "${id}" has pricing.amount "${amount}" with more precision (${fractionalDigits} fractional digits) than the configured asset supports (${x402.assetDecimals} decimals)`,
+        `Resource "${id}" has pricing.amount "${amount}" with more precision (${fractionalDigits} fractional digits) than the configured asset supports (${decimals} decimals)`,
         { details: { path, resourceId: id } },
       );
     }

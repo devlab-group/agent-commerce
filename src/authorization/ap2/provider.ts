@@ -2,8 +2,8 @@
  * The AP2 authorization provider: the seam between core's generic contract and
  * the mandate machinery.
  *
- * Owns the replay database, so the gateway owns this object's lifetime and
- * closes it on shutdown.
+ * The provider owns its replay store. The caller that creates the provider must
+ * call `close()`; `createGateway` does not close authorization providers.
  */
 import type {
   AdapterHealth,
@@ -34,7 +34,7 @@ export interface Ap2AuthorizationProviderOptions {
 }
 
 export interface Ap2AuthorizationProvider extends AuthorizationProvider {
-  /** Closes the replay database */
+  /** Closes the replay store */
   close(): void;
 }
 

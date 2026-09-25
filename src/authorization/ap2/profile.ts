@@ -61,6 +61,19 @@ export interface BoundPurchase {
   readonly paymentMethod: string;
 }
 
+const EVM_ADDRESS = /^0x[0-9a-f]{40}$/i;
+
+// EIP-55 encodes an address checksum through letter casing, so lowercase and
+// checksummed forms identify the same account. Other values compare exactly.
+function sameCoordinate(declared: unknown, expected: string | undefined): boolean {
+  if (typeof declared === 'string' && expected !== undefined) {
+    if (EVM_ADDRESS.test(declared) && EVM_ADDRESS.test(expected)) {
+      return declared.toLowerCase() === expected.toLowerCase();
+    }
+  }
+  return declared === expected;
+}
+
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -115,7 +128,7 @@ export async function bindMandateToPurchase(
   ] as const) {
     const declared = profile[claim];
     if (declared === undefined && expected === undefined) continue;
-    if (declared !== expected) throw ap2Rejected('purchase_mismatch', errorContext);
+    if (!sameCoordinate(declared, expected)) throw ap2Rejected('purchase_mismatch', errorContext);
   }
 
   return {

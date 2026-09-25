@@ -15,6 +15,7 @@ import {
   type AuthorizationProvider,
   type BackendExecutor,
   type Clock,
+  type CommerceResource,
   type ExecutionPipeline,
   type IdGenerator,
   type Logger,
@@ -66,6 +67,23 @@ export interface GatewayInstance {
   readonly server: FastifyInstance;
 }
 
+// Ingress labels a proof with `paymentMethods[0]`, while the pipeline selects
+// the first method backed by a provider. Move backed methods first, preserving
+// declared order within each group, so both paths select the same rail.
+function withProviderBackedMethodsFirst(
+  resource: CommerceResource,
+  providers: readonly PaymentProvider[],
+): CommerceResource {
+  const backed = (method: string) => providers.some((provider) => provider.name === method);
+  const ordered = [
+    ...resource.paymentMethods.filter(backed),
+    ...resource.paymentMethods.filter((method) => !backed(method)),
+  ];
+  return ordered.some((method, i) => method !== resource.paymentMethods[i])
+    ? { ...resource, paymentMethods: ordered }
+    : resource;
+}
+
 export async function createGateway(options: GatewayOptions): Promise<GatewayInstance> {
   const clock = options.clock ?? systemClock;
   const ids = options.ids ?? createDefaultIdGenerator();
@@ -74,7 +92,11 @@ export async function createGateway(options: GatewayOptions): Promise<GatewayIns
 
   const authorizationProviders = options.authorizationProviders ?? [];
 
-  const resources = createResourceRegistry(options.config.resources);
+  const resources = createResourceRegistry(
+    options.config.resources.map((resource) =>
+      withProviderBackedMethodsFirst(resource, options.paymentProviders),
+    ),
+  );
   const eventBus = createEventBus({ store: options.store, logger });
   const pipeline = createExecutionPipeline({
     resources,

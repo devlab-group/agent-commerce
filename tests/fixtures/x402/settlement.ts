@@ -100,3 +100,32 @@ export async function expectRealSettlement(options: {
   assertBalanceDelta(options.before, options.after, options.amountBaseUnits);
   await assertTransactionSucceeded(options.rpcUrl, options.txHash);
 }
+
+/**
+ * Polls balances until `predicate` holds or the timeout passes, and returns
+ * the last snapshot read. It throws only when no snapshot was ever read. It
+ * waits out a public RPC node that lags the facilitator's by a block or two;
+ * callers still assert the exact delta.
+ */
+export async function waitForBalances(
+  query: Erc20BalanceQuery,
+  predicate: (snapshot: BalanceSnapshot) => boolean,
+  timeoutMs = 90_000,
+): Promise<BalanceSnapshot> {
+  const deadline = Date.now() + timeoutMs;
+  let snapshot: BalanceSnapshot | undefined;
+  let lastError: unknown;
+  while (Date.now() < deadline) {
+    try {
+      snapshot = await readBalances(query);
+      lastError = undefined;
+      if (predicate(snapshot)) return snapshot;
+    } catch (err) {
+      // A public RPC rate-limiting the poll is not evidence about the payment
+      lastError = err;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 3_000));
+  }
+  if (snapshot) return snapshot;
+  throw lastError ?? new Error('no balance snapshot was ever read');
+}

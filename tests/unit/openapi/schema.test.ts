@@ -101,6 +101,29 @@ describe('convertSchema', () => {
     });
   });
 
+  it('keeps a merged allOf open when a branch allows additional properties', () => {
+    const result = convertSchema(document, {
+      allOf: [
+        { type: 'object', properties: { id: { type: 'string' } } },
+        { type: 'object', additionalProperties: true, title: 'Open' },
+      ],
+    });
+    expect(result.supported && result.schema).toMatchObject({
+      additionalProperties: true,
+      title: 'Open',
+    });
+  });
+
+  it('refuses an allOf branch whose additionalProperties is a schema', () => {
+    const result = convertSchema(document, {
+      allOf: [
+        { type: 'object', properties: { id: { type: 'string' } } },
+        { type: 'object', additionalProperties: { type: 'string' } },
+      ],
+    });
+    expect(!result.supported && result.reason).toContain('additionalProperties');
+  });
+
   it('refuses an allOf whose branches disagree about a property', () => {
     const result = convert('ConflictingAllOf');
     expect(result.supported).toBe(false);

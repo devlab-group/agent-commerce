@@ -55,11 +55,15 @@ const REMOTE_PAY_TO = '0x1111111111111111111111111111111111111111' as const;
 const BUYER_PRIVATE_KEY =
   '0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a' as const;
 
-async function makeProvider(facilitatorMode: 'local' | 'remote' = 'local', clock?: Clock) {
+async function makeProvider(
+  facilitatorMode: 'local' | 'remote' = 'local',
+  clock?: Clock,
+  rpcUrl = 'http://127.0.0.1:19322',
+) {
   const { createX402PaymentProvider } = await import('../../../src/payments/x402/provider.js');
   return createX402PaymentProvider({
     network: 'eip155:84532',
-    rpcUrl: 'http://127.0.0.1:19322',
+    rpcUrl,
     asset: ASSET,
     assetName: 'MockUSDC',
     assetVersion: '2',
@@ -147,6 +151,31 @@ describe('health() — mocked RPC client', () => {
     const health = await provider.health();
     expect(health.status).toBe('fail');
     expect(health.detail).toContain('chain id');
+  });
+
+  it('names the RPC by origin only, never a key in its path or query', async () => {
+    getChainIdMock.mockResolvedValueOnce(1);
+    const provider = await makeProvider(
+      'local',
+      undefined,
+      'http://127.0.0.1:19322/v2/RPC-KEY?token=QUERY-KEY',
+    );
+    const health = await provider.health();
+    expect(health.detail).toContain('http://127.0.0.1:19322');
+    expect(health.detail).not.toContain('RPC-KEY');
+    expect(health.detail).not.toContain('QUERY-KEY');
+  });
+
+  it('names the RPC by origin only when the RPC call itself fails', async () => {
+    getChainIdMock.mockRejectedValueOnce(
+      new Error('HTTP request failed.\n\nURL: http://127.0.0.1:19322/v2/RPC-KEY?token=QUERY-KEY'),
+    );
+    const provider = await makeProvider();
+    const health = await provider.health();
+    expect(health.status).toBe('fail');
+    expect(health.detail).toContain('http://127.0.0.1:19322');
+    expect(health.detail).not.toContain('RPC-KEY');
+    expect(health.detail).not.toContain('QUERY-KEY');
   });
 
   it('fails when the asset address has no code', async () => {

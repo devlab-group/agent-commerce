@@ -70,6 +70,10 @@ export interface X402DeploymentInput {
    * without an account, terms, or anyone to call".
    */
   readonly allowUnauthenticatedFacilitator?: boolean;
+  /** Error-path prefix, `payments.x402` by default */
+  readonly configPath?: string;
+  /** Settlement-recipient field named in errors, `payTo` by default */
+  readonly payToField?: string;
 }
 
 export interface X402Deployment {
@@ -87,7 +91,9 @@ function invalid(message: string, path: string): CommerceError {
  * first; the rest are independent.
  */
 export function resolveX402Deployment(input: X402DeploymentInput): X402Deployment {
-  const profile = requireNetworkProfile(input.network, 'payments.x402.network');
+  const at = input.configPath ?? 'payments.x402';
+  const payTo = input.payToField ?? 'payTo';
+  const profile = requireNetworkProfile(input.network, `${at}.network`);
   const mode = resolveDeploymentMode(profile, input.facilitator.mode);
 
   // The in-process facilitator signs with a key this process holds. Not a
@@ -99,20 +105,20 @@ export function resolveX402Deployment(input: X402DeploymentInput): X402Deploymen
   // radius — so it is refused, not warned about.
   if (profile.kind === 'mainnet' && input.facilitator.mode === 'local') {
     throw invalid(
-      `payments.x402: network "${profile.id}" (${profile.displayName}) is a mainnet and cannot be served by facilitator.mode "local". A mainnet deployment must settle through a remote facilitator.`,
-      'payments.x402.facilitator.mode',
+      `${at}: network "${profile.id}" (${profile.displayName}) is a mainnet and cannot be served by facilitator.mode "local". A mainnet deployment must settle through a remote facilitator.`,
+      `${at}.facilitator.mode`,
     );
   }
 
   if (mode === 'mainnet' && input.allowMainnet !== true) {
     throw invalid(
-      `payments.x402: network "${profile.id}" (${profile.displayName}) settles real funds. Set payments.x402.allowMainnet: true to acknowledge this explicitly — it is never the default.`,
-      'payments.x402.allowMainnet',
+      `${at}: network "${profile.id}" (${profile.displayName}) settles real funds. Set ${at}.allowMainnet: true to acknowledge this explicitly - it is never the default.`,
+      `${at}.allowMainnet`,
     );
   }
 
   if (input.facilitator.mode === 'remote') {
-    assertFacilitatorUrlIsSafe(input.facilitator.url, mode);
+    assertFacilitatorUrlIsSafe(input.facilitator.url, mode, at);
     // Not a funds check. An EIP-3009 authorisation names its recipient, its
     // amount and its chain, so a facilitator can broadcast exactly that
     // transfer or nothing — it cannot redirect the money. What a credential
@@ -126,8 +132,8 @@ export function resolveX402Deployment(input: X402DeploymentInput): X402Deploymen
       input.allowUnauthenticatedFacilitator !== true
     ) {
       throw invalid(
-        `payments.x402: facilitator ${describeOrigin(input.facilitator.url)} takes no credential, and this is a mainnet deployment. It will see every payment authorisation you handle, with no account, terms or support behind it. Set payments.x402.allowUnauthenticatedFacilitator: true to accept that, or configure facilitator.auth.`,
-        'payments.x402.allowUnauthenticatedFacilitator',
+        `${at}: facilitator ${describeOrigin(input.facilitator.url)} takes no credential, and this is a mainnet deployment. It will see every payment authorisation you handle, with no account, terms or support behind it. Set ${at}.allowUnauthenticatedFacilitator: true to accept that, or configure facilitator.auth.`,
+        `${at}.allowUnauthenticatedFacilitator`,
       );
     }
     // An empty credential is refused rather than sent: a blank token or key
@@ -137,8 +143,8 @@ export function resolveX402Deployment(input: X402DeploymentInput): X402Deploymen
     for (const [field, value] of credentialFields(input.facilitator.auth)) {
       if (value.trim() === '') {
         throw invalid(
-          `payments.x402: facilitator.auth.type is "${input.facilitator.auth.type}" but ${field} is empty. An empty credential is refused rather than sent.`,
-          `payments.x402.facilitator.auth.${field}`,
+          `${at}: facilitator.auth.type is "${input.facilitator.auth.type}" but ${field} is empty. An empty credential is refused rather than sent.`,
+          `${at}.facilitator.auth.${field}`,
         );
       }
     }
@@ -155,15 +161,15 @@ export function resolveX402Deployment(input: X402DeploymentInput): X402Deploymen
   // check had drifted out of the shared one.
   if (/^0x0{40}$/i.test(input.payTo)) {
     throw invalid(
-      'payments.x402: "payTo" is the zero address. Every payment settled there is destroyed.',
-      'payments.x402.payTo',
+      `${at}: "${payTo}" is the zero address. Every payment settled there is destroyed.`,
+      `${at}.${payTo}`,
     );
   }
 
   if (mode !== 'local' && isWellKnownDevAddress(input.payTo)) {
     throw invalid(
-      `payments.x402: "payTo" (${input.payTo}) is a well-known Anvil development address and this is a ${mode} deployment. Anyone can spend what settles there. Set payTo to your own merchant wallet.`,
-      'payments.x402.payTo',
+      `${at}: "${payTo}" (${input.payTo}) is a well-known Anvil development address and this is a ${mode} deployment. Anyone can spend what settles there. Set ${payTo} to your own merchant wallet.`,
+      `${at}.${payTo}`,
     );
   }
 
@@ -173,8 +179,8 @@ export function resolveX402Deployment(input: X402DeploymentInput): X402Deploymen
   if (mode === 'mainnet' && canonical) {
     if (!sameAddress(input.asset, canonical.address)) {
       throw invalid(
-        `payments.x402: asset ${input.asset} is not ${canonical.symbol} on ${profile.displayName} (expected ${canonical.address}). Settling a mainnet payment in an unintended token is refused.`,
-        'payments.x402.asset',
+        `${at}: asset ${input.asset} is not ${canonical.symbol} on ${profile.displayName} (expected ${canonical.address}). Settling a mainnet payment in an unintended token is refused.`,
+        `${at}.asset`,
       );
     }
     // The EIP-712 domain is signed by the buyer and checked by the scheme. Get
@@ -183,14 +189,14 @@ export function resolveX402Deployment(input: X402DeploymentInput): X402Deploymen
     // Caught here instead, before the gateway starts.
     if (input.assetName !== undefined && input.assetName !== canonical.name) {
       throw invalid(
-        `payments.x402: assetName "${input.assetName}" is not the EIP-712 domain name ${canonical.symbol} reports on ${profile.displayName} (expected "${canonical.name}"). Every payment would be refused after the buyer signed.`,
-        'payments.x402.assetName',
+        `${at}: assetName "${input.assetName}" is not the EIP-712 domain name ${canonical.symbol} reports on ${profile.displayName} (expected "${canonical.name}"). Every payment would be refused after the buyer signed.`,
+        `${at}.assetName`,
       );
     }
     if (input.assetVersion !== undefined && input.assetVersion !== canonical.version) {
       throw invalid(
-        `payments.x402: assetVersion "${input.assetVersion}" is not the EIP-712 domain version ${canonical.symbol} reports on ${profile.displayName} (expected "${canonical.version}").`,
-        'payments.x402.assetVersion',
+        `${at}: assetVersion "${input.assetVersion}" is not the EIP-712 domain version ${canonical.symbol} reports on ${profile.displayName} (expected "${canonical.version}").`,
+        `${at}.assetVersion`,
       );
     }
   }
@@ -204,22 +210,22 @@ export function resolveX402Deployment(input: X402DeploymentInput): X402Deploymen
  * lets anyone in the path rewrite a settlement result, so it is allowed only
  * where the endpoint cannot leave the host — a local or private address.
  */
-function assertFacilitatorUrlIsSafe(url: string, mode: DeploymentMode): void {
+function assertFacilitatorUrlIsSafe(url: string, mode: DeploymentMode, at: string): void {
   let parsed: URL;
   try {
     parsed = new URL(url);
   } catch (cause) {
-    throw new CommerceError('CONFIG_INVALID', `payments.x402: facilitator.url is not a valid URL`, {
+    throw new CommerceError('CONFIG_INVALID', `${at}: facilitator.url is not a valid URL`, {
       cause,
-      details: { path: 'payments.x402.facilitator.url' },
+      details: { path: `${at}.facilitator.url` },
     });
   }
 
   if (parsed.protocol === 'https:') return;
   if (parsed.protocol !== 'http:') {
     throw invalid(
-      `payments.x402: facilitator ${describeOrigin(url)} must be reached over https (or http on a local/private host); got "${parsed.protocol}//"`,
-      'payments.x402.facilitator.url',
+      `${at}: facilitator ${describeOrigin(url)} must be reached over https (or http on a local/private host); got "${parsed.protocol}//"`,
+      `${at}.facilitator.url`,
     );
   }
   if (mode !== 'mainnet' && isLikelyLocalOrPrivateHost(parsed.hostname)) return;
@@ -228,8 +234,8 @@ function assertFacilitatorUrlIsSafe(url: string, mode: DeploymentMode): void {
   // key, which is why `/.well-known` withholds this field entirely. A refusal
   // message goes to `validate`, `doctor`, startup output and CI logs.
   throw invalid(
-    `payments.x402: facilitator ${describeOrigin(url)} is reached over plain HTTP. Payment authorisations and settlement results would travel unencrypted. Use https, or point at a local/private host on a non-mainnet deployment.`,
-    'payments.x402.facilitator.url',
+    `${at}: facilitator ${describeOrigin(url)} is reached over plain HTTP. Payment authorisations and settlement results would travel unencrypted. Use https, or point at a local/private host on a non-mainnet deployment.`,
+    `${at}.facilitator.url`,
   );
 }
 

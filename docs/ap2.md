@@ -1,265 +1,219 @@
 # AP2 mandate verification
 
-**Experimental.** The gateway verifies an [AP2](https://github.com/google-agentic-commerce/AP2)
-**v0.2.0 Direct Checkout Mandate** before it lets a payment settle, so a paid
-resource can require proof that the human behind an agent approved *this exact
-purchase*.
+**Experimental.** The gateway can require an AP2 v0.2.0 Direct Checkout
+Mandate before a paid resource settles. AP2 is disabled unless configured with
+`enabled: true`.
 
-Off by default: a deployment that configures nothing here behaves exactly as it
-did before AP2 existed.
+This is merchant-side mandate verification, not a complete AP2 Merchant
+implementation. The AP2 provider verifies closed mandates but does not issue
+mandates or signed Checkout Receipts.
 
-## Call it what it is
-
-This is **AP2 merchant-side mandate verification**, not a full AP2 Merchant
-implementation. AP2 v0.2's Merchant role also covers Checkout Receipts, and the
-gateway holds no signing key and issues none. It is the verifying half.
-
-| | |
+| Property | Supported value |
 | --- | --- |
-| Spec | AP2 **v0.2.0**, tagged 2026-04-28, commit `b4587ac` |
+| Specification | AP2 v0.2.0, tag 2026-04-28, commit `b4587ac` |
 | Mode | Direct (Human-Present) |
-| Mandate type | closed Checkout Mandate, `vct` exactly `mandate.checkout.1` |
-| Signatures | ES256 over P-256, and nothing else |
-| Trust | static public keys in `config.yaml`, no discovery of any kind |
+| Mandate type | closed Checkout Mandate, `vct: mandate.checkout.1` |
+| Signature | ES256 with P-256 |
+| Trust | static public keys in `config.yaml` |
 
-## What a verified mandate proves
+## What verification establishes
 
-1. A configured issuer signed it, with a key that issuer declared.
-2. It has not expired, and was not issued in the future.
-3. It is addressed to this merchant.
-4. It binds a checkout document the merchant signed.
-5. That document authorises the resource, input, price and rail in front of us.
-6. It has not been spent before.
+A successful verify-and-reserve call shows that, immediately before its
+reservation:
 
-Nothing else. A mandate never unlocks a resource on its own and never moves
-money: a gated resource still needs a real payment proof.
+1. a configured mandate issuer signed it with the named configured key;
+2. its time claims and audience are valid;
+3. it binds a checkout JWT signed by a configured checkout issuer;
+4. that checkout JWT matches the resolved resource, validated input, price,
+   payment method and settlement coordinates;
+5. the mandate identity had no `reserved`, `consumed` or `uncertain` replay
+   record, and no other non-released mandate held the checkout JWT `jti`.
 
-## Where it sits
+The call then reserves the mandate identity and checkout `jti` atomically.
+
+Authorization does not move money or unlock a paid resource by itself. The
+request still needs a valid payment proof.
+
+## Pipeline position
 
 ```text
 CanonicalRequest
   -> resolve resource, validate input, resolve price
-  -> no payment proof?  402 challenge + the AP2 requirement
-  -> verify payment proof            no funds move
-  -> VERIFY AND RESERVE THE MANDATE  AUTHORIZATION_*, fail closed
-  -> reserve the payment replay key
-  -> settle                          funds move here, and only here
-  -> consume | release | mark uncertain the reservation
-  -> merchant backend
-  -> receipt, carrying the mandate's digest
+  -> no payment proof? return the payment and AP2 requirements
+  -> verify payment proof
+  -> verify and reserve mandate        AUTHORIZATION_*
+  -> reserve payment replay key        PAYMENT_REPLAYED
+       reservation failure -> release mandate
+  -> settle payment
+  -> consume, release or mark the mandate uncertain after settlement
+  -> call merchant backend
+  -> store receipt with mandate digest
 ```
 
-The order is the control. Payment verification runs first because it has no
-side effect, so a bad proof cannot burn a reservation; the mandate is reserved
-before settlement, so two presentations cannot race one payment; and its fate
-is decided afterwards, because until settlement returns nobody knows it.
+Payment verification runs before mandate reservation and must not move funds.
+The mandate is reserved before settlement to block concurrent reuse. If
+recording the payment attempt fails, the pipeline releases the mandate before
+settlement; otherwise the settlement outcome determines its final state.
 
-## The Agent Commerce checkout profile
+## Agent Commerce checkout profile
 
-AP2 leaves the checkout payload outside its scope, so the claims a paid
-invocation needs are specified here instead, under the identifier
+AP2 leaves the checkout payload to the implementation. This gateway requires:
 
 ```text
 agent-commerce/ap2/checkout/v1
 ```
 
-A bare name, like the gateway's other wire identifiers: a profile id is a
-namespace, never dereferenced, so a URL would only tie the format to a domain.
-**Frozen** once released, because merchants sign it into every checkout JWT.
+The identifier is a namespace, not a URL, and is frozen as a signed wire value.
 
-### The mandate
+### Closed Checkout Mandate
 
-A closed Checkout Mandate, presented as an SD-JWT with its disclosures:
+The mandate is an SD-JWT presentation with these claims:
 
-| Claim | Required | Notes |
+| Claim | Required | Rule |
 | --- | --- | --- |
 | `vct` | yes | exactly `mandate.checkout.1` |
-| `iss` | yes | must be a configured mandate issuer |
-| `aud` | yes | must equal that issuer's configured `audience` |
-| `iat` | yes | rejected if further ahead than the configured skew |
-| `exp` | yes | required, not only checked when present |
+| `iss` | yes | configured mandate issuer |
+| `aud` | yes | issuer's configured audience |
+| `iat` | yes | no further in the future than allowed clock skew |
+| `exp` | yes | checked with allowed clock skew |
 | `checkout_hash` | yes | `base64url(SHA-256(compact checkout JWT))` |
-| `checkout_jwt` | yes | the compact merchant checkout JWT, read after disclosures resolve |
-| `_sd_alg` | when present | `sha-256` only |
+| `checkout_jwt` | yes | compact merchant checkout JWT after disclosure resolution |
+| `_sd_alg` | when present | `sha-256` |
 
-A key-bound presentation (`cnf`, a KB-JWT) is refused: Direct mode issues none,
-so one arriving belongs to a flow this release does not verify.
+Presentations with a KB-JWT are refused because this Direct profile does not
+verify them. The verifier does not inspect `cnf`.
 
-### The merchant checkout JWT
+### Merchant checkout JWT
 
-| Claim | Required | Notes |
+| Claim | Required | Rule |
 | --- | --- | --- |
-| `iss` | yes | must be a configured **checkout** issuer |
-| `aud` | yes | must equal that issuer's configured `audience` |
-| `iat` | yes | rejected if further ahead than the configured skew |
-| `exp` | yes | required |
-| `jti` | yes | an opaque id; recorded in the receipt and used for replay defence |
-| `agent_commerce` | yes | the profile object below |
+| `iss` | yes | configured checkout issuer |
+| `aud` | yes | issuer's configured audience |
+| `iat` | yes | no further in the future than allowed clock skew |
+| `exp` | yes | required and checked |
+| `jti` | yes | opaque id stored for replay defence and receipt reconciliation |
+| `agent_commerce` | yes | profile object below |
 
-### The profile object
+### Profile fields
 
-Every field is a string, and absent is a mismatch rather than a skipped check:
-a mandate that will not say which resource or how much authorises nothing in
-particular.
+The first six fields are required, non-empty strings. An absent field is a
+mismatch.
 
-| Field | Compared against |
+| Field | Compared with |
 | --- | --- |
-| `profile` | the literal `agent-commerce/ap2/checkout/v1` |
-| `resource_id` | the resolved resource |
-| `input_hash` | the digest of the validated input, below |
-| `amount` | the resolved price, **as a string** |
-| `currency` | the resolved currency |
-| `payment_method` | the payment provider that built the requirement |
-| `destination` | the requirement's settlement destination |
-| `network` | the requirement's CAIP-2 network |
-| `asset` | the requirement's asset |
+| `profile` | `agent-commerce/ap2/checkout/v1` |
+| `resource_id` | resolved resource id |
+| `input_hash` | validated canonical input digest |
+| `amount` | resolved decimal price string |
+| `currency` | resolved currency |
+| `payment_method` | selected payment provider |
+| `destination` | payment requirement destination |
+| `network` | payment requirement CAIP-2 network |
+| `asset` | payment requirement asset |
 
-The last three are checked whenever **either** side names one, so under x402,
-which names all three, all three are required. A mandate silent about the chain
-must not unlock a settlement on one, and a mandate naming a chain the
-requirement lacks was approved for another rail.
+For `destination`, `network` and `asset`, a value present on either side
+must be present and equal on both. x402 and MPP requirements name all three.
+EVM address comparisons ignore letter case because EIP-55 encodes the checksum
+through casing. Every other field, including `network`, must match exactly.
+Amounts are compared as strings, so `0.10` and `0.1` differ.
 
-Amounts are compared as decimal strings, never numerically: `0.10` and `0.1`
-are different strings, and a mandate says what it says.
+The mandate is checked against the resolved request; it does not supply values
+used to construct the purchase.
 
-Everything is compared against the **already resolved** request. Nothing is
-taken from the mandate and used to shape the purchase, which would invert the
-control.
-
-### The input hash
+### Input hash
 
 ```text
 input_hash = base64url(SHA-256(RFC 8785 JCS(validated input)))
 ```
 
-[RFC 8785](https://www.rfc-editor.org/rfc/rfc8785) (JCS), not a sorted-key
-`JSON.stringify`. The merchant's signer computes this digest too, probably in
-another language, and the two agree only if both follow JCS number formatting
-and UTF-16 key ordering.
+The hash uses RFC 8785 JSON Canonicalization Scheme, including its number
+formatting and UTF-16 key ordering. It covers validated canonical input after
+`_payment` and `_authorization` are stripped. It excludes request ids and
+transport metadata. Backend input bindings may subsequently map that canonical
+input into path, query and body values.
 
-What gets hashed is exactly what the backend will receive: validated, reserved
-fields stripped, no request id, no transport metadata. A buyer could not have
-known any of that when they approved.
+## Creating the checkout JWT
 
-Without it, one mandate for `translate` would authorise any translation.
-
-## Minting the checkout JWT
-
-The gateway only verifies. Someone has to sign, and for the checkout JWT that
-someone is you, in your own process, with a key whose public half you listed
-under `checkoutIssuers`.
+The gateway verifies checkout JWTs. The merchant signs them in its own process
+with the private half of a key whose public half appears under
+`checkoutIssuers`.
 
 ```ts
 import { createCheckoutJwt } from '@devlab.group/agent-commerce/ap2';
 
 const jwt = await createCheckoutJwt({
-  privateKey,                        // a private JWK, or a PKCS#8 PEM
-  kid: 'checkout-2026-01',           // must match a configured key
+  privateKey,
+  kid: 'checkout-2026-01',
   issuer: 'https://merchant.example',
   audience: 'agent-commerce',
   resourceId: 'market_report',
-  input: { city: 'Berlin' },         // it computes the RFC 8785 digest
-  amount: '0.01',                    // a string, from your own catalogue
+  input: { city: 'Berlin' },
+  amount: '0.01',
   currency: 'USDC',
   paymentMethod: 'x402',
-  destination, network, asset,       // as the 402 published them
+  destination,
+  network,
+  asset,
 });
 ```
 
-It exists mainly to compute [`input_hash`](#the-input-hash) the way the gateway
-does, so nobody has to reimplement JCS and discover the difference on a float.
+`createCheckoutJwt` computes the RFC 8785 input digest and rejects missing
+required strings, numeric amounts, public or non-P-256 JWKs, and non-PKCS#8 PEM
+strings. It cannot compare its inputs with the gateway's eventual payment
+requirement. Take price data from the merchant catalogue and settlement
+coordinates from the payment challenge.
 
-It also refuses, before signing, what would otherwise surface much later as one
-coarse `AUTHORIZATION_INVALID`: a numeric `amount`, the public half of the key
-pair, a key that is not P-256, and a missing required field.
-
-What it cannot check is agreement with the gateway's own resolved requirement,
-which it never sees. Take `amount` and `currency` from your catalogue and the
-settlement coordinates from the 402, rather than echoing what the agent asked
-for. A lie from the agent fails closed at verification either way, but a
-mismatch you introduce fails just as closed and is yours to debug.
-
-The mandate that wraps this JWT is signed elsewhere, by the buyer's agent or
-credential provider, using a key listed under `mandateIssuers`. Nothing in this
-package mints one: the gateway is the merchant, not the buyer.
+The buyer's agent or credential provider creates the mandate around this JWT.
+This package does not mint mandates.
 
 ## Trust
 
-**Static public keys only.** Every verification key is written into
-`config.yaml` by an operator.
+Verification uses operator-configured public keys only:
 
-- No JWKS, no issuer metadata, no fetching of any kind at runtime.
-- `jku` and `x5u` are not followed. A JWK carrying either is refused at load,
-  by an allowlist of members (`kty`, `crv`, `x`, `y`, `kid`, `alg`, `use`)
-  rather than a denylist that has to remember them.
-- Private material (`d`) is refused at load, naming the key to rotate.
+- `trust.mandateIssuers` and `trust.checkoutIssuers` are separate;
+- each issuer has a required, non-defaulted audience;
+- `iss` and `kid` must select an exact configured key;
+- keys are restricted to public P-256 JWK members;
+- the verifier does not fetch JWKS, issuer metadata, `jku` or `x5u`.
 
-A mandate's `iss` and `kid` only choose *which* configured key verifies it. An
-unrecognised pair is refused, so a mandate can never nominate its own signer,
-and there is no "try every key" fallback that would make `kid` advisory.
+### Key rotation
 
-**Two separate lists.** `trust.mandateIssuers` signs mandates;
-`trust.checkoutIssuers` signs the merchant's checkout documents. Being trusted
-for one confers nothing for the other.
+Deploy the new public key beside the old one, switch the signer
+to the new `kid`, then remove the old key after old documents expire. Removing
+a key from config and restarting is the available revocation mechanism.
 
-Each issuer carries its own `audience`, required and never defaulted. Without
-it a mandate minted for another merchant would verify here, and there is no
-value worth guessing for something that decides that.
+## Time checks
 
-### Rotating a key
+`clockSkewSeconds` defaults to 60 and cannot exceed 300. It applies to
+`exp`, `nbf` and `iat` on the mandate and checkout JWT. An `iat` beyond
+the permitted future skew is refused.
 
-List the new public key beside the old one under the same issuer and deploy;
-move the signer to the new `kid`; once nothing old is in flight, remove the old
-key and deploy again. Both are live during the overlap, and `kid` picks which
-one verifies a given mandate.
+## Replay states
 
-There is no revocation API: removing a key from the config and restarting is
-the revocation.
+AP2 replay state lives in its own SQLite database at
+`authorization.ap2.replay.path`.
 
-## Time
+The primary replay identity is a digest of the issuer-signed SD-JWT token, not
+the full presentation. Different selective-disclosure presentations therefore
+collide. The checkout JWT `jti` is also reserved, preventing two mandates
+bound to one checkout document from both settling.
 
-`clockSkewSeconds` (default 60, ceiling 300) applies to `exp`, `nbf` and `iat`
-on both the mandate and the checkout JWT. The ceiling exists because a skew
-wide enough to cover a mandate's whole validity window stops `exp` rejecting
-anything; an operator needing more than five minutes has a clock to fix.
+| State | Meaning | Reusable? |
+| --- | --- | --- |
+| `reserved` | settlement outcome not known yet | no |
+| `consumed` | settlement succeeded | no |
+| `released` | failure proved that no funds moved | only if no other non-released row has the same checkout `jti` |
+| `uncertain` | settlement may have been broadcast | no |
 
-`iat` further ahead than the skew is refused. That is a broken signer, or a
-mandate minted to outlive its own expiry window.
+No replay rows are swept. Deleting a `reserved`, `consumed` or `uncertain` row
+could make a mandate spendable again, so a bounded deployment should archive
+only released rows. A crash between settlement and the final replay-state
+update leaves the row reserved, favoring a refused retry over a possible second
+payment.
 
-## Replay
+## Receipt data
 
-A mandate is spendable exactly once, recorded in its own SQLite database
-(`authorization.ap2.replay.path`) that no other store shares.
-
-The replay key is a digest of the **issuer-signed token**, not of the
-presentation. Selective disclosure gives one mandate many valid presentation
-strings, so keying on the presentation would let it be spent once per disclosed
-subset. The checkout `jti` is guarded as well, so two mandates binding one
-checkout document cannot both settle.
-
-| State | Meaning |
-| --- | --- |
-| `reserved` | claimed, outcome not yet known. Not reusable |
-| `consumed` | settled. Never reusable |
-| `released` | nothing happened. Presentable again |
-| `uncertain` | settlement broadcast, outcome never learned. Not reusable |
-
-Only a failure that provably moved no money releases a reservation. A
-settlement broadcast but never confirmed is marked `uncertain` instead: the
-buyer's funds may already have moved, and a mandate handed back after that can
-be spent twice.
-
-Nothing is swept: deleting a consumed row makes that mandate spendable again,
-and it must stay consumed for as long as the merchant can be asked what they
-delivered. If the table needs bounding, archive `released` rows only.
-
-Settlement and the local commit are not one transaction. If the process dies
-between them the row stays `reserved` and that mandate is refused from then on:
-a refused retry costs a round trip, the other direction costs a second payment.
-
-## What is recorded, and what is not
-
-A receipt keeps a method and a digest:
+A receipt stores a digest and reconciliation identifiers:
 
 ```json
 {
@@ -275,109 +229,95 @@ A receipt keeps a method and a digest:
 }
 ```
 
-The presentation, its disclosures, the checkout JWT and the
-`Agent-Authorization` header are **never** stored and never logged. A receipt
-outlives the request that produced it, and a stored mandate would be a
-spendable secret at rest. Failures are logged as reason codes.
+The built-in gateway does not persist the presentation, disclosures, checkout
+JWT or `Agent-Authorization` header. Its logger redacts the header, and receipt
+records contain only the summary above.
 
-**Evidence retention is not solved here.** A digest proves a mandate with that
-identity was accepted; it does not reconstruct what the buyer saw or agreed to.
-Dispute-grade evidence stays with the merchant or the system that minted the
-mandate, unless an encrypted evidence store is added later.
+The digest identifies an accepted mandate but cannot reconstruct the buyer's
+evidence. A merchant that needs dispute-grade evidence must retain it outside
+this receipt store.
 
 ## Errors
 
-| Code | HTTP | When |
+| Code | HTTP | Meaning |
 | --- | --- | --- |
-| `AUTHORIZATION_REQUIRED` | 403 | the resource requires a mandate and none was presented |
-| `AUTHORIZATION_INVALID` | 403 | signature, trust, binding, time or purchase mismatch |
-| `AUTHORIZATION_REPLAYED` | 409 | the mandate is good, and already spent |
-| `AUTHORIZATION_PROVIDER_UNAVAILABLE` | 503 | our verifier or store failed. Retryable |
+| `AUTHORIZATION_REQUIRED` | 403 | after payment verification, required authorization was absent or did not satisfy every required method |
+| `AUTHORIZATION_INVALID` | 403 | malformed, untrusted, expired or mismatched proof |
+| `AUTHORIZATION_REPLAYED` | 409 | mandate or checkout JWT has a `reserved`, `consumed` or `uncertain` row |
+| `AUTHORIZATION_PROVIDER_UNAVAILABLE` | 503 | verifier or replay store did not produce a verdict; retryable |
 
-403 rather than 402: the buyer's money is not the problem. A 402 tells a client
-"pay and retry", which cannot fix a rejected mandate, and a client that auto-pays
-on 402 would be charged for a request that was never going to be delivered.
+With no payment proof, the pipeline returns a payment-required response before
+checking authorization. After payment verification, missing and invalid
+authorization use 403 because another payment cannot repair them. Replay uses
+409, and provider unavailability uses 503. Rejection reasons are deliberately
+coarse, such as `untrusted_issuer`, `invalid_signature`, `expired` and
+`purchase_mismatch`; reporting field-level purchase mismatches would let a
+caller read a mandate by elimination.
 
-Rejection reasons are coarse by design (`untrusted_issuer`, `invalid_signature`,
-`expired`, `purchase_mismatch`, and a handful more). A caller learns roughly
-where its mandate was refused, not which field disagreed: finer detail lets
-someone read a mandate's contents out of the gateway by elimination.
+## Transports
 
-An outage is never recorded against the payer. Their mandate may be perfectly
-good.
-
-## Carrying a mandate
-
-One envelope, three transports:
+HTTP, MCP and A2A carry this envelope:
 
 ```json
-{ "method": "ap2", "payload": "<the SD-JWT presentation>" }
+{ "method": "ap2", "payload": "<SD-JWT presentation>" }
 ```
 
 | Surface | Carrier |
 | --- | --- |
-| HTTP | `Agent-Authorization` header, base64url of that JSON |
-| MCP | the reserved `_authorization` tool argument |
-| A2A | the reserved `_authorization` input field |
+| HTTP | base64url-encoded JSON in `Agent-Authorization` |
+| MCP | reserved `_authorization` tool argument |
+| A2A | reserved `_authorization` input field |
 
-HTTP uses a header because the payment proof already travels out of band there,
-and an authorization inside the body would have to survive every backend
-input-binding mode intact. The header is capped at 8192 bytes, checked before
-any decode; see [security.md](security.md#denial-of-service).
+The HTTP header is limited to 8192 encoded bytes before decoding. Transport
+adapters preserve `payload` byte for byte. Reserved fields are removed before
+resource validation, hashing and backend execution.
 
-The payload is preserved byte for byte from the wire. Reserved fields are
-stripped before validation, so `_authorization` never reaches the merchant
-backend and never enters the input hash.
+## Configuration and lifecycle
 
-## Configuration
+See [configuration.md](configuration.md#authorizationap2) for the YAML schema
+and validation rules. A free resource cannot require AP2 because authorization
+gates settlement.
 
-The YAML block and every rule the loader enforces are in
-[configuration.md](configuration.md#authorizationap2). One rule surprises
-people: `required: [ap2]` on a **free** resource is refused, at load and again
-on the execution path. Authorization gates settlement, so where there is no
-settlement nothing would ever read the mandate.
-
-The provider lives on the `./ap2` subpath and its peers are optional:
+Install the optional AP2 peers with:
 
 ```bash
 npm install @devlab.group/agent-commerce jose @sd-jwt/core canonicalize
 ```
 
-`agent-commerce doctor` reports the pins, the trusted issuer ids with key
-counts, the replay store's writability, and which resources a mandate gates.
-`GET /.well-known/agent-commerce` lists the provider's descriptor under
-`authorizationProviders`, apart from the payment rails.
+`agent-commerce doctor` reports the AP2 pin, trusted issuer ids and key
+counts, replay-store status, gated resources and unsupported list.
+`GET /.well-known/agent-commerce` reports the descriptor under
+`authorizationProviders`.
+
+Whoever creates an AP2 provider must call `close()`. The application
+composition root does so after `gateway.close()`; `createGateway()` itself
+does not close authorization providers.
 
 ## Not implemented
 
-Refused rather than half-served. The adapter descriptor and `agent-commerce
-doctor` print the machine-readable half of this at runtime; this page adds the
-AP2 roles and artefacts the gateway does not play or produce. If the two ever
-disagree about something they both name, the runtime list is the truth and this
-page is a bug.
+`src/authorization/ap2/descriptor.ts` is authoritative for the unsupported list
+published through discovery and `doctor`. The broader implementation limits are:
 
-- autonomous mode, and open Checkout Mandates (`mandate.checkout.open.1`)
-- intent mandates, cart mandates, Payment Mandate verification
-- spending-constraint evaluation (`allowed_merchants`, `line_items`)
+- autonomous mode and open Checkout Mandates (`mandate.checkout.open.1`)
+- intent, cart and Payment Mandate verification
+- spending-constraint evaluation
 - `cnf`-bound agent keys and delegation chains
-- JWKS, `jku`, `x5u`, issuer metadata fetching, remote revocation
+- JWKS, issuer metadata, remote key discovery or remote revocation
 - key rotation without a config change
-- algorithms other than ES256, digests other than sha-256
-- mandate issuance and signed Checkout Receipts (the checkout JWT you can sign
-  with `createCheckoutJwt`, above; the mandate itself is the buyer's side)
-- an AP2 transport adapter, `/.well-known/ap2`, AP2 as a payment rail
-- AP2 over the ACP checkout adapter
+- signatures other than ES256 or digests other than SHA-256
+- mandate issuance or signed AP2 Checkout Receipts
+- an AP2 transport adapter or `/.well-known/ap2`
+- AP2 as a payment rail
+- AP2 over ACP
 
-Open mandates are the one worth naming twice: they carry spending constraints
-this release does not evaluate, so accepting one would tell a buyer their
-limits were checked when nothing read them.
+Open mandates are refused because their spending constraints are not evaluated.
 
-## Where to look
+## Code map
 
-| | |
+| Path | Responsibility |
 | --- | --- |
-| `src/authorization/ap2/` | verifier, trust store, purchase binding, replay store |
-| `src/core/domain/authorization.ts` | the generic contract core enforces |
-| `src/core/execution/pipeline.ts` | the ordering above |
-| `tests/integration/ap2-x402-conformance.test.ts` | every refusal, end to end |
-| `tests/e2e/authorization/` | a gated purchase settling on a real chain |
+| `src/authorization/ap2/` | verifier, trust, purchase binding and replay store |
+| `src/core/domain/authorization.ts` | generic authorization contract |
+| `src/core/execution/pipeline.ts` | verification and reservation ordering |
+| `tests/integration/ap2-x402-conformance.test.ts` | end-to-end refusal cases |
+| `tests/e2e/authorization/` | on-chain gated settlement |

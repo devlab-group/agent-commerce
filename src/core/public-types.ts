@@ -34,7 +34,7 @@ export type {
   PaymentMethodName,
   ProtocolName,
 } from './domain/common.js';
-export { PROTOCOL_NAMES } from './domain/common.js';
+export { PAYMENT_METHOD_NAMES, PROTOCOL_NAMES } from './domain/common.js';
 export type { CommerceEvent, CommerceEventType, EventSink } from './domain/event.js';
 export { COMMERCE_EVENT_TYPES } from './domain/event.js';
 

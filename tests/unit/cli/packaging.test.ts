@@ -185,11 +185,10 @@ describe('published package metadata', () => {
   });
 
   it('gates the heavy adapters behind subpaths with optional peers', () => {
-    // Installing `createGateway` used to pull the whole EVM/wallet stack for
-    // a consumer serving a free HTTP resource. None of these is needed by the
-    // main entry or the CLI, so they are optional peers reached by subpath.
+    // Keep protocol-specific peers off the main entry and CLI. Their public
+    // surfaces use subpaths, and the peers remain optional.
     const exportsField = manifest.exports as Record<string, unknown> | undefined;
-    for (const subpath of ['./ap2', './mcp', './x402']) {
+    for (const subpath of ['./ap2', './mcp', './mpp', './x402']) {
       expect(exportsField?.[subpath]).toBeDefined();
     }
     for (const peer of [
@@ -200,6 +199,7 @@ describe('published package metadata', () => {
       '@x402/evm',
       'canonicalize',
       'jose',
+      'mppx',
       'viem',
     ]) {
       expect(manifest.peerDependencies?.[peer]).toBeDefined();
@@ -375,6 +375,7 @@ describe.skipIf(!existsSync(libEntry))('built library entry', () => {
 describe.skipIf(!existsSync(libEntry))('optional-peer subpaths', () => {
   const ap2Entry = join(pkgRoot, 'dist', 'ap2.js');
   const mcpEntry = join(pkgRoot, 'dist', 'mcp.js');
+  const mppEntry = join(pkgRoot, 'dist', 'mpp.js');
   const x402Entry = join(pkgRoot, 'dist', 'x402.js');
 
   it('keeps every optional peer out of the main entry and the CLI', () => {
@@ -396,6 +397,8 @@ describe.skipIf(!existsSync(libEntry))('optional-peer subpaths', () => {
   it('imports only its own peer, in each subpath', () => {
     expect(bareImportsOf(mcpEntry)).toEqual(['@modelcontextprotocol/sdk']);
     expect(bareImportsOf(x402Entry).sort()).toEqual(['@x402/core', '@x402/evm', 'viem']);
+    // MPP settles through an x402 facilitator, so its entry also imports the x402 peers
+    expect(bareImportsOf(mppEntry).sort()).toEqual(['@x402/core', '@x402/evm', 'mppx', 'viem']);
     // `better-sqlite3` rides along through the shared storage chunk: the AP2
     // replay store is a SQLite file. It is a real dependency, not a peer, so
     // it is always installed anyway.
@@ -419,6 +422,7 @@ describe.skipIf(!existsSync(libEntry))('optional-peer subpaths', () => {
       );
     expect(probe(mcpEntry, ['mcp', 'createMcpAdapter'])).toBe('');
     expect(probe(x402Entry, ['x402', 'createX402PaymentProvider', 'createPaymentProof'])).toBe('');
+    expect(probe(mppEntry, ['mpp', 'createMppPaymentProvider'])).toBe('');
     expect(probe(ap2Entry, ['ap2', 'createAp2AuthorizationProvider', 'createCheckoutJwt'])).toBe(
       '',
     );
