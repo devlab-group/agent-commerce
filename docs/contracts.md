@@ -171,8 +171,8 @@ commerce flow.
   `mpp` needs `payments.mpp` enabled but no x402 block.
 - The `./mpp` entry exports `createMppPaymentProvider` (also as `mpp`) beside
   the pinned profile metadata and descriptor. The provider runs local checks,
-  calls the supplied x402 provider's read-only facilitator check, uses
-  x402-compatible replay keys, and delegates settlement to that provider.
+  then verifies and settles through the x402 facilitator named in its options,
+  using x402-compatible replay keys.
 
 ## Published entry points
 
@@ -181,7 +181,7 @@ commerce flow.
 | `@devlab.group/agent-commerce`      | Core contract, config, gateway, receipt store, ACP adapter | None                                                                            |
 | `@devlab.group/agent-commerce/ap2`  | AP2 verification and checkout signing                      | `jose`, `@sd-jwt/core`, `canonicalize`                                          |
 | `@devlab.group/agent-commerce/mcp`  | MCP adapter                                                | `@modelcontextprotocol/sdk`                                                     |
-| `@devlab.group/agent-commerce/mpp`  | MPP provider with caller-supplied x402 settlement, profile metadata | `mppx`, `viem`                                                       |
+| `@devlab.group/agent-commerce/mpp`  | MPP provider and profile metadata                          | `@coinbase/x402` (only for `auth.type: cdp`), `@x402/core`, `@x402/evm`, `mppx`, `viem` |
 | `@devlab.group/agent-commerce/x402` | x402 provider and client proof helper                      | `@coinbase/x402` (only for `auth.type: cdp`), `@x402/core`, `@x402/evm`, `viem` |
 
 The main entry and CLI must not import optional peers. `package.json` is the
@@ -271,11 +271,14 @@ export interface MppProviderOptions {
   readonly realm: string;
   /** Key that binds each challenge to this gateway. Never logged or published */
   readonly challengeSecret: string;
-  /**
-   * x402 provider used for settlement. Each requirement it returns must match
-   * this provider's network, asset, EIP-712 domain and recipient.
-   */
-  readonly settlement: PaymentProvider;
+  readonly rpcUrl: string;
+  /** x402 facilitator that verifies and broadcasts the authorization */
+  readonly facilitator: X402FacilitatorConfig;
+  /** Must be true before mainnet settlement */
+  readonly allowMainnet?: boolean;
+  /** Must be true for an unauthenticated mainnet facilitator */
+  readonly allowUnauthenticatedFacilitator?: boolean;
+  readonly logger?: Logger;
   readonly challengeTtlSeconds?: number; // default 300
   /** CAIP-2 network: 'eip155:84532' (default) or 'eip155:8453' */
   readonly network?: string;
@@ -289,23 +292,24 @@ export function createMppPaymentProvider(options: MppProviderOptions): PaymentPr
 Construction fails with `CONFIG_INVALID` for a recipient or asset that is not
 an address, an empty EIP-712 domain name or version, an empty or multi-line
 realm, a challenge secret with length below 32, a TTL that is not a
-positive whole number, an unsupported `network`, or a `settlement` provider
-not named `x402`. The supported networks are `eip155:84532` and
-`eip155:8453`.
+positive whole number, or an unsupported `network`. The supported networks are
+`eip155:84532` and `eip155:8453`. The provider then builds an internal x402
+provider from the same network, asset, recipient and facilitator options, so
+every x402 construction check applies, including the mainnet guardrails.
+`X402FacilitatorConfig` is the type exported by the `./x402` entry.
 `createRequirement` refuses a resource priced in anything but USDC
-(`CONFIG_INVALID`), a settlement requirement whose network, asset, EIP-712
-domain or recipient differs (`CONFIG_INVALID`), and an amount that is not a
-positive decimal with at most 6 fractional digits (`PAYMENT_INVALID`). Each
-challenge binds the resource id in its HMAC-covered `opaque` field.
+(`CONFIG_INVALID`) and an amount that is not a positive decimal with at most 6
+fractional digits (`PAYMENT_INVALID`). Each challenge binds the resource id in
+its HMAC-covered `opaque` field.
 
-`verify` performs local checks, calls the supplied x402 provider's read-only
-facilitator check, and confirms that both providers derived the same replay key.
+`verify` performs local checks, then the facilitator's read-only check through
+the internal x402 provider, and confirms that both derived the same replay key.
 The shared key makes an authorization collide across both rails. `settle`
-rewraps the credential and delegates directly to x402 settlement. Negative
+rewraps the credential and hands it to x402 settlement. Negative
 settlement results remain rejections; thrown settlement errors propagate, so
 the pipeline records `settlement-uncertain` and returns
-`PAYMENT_SETTLEMENT_FAILED`. Returned results name `mpp`; `health` delegates
-unchanged.
+`PAYMENT_SETTLEMENT_FAILED`. Returned results name `mpp`; `health` returns the
+internal x402 provider's health unchanged.
 
 `PaymentSubmission.payload` is the serialised credential: the value of an
 `Authorization: Payment ...` header, scheme included. `PaymentChallenge.envelope`

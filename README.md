@@ -104,7 +104,7 @@ free HTTP resources does not install MCP, EVM, JOSE or SD-JWT packages.
 | verify AP2 mandates, sign checkout JWTs | `+ jose @sd-jwt/core canonicalize` | `from '@devlab.group/agent-commerce/ap2'`  |
 | authenticate to a CDP facilitator       | `+ @coinbase/x402`                 | (no import - loaded on demand)             |
 
-The built-in MPP settlement provider uses x402 and therefore needs the x402
+MPP settles through an x402 facilitator, so its entry also needs the x402
 peers.
 
 ```bash

@@ -5,7 +5,6 @@
  */
 import type { GatewayConfig } from '../config/index.js';
 import type { Logger, PaymentProvider } from '../core/index.js';
-import { MPP_PROFILE } from '../payments/mpp/constants.js';
 import { createMppPaymentProvider } from '../payments/mpp/provider.js';
 import { createX402PaymentProvider } from '../payments/x402/index.js';
 
@@ -36,12 +35,10 @@ export function createConfiguredPaymentProviders(
     );
   }
   if (mpp?.enabled) {
-    const asset = mpp.asset as `0x${string}`;
-    const recipient = mpp.recipient as `0x${string}`;
     providers.push(
       createMppPaymentProvider({
-        recipient,
-        asset,
+        recipient: mpp.recipient as `0x${string}`,
+        asset: mpp.asset as `0x${string}`,
         assetName: mpp.assetName,
         assetVersion: mpp.assetVersion,
         network: mpp.network,
@@ -50,23 +47,13 @@ export function createConfiguredPaymentProviders(
         ...(mpp.challengeTtlSeconds !== undefined
           ? { challengeTtlSeconds: mpp.challengeTtlSeconds }
           : {}),
-        // Built from the MPP block alone and never registered as a rail, so an
-        // MPP-only deployment needs no `payments.x402`
-        settlement: createX402PaymentProvider({
-          network: mpp.network,
-          rpcUrl: mpp.rpcUrl,
-          asset,
-          assetName: mpp.assetName,
-          assetVersion: mpp.assetVersion,
-          assetDecimals: MPP_PROFILE.assetDecimals,
-          payTo: recipient,
-          facilitator: mpp.facilitator,
-          ...(mpp.allowMainnet !== undefined ? { allowMainnet: mpp.allowMainnet } : {}),
-          ...(mpp.allowUnauthenticatedFacilitator !== undefined
-            ? { allowUnauthenticatedFacilitator: mpp.allowUnauthenticatedFacilitator }
-            : {}),
-          logger,
-        }),
+        rpcUrl: mpp.rpcUrl,
+        facilitator: mpp.facilitator,
+        ...(mpp.allowMainnet !== undefined ? { allowMainnet: mpp.allowMainnet } : {}),
+        ...(mpp.allowUnauthenticatedFacilitator !== undefined
+          ? { allowUnauthenticatedFacilitator: mpp.allowUnauthenticatedFacilitator }
+          : {}),
+        logger,
       }),
     );
   }

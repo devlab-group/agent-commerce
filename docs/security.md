@@ -223,10 +223,8 @@ provider construction both run these checks. The separate well-known Anvil
 signer-key check runs only when a local x402 provider is constructed, where it
 rejects that key against a non-local RPC.
 
-The MPP provider checks address shape and verifies that its supplied x402
-settlement requirement matches. Configured MPP composition constructs that
-x402 provider and therefore runs its recipient and signer-key checks; direct
-MPP construction relies on the supplied settlement provider.
+The MPP provider builds its x402 settlement provider from its own options, so
+configured and direct MPP construction both run these checks.
 
 ## Mainnet
 
@@ -323,7 +321,6 @@ real funds.
 | **an MPP authorization outside its `validAfter`/`validBefore` window** | `authorization_not_yet_valid` or `authorization_expired` | same |
 | **a valid MPP credential** | local checks, then the facilitator's read-only check; nothing is broadcast | `tests/unit/payments-mpp/provider.test.ts` |
 | **an MPP copy that passes the facilitator check while its replay key is already reserved** | `PAYMENT_REPLAYED`; no second settlement | `tests/unit/payments-mpp/provider.test.ts` |
-| **the supplied x402 provider returns a requirement for another recipient** | `CONFIG_INVALID` before the MPP challenge is issued | `tests/unit/payments-mpp/provider.test.ts` |
 | **the facilitator is unreachable during MPP verification** | `verify` throws `PAYMENT_PROVIDER_UNAVAILABLE` (503) before anything is reserved | `tests/e2e/payment/mpp-settlement.e2e.test.ts` |
 | **an MPP settlement times out after a possible broadcast**            | provider throws `PAYMENT_PROVIDER_UNAVAILABLE`; pipeline records `settlement-uncertain` | `tests/unit/payments-mpp/provider.test.ts`, `tests/unit/core/execution/pipeline.test.ts` |
 | **an `Authorization` header in another scheme on an MPP resource** | no payment: `402` with a challenge | `tests/integration/mpp-carriers.test.ts` |

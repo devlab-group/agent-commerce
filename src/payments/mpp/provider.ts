@@ -3,10 +3,9 @@
  * EIP-3009 `authorization` credential.
  *
  * It issues challenges and verifies credentials without moving funds: local
- * checks first, then the read-only facilitator check of the x402 provider
- * passed as `settlement`. Settlement hands the same signed authorization to
- * that provider. The MPP layer adds no signing key; the supplied provider owns
- * facilitator configuration and settlement credentials.
+ * checks first, then a read-only check by an x402 facilitator. Settlement hands
+ * the same signed authorization to that facilitator through an internal x402
+ * provider built from these options. The MPP layer adds no signing key.
  */
 import { Challenge, Credential, Errors, Method, PaymentRequest, Receipt } from 'mppx';
 import { Methods, type Types } from 'mppx/evm';
@@ -17,6 +16,7 @@ import {
   type Clock,
   CommerceError,
   type IdGenerator,
+  type Logger,
   type PaymentContext,
   type PaymentProvider,
   type PaymentRequirement,
@@ -27,6 +27,8 @@ import {
   systemClock,
 } from '../../core/index.js';
 import { parseCanonicalAmount } from '../x402/amount.js';
+import type { X402FacilitatorConfig } from '../x402/guardrails.js';
+import { createX402PaymentProvider } from '../x402/provider.js';
 import { computeReplayKey } from '../x402/replay-key.js';
 import {
   isMppNetwork,
@@ -56,11 +58,15 @@ export interface MppProviderOptions {
   readonly realm: string;
   /** Key that binds each challenge to this gateway. Never logged or published */
   readonly challengeSecret: string;
-  /**
-   * x402 provider used for settlement. Each requirement it returns must match
-   * this provider's network, asset, EIP-712 domain and recipient.
-   */
-  readonly settlement: PaymentProvider;
+  /** RPC endpoint of the settlement chain */
+  readonly rpcUrl: string;
+  /** The x402 facilitator that verifies and broadcasts the authorization */
+  readonly facilitator: X402FacilitatorConfig;
+  /** Must be `true` before anything settles on a mainnet. Never a default */
+  readonly allowMainnet?: boolean;
+  /** Must be `true` to settle on a mainnet through a facilitator that takes no credential */
+  readonly allowUnauthenticatedFacilitator?: boolean;
+  readonly logger?: Logger;
   /**
    * Seconds a challenge stays valid, 300 by default. The mppx client signs its
    * authorization to expire at the same moment.
@@ -89,7 +95,12 @@ function configInvalid(message: string): CommerceError {
   return new CommerceError('CONFIG_INVALID', message);
 }
 
-function validateOptions(options: MppProviderOptions): void {
+type MppChallengeOptions = Omit<
+  MppProviderOptions,
+  'rpcUrl' | 'facilitator' | 'allowMainnet' | 'allowUnauthenticatedFacilitator' | 'logger'
+>;
+
+function validateOptions(options: MppChallengeOptions): void {
   if (!isAddress(options.recipient)) throw configInvalid('MPP recipient is not an EVM address');
   if (!isAddress(options.asset)) throw configInvalid('MPP asset is not an EVM address');
   if (options.assetName.length === 0 || options.assetVersion.length === 0) {
@@ -104,9 +115,6 @@ function validateOptions(options: MppProviderOptions): void {
     throw configInvalid(
       `MPP challenge secret must have length at least ${MPP_MIN_CHALLENGE_SECRET_LENGTH}`,
     );
-  }
-  if (options.settlement?.name !== 'x402') {
-    throw configInvalid('MPP settlement must be an x402 payment provider');
   }
   const ttl = options.challengeTtlSeconds;
   if (ttl !== undefined && (!Number.isInteger(ttl) || ttl <= 0)) {
@@ -129,7 +137,38 @@ function verificationReason(error: unknown): string {
 }
 
 export function createMppPaymentProvider(options: MppProviderOptions): PaymentProvider {
+  const { rpcUrl, facilitator, allowMainnet, allowUnauthenticatedFacilitator, logger, ...rest } =
+    options;
+  // Checked first so a bad MPP option is reported as one, not as an x402 error
+  validateOptions(rest);
+  // Built from the same terms, and never registered as a rail, so an MPP-only
+  // deployment needs no x402 configuration
+  const settlement = createX402PaymentProvider({
+    network: options.network ?? MPP_DEFAULT_NETWORK,
+    rpcUrl,
+    asset: options.asset,
+    assetName: options.assetName,
+    assetVersion: options.assetVersion,
+    assetDecimals: MPP_PROFILE.assetDecimals,
+    payTo: options.recipient,
+    facilitator,
+    ...(allowMainnet !== undefined ? { allowMainnet } : {}),
+    ...(allowUnauthenticatedFacilitator !== undefined ? { allowUnauthenticatedFacilitator } : {}),
+    ...(logger !== undefined ? { logger } : {}),
+    ...(options.clock !== undefined ? { clock: options.clock } : {}),
+  });
+  return createMppProviderWithSettlement(rest, settlement);
+}
+
+/** Internal seam: tests inject a settlement provider. Not exported from the `./mpp` entry */
+export function createMppProviderWithSettlement(
+  options: MppChallengeOptions,
+  settlement: PaymentProvider,
+): PaymentProvider {
   validateOptions(options);
+  if (settlement.name !== 'x402') {
+    throw configInvalid('MPP settlement must be an x402 payment provider');
+  }
   const network = options.network ?? MPP_DEFAULT_NETWORK;
   const chainId = Number(network.split(':')[1]);
   const clock = options.clock ?? systemClock;
@@ -139,7 +178,7 @@ export function createMppPaymentProvider(options: MppProviderOptions): PaymentPr
   const ids = options.ids ?? DEFAULT_IDS;
 
   // charge() requires a callback even though this provider never invokes the
-  // mppx broadcast path. Settlement is delegated through options.settlement.
+  // mppx broadcast path. Settlement is delegated to the x402 provider.
   const method = charge({
     currency: asset,
     recipient,
@@ -270,7 +309,7 @@ export function createMppPaymentProvider(options: MppProviderOptions): PaymentPr
     // The facilitator check runs before the pipeline reserves the replay key,
     // so an outage throws the x402 provider's retryable error and uses up
     // nothing, and a refusal is an ordinary rejection
-    const x402Verification = await options.settlement.verify(await toX402Context(context));
+    const x402Verification = await settlement.verify(await toX402Context(context));
     if (x402Verification.status !== 'verified') {
       return rejected(requirement, x402Verification.rejectionReason ?? 'settlement_rejected');
     }
@@ -313,7 +352,7 @@ export function createMppPaymentProvider(options: MppProviderOptions): PaymentPr
   }
 
   async function settlementRequirement(context: PaymentContext): Promise<PaymentRequirement> {
-    const x402 = await options.settlement.createRequirement(context);
+    const x402 = await settlement.createRequirement(context);
     const extra = (x402.challenge.accepts[0]?.['extra'] ?? {}) as Record<string, unknown>;
     if (
       x402.network !== network ||
@@ -341,7 +380,7 @@ export function createMppPaymentProvider(options: MppProviderOptions): PaymentPr
     // verify() already ran the facilitator check, and x402 settle checks again
     // before broadcasting. A throw may follow a broadcast, so it propagates and
     // the pipeline marks the payment uncertain.
-    const settled = await options.settlement.settle({
+    const settled = await settlement.settle({
       ...(await toX402Context({ requestId, requirement, resource, submission })),
       verification: { ...verification, provider: 'x402' },
     });
@@ -364,7 +403,7 @@ export function createMppPaymentProvider(options: MppProviderOptions): PaymentPr
   }
 
   function health(): Promise<AdapterHealth> {
-    return options.settlement.health();
+    return settlement.health();
   }
 
   return { name: 'mpp', descriptor: MPP_DESCRIPTOR, createRequirement, verify, settle, health };

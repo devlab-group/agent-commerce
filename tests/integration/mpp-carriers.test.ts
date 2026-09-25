@@ -18,7 +18,6 @@ import {
 } from '../../src/core/index.js';
 import { createGateway, type GatewayInstance } from '../../src/gateway/index.js';
 import { createMppPaymentProvider } from '../../src/payments/mpp/provider.js';
-import { createX402PaymentProvider } from '../../src/payments/x402/provider.js';
 import { createA2aAdapter } from '../../src/protocols/a2a/index.js';
 import { createMcpAdapter } from '../../src/protocols/mcp/index.js';
 import { createSqliteReceiptStore } from '../../src/storage/receipts/index.js';
@@ -96,16 +95,6 @@ const backend: BackendExecutor = {
 };
 
 async function startGateway(store: ReceiptStore = createFakeStore()): Promise<GatewayInstance> {
-  const settlement = createX402PaymentProvider({
-    network: 'eip155:84532',
-    rpcUrl: 'http://127.0.0.1:19321', // never contacted: the facilitator client is mocked
-    asset: ASSET,
-    assetName: AUTHORIZATION.name,
-    assetVersion: AUTHORIZATION.version,
-    assetDecimals: 6,
-    payTo: recipient,
-    facilitator: { mode: 'remote', url: 'https://facilitator.example.com', auth: { type: 'none' } },
-  });
   gateway = await createGateway({
     config: config(),
     store,
@@ -117,7 +106,12 @@ async function startGateway(store: ReceiptStore = createFakeStore()): Promise<Ga
         assetVersion: AUTHORIZATION.version,
         realm: 'gateway.test',
         challengeSecret: 's'.repeat(32),
-        settlement,
+        rpcUrl: 'http://127.0.0.1:19321', // never contacted: the facilitator client is mocked
+        facilitator: {
+          mode: 'remote',
+          url: 'https://facilitator.example.com',
+          auth: { type: 'none' },
+        },
       }),
     ],
     protocolAdapters: [createMcpAdapter(), createA2aAdapter()],

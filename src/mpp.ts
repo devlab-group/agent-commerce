@@ -4,11 +4,10 @@
  *
  *   npm install @devlab.group/agent-commerce mppx viem @x402/core @x402/evm
  *   import { mpp } from '@devlab.group/agent-commerce/mpp';
- *   import { x402 } from '@devlab.group/agent-commerce/x402';
  *
- * MPP verifies locally, then delegates settlement to the x402 provider passed
- * as `settlement`. The install command covers local, unauthenticated and bearer
- * facilitator modes; `auth.type: cdp` also requires `@coinbase/x402`.
+ * MPP verifies locally, then verifies and settles through the x402 facilitator
+ * named in its options. The install command covers local, unauthenticated and
+ * bearer facilitator modes; `auth.type: cdp` also requires `@coinbase/x402`.
  */
 
 export {

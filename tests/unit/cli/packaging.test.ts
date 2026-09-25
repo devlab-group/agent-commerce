@@ -397,8 +397,8 @@ describe.skipIf(!existsSync(libEntry))('optional-peer subpaths', () => {
   it('imports only its own peer, in each subpath', () => {
     expect(bareImportsOf(mcpEntry)).toEqual(['@modelcontextprotocol/sdk']);
     expect(bareImportsOf(x402Entry).sort()).toEqual(['@x402/core', '@x402/evm', 'viem']);
-    // The MPP entry imports no @x402 package; callers supply a constructed provider
-    expect(bareImportsOf(mppEntry).sort()).toEqual(['mppx', 'viem']);
+    // MPP settles through an x402 facilitator, so its entry also imports the x402 peers
+    expect(bareImportsOf(mppEntry).sort()).toEqual(['@x402/core', '@x402/evm', 'mppx', 'viem']);
     // `better-sqlite3` rides along through the shared storage chunk: the AP2
     // replay store is a SQLite file. It is a real dependency, not a peer, so
     // it is always installed anyway.

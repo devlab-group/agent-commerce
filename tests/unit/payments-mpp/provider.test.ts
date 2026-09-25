@@ -15,6 +15,7 @@ import {
 } from '../../../src/core/index.js';
 import {
   createMppPaymentProvider,
+  createMppProviderWithSettlement,
   type MppProviderOptions,
 } from '../../../src/payments/mpp/provider.js';
 import { createX402PaymentProvider } from '../../../src/payments/x402/provider.js';
@@ -94,17 +95,26 @@ function x402Settlement(payTo = recipient, asset: `0x${string}` = ASSET): Paymen
   });
 }
 
+const BASE_OPTIONS = {
+  recipient,
+  asset: ASSET,
+  assetName: AUTHORIZATION.name,
+  assetVersion: AUTHORIZATION.version,
+  realm: 'gateway.test',
+  challengeSecret: SECRET,
+} as const;
+
 function makeProvider(overrides: Partial<MppProviderOptions> = {}): PaymentProvider {
   return createMppPaymentProvider({
-    recipient,
-    asset: ASSET,
-    assetName: AUTHORIZATION.name,
-    assetVersion: AUTHORIZATION.version,
-    realm: 'gateway.test',
-    challengeSecret: SECRET,
-    settlement: x402Settlement(),
+    ...BASE_OPTIONS,
+    rpcUrl: 'http://127.0.0.1:19321', // not contacted because the HTTP client is mocked
+    facilitator: { mode: 'remote', url: 'https://facilitator.example.com', auth: { type: 'none' } },
     ...overrides,
   });
+}
+
+function withSettlement(settlement: PaymentProvider): PaymentProvider {
+  return createMppProviderWithSettlement(BASE_OPTIONS, settlement);
 }
 
 function paidResource(id = 'market_report', amount = '0.01'): CommerceResource {
@@ -238,12 +248,19 @@ describe('createMppPaymentProvider', () => {
     ['a TTL that is not a positive whole number', { challengeTtlSeconds: 0 }],
     ['an asset without its EIP-712 domain name', { assetName: '' }],
     ['an unsupported network', { network: 'eip155:1' }],
-    [
-      'a settlement provider that is not x402',
-      { settlement: { ...x402Settlement(), name: 'mpp' as const } },
-    ],
+    ['Base mainnet without allowMainnet', { network: 'eip155:8453' }],
   ])('refuses %s at construction', (_label, overrides) => {
     expect(() => makeProvider(overrides)).toThrow(
+      expect.objectContaining({ code: 'CONFIG_INVALID' }),
+    );
+  });
+
+  it('reports a bad MPP option as an MPP error, not an x402 one', () => {
+    expect(() => makeProvider({ recipient: '0xnope' })).toThrow('MPP recipient');
+  });
+
+  it('refuses a settlement provider that is not x402', () => {
+    expect(() => withSettlement({ ...x402Settlement(), name: 'mpp' })).toThrow(
       expect.objectContaining({ code: 'CONFIG_INVALID' }),
     );
   });
@@ -290,7 +307,7 @@ describe('MPP createRequirement', () => {
   });
 
   it('refuses an x402 settlement provider that pays another recipient', async () => {
-    const provider = makeProvider({ settlement: x402Settlement(stranger.address) });
+    const provider = withSettlement(x402Settlement(stranger.address));
     await expect(requirementFor(provider)).rejects.toSatisfy(
       (error: unknown) => isCommerceError(error) && error.code === 'CONFIG_INVALID',
     );
@@ -298,23 +315,13 @@ describe('MPP createRequirement', () => {
 
   it('issues the challenge for the configured network', async () => {
     const baseUsdc = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913' as const;
-    const settlement = createX402PaymentProvider({
+    const provider = makeProvider({
       network: 'eip155:8453',
       rpcUrl: 'https://base.example',
       asset: baseUsdc,
       assetName: 'USD Coin',
-      assetVersion: '2',
-      assetDecimals: 6,
-      payTo: recipient,
       allowMainnet: true,
       allowUnauthenticatedFacilitator: true,
-      facilitator: { mode: 'remote', url: 'https://facilitator.example', auth: { type: 'none' } },
-    });
-    const provider = makeProvider({
-      network: 'eip155:8453',
-      asset: baseUsdc,
-      assetName: 'USD Coin',
-      settlement,
     });
     const requirement = await requirementFor(provider);
     const request = issuedChallenge(requirement).request as unknown as ChargeRequest;
@@ -323,7 +330,15 @@ describe('MPP createRequirement', () => {
   });
 
   it('refuses an x402 settlement provider on another network', async () => {
-    await expect(requirementFor(makeProvider({ network: 'eip155:8453' }))).rejects.toSatisfy(
+    const base = x402Settlement();
+    const provider = withSettlement({
+      ...base,
+      createRequirement: async (context) => ({
+        ...(await base.createRequirement(context)),
+        network: 'eip155:8453',
+      }),
+    });
+    await expect(requirementFor(provider)).rejects.toSatisfy(
       (error: unknown) => isCommerceError(error) && error.code === 'CONFIG_INVALID',
     );
   });
@@ -395,14 +410,12 @@ describe('MPP verify', () => {
 
   it('rejects when the x402 check derives another replay key', async () => {
     const settlement = x402Settlement();
-    const provider = makeProvider({
-      settlement: {
-        ...settlement,
-        verify: async (context) => ({
-          ...(await settlement.verify(context)),
-          replayKey: '0xanother',
-        }),
-      },
+    const provider = withSettlement({
+      ...settlement,
+      verify: async (context) => ({
+        ...(await settlement.verify(context)),
+        replayKey: '0xanother',
+      }),
     });
     const requirement = await requirementFor(provider);
 
@@ -473,9 +486,7 @@ describe('MPP verify', () => {
     });
 
     it('refuses a challenge that pays another recipient', async () => {
-      const elsewhere = await requirementFor(
-        makeProvider({ recipient: stranger.address, settlement: x402Settlement(stranger.address) }),
-      );
+      const elsewhere = await requirementFor(makeProvider({ recipient: stranger.address }));
       const provider = makeProvider();
       const result = await verifyWith(
         provider,
@@ -486,9 +497,7 @@ describe('MPP verify', () => {
     });
 
     it('refuses a challenge in another asset', async () => {
-      const otherAsset = await requirementFor(
-        makeProvider({ asset: OTHER_ASSET, settlement: x402Settlement(recipient, OTHER_ASSET) }),
-      );
+      const otherAsset = await requirementFor(makeProvider({ asset: OTHER_ASSET }));
       const provider = makeProvider();
       const result = await verifyWith(
         provider,
@@ -732,9 +741,7 @@ describe('MPP settle', () => {
 
   it('returns the settlement provider health unchanged', async () => {
     const health = { status: 'pass' as const, detail: 'ok', checkedAt: new Date().toISOString() };
-    const provider = makeProvider({
-      settlement: { ...x402Settlement(), health: async () => health },
-    });
+    const provider = withSettlement({ ...x402Settlement(), health: async () => health });
     expect(await provider.health()).toBe(health);
   });
 });
