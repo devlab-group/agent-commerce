@@ -30,7 +30,12 @@ import {
   startAnvil,
 } from '../../../src/payments/x402/testing.js';
 import { createSqliteReceiptStore } from '../../../src/storage/receipts/index.js';
-import { expectRealSettlement, readBalances } from '../../fixtures/x402/settlement.js';
+import { startLossyRpc } from '../../fixtures/x402/lossy-rpc.js';
+import {
+  assertBalanceDelta,
+  expectRealSettlement,
+  readBalances,
+} from '../../fixtures/x402/settlement.js';
 
 const PORT = 18792;
 const RESOURCE_ID = 'market_report';
@@ -453,4 +458,28 @@ describe('MPP settlement - real local chain', () => {
       txHash: details['transactionHash'] as string,
     });
   }, 150_000);
+
+  it('8. a broadcast whose RPC response is lost is recorded uncertain, and the transfer landed', async () => {
+    const rpc = await startLossyRpc(anvil.rpcUrl);
+    try {
+      const { gateway, store } = await startGateway({ mpp: { rpcUrl: rpc.url } });
+      const credential = await mppCredential(gateway);
+      const before = await balances();
+      const callsBefore = backendCalls;
+
+      const uncertain = await invoke(gateway, { authorization: credential });
+
+      expect(uncertain.statusCode).toBe(502);
+      expect(uncertain.body['code']).toBe('PAYMENT_SETTLEMENT_FAILED');
+      const details = uncertain.body['details'] as Record<string, unknown>;
+      expect(details['settlementUncertain']).toBe(true);
+      expect(backendCalls).toBe(callsBefore);
+      const [attempt] = await store.listPaymentAttempts();
+      expect(attempt?.status).toBe('settlement-uncertain');
+      // The recorded outcome is unknown, but the money did move
+      assertBalanceDelta(before, await balances(), ONE_USDC);
+    } finally {
+      await rpc.close();
+    }
+  });
 });

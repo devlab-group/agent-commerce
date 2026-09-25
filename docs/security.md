@@ -270,6 +270,7 @@ real funds.
 | an unknown key nested under an `additionalProperties` schema         | rejected by the closed schema                                     | same                                              |
 | remote facilitator timeout during settlement                          | provider throws `PAYMENT_PROVIDER_UNAVAILABLE`; pipeline marks the attempt uncertain and returns `PAYMENT_SETTLEMENT_FAILED` | `tests/unit/payments-x402/provider-remote-facilitator.test.ts`, `tests/unit/core/execution/pipeline.test.ts` |
 | an unclassified local `settle()` throw                                | provider throws `PAYMENT_PROVIDER_UNAVAILABLE`; pipeline marks the attempt uncertain and returns `PAYMENT_SETTLEMENT_FAILED` | `tests/unit/payments-x402/provider-sdk-mocked.test.ts`, `tests/unit/core/execution/pipeline.test.ts` |
+| **a broadcast that lands but whose RPC response is an error** | the SDK's catch-all with no transaction hash; provider throws `PAYMENT_PROVIDER_UNAVAILABLE`; pipeline records `settlement-uncertain`, no delivery | `tests/e2e/payment/x402-settlement.e2e.test.ts`, `tests/e2e/payment/mpp-settlement.e2e.test.ts` |
 | **remote facilitator 401 / 5xx during verification**                  | transport failure, not a buyer rejection                          | `tests/integration/adversarial-payment.test.ts`   |
 | **malformed remote-facilitator response**                            | transport failure; never read as a verdict                        | same                                              |
 | **facilitator rejection reason is empty, over 64 characters or outside `[A-Za-z0-9_.-]`** | replaced with `invalid_payment` or `settlement_failed` | `tests/unit/payments-x402/provider-sdk-mocked.test.ts` |
@@ -337,6 +338,14 @@ throw becomes `PAYMENT_PROVIDER_UNAVAILABLE`. The local x402 provider instead
 returns `unexpected_verify_error` for an unclassified verification throw and
 `transaction_reverted` for an on-chain settlement revert; other unclassified
 settlement throws become `PAYMENT_PROVIDER_UNAVAILABLE`.
+
+The SDK catches every throw around the broadcast and returns
+`invalid_exact_evm_transaction_failed`, with a valid transaction hash only
+when a mined transaction reverted. Without one the provider cannot tell a
+refused call from a lost response, because viem reports an RPC error on the
+send as a revert, so it throws `PAYMENT_PROVIDER_UNAVAILABLE`. A revert during
+gas estimation that the SDK does not recognise is therefore also recorded
+`settlement-uncertain`, although nothing was sent.
 
 Facilitator rejection reasons reach clients and storage only after trimming and
 a 64-character, `[A-Za-z0-9_.-]` check. Other values become the fixed token

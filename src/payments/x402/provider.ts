@@ -80,6 +80,12 @@ const HEALTH_TIMEOUT_MS = 4_000;
 /** `SettleResponse.errorReason` the SDK uses for "broadcast, not confirmed". */
 const SETTLEMENT_PENDING_REASON = 'settlement_pending';
 /**
+ * The SDK's catch-all for a throw from the broadcast call, and its reason for
+ * a mined transaction that reverted. Only the second carries a hash. A revert
+ * the SDK recognises during gas estimation gets its own reason instead.
+ */
+const TRANSACTION_FAILED_REASON = 'invalid_exact_evm_transaction_failed';
+/**
  * `invalidReason`/`errorReason` are `z.string()` in the SDK schema — no length
  * or charset bound. They become the message a buyer is told about their own
  * payment, a persisted and SSE-streamed event field, and a column in the
@@ -573,10 +579,24 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
     if (!sdkResult.success) {
       // "Broadcast, never confirmed" is not "did not happen": the transfer may
       // already be on-chain, so it surfaces as an *unavailable* provider
-      // carrying the hash, letting the pipeline record
-      // the attempt `settlement-uncertain` rather than `failed` and the payer
-      // is told which transaction to check. Everything else is a real
-      // rejection.
+      // carrying the hash, letting the pipeline record the attempt
+      // `settlement-uncertain` rather than `failed`. The SDK's catch-all with
+      // no hash is treated the same way: its throw may have followed a
+      // broadcast, and the message cannot tell, because viem reports an RPC
+      // error on the send as a revert. Everything else is a real rejection.
+      if (
+        sdkResult.errorReason === TRANSACTION_FAILED_REASON &&
+        !/^0x[0-9a-f]{64}$/i.test(sdkResult.transaction)
+      ) {
+        logger.warn(
+          { reportedReason: sdkResult.errorReason },
+          'x402 settle(): the broadcast failed without a transaction hash; outcome unknown',
+        );
+        throw new CommerceError(
+          'PAYMENT_PROVIDER_UNAVAILABLE',
+          'x402 provider: settlement failed with an unclassified error; outcome unknown',
+        );
+      }
       if (sdkResult.errorReason === SETTLEMENT_PENDING_REASON || scope.transportFailed()) {
         throw new CommerceError(
           'PAYMENT_PROVIDER_UNAVAILABLE',

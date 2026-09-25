@@ -476,6 +476,45 @@ describe('provider — SDK-boundary branches (mocked x402/facilitator)', () => {
     );
   });
 
+  it.each([
+    ['without a hash, as an unknown outcome', '', 'throws'],
+    ['with a value that is not a hash, as an unknown outcome', 'not-a-hash', 'throws'],
+    ['with a hash, as a mined revert', `0x${'cd'.repeat(32)}`, 'rejected'],
+  ])(
+    'settle() treats the SDK catch-all transaction failure %s',
+    async (_label, transaction, outcome) => {
+      const provider = makeProvider();
+      const requirement = await provider.createRequirement(paymentContext());
+      const proof = await createPaymentProof({
+        buyerPrivateKey: BUYER_PRIVATE_KEY,
+        rpcUrl: RPC_URL,
+        accepts: requirement.challenge.accepts[0] as Record<string, unknown>,
+      });
+      settleMock.mockResolvedValueOnce({
+        success: false,
+        errorReason: 'invalid_exact_evm_transaction_failed',
+        transaction,
+        network: 'eip155:84532',
+      });
+
+      const settled = provider.settle({
+        requestId: 'req-1',
+        resource: RESOURCE,
+        requirement,
+        submission: { method: 'x402', payload: proof },
+        verification: { status: 'verified', provider: 'x402', amount: '0.01', currency: 'USD' },
+      });
+
+      if (outcome === 'throws') {
+        await expect(settled).rejects.toSatisfy(
+          (err: unknown) => isCommerceError(err) && err.code === 'PAYMENT_PROVIDER_UNAVAILABLE',
+        );
+      } else {
+        await expect(settled).resolves.toMatchObject({ status: 'rejected' });
+      }
+    },
+  );
+
   it('settle() attaches transactionHash to PAYMENT_PROVIDER_UNAVAILABLE when the broadcast succeeded but confirmation timed out', async () => {
     // The SDK bounds its own receipt wait and reports the outcome rather than
     // throwing: `settlement_pending` means the transfer was broadcast and may

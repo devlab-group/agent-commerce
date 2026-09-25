@@ -29,6 +29,7 @@ import {
   deployLocalChain,
   startAnvil,
 } from '../../../src/payments/x402/testing.js';
+import { startLossyRpc } from '../../fixtures/x402/lossy-rpc.js';
 import {
   assertBalanceDelta,
   expectRealSettlement,
@@ -371,14 +372,18 @@ describe('x402 settlement — real local chain', () => {
     expect(verifyAfterSettling.status).toBe('rejected');
 
     // And settling the already-spent authorisation anyway moves nothing.
-    const settle2 = await provider.settle({
+    // MockUSDC's custom revert is not in the SDK's ABI, so the SDK reports its
+    // catch-all, which the provider must treat as an unknown outcome
+    const settle2 = provider.settle({
       requestId: 'req-replay-2',
       resource: RESOURCE,
       requirement,
       submission: { method: 'x402', payload: proof },
       verification: verifyAgainBeforeSettling,
     });
-    expect(settle2.status).toBe('rejected');
+    await expect(settle2).rejects.toSatisfy(
+      (err: unknown) => isCommerceError(err) && err.code === 'PAYMENT_PROVIDER_UNAVAILABLE',
+    );
 
     const afterSecond = await balances();
     // Merchant balance must NOT have increased a second time.
@@ -460,6 +465,54 @@ describe('x402 settlement — real local chain', () => {
 
     const health = await unavailableProvider.health();
     expect(health.status).toBe('fail');
+  });
+
+  it('10b. a broadcast whose RPC response is an unclassified error is uncertain, never a rejection', async () => {
+    const rpc = await startLossyRpc(anvil.rpcUrl);
+    try {
+      const lossyProvider = createX402PaymentProvider({
+        network: 'eip155:84532',
+        rpcUrl: rpc.url,
+        asset: deployment.asset,
+        assetName: deployment.assetName,
+        assetVersion: deployment.assetVersion,
+        assetDecimals: deployment.assetDecimals,
+        payTo: deployment.merchant.address,
+        facilitator: { mode: 'local', signerPrivateKey: deployment.facilitator.privateKey },
+      });
+      const requirement = await lossyProvider.createRequirement(paymentContext());
+      const proof = await createPaymentProof({
+        buyerPrivateKey: deployment.buyer.privateKey,
+        rpcUrl: anvil.rpcUrl,
+        accepts: requirement.challenge.accepts[0] as Record<string, unknown>,
+      });
+      const submission = { method: 'x402' as const, payload: proof };
+      const before = await balances();
+      const verification = await lossyProvider.verify({
+        requestId: requirement.requestId,
+        resource: RESOURCE,
+        requirement,
+        submission,
+      });
+      expect(verification.status).toBe('verified');
+
+      const settled = lossyProvider.settle({
+        requestId: requirement.requestId,
+        resource: RESOURCE,
+        requirement,
+        submission,
+        verification,
+      });
+
+      // The transfer landed, so reporting "rejected" would release the
+      // replay key and blame the buyer for a payment that went through
+      await expect(settled).rejects.toSatisfy(
+        (err: unknown) => isCommerceError(err) && err.code === 'PAYMENT_PROVIDER_UNAVAILABLE',
+      );
+      assertBalanceDelta(before, await balances(), 1_000_000n);
+    } finally {
+      await rpc.close();
+    }
   });
 
   it('11. health() passes against the real local chain, confirming the anvil_nodeInfo probe works against a genuine Anvil node', async () => {
