@@ -112,8 +112,10 @@ mismatch.
 | `asset` | payment requirement asset |
 
 For `destination`, `network` and `asset`, a value present on either side
-must be present and equal on both. x402 requirements name all three. Amounts are
-compared as strings, so `0.10` and `0.1` differ.
+must be present and equal on both. x402 and MPP requirements name all three.
+EVM address comparisons ignore letter case because EIP-55 encodes the checksum
+through casing. Every other field, including `network`, must match exactly.
+Amounts are compared as strings, so `0.10` and `0.1` differ.
 
 The mandate is checked against the resolved request; it does not supply values
 used to construct the purchase.

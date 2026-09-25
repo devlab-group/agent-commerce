@@ -192,6 +192,18 @@ describe('binding a mandate to the resolved purchase', () => {
     expect(error.details?.['reason']).toBe('purchase_mismatch');
   });
 
+  it.each([
+    ['lowercase', '0x70997970c51812dc3a010c7d01b50e0d17dc79c8'],
+    ['uppercase', '0x70997970C51812DC3A010C7D01B50E0D17DC79C8'],
+  ])('accepts the %s form of a checksummed destination', async (_label, destination) => {
+    const verified = await verifier.verify(await mandateFor(profileClaims({ destination })));
+    await expect(bindMandateToPurchase(verified, context(), {})).resolves.toBeDefined();
+  });
+
+  it('compares network identifiers exactly', async () => {
+    await bindRejection(await mandateFor(profileClaims({ network: 'EIP155:84532' })));
+  });
+
   it.each(['profile', 'resource_id', 'input_hash', 'amount', 'currency', 'payment_method'])(
     'refuses one that omits %s rather than skipping the check',
     async (claim) => {
