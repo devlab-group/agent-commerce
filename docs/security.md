@@ -1,188 +1,149 @@
 # Security model
 
-[`SECURITY.md`](../SECURITY.md) is the policy and the disclosure process. This
-page is the engineering detail: what the trust boundaries are, and what we
-deliberately do not defend.
+[`SECURITY.md`](../SECURITY.md) explains how to report a vulnerability. This
+page describes the gateway's trust boundaries, controls, and known limits.
 
 ## Trust boundaries
 
 ```text
-       UNTRUSTED                    SEMI-TRUSTED                       TRUSTED
+       UNTRUSTED                  GATEWAY PROCESS                       TRUSTED
   ────────────────────       ──────────────────────────       ─────────────────────────
 
-  agent input          ────► gateway process            ────► merchant backend
-  payment proofs             validates all agent input,       administrator configured,
-  authorization proofs       holds no keys                    assumed to be yours
+  agent input          ────► validates agent input      ────► merchant backend
+  payment proofs             may hold a local                 administrator configured
+  authorization proofs       facilitator gas key
   protocol traffic
 
                              configuration              ◄──── administrator
                              environment                ◄──── operator
 ```
 
-Everything from an agent is untrusted and validated. Configuration is trusted
-input supplied by whoever runs the gateway - which is why backend URLs may only
-come from configuration.
+Agent input is untrusted. Configuration and environment variables are trusted
+operator input, so only they may select backend URLs. The gateway never holds
+buyer or merchant keys; local payment mode may hold a facilitator key that pays
+gas and broadcasts transactions.
 
 ## Secret handling
 
-Never logged, never persisted, never returned:
+The built-in logger redacts request authorization and payment headers, plus
+recognized secret fields such as `privateKey`, `signature`, `secret`,
+`challengeSecret`, `apiKey`, `signerPrivateKey`, `adminToken`, and `token`.
+Some call sites reduce caught errors with `describeError`; MCP, A2A and ACP log
+`CommerceError.toInfo()`, which can include details. Request URLs are logged
+without query strings.
 
-- private keys, seed phrases, mnemonics
-- `Authorization` headers and backend API secrets
-- the `PAYMENT-SIGNATURE` header and raw payment authorisation payloads
-- the `Agent-Authorization` header, AP2 presentations, their disclosures, and
-  the merchant checkout JWT they bind
-- `signature`, `secret`, `challengeSecret`, `apiKey`, `signerPrivateKey`,
-  `adminToken` and `token` fields, **at the top level and one level deep**
-  (see below)
+Logger field redaction covers the top level and one nested level. It does not
+cover a secret at `a.b.privateKey`, so do not log raw nested objects that may
+contain credentials. Do not put secrets in `CommerceError` details. Receipt
+redaction is recursive, and receipts omit raw payment and authorization proofs.
 
-Enforcement is pino redaction on the logger plus explicit exclusion in the
-receipt store.
-
-**The logger's depth limit is real.** `fast-redact` wildcards match a single
-level, so `REDACT_PATHS` covers `privateKey` and `wallet.privateKey` but not
-`a.b.privateKey`. Nothing leaks today because every call site funnels caught
-errors through `describeError`, which extracts only `{message, name}` - but
-that is a property of the call sites, not of the redaction config. Do not log a
-raw object that may carry a secret at depth ≥ 2. The **receipt store's**
-redaction (`src/storage/receipts/redact.ts`) has no such limit: it is a
-recursive key-pattern strip at every depth. Both have tests. Resolved `${VAR}` values are never printed, even
-in configuration error messages - errors name the *variable*, not the value.
+Environment-substitution errors name the template token and path, never its
+resolved value. Later validation errors may echo substituted non-secret values,
+such as URLs, so keep secrets in fields designated for credentials.
 
 ## Authorization trust (AP2)
 
-A separate trust anchor from payment, and a deliberately small one. The key
-policy, the two issuer lists and the rotation procedure are in
-[ap2.md](ap2.md#trust).
+AP2 uses operator-configured public keys; it performs no JWKS, issuer metadata,
+revocation, `jku`, or `x5u` lookup. Removing a key from configuration and
+restarting the process revokes it. See [AP2 trust and rotation](ap2.md#trust).
 
-Every AP2 verification key is a **public** key an operator wrote into
-`config.yaml`. The gateway performs no key discovery of any kind: no JWKS
-endpoint, no `jku`, no `x5u`, no issuer metadata fetch, no revocation call.
-A JWK is validated member by member at load against an allowlist, so private
-material and anything naming a URL is refused without the check having to name
-it. That closes an SSRF surface before it exists: no code path lets a presented
-mandate cause an outbound request, and removing a key from the config is the
-revocation.
-
-The algorithm comes from local policy, never from the JWT header: ES256 over
-P-256, one entry, so `alg: none` and the HMAC family are excluded by
-construction rather than by a check that has to remember them. `iss` and `kid`
-select which configured key verifies a mandate, and an unrecognised pair is
-refused - there is no "try every key" fallback that would make `kid` advisory.
-
-Digests are taken over the bytes that arrived - the compact checkout JWT as
-presented, and the issuer-signed token - never over a re-serialised object. A
-normalised payload has a different digest, and hashing it would check a
-document other than the one being verified.
+Local policy fixes verification to ES256 over P-256. The presented `iss` and
+`kid` select one configured key, with no fallback to other keys. Replay
+identity uses the issuer-signed token, while checkout binding hashes the
+compact checkout JWT as presented. Neither value is reconstructed from parsed
+JSON before hashing.
 
 ## SSRF
 
-The gateway makes outbound HTTP calls to URLs it was configured with:
+The built-in HTTP executor calls only configured backend URLs:
 
 - backend URLs are **administrator-controlled configuration only**;
-- dynamic, agent- or user-controlled backend URLs are **forbidden** - no code
-  path constructs a backend URL from request input beyond `{param}` substitution
-  into a configured template, with each value URL-encoded. A parameter may only
-  appear once the authority is complete: a template whose `{param}` reaches the
-  scheme, host or port is refused at config load, because caller input would
-  otherwise choose which host the gateway calls and every path-position defence
-  (containment check, `encodeURIComponent`) is inert there;
+- request input can replace `{param}` tokens in the configured path or query.
+  Tokens in the scheme, host, or port are rejected at config load, and
+  substituted values are URL-encoded;
+- without `inputBindings`, remaining input becomes query parameters for GET and
+  DELETE, or the JSON body for POST, PUT and PATCH. Bindings instead select the
+  path, query and body groups;
 - **redirects are not followed** (`redirect: 'manual'`); a 3xx is a
   `BACKEND_ERROR`;
-- every call is bounded by an explicit timeout.
+- every call has a timeout and a 1 MiB response-body cap.
 
-Path parameters are additionally checked for dot segments: `.` and `..` are
-rejected as `INPUT_INVALID` rather than URL-encoded, because
-`encodeURIComponent` does not escape `.` and the WHATWG URL parser then
-normalises `..` away - which would let a caller *remove* path segments and reach
-a parent endpoint the operator never exposed. After substitution the constructed
-path is asserted to still begin with the template's literal prefix.
+Empty path values are rejected. Values `.` and `..` are also rejected because
+URL parsing would normalize them and could remove configured path segments.
+After substitution, the path must still start with the template's literal
+prefix. Request input also cannot replace a query parameter already fixed in
+`backend.url`; collisions fail as `INPUT_INVALID`.
 
-Caller input can never override a query parameter the operator baked into
-`backend.url`. A collision is rejected, not silently applied - otherwise an
-input key named after an embedded `?apikey=…` would replace it.
+There is no IP/CIDR allowlist or private-address blocklist. A configured URL
+such as `http://169.254.169.254/…` will be called, so configuration is
+privileged.
 
-Not implemented: an IP/CIDR allowlist or a private-address blocklist. If
-you configure `http://169.254.169.254/…`, the gateway will call it. Treat
-configuration as privileged.
-
-A backend URL produced by [`agent-commerce import openapi`](openapi-import.md)
-is configuration too: it comes from the document's `servers` or from
-`--base-url`, both supplied by the operator at import time, and it lands in a
-file a human reviews before it is merged. A relative or unresolvable server URL
-is refused rather than guessed at. The importer makes no network requests of
-its own.
+The OpenAPI importer gets backend URLs from the operator's document or
+`--base-url`. It rejects relative or unresolved server URLs and makes no
+network requests. Review its generated configuration before use.
 
 ### Backend response relay
 
-On a non-2xx backend response, the gateway states the **status code** to the
-caller (ours to say) but does not forward the backend's **response body**. A
-merchant backend in verbose/dev-error mode routinely emits stack traces,
-internal hostnames or SQL fragments - a free, often-unauthenticated resource
-call is not a safe place to relay that. The body is truncated (512 chars) and
-logged at `debug` for the operator only; it never reaches a client-visible
-field. A merchant that wants pass-through is a per-resource opt-in, post-alpha.
+On a non-2xx response, the executor returns the backend status but not its body.
+It logs at most 512 body characters at `debug`; default log settings may hide
+that detail. This prevents stack traces, internal hosts, and similar backend
+details from reaching the client.
 
 ## Input validation
 
-Validated at the boundary, before anything else happens:
+| Input | Check |
+| --- | --- |
+| Resource input | Config-loaded schemas are closed recursively by default; an explicit `additionalProperties` setting is preserved. For a config-loaded resource, a missing `input` accepts only an empty object. A directly constructed resource without an input schema accepts any input. Validation checks own properties; top-level `__proto__`, `_payment` and `_authorization` are removed first. |
+| Path parameters | Empty values and dot segments are rejected; other values are URL-encoded. |
+| Body size | 256 KiB. Fastify enforces it on parsed routes; raw protocol mounts enforce the same exported limit on the socket. A2A and ACP also cap what their adapters buffer. |
+| Content type | HTTP invoke accepts JSON, plain text or an empty body. Raw mounts delegate parsing to their protocol: MCP applies its own rules, ACP requires JSON for a POST body, and A2A does not check content type. |
+| Payment proof | The selected provider decodes and validates it. |
+| Configuration | Strict Zod shape validation followed by business-rule validation before startup. |
 
-| Input           | Check                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| resource input  | JSON Schema from the resource definition, closed by default at every level: an object schema - root, nested under `properties`, nested under `items`, or nested under an `additionalProperties` subschema - that omits `additionalProperties` gets `additionalProperties: false` stamped on recursively at config load, not just at the root. That enumeration was written from the stamper rather than from the validator and drifted three times; it now matches what `compileJsonSchema` actually recurses into; an operator who sets it explicitly (including explicitly to `true`) is respected at whichever level they set it. A resource that declares no `input:` at all gets an empty closed schema, not an always-valid one - declaring nothing means accepting nothing. Unknown properties, including prototype-named keys (`__proto__`, `constructor`, …), are matched by own-property lookup only. |
-| path parameters | URL-encoded on substitution                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| body size       | capped at 256 KB, one number for both surfaces, enforced in two different places: Fastify's `bodyLimit` runs inside a body parser on the HTTP routes; `/mcp` deliberately installs a no-op parser so the MCP transport can read the raw stream, so the mount enforces its own byte count instead. A cap that only protects one of two entry points, or two caps that can silently drift apart, is how `/mcp` ended up with no cap at all in the first place.                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| content type    | JSON enforced on the invoke routes. **Not** on `/mcp`, where a wildcard no-op parser hands the raw stream to the MCP SDK and the SDK does its own enforcement.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| payment proof   | decoded and schema-validated by the payment provider; a malformed proof is a rejection, never a crash                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| configuration   | Zod, strict, before startup                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-
-The reserved `_payment` field is stripped from tool input before schema
-validation, so it can never collide with a resource's own properties.
+The gateway removes the reserved `_payment` and `_authorization` carriers
+before validating resource input.
 
 ## Payment security
 
 Covered in detail in [payment-flow.md](payment-flow.md). The invariants:
 
-1. Paid resources **fail closed** - thirteen distinct failure conditions, each
-   with a test, none of which delivers the resource.
+1. Paid resources fail closed: payment or authorization failures do not deliver
+   the resource.
 2. `verify` has no fund-moving side effects; only `settle` does.
 3. Replay is defended twice: on-chain via EIP-3009 `authorizationState`, and in
    the gateway via a `replayKey` reserved under a `UNIQUE` constraint **before**
    settlement. The key is derived from the authorisation, not the request, so a
    replay against a different request still collides.
-4. The gateway holds no buyer or merchant key. The signed authorisation names
-   the merchant as recipient, so a broadcaster cannot redirect funds.
+4. The gateway holds no buyer or merchant key. A local facilitator key pays gas
+   and broadcasts a signed transfer whose recipient the buyer already fixed.
 5. The effective settlement destination is visible in
    `/.well-known/agent-commerce` and in `doctor`, so misconfiguration is
    noticeable rather than silent.
 
 ## Authentication and exposure
 
-The surface splits by audience, and the split is enforced, not advisory:
+All routes first pass Host validation. Requests with an `Origin` header also
+pass the `server.allowedOrigins` check, whose default is empty.
 
-| Route                                                          | Audience      | Protection                                               |
-| -------------------------------------------------------------- | ------------- | -------------------------------------------------------- |
-| `POST /api/resources/:id/invoke`                               | agents        | payment, not authentication                              |
-| `/mcp`                                                         | agents        | payment, not authentication                              |
-| `GET /api/resources`, `/health`, `/.well-known/agent-commerce` | anyone        | none - public by design                                  |
-| `GET /ready`                                                   | operators     | none, but detail is a fixed vocabulary, never raw errors |
-| `GET /api/receipts`, `/api/events`, `/api/events/stream`       | **operators** | `server.adminToken`, compared in constant time           |
-| `GET /.well-known/acp.json`                                    | anyone        | none - public by design, and carries no configuration    |
-| `/acp/checkout_sessions…`                                      | agents        | `protocols.acp.auth.token`, compared in constant time    |
+| Route | Audience | Authentication |
+| --- | --- | --- |
+| `POST /api/resources/:id/invoke` | Agents | None; paid resources require payment. |
+| `/mcp` | Agents | None; available when MCP is enabled; paid resources require payment. |
+| `GET /api/resources`, `/health`, `/.well-known/agent-commerce` | Public | None. |
+| `GET /ready` | Operators | None; it returns fixed status vocabulary rather than raw details. |
+| `GET /api/receipts`, `/api/events`, `/api/events/stream` | Operators | `server.adminToken`, compared in constant time. |
+| `GET /.well-known/agent-card.json` | Public | None; available when A2A is enabled. |
+| `/a2a` | Agents | None; available when A2A is enabled; paid resources require payment. |
+| `GET /.well-known/acp.json` | Public | None; it omits private configuration. |
+| `/acp/checkout_sessions…` | Agents | `protocols.acp.auth.token`, compared in constant time. |
 
 The operator routes carry the merchant's commerce ledger. With no
 `server.adminToken` configured they return **404**, not open data - a missing
 control must not read as an absent restriction.
 
-Browser access uses `server.allowedOrigins`, an explicit allowlist defaulting to
-empty. Origin reflection was removed: reflecting the caller's own `Origin` makes
-every route cross-origin readable from any page the operator happens to visit,
-which is the same thing as having no policy. Agent traffic gets no CORS headers
-at all, because it is not browser traffic.
-
-`Origin` and `Host` are validated in one place, the gateway's `onRequest` hook,
-so the MCP mount is covered by the same rule as the HTTP routes - including
-against DNS rebinding at a hostname resolving to `127.0.0.1`.
+An allowed browser origin receives CORS headers. Requests without `Origin` do
+not. The shared `onRequest` hook covers raw mounts such as MCP and uses Host
+validation to limit DNS-rebinding attacks.
 
 Every published port in `docker-compose.yml` binds `127.0.0.1`. Port 8545 in
 particular is an Anvil node with unlocked accounts and the full `anvil_*` admin
@@ -191,100 +152,63 @@ chain.
 
 ### ACP
 
-ACP is the one agent-facing surface that **is** authenticated: every checkout
-route requires `Authorization: Bearer <token>`, compared in constant time
-against `protocols.acp.auth.token`. Both sides are hashed before comparison, so
-a wrong token costs the same whatever its length. Authentication runs before the
-request body is read, so an unauthenticated caller cannot make the adapter
-buffer or parse anything.
+Every ACP checkout route requires `Authorization: Bearer <token>`. The adapter
+hashes both values before comparison, so different token lengths do not change
+the comparison. Authentication and idempotency-key shape checks run before the
+request body is read.
 
-Discovery at `/.well-known/acp.json` stays public and carries no configuration:
-no bearer token, no backend URL, no mapped resource ids, no idempotency database
-path. The token is not persisted in any form - the idempotency store scopes
-keys by the gateway's public base URL, and the token plays no part in it. It
-used to scope by `SHA-256("acp-auth:" + token)`, which kept the secret out of
-the file but let a rotation free every outstanding claim. A credential must not
-be able to do that, so the scope moved off it entirely.
+Discovery at `/.well-known/acp.json` is public. It omits the bearer token,
+backend URLs, mapped resource ids, and idempotency database path. The token is
+not persisted; idempotency keys are scoped by the public base URL, so rotating
+the token does not release outstanding claims.
 
-`Signature` and `Timestamp` verification are **not implemented**, are not
-advertised, and a `Signature` header is never accepted in place of the bearer
-token. Deploy ACP behind TLS: a bearer token on a plaintext connection is a
-shared secret in the clear.
+`Signature` and `Timestamp` verification are not implemented or advertised,
+and `Signature` cannot replace the bearer token. Use TLS because the bearer
+token is otherwise sent in clear text.
 
-`payment_data` on a completion is buyer payment material belonging to the
-merchant's own flow. It passes through to the merchant backend as ordinary
-business input and is never logged, never stored in a receipt, and never
-converted into an Agent Commerce payment proof. Delegated payment and delegated
-authentication are not implemented, so this feature adds no handling of raw card
-credentials anywhere in the gateway.
+Completion `payment_data` passes to the merchant backend as business input. The
+built-in gateway does not log it, store it in a receipt, or treat it as an Agent
+Commerce payment proof. Delegated payment and delegated authentication are not
+implemented.
 
-## What the gateway relays, and what it does not
+## Health details
 
-The gateway does not forward the merchant backend's own error body to callers.
-A backend in verbose or development error mode routinely emits stack traces,
-internal hostnames and SQL fragments; relaying them would make the gateway a
-pass-through for someone else's internals to whoever called a free resource.
-The backend's **status code** is returned - that is ours to state and useful -
-and the body is logged server-side at debug level only.
-
-The same rule governs health and readiness detail: a fixed vocabulary on the
-wire, raw messages to the log; the rule generalises to any value crossing a
-trust boundary.
+`GET /ready` exposes fixed status terms, not dependency messages. Returned
+details are logged at `debug`. Store and provider health throws are logged at
+`error`; adapter throws become failed health results whose details are logged
+at `debug`. Only `fail` blocks readiness. Results are cached briefly and
+concurrent probes share one in-flight check.
 
 ## Denial of service
 
-Not a focus of this release, but more is in place than this section used to
-list. What exists:
+Available bounds include:
 
-- request body-size cap, enforced inside the body parsers
-- a **1 MB cap on the merchant backend's *response*** - `AbortSignal.timeout`
-  bounds a backend call by time, not by bytes
-- explicit backend timeouts on every outbound call
+- a 256 KiB request cap on parsed routes and raw protocol mounts
+- a 1 MiB response cap and timeout in the built-in backend executor
 - a bounded list limit on every receipts/events query, applied in the store
 - a cap on concurrent SSE subscribers
-- on `/mcp`: a counting semaphore bounding concurrent tool calls (8) plus a
-  bounded queue (64) - over that, `GATEWAY_BUSY` rather than unbounded growth
+- on `/mcp`, 8 concurrent tool calls and a queue of 64; excess work gets
+  `GATEWAY_BUSY`
 - readiness memoisation and single-flight, so `/ready` polling cannot amplify
   into one upstream RPC call per request
 - `X-Request-Id` accepted only as `[A-Za-z0-9._:-]{1,64}`, so a caller cannot
   write an unbounded string into every audit row
-- an **8192-byte cap on the `Agent-Authorization` header**
-  (`MAX_AUTHORIZATION_HEADER_BYTES`), checked on the raw header before it is
-  base64url-decoded or parsed as JSON. Over the limit is
-  `AUTHORIZATION_INVALID`, and nothing from the caller's value is echoed back.
-  The cap is on the encoded header rather than on the decoded proof because
-  base64url expands by 4/3, so a decode-first check would have to allocate the
-  oversized string first. A real Direct Checkout Mandate presentation is well
-  inside it; MCP and A2A carry the same proof in the request body instead and
-  are bounded by the body-size cap
+- an 8192-byte `Agent-Authorization` header cap, checked before decoding;
+  MCP and A2A authorization carriers use the request body cap instead
 
-What does **not** exist: rate limiting, per-agent quotas, adaptive
-backpressure. Put the gateway behind your own edge if you expose it publicly.
+Rate limiting, per-agent quotas, and adaptive backpressure are not implemented.
+Add them at the edge for public deployments.
 
 ## Dependencies
 
-`@x402/core`, `@x402/evm`, `@modelcontextprotocol/sdk`, `viem`, `fastify`,
-`pino` and `better-sqlite3` are third-party code, pinned exactly. `npm audit`
-runs in the release workflow; high and critical findings are assessed and
-documented before a release rather than auto-blocking on irrelevant transitive
-advisories.
+Runtime dependencies are pinned exactly, and the release workflow runs
+`npm audit`. Review the current audit rather than relying on a count recorded in
+this document.
 
-What a consumer actually installs, audited against the published tarball:
-
-| Install                                                             | `npm audit`            |
-| ------------------------------------------------------------------- | ---------------------- |
-| the package alone                                                   | **0 vulnerabilities**  |
-| plus `@modelcontextprotocol/sdk`, `@x402/core`, `@x402/evm`, `viem` | **0 vulnerabilities**  |
-| plus `@coinbase/x402` (only for `auth.type: cdp`)                   | 2 - 1 high, 1 moderate |
-| plus `mppx` (the `./mpp` subpath)                                   | **0 vulnerabilities**  |
-
-The whole delta is CDP: `@coinbase/x402` → `@coinbase/cdp-sdk` → `axios`, which
-carries a set of high-severity advisories, plus a Solana client tree this
-project has no use for. It is an optional peer, imported dynamically only when
-that auth type is configured, so nobody else pays for it - and `auth.type:
-bearer` covers any facilitator with a static token and installs nothing. This
-is stated rather than buried because the affected path is the one handling real
-money.
+`@coinbase/x402` is loaded dynamically only for facilitator `auth.type: cdp`.
+It adds `@coinbase/cdp-sdk`, `axios`, and a Solana dependency tree, so audit that
+optional installation before using it. Static-token facilitators can use
+`auth.type: bearer` without this peer.
 
 ## Development keys
 
@@ -293,86 +217,86 @@ the local demo chain and labelled `LOCAL DEVELOPMENT ONLY - DO NOT FUND`. They
 are public knowledge and anyone can spend from them. Never send real assets to
 those addresses, and never reuse them anywhere else.
 
-Two independent checks refuse them where it would matter: a dev *key* may not
-sign against an RPC that does not look local or private, and a dev *address*
-may not be the settlement destination on any non-local deployment. The second
-is the consequential one - a wrong key merely fails to sign, a wrong `payTo`
-succeeds and gives the money away.
+Shared x402 deployment checks reject a well-known Anvil recipient on a
+non-local deployment and reject the zero address. Config validation and x402
+provider construction both run these checks. The separate well-known Anvil
+signer-key check runs only when a local x402 provider is constructed, where it
+rejects that key against a non-local RPC.
+
+The MPP provider checks address shape and verifies that its supplied x402
+settlement requirement matches. Configured MPP composition constructs that
+x402 provider and therefore runs its recipient and signer-key checks; direct
+MPP construction relies on the supplied settlement provider.
 
 ## Mainnet
 
-`eip155:8453` is refused unless the configuration says so in full: an explicit
-`allowMainnet`, a remote facilitator reached over HTTPS, a second explicit
-acknowledgement (`allowUnauthenticatedFacilitator`) if that facilitator takes
-no credential, a non-development `payTo`, and the canonical USDC for the chain
-including the EIP-712 domain name it reports. All of it is checked at config
-load, so the gateway does not start otherwise and `agent-commerce validate`
-reports it without starting anything.
+Base mainnet (`eip155:8453`) requires `allowMainnet: true`, a remote HTTPS
+facilitator, a non-development recipient, and canonical USDC address and EIP-712
+domain values. A facilitator with `auth.type: none` also requires
+`allowUnauthenticatedFacilitator: true`. Shared deployment checks run during
+config validation and provider construction; the provider additionally checks
+RPC and local-key safety.
 
-A facilitator cannot redirect your money - an EIP-3009 authorisation names its
-recipient, its amount and its chain, so it can broadcast exactly that transfer
-or nothing. What it can do is see every authorisation you handle, and stop
-answering. That is why an unauthenticated one is a separate, explicit
-acknowledgement rather than a warning.
+A facilitator cannot change an EIP-3009 transfer's signed recipient, amount, or
+chain. It can observe authorizations and refuse to broadcast them, which is why
+an unauthenticated mainnet facilitator needs a separate acknowledgement.
 
-The in-process facilitator is never allowed on a mainnet. To be precise about
-why: it is not a custody problem - the facilitator signer never holds buyer or
-merchant funds, it pays gas and broadcasts `transferWithAuthorization`, and the
-money moves buyer to merchant directly on-chain. It is a *funded key inside the
-resource server*, so compromising that process means draining the gas wallet
-and broadcasting arbitrary transactions from it. With a remote facilitator the
-gateway holds no signing key at all.
+The in-process facilitator is forbidden on mainnet because it puts a funded gas
+key in the gateway process. On Base Sepolia, config accepts any non-empty local
+facilitator key. Provider construction requires a 32-byte hex private key and
+rejects a well-known Anvil key against a public RPC. The local health check also
+requires Anvil, so public Base Sepolia needs remote mode to become ready.
 
 ## Adversarial scenarios, and where each is tested
 
-Every row below has an executed test, not a claim, and nothing is asserted by
-reading a log line. Rows covered end to end read settlement back off the chain
-and check that a rejected payment moved no balance; the other rows assert the
-outcome the code under test returns.
+This table maps scenarios to their closest tests. Some unit tests cover only the
+named state transition or returned outcome; end-to-end payment tests also check
+balances on chain. The two mainnet smoke tests run manually because they move
+real funds.
 
 | Scenario                                                             | Outcome                                                           | Where                                             |
 | -------------------------------------------------------------------- | ----------------------------------------------------------------- | ------------------------------------------------- |
-| header tampering (`PAYMENT-SIGNATURE` mangled, wrong header, absent) | 402, no delivery                                                  | `tests/unit/gateway`, `tests/e2e/payment`         |
-| payload tampering (any field of the authorisation)                   | `PAYMENT_INVALID`                                                 | `tests/e2e/payment`, `tests/unit/payments-x402`   |
+| missing `PAYMENT-SIGNATURE`                                           | 402, no delivery                                                  | `tests/unit/gateway/server.test.ts`               |
+| malformed `PAYMENT-SIGNATURE` over HTTP                              | `PAYMENT_INVALID`; no backend call                                | `tests/integration/adversarial-payment.test.ts`   |
+| x402 signature, nonce or payer changed after signing                   | rejected before settlement; balances unchanged                   | `tests/e2e/payment/x402-settlement.e2e.test.ts`   |
 | network substitution                                                 | `wrong_network` before settlement                                 | `tests/e2e/payment`                               |
-| asset substitution (a real but different token)                      | `wrong_asset` before settlement                                   | `tests/e2e/payment`                               |
-| `payTo` substitution                                                 | `wrong_recipient` before settlement                               | `tests/e2e/payment`, testnet suite                |
-| amount manipulation (below the price)                                | `wrong_amount` before settlement                                  | `tests/e2e/payment`                               |
-| replay, sequentially                                                 | refused, no second transfer                                       | `tests/e2e/payment`, mainnet suite                |
+| requirement changed to another deployed token, or buyer proof signed for that token | `wrong_asset` or invalid signature before settlement; balances unchanged | `tests/e2e/payment/x402-settlement.e2e.test.ts` |
+| proof recipient differs from configured `payTo`                       | `wrong_recipient` before settlement                               | `tests/e2e/payment/x402-settlement.e2e.test.ts`, `tests/unit/payments-x402/provider.test.ts` |
+| amount differs from the price in either direction                    | `wrong_amount` before settlement                                  | `tests/e2e/payment/x402-settlement.e2e.test.ts`   |
+| replay, sequentially                                                 | refused, no second transfer                                       | `tests/e2e/payment/x402-settlement.e2e.test.ts`, `tests/mainnet/base.smoke.test.ts` |
 | **duplicate concurrent request**                                     | settles once, other gets `PAYMENT_REPLAYED`                       | `tests/integration/adversarial-payment.test.ts`   |
 | **replay after a gateway restart**                                   | still refused - the reservation is in SQLite                      | same                                              |
 | expired authorisation (`validBefore` in the past)                    | refused before settlement                                         | `tests/e2e/payment`                               |
 | not-yet-valid authorisation (`validAfter` in the future)             | refused before settlement                                         | `tests/e2e/payment`                               |
 | a `{param}` in the host position of `backend.url`                    | refused at config load                                            | `tests/unit/config/schema.test.ts`                |
 | an unknown key nested under an `additionalProperties` schema         | rejected by the closed schema                                     | same                                              |
-| a hostile or unbounded facilitator rejection string                  | clamped before it reaches buyer, event or ledger                  | `tests/unit/payments-x402`                        |
-| facilitator timeout                                                  | `PAYMENT_PROVIDER_UNAVAILABLE`, settlement treated as *uncertain* | `tests/unit/payments-x402`                        |
-| a settle() throw the provider cannot classify                        | `PAYMENT_PROVIDER_UNAVAILABLE`, *uncertain* - never a rejection   | `tests/unit/payments-x402`                        |
-| **facilitator 401 / 5xx**                                            | `PAYMENT_PROVIDER_UNAVAILABLE`, never charged to the buyer        | `tests/integration/adversarial-payment.test.ts`   |
-| **malformed facilitator response**                                   | refused; never read as a verdict                                  | same                                              |
+| remote facilitator timeout during settlement                          | provider throws `PAYMENT_PROVIDER_UNAVAILABLE`; pipeline marks the attempt uncertain and returns `PAYMENT_SETTLEMENT_FAILED` | `tests/unit/payments-x402/provider-remote-facilitator.test.ts`, `tests/unit/core/execution/pipeline.test.ts` |
+| an unclassified local `settle()` throw                                | provider throws `PAYMENT_PROVIDER_UNAVAILABLE`; pipeline marks the attempt uncertain and returns `PAYMENT_SETTLEMENT_FAILED` | `tests/unit/payments-x402/provider-sdk-mocked.test.ts`, `tests/unit/core/execution/pipeline.test.ts` |
+| **remote facilitator 401 / 5xx during verification**                  | transport failure, not a buyer rejection                          | `tests/integration/adversarial-payment.test.ts`   |
+| **malformed remote-facilitator response**                            | transport failure; never read as a verdict                        | same                                              |
+| **facilitator rejection reason is empty, over 64 characters or outside `[A-Za-z0-9_.-]`** | replaced with `invalid_payment` or `settlement_failed` | `tests/unit/payments-x402/provider-sdk-mocked.test.ts` |
 | backend timeout                                                      | `BACKEND_TIMEOUT`                                                 | `tests/unit/core/execution`                       |
 | backend 500 after payment                                            | receipt records paid-and-undelivered; payer told it settled       | `tests/unit/gateway`, `tests/unit/core/execution` |
-| receipt-store failure                                                | `STORAGE_ERROR`, never mislabelled `PAYMENT_REPLAYED`             | `tests/unit/storage-receipts`                     |
-| a local reader racing the ledger's creation                          | database and sidecars are 0600 from the moment SQLite opens them  | `tests/unit/storage-receipts/permissions.test.ts` |
+| payment-attempt reservation failure                                  | `STORAGE_ERROR`, never mislabelled `PAYMENT_REPLAYED`             | `tests/unit/core/execution/pipeline.test.ts`      |
+| a local reader racing the ledger's creation                          | database is 0600 before SQLite opens it; WAL sidecars stay 0600   | `tests/unit/storage-receipts/permissions.test.ts`, `tests/unit/storage-receipts/persistence.test.ts` |
 | RPC unreachable during verify                                        | `PAYMENT_PROVIDER_UNAVAILABLE`, not "bad signature"               | `tests/unit/payments-x402`                        |
 | **an external `$ref` in an imported document**                        | refused; zero outbound requests                                   | `tests/unit/openapi/load.test.ts`                 |
 | **an imported path value naming another host**                        | percent-encoded into one segment of the configured origin         | `tests/integration/openapi-import.test.ts`        |
 | **an imported query group colliding with a pinned backend query**     | `INPUT_INVALID` before payment; nothing settled                   | same                                              |
 | **an imported operation with an unsupported required parameter**      | never becomes a resource at all                                   | same                                              |
-| **an ACP request with no, wrong or non-bearer authorisation**         | 401 before the body is read; zero merchant calls                  | `tests/conformance/acp/protocol.test.ts`          |
+| **an ACP request with missing, non-bearer, empty or wrong authorisation** | 401 before the body is read; zero merchant calls               | `tests/unit/protocols-acp/adapter.test.ts`        |
 | **an ACP request naming an unsupported API version**                  | 400 naming `supported_versions`; never mapped to the pinned one   | same                                              |
-| **an ACP POST with no or an over-long `Idempotency-Key`**             | 400 before the body is read                                       | same                                              |
+| **an ACP POST with no or an over-long `Idempotency-Key`**             | 400; zero merchant calls                                          | `tests/conformance/acp/protocol.test.ts`          |
 | **an ACP key replayed while the first request is in flight**          | 409; the merchant is called exactly once                          | `tests/conformance/acp/idempotency.test.ts`       |
 | **an ACP operation the merchant acted on before timing out**          | 409 `idempotency_unresolved`; one order, never two                | same                                              |
 | **an ACP retry after a merchant 5xx**                                 | the claim is held, not freed; the merchant is not called again    | same, `tests/conformance/acp/errors.test.ts`      |
 | **an unresolved ACP record outliving its retention window**           | kept; only a completed record expires                             | `tests/unit/protocols-acp/idempotency.test.ts`    |
 | **an ACP claim outliving a bearer-token rotation**                    | kept; the scope is the deployment, never the credential           | same                                              |
 | **an ACP key reused with a different body**                           | 422; the merchant is called exactly once                          | same                                              |
-| **an ACP completion retried after a 5xx**                             | not cached; the clean retry runs                                  | same                                              |
 | **a merchant answering an ACP route with a non-ACP document**         | refused as `processing_error`; its body never forwarded           | `tests/conformance/acp/errors.test.ts`            |
 | **a merchant leaking a connection string or stack in an error body**  | never relayed; the ACP error carries type, code and message only  | same                                              |
 | **an ACP `Request-Id` carrying a header-injection payload**           | dropped, never echoed                                             | `tests/unit/protocols-acp/adapter.test.ts`        |
-| **an ACP checkout resource configured as paid**                       | refused at config load; `payment-required` at runtime is a 500    | `tests/unit/config/schema.test.ts`                |
+| **an ACP checkout resource configured as paid**                       | refused at config load; a defensive runtime challenge maps to 500 | `tests/unit/config/schema.test.ts`, `tests/unit/protocols-acp/checkout-mapping.test.ts` |
 | **an AP2 mandate with a tampered signature**                          | `AUTHORIZATION_INVALID`; nothing settles                          | `tests/integration/ap2-x402-conformance.test.ts`  |
 | **an expired AP2 mandate**                                            | `AUTHORIZATION_INVALID`; nothing settles                          | same                                              |
 | **a mandate from an issuer that is not configured**                   | refused at the trust allowlist, before any signature check        | same, `tests/unit/authorization-ap2`              |
@@ -384,77 +308,63 @@ outcome the code under test returns.
 | **a mandate presented twice**                                         | `AUTHORIZATION_REPLAYED`; the second purchase moves no funds      | same, `tests/e2e/authorization`                   |
 | **the same mandate re-presented with a fresh, valid payment proof**   | still refused; balances unchanged on a real chain                 | `tests/e2e/authorization`                         |
 | **a mandate replayed under selective disclosure** (one mandate, many presentation strings) | refused - the replay key is the issuer-signed token, not the presentation | `tests/unit/authorization-ap2` |
+| **a released mandate re-presented after another mandate reserved or spent the same checkout** | refused as replayed; the released row remains released | `tests/unit/authorization-ap2/replay-store.test.ts` |
 | **the AP2 replay store unreachable**                                  | `AUTHORIZATION_PROVIDER_UNAVAILABLE`, retryable, never the buyer's fault | `tests/integration/ap2-runtime.test.ts`     |
 | **a payment rejected after a mandate verified**                       | the reservation is released; a corrected proof reuses the mandate | `tests/integration/ap2-x402-conformance.test.ts`  |
-| **a settlement whose outcome never came back** (timeout, reset, proxy 502, with or without a transaction hash) | the mandate is *not* handed back; marked uncertain for an operator | same, `tests/unit/core/execution` |
+| **settlement throws without a verdict, with or without a transaction hash** | the mandate is marked uncertain, not handed back | `tests/integration/ap2-x402-conformance.test.ts`, `tests/unit/core/execution/pipeline-authorization.test.ts` |
 | **a free resource configured to require a mandate**                   | refused at config load, and again on the execution path           | `tests/unit/config/ap2.test.ts`, `tests/unit/core/execution` |
-| **an oversized `Agent-Authorization` header**                         | `AUTHORIZATION_INVALID` before any decode; nothing echoed back    | `tests/integration/authorization-carrier.test.ts` |
-| **an MPP challenge edited after issue, or signed with another gateway's secret** | `challenge_not_issued`; the HMAC covers the terms, expiry and resource | `tests/unit/payments-mpp/provider.test.ts` |
+| **an oversized `Agent-Authorization` header**                         | `AUTHORIZATION_INVALID`; the pipeline is not called               | `tests/integration/authorization-carrier.test.ts` |
+| **an MPP challenge edited after issue, or signed with another gateway's secret** | `challenge_not_issued` | `tests/unit/payments-mpp/provider.test.ts` |
 | **an MPP challenge issued for another resource, price, recipient, asset or network** | refused on the binding check, one reason per field | same |
 | **an MPP credential presented after its challenge expired** | `challenge_expired`, on the gateway's clock | same |
 | **an MPP authorization whose nonce is not the challenge hash** | `wrong_nonce` | same |
 | **an MPP credential type other than EIP-3009 `authorization`** | `unsupported_credential` | same |
 | **an MPP authorization signed by someone other than the payer, or for another amount or recipient** | `invalid_signature`, `wrong_amount` or `wrong_recipient` | same |
 | **an MPP authorization outside its `validAfter`/`validBefore` window** | `authorization_not_yet_valid` or `authorization_expired` | same |
-| **a valid MPP credential** | verified locally, with no broadcast or network call | same |
-| **an MPP credential presented a second time through the pipeline** | `PAYMENT_REPLAYED`; no second settlement | same |
-| **the supplied x402 provider returns a requirement for another recipient** | `CONFIG_INVALID` before the MPP challenge is issued | same |
-| **the facilitator is unreachable during MPP's pre-settlement x402 verification** | provider returns `settlement_unavailable`; pipeline reports `PAYMENT_SETTLEMENT_FAILED`; no settle call | same |
-| **an MPP settlement times out after a possible broadcast, or a broadcast is never confirmed** | provider throws `PAYMENT_PROVIDER_UNAVAILABLE`; pipeline records `settlement-uncertain` and reports `PAYMENT_SETTLEMENT_FAILED`, including the transaction hash when known | same, `tests/unit/core/execution` |
+| **a valid MPP credential** | local checks, then the facilitator's read-only check; nothing is broadcast | `tests/unit/payments-mpp/provider.test.ts` |
+| **an MPP copy that passes the facilitator check while its replay key is already reserved** | `PAYMENT_REPLAYED`; no second settlement | `tests/unit/payments-mpp/provider.test.ts` |
+| **the supplied x402 provider returns a requirement for another recipient** | `CONFIG_INVALID` before the MPP challenge is issued | `tests/unit/payments-mpp/provider.test.ts` |
+| **the facilitator is unreachable during MPP verification** | `verify` throws `PAYMENT_PROVIDER_UNAVAILABLE` (503) before anything is reserved | `tests/e2e/payment/mpp-settlement.e2e.test.ts` |
+| **an MPP settlement times out after a possible broadcast**            | provider throws `PAYMENT_PROVIDER_UNAVAILABLE`; pipeline records `settlement-uncertain` | `tests/unit/payments-mpp/provider.test.ts`, `tests/unit/core/execution/pipeline.test.ts` |
 | **an `Authorization` header in another scheme on an MPP resource** | no payment: `402` with a challenge | `tests/integration/mpp-carriers.test.ts` |
 | **an MPP credential in the x402 `PAYMENT-SIGNATURE` header** | ignored: `402` | same |
 | **a valid MPP credential from the mppx client** | settled on chain once: buyer down and merchant up by the price, and `Payment-Receipt` names the transaction | `tests/e2e/payment/mpp-settlement.e2e.test.ts` |
-| **an MPP broadcast that is never confirmed** | `settlement-uncertain` with the transaction hash and no delivery; the transfer lands once the block is mined | same |
-| **an MPP buyer with no funds** | refused by the facilitator before broadcast: `PAYMENT_SETTLEMENT_FAILED`, nothing moved | same |
+| **an MPP broadcast that is never confirmed** | `settlement-uncertain`, no delivery; the recorded transaction lands once mined | `tests/e2e/payment/mpp-settlement.e2e.test.ts` |
+| **an MPP buyer with no funds** | facilitator check returns `PAYMENT_INVALID` before broadcast; nothing moved | same |
 | **an AP2-gated MPP payment with no mandate, or a mandate approved for x402** | `AUTHORIZATION_REQUIRED` or `AUTHORIZATION_INVALID`; nothing settles | `tests/e2e/authorization/ap2-mpp.e2e.test.ts` |
 | **an MPP config on Base mainnet without `allowMainnet`, with a local facilitator, a noncanonical asset or Base Sepolia's EIP-712 name** | `CONFIG_INVALID` at load under the relevant `payments.mpp` field | `tests/unit/config/schema.test.ts` |
-| **a valid MPP payment on Base mainnet, then the same credential again** | settled once on chain; the replay is refused with `409` and moves nothing | `tests/mainnet/mpp-base.smoke.test.ts` (real funds, run by hand) |
+| **a valid MPP payment on Base mainnet, then the same credential again** | settled once on chain; the later replay is refused with 402 or 409 and moves no funds again | `tests/mainnet/mpp-base.smoke.test.ts` (real funds, run by hand) |
 
-Two of those exist because writing them found a bug. The SDK's `exact`/EVM
-scheme reports an unreachable node as `invalid_exact_evm_signature`, and its
-HTTP facilitator client throws a bare `Error` for a 401 or 5xx - both would
-have recorded a failure of ours as the payer's fault, and burned an
-authorisation nothing had checked. The provider now treats *any* throw out of a
-facilitator call as "no verdict obtained", because a verdict arrives as a
-returned value.
+A facilitator verdict is a returned result. A remote-facilitator transport
+throw becomes `PAYMENT_PROVIDER_UNAVAILABLE`. The local x402 provider instead
+returns `unexpected_verify_error` for an unclassified verification throw and
+`transaction_reverted` for an on-chain settlement revert; other unclassified
+settlement throws become `PAYMENT_PROVIDER_UNAVAILABLE`.
+
+Facilitator rejection reasons reach clients and storage only after trimming and
+a 64-character, `[A-Za-z0-9_.-]` check. Other values become the fixed token
+`invalid_payment` during verification or `settlement_failed` during settlement;
+the raw value is available only in debug logs.
 
 ## OpenAPI import
 
-The importer reads a **local, operator-supplied** document and writes a file
-for review. It is not on the request path, and after import nothing reads the
-document again.
+The importer reads one local, operator-supplied document and writes ordinary
+resource configuration for review. It is not on the request path.
 
-- **No network, no filesystem walk.** There is no remote source option, and
-  every `$ref` is checked before the validator sees the document: an external
-  reference (`https://…`, `./types.yaml`, `file:///…`) is refused by name. A
-  document that names one cannot cause a single outbound request. Asserted with
-  a stubbed `fetch` in `tests/unit/openapi/load.test.ts` and again end to end
-  in `tests/integration/openapi-import.test.ts`.
-- **Bounded work.** A source over 10 MiB is refused before parsing. Internal
-  references are resolved lazily with cycle detection and a depth bound, so a
-  recursive schema is a diagnostic rather than an out-of-memory kill.
-- **No credential is ever imported.** An operation declaring OpenAPI security
-  produces a warning and a review comment pointing at
-  `backend.headers: { Authorization: Bearer ${BACKEND_TOKEN} }`; the scheme
-  name, header name and any example value stay out of the generated file. A
-  security scheme never becomes agent-supplied input, and `Accept`,
-  `Content-Type` and `Authorization` header parameters are ignored per the
-  specification.
-- **The document is data.** Descriptions, examples and vendor `x-` extensions
-  are serialised into YAML or dropped. Nothing in a document is executed, and
-  no `x-` extension can alter pricing, payments, the backend URL or protocol
-  exposure - the generator reads only the fields it knows.
-- **Nothing is overwritten.** An existing output file stops the run unless
-  `--force` is passed, a failed run writes nothing at all, and the write is a
-  temp sibling plus rename so a crash cannot leave a partial file.
-- **Commerce policy is never inferred.** Without `--free` / `--expose` the
-  generated fragment has no `pricing` or `expose` and will not load, so no
-  operation becomes purchasable or agent-visible without a human deciding so.
-- **Imported resources are not privileged.** They are ordinary
-  `CommerceResource` entries: same config validation, same execution pipeline,
-  same pre-payment request-shape checks. `tests/integration/openapi-import.test.ts`
-  drives one over HTTP, MCP and A2A and asserts all three produce the identical
-  merchant request.
+- It rejects sources over 10 MiB and all external `$ref` values. Internal
+  references have cycle and depth checks.
+- It makes no network requests and does not walk the filesystem.
+- OpenAPI security declarations produce a warning and review comment; they do
+  not import credentials or turn security headers into caller input.
+- Vendor extensions cannot set pricing, payments, backend URLs, or exposure.
+- Existing output requires `--force`; failed runs write nothing; successful
+  writes use a temporary sibling and rename.
+- The importer infers neither pricing nor exposure. `--free` can add free
+  pricing and `--expose` can add exposure; paid pricing must be written by hand.
+  Imported resources then use the same validation and execution pipeline as
+  handwritten resources.
+
+See [OpenAPI import](openapi-import.md) for supported syntax and limitations.
 
 ## Threats we are not addressing
 

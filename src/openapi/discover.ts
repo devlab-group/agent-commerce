@@ -76,16 +76,26 @@ export function discoverOperations(
     const pathItem = dereference(document, rawPathItem).value;
     if (!isRecord(pathItem)) continue;
 
+    const unsupportedMethod = (name: string): void => {
+      diagnostics.push({
+        severity: 'warning',
+        code: 'unsupported-method',
+        operation: `${name.toUpperCase()} ${path}`,
+        message: `Skipped ${name.toUpperCase()} ${path}: only GET, POST, PUT, PATCH and DELETE are supported`,
+      });
+    };
+
     for (const [key, rawOperation] of Object.entries(pathItem)) {
       if (NON_OPERATION_KEYS.has(key) || key.startsWith('x-')) continue;
+      // OpenAPI 3.2 maps each method outside the fixed fields to its operation
+      if (key === 'additionalOperations') {
+        if (isRecord(rawOperation))
+          for (const name of Object.keys(rawOperation)) unsupportedMethod(name);
+        continue;
+      }
       const method = SUPPORTED_METHODS[key.toLowerCase()];
       if (method === undefined) {
-        diagnostics.push({
-          severity: 'warning',
-          code: 'unsupported-method',
-          operation: `${key.toUpperCase()} ${path}`,
-          message: `Skipped ${key.toUpperCase()} ${path}: only GET, POST, PUT, PATCH and DELETE are supported`,
-        });
+        unsupportedMethod(key);
         continue;
       }
       const operation = dereference(document, rawOperation).value;
@@ -208,12 +218,13 @@ function selectServer(
 
     const substituted = substituteServerVariables(url, first['variables'], context, diagnostics);
     if (substituted === undefined) return undefined;
-    if (!isAbsoluteHttpUrl(substituted)) {
+    const issue = describeServerUrlIssue(substituted);
+    if (issue !== undefined) {
       diagnostics.push({
         severity: 'error',
-        code: 'relative-server-url',
+        code: issue.code,
         operation: context.resourceId,
-        message: `Skipped ${context.where}: server URL "${substituted}" is relative, so no backend host is known. Pass --base-url`,
+        message: `Skipped ${context.where}: server URL "${substituted}" ${issue.reason}. Pass --base-url`,
       });
       return undefined;
     }
@@ -276,12 +287,31 @@ function substituteServerVariables(
  * parses fine and calls the wrong endpoint.
  */
 function isAbsoluteHttpUrl(value: string): boolean {
+  return describeServerUrlIssue(value) === undefined;
+}
+
+function describeServerUrlIssue(
+  value: string,
+):
+  | { readonly code: 'relative-server-url' | 'invalid-server-url'; readonly reason: string }
+  | undefined {
   try {
     const parsed = new URL(value);
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
-    return parsed.search === '' && parsed.hash === '';
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return { code: 'invalid-server-url', reason: 'must use http:// or https://' };
+    }
+    if (parsed.search !== '' || parsed.hash !== '') {
+      return {
+        code: 'invalid-server-url',
+        reason: 'must not contain a query string or fragment',
+      };
+    }
+    return undefined;
   } catch {
-    return false;
+    return {
+      code: 'relative-server-url',
+      reason: 'is relative or malformed, so no backend host is known',
+    };
   }
 }
 

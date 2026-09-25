@@ -157,6 +157,23 @@ payments:
     #     type: bearer
     #     token: ${X402_FACILITATOR_TOKEN}
 
+  # MPP (charge, evm, EIP-3009) is experimental and disabled by default. It
+  # settles through an x402 facilitator and can reuse the local values above.
+  # MPP resources use USDC; [x402, mpp] selects the first enabled rail.
+  #
+  # mpp:
+  #   enabled: true
+  #   rpcUrl: ${X402_RPC_URL}
+  #   asset: ${X402_ASSET}
+  #   assetName: ${X402_ASSET_NAME}
+  #   assetVersion: ${X402_ASSET_VERSION}
+  #   recipient: ${MERCHANT_WALLET}
+  #   realm: localhost
+  #   challengeSecret: ${MPP_CHALLENGE_SECRET} # at least 32 characters
+  #   facilitator:
+  #     mode: local
+  #     signerPrivateKey: ${X402_FACILITATOR_PRIVATE_KEY}
+
 # ---------------------------------------------------------------------------
 # AP2 mandate verification - experimental, off by default.
 #

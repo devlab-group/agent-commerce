@@ -44,6 +44,22 @@ describe('discoverOperations', () => {
     expect(head?.severity).toBe('warning');
   });
 
+  it('warns once per method of an OpenAPI 3.2 additionalOperations map', () => {
+    const result = discoverOperations({
+      version: '3.2',
+      sourcePath: 'inline.yaml',
+      document: {
+        openapi: '3.2.0',
+        paths: {
+          '/items': {
+            additionalOperations: { LINK: { responses: {} }, UNLINK: { responses: {} } },
+          },
+        },
+      },
+    });
+    expect(result.diagnostics.map((d) => d.operation)).toEqual(['LINK /items', 'UNLINK /items']);
+  });
+
   it('fails the import when two operations claim one resource id', async () => {
     try {
       await discover('collision.yaml');
@@ -130,6 +146,25 @@ describe('discoverOperations', () => {
     const result = await discover('relative-server.yaml', { baseUrl: 'https://api.example.com' });
     expect(result.operations.map((o) => o.backendUrl)).toEqual(['https://api.example.com/a']);
     expect(result.diagnostics).toEqual([]);
+  });
+
+  it('reports a query or fragment in a declared server URL as invalid, not relative', () => {
+    for (const url of ['https://api.example.com/v1?key=value', 'https://api.example.com/v1#part']) {
+      const result = discoverOperations({
+        version: '3.1',
+        sourcePath: '/tmp/invalid-server.yaml',
+        document: {
+          openapi: '3.1.0',
+          info: { title: 'Invalid server', version: '1.0.0' },
+          servers: [{ url }],
+          paths: { '/items': { get: { operationId: 'items' } } },
+        },
+      });
+      expect(result.operations).toHaveLength(0);
+      expect(result.diagnostics[0]?.code).toBe('invalid-server-url');
+      expect(result.diagnostics[0]?.message).toContain('query string or fragment');
+      expect(result.diagnostics[0]?.message).not.toContain('is relative');
+    }
   });
 
   it('collects path-item parameters before operation parameters', async () => {

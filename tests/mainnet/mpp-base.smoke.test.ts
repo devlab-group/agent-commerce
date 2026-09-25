@@ -237,8 +237,10 @@ describeOrSkip('MPP on Base mainnet - real funds', () => {
     });
     expect(stored?.deliveredAt).toBeDefined();
 
+    // A spent authorization fails the facilitator check (402); a copy that
+    // races the first settlement hits the gateway's replay reservation (409)
     const replay = await invoke({ authorization: credential });
-    expect(replay.statusCode).toBe(409);
+    expect([402, 409]).toContain(replay.statusCode);
     const afterReplay = await balances();
     expect(afterReplay.buyer).toBe(after.buyer);
     expect(afterReplay.merchant).toBe(after.merchant);

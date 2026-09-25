@@ -117,17 +117,20 @@ export function createAp2ReplayStore(options: Ap2ReplayStoreOptions): Ap2ReplayS
     const at = new Date(now()).toISOString();
 
     const existing = selectByReference.get(request.reference);
-    if (existing !== undefined) {
-      if (existing.state !== 'released') {
-        return { kind: 'replayed', state: existing.state as Ap2AuthorizationState };
-      }
-      reReserve.run({ reference: request.reference, request_id: request.requestId, at });
-      return { kind: 'reserved' };
+    if (existing !== undefined && existing.state !== 'released') {
+      return { kind: 'replayed', state: existing.state as Ap2AuthorizationState };
     }
 
+    // Checked for a released reference too: another mandate may have reserved
+    // or spent the same checkout while this one was released
     const sameCheckout = selectLiveByJti.get(request.checkoutJti, request.reference);
     if (sameCheckout !== undefined) {
       return { kind: 'replayed', state: sameCheckout.state as Ap2AuthorizationState };
+    }
+
+    if (existing !== undefined) {
+      reReserve.run({ reference: request.reference, request_id: request.requestId, at });
+      return { kind: 'reserved' };
     }
 
     insert.run({

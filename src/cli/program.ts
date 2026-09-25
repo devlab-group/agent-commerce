@@ -93,7 +93,10 @@ export function buildProgram(io: Io = processIo): Command {
     .command('openapi')
     .description('Convert a local OpenAPI 3.0/3.1/3.2 document into resource drafts.')
     .argument('<source>', 'path to a local .yaml, .yml or .json OpenAPI document')
-    .option('--output <path>', 'output path (default: <source>.agent-commerce.yaml)')
+    .option(
+      '--output <path>',
+      'output path (default: <source name without extension>.agent-commerce.yaml in the current directory)',
+    )
     .option('--force', 'overwrite an existing output file', false)
     .option('--base-url <url>', 'backend base URL, overriding the document servers')
     .option(

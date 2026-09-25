@@ -50,7 +50,6 @@ export const AP2_UNSUPPORTED: readonly string[] = [
   'digest algorithms other than sha-256',
   // Roles this gateway does not play
   'mandate issuance',
-  'merchant checkout JWT issuance',
   'AP2 over the ACP checkout adapter',
 ];
 

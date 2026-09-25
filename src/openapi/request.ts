@@ -260,11 +260,15 @@ function resolveBody(
   candidate: OpenApiOperationCandidate,
 ): BodyResult {
   if (candidate.requestBody === undefined) return { kind: 'none' };
-  const resolved = dereference(document, candidate.requestBody).value;
-  if (typeof resolved !== 'object' || resolved === null || Array.isArray(resolved)) {
+  const resolvedBody = dereference(document, candidate.requestBody);
+  if (
+    typeof resolvedBody.value !== 'object' ||
+    resolvedBody.value === null ||
+    Array.isArray(resolvedBody.value)
+  ) {
     return { kind: 'none' };
   }
-  const requestBody = resolved as Record<string, unknown>;
+  const requestBody = resolvedBody.value as Record<string, unknown>;
   const required = requestBody['required'] === true;
 
   if (candidate.method === 'GET' || candidate.method === 'DELETE') {
@@ -288,7 +292,7 @@ function resolveBody(
       reason: `no JSON request body content type (found: ${Object.keys(content).join(', ') || 'none'}). Only application/json and application/*+json are supported - multipart and form data are never serialized as JSON`,
     };
   }
-  const media = content[mediaType];
+  const media = dereference(document, content[mediaType], resolvedBody.stack).value;
   const schemaNode = isRecord(media) ? media['schema'] : undefined;
   if (schemaNode === undefined) {
     // A body with no schema accepts anything; an open object is the honest

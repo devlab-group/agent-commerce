@@ -58,7 +58,7 @@ describe('agent-commerce import openapi', () => {
     expect(readFileSync(output, 'utf8')).toContain('list_things:');
   });
 
-  it('defaults the output name to <source>.agent-commerce.yaml', () => {
+  it('defaults the output name to the source name without extension plus .agent-commerce.yaml', () => {
     expect(defaultOutputPath('./specs/openapi.yaml')).toBe('openapi.agent-commerce.yaml');
     expect(defaultOutputPath('/tmp/petstore.json')).toBe('petstore.agent-commerce.yaml');
   });

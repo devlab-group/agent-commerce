@@ -57,7 +57,11 @@ import {
   createLocalPublicClient,
   type LocalFacilitatorClient,
 } from './chain.js';
-import { assertDevKeyIsLocalOnly, assertPayToIsNotDevAddress } from './dev-key-guard.js';
+import {
+  assertDevKeyIsLocalOnly,
+  assertPayToIsNotDevAddress,
+  describeRpc,
+} from './dev-key-guard.js';
 import {
   createLocalFacilitatorBinding,
   createRemoteFacilitatorBinding,
@@ -220,6 +224,8 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
   // createLocalPublicClient's doc comment). Verification and settlement read
   // the chain through the facilitator signer instead, so this is the only
   // public client the provider builds.
+  // Health details are logged, so they name the RPC by origin only
+  const rpcOrigin = describeRpc(options.rpcUrl);
   const healthPublicClient = createLocalPublicClient(
     options.rpcUrl,
     HEALTH_TIMEOUT_MS,
@@ -442,10 +448,15 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
     if (!sdkResult.isValid) {
       // An RPC that never answered is not a payment that failed a check.
       if (scope.transportFailed()) {
+        if (sdkResult.invalidReason !== undefined) {
+          logger.debug(
+            { reportedReason: sdkResult.invalidReason },
+            'x402 verify(): local facilitator transport failure reason',
+          );
+        }
         throw new CommerceError(
           'PAYMENT_PROVIDER_UNAVAILABLE',
           `x402 provider: ${binding.kind} facilitator unreachable during verify()`,
-          { details: { reportedReason: sdkResult.invalidReason ?? 'invalid_payment' } },
         );
       }
       // The raw string still reaches the operator's logs below; only what is
@@ -614,7 +625,7 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
       if (chainId !== profile.chainId) {
         return {
           status: 'fail',
-          detail: `RPC at ${options.rpcUrl} reports chain id ${chainId}, expected ${profile.chainId} (${profile.displayName})`,
+          detail: `RPC at ${rpcOrigin} reports chain id ${chainId}, expected ${profile.chainId} (${profile.displayName})`,
           checkedAt,
           durationMs: clock.monotonicMs() - startedAt,
         };
@@ -654,7 +665,7 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
         return {
           status: 'pass',
           detail:
-            `${describeDeploymentMode(mode)} — RPC ${options.rpcUrl} reachable, chain id ` +
+            `${describeDeploymentMode(mode)} — RPC ${rpcOrigin} reachable, chain id ` +
             `${profile.chainId} (${profile.displayName}), asset ${options.asset} has code, ` +
             `facilitator ${binding.describe} supports exact/${options.network}`,
           checkedAt,
@@ -671,7 +682,7 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
         return {
           status: 'fail',
           detail:
-            `RPC at ${options.rpcUrl} reports chain id ${profile.chainId} but does not answer ` +
+            `RPC at ${rpcOrigin} reports chain id ${profile.chainId} but does not answer ` +
             '"anvil_nodeInfo" — it does not look like a local Anvil dev node. Refusing to treat it ' +
             'as safe for a local-facilitator dev key.',
           checkedAt,
@@ -682,7 +693,7 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
       return {
         status: 'pass',
         detail:
-          `${describeDeploymentMode(mode)} — RPC ${options.rpcUrl} reachable, chain id ` +
+          `${describeDeploymentMode(mode)} — RPC ${rpcOrigin} reachable, chain id ` +
           `${profile.chainId}, asset ${options.asset} has code, confirmed Anvil dev node`,
         checkedAt,
         durationMs: clock.monotonicMs() - startedAt,
@@ -797,10 +808,11 @@ function isProviderUnavailableError(err: unknown): boolean {
   );
 }
 
-/** Never includes secrets: only error class name + message, never raw payloads or keys. */
+// Error class name and message. viem puts the request URL in its messages and
+// an RPC URL often carries an API key, so each URL is cut to its origin.
 function describeError(err: unknown): string {
-  if (err instanceof Error) return `${err.name}: ${err.message}`;
-  return String(err);
+  const text = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+  return text.replace(/\bhttps?:\/\/[^\s"'<>]+/gi, (url) => describeRpc(url));
 }
 
 /**

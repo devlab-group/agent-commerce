@@ -2,9 +2,10 @@
  * MPP payment provider for the `charge` intent, the `evm` method and the
  * EIP-3009 `authorization` credential.
  *
- * It issues challenges and verifies credentials locally without moving funds.
- * Settlement rewraps the signed authorization for the x402 provider passed as
- * `settlement`. The MPP layer adds no signing key; the supplied provider owns
+ * It issues challenges and verifies credentials without moving funds: local
+ * checks first, then the read-only facilitator check of the x402 provider
+ * passed as `settlement`. Settlement hands the same signed authorization to
+ * that provider. The MPP layer adds no signing key; the supplied provider owns
  * facilitator configuration and settlement credentials.
  */
 import { Challenge, Credential, Errors, Method, PaymentRequest, Receipt } from 'mppx';
@@ -257,6 +258,27 @@ export function createMppPaymentProvider(options: MppProviderOptions): PaymentPr
       return rejected(requirement, verificationReason(error));
     }
 
+    // Match x402's key so the same authorization collides across both rails
+    const replayKey = computeReplayKey({
+      chainId,
+      asset,
+      from: payer,
+      // validateCredential proved it equals the 32-byte challenge hash
+      nonce: (credential.payload as Types.AuthorizationPayload).nonce as `0x${string}`,
+    });
+
+    // The facilitator check runs before the pipeline reserves the replay key,
+    // so an outage throws the x402 provider's retryable error and uses up
+    // nothing, and a refusal is an ordinary rejection
+    const x402Verification = await options.settlement.verify(await toX402Context(context));
+    if (x402Verification.status !== 'verified') {
+      return rejected(requirement, x402Verification.rejectionReason ?? 'settlement_rejected');
+    }
+    // A different key would settle an authorization the pipeline did not reserve
+    if (x402Verification.replayKey !== replayKey) {
+      return rejected(requirement, 'settlement_mismatch');
+    }
+
     return {
       status: 'verified',
       provider: 'mpp',
@@ -266,14 +288,27 @@ export function createMppPaymentProvider(options: MppProviderOptions): PaymentPr
       currency: requirement.currency,
       network,
       asset,
-      // Match x402's key so the same authorization collides across both rails
-      replayKey: computeReplayKey({
-        chainId,
-        asset,
-        from: payer,
-        // validateCredential proved it equals the 32-byte challenge hash
-        nonce: (credential.payload as Types.AuthorizationPayload).nonce as `0x${string}`,
-      }),
+      replayKey,
+    };
+  }
+
+  // The same payment as an x402 requirement and `exact` submission
+  async function toX402Context(
+    context: PaymentVerificationContext,
+  ): Promise<PaymentVerificationContext> {
+    const { requestId, requirement, resource, submission } = context;
+    const x402Requirement = await settlementRequirement({
+      requestId,
+      resource,
+      amount: requirement.amount,
+      currency: requirement.currency,
+      requestedAt: clock.nowIso(),
+    });
+    return {
+      requestId,
+      resource,
+      requirement: x402Requirement,
+      submission: toX402Submission(x402Requirement, submission),
     };
   }
 
@@ -303,44 +338,13 @@ export function createMppPaymentProvider(options: MppProviderOptions): PaymentPr
       );
     }
 
-    // Nothing before the final settle call can broadcast, so failures here are
-    // rejections that let the pipeline release its reservation
-    let x402Context: PaymentSettlementContext;
-    try {
-      const x402Requirement = await settlementRequirement({
-        requestId,
-        resource,
-        amount: requirement.amount,
-        currency: requirement.currency,
-        requestedAt: clock.nowIso(),
-      });
-      const x402Submission = toX402Submission(x402Requirement, submission);
-      const x402Verification = await options.settlement.verify({
-        requestId,
-        resource,
-        requirement: x402Requirement,
-        submission: x402Submission,
-      });
-      if (x402Verification.status !== 'verified') {
-        return rejected(requirement, x402Verification.rejectionReason ?? 'settlement_rejected');
-      }
-      // A different key would settle an authorization the pipeline did not reserve
-      if (x402Verification.replayKey !== verification.replayKey) {
-        return rejected(requirement, 'settlement_mismatch');
-      }
-      x402Context = {
-        requestId,
-        resource,
-        requirement: x402Requirement,
-        submission: x402Submission,
-        verification: x402Verification,
-      };
-    } catch {
-      return rejected(requirement, 'settlement_unavailable');
-    }
-
-    // A throw from x402 settle may follow a broadcast, so let the pipeline mark it uncertain
-    const settled = await options.settlement.settle(x402Context);
+    // verify() already ran the facilitator check, and x402 settle checks again
+    // before broadcasting. A throw may follow a broadcast, so it propagates and
+    // the pipeline marks the payment uncertain.
+    const settled = await options.settlement.settle({
+      ...(await toX402Context({ requestId, requirement, resource, submission })),
+      verification: { ...verification, provider: 'x402' },
+    });
     const result: PaymentResult = {
       ...settled,
       provider: 'mpp',

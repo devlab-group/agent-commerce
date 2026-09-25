@@ -1,11 +1,8 @@
 # Configuration
 
-One file, `config.yaml`, validated before the server starts. Start from
-[`config.example.yaml`](../config.example.yaml) or generate one:
-
-`config.yaml` is yours - it is git-ignored, and `agent-commerce init` writes it
-by default. The demo stack in this repository runs its own
-[`config-demo.yaml`](../config-demo.yaml) instead, so the two never collide.
+The gateway validates one `config.yaml` before startup. The file is git-ignored
+and separate from the repository's [`config-demo.yaml`](../config-demo.yaml).
+Start from [`config.example.yaml`](../config.example.yaml) or generate it:
 
 ```bash
 npm run agent-commerce -- init
@@ -18,9 +15,9 @@ npm run agent-commerce -- validate
   keys fail rather than being ignored silently.
 - **Fail before startup.** An invalid configuration stops the process with an
   actionable message naming the file, the path and what was expected.
-- **Secrets by reference only.** `${VAR}` placeholders are resolved from the
-  environment. An unresolved variable is an error that names the *variable* and
-  never prints any resolved value.
+- **Reference secrets from the environment.** `${VAR}` placeholders are
+  resolved before validation. An unresolved variable names the variable but
+  does not print resolved values.
 - **Explicit version.** `version: 1`. A future version is rejected, not guessed.
 
 ## Top level
@@ -52,7 +49,7 @@ resources:
       method: GET
       url: ${MERCHANT_API_BASE_URL}/api/report
       timeoutMs: 10000 # bounded, always
-      headers: # secrets by reference only
+      headers: # reference secrets from the environment
         Authorization: Bearer ${BACKEND_TOKEN}
     pricing:
       type: fixed # free | fixed (dynamic is rejected)
@@ -64,6 +61,11 @@ resources:
 
 The map key (`market_report`) is the resource id: it is the MCP tool name and
 the HTTP path segment, so it must be unique and a legal tool name.
+
+`payments` orders the rails a paid resource accepts. The gateway selects the
+first enabled rail in that order; it does not let each request choose a rail or
+fall back after a failure. Config load rejects a paid resource with no enabled
+listed rail.
 
 `url` supports `{param}` templating from validated input; values are
 URL-encoded. Remaining input becomes query string for `GET`/`DELETE` and a JSON
@@ -105,10 +107,9 @@ backend request:
         body: body
 ```
 
-**Absent is the legacy behaviour, unchanged**: `{param}` values come from
-top-level input, and everything left over becomes the query string (`GET`,
-`DELETE`) or the entire JSON body (`POST`, `PUT`, `PATCH`). Every existing
-configuration keeps working exactly as before.
+Without `inputBindings`, `{param}` values come from top-level input and the
+remaining fields become the query string (`GET`, `DELETE`) or entire JSON body
+(`POST`, `PUT`, `PATCH`). This preserves the original mapping behavior.
 
 **Present is explicit mode.** Each group is sourced independently, so one
 operation can carry path parameters, query parameters *and* a JSON body at
@@ -127,8 +128,7 @@ OpenAPI importer generates. Config load rejects, before the gateway starts:
 - a `body` binding on `GET` or `DELETE`, which send none;
 - explicit bindings with no `path` binding while `url` is templated;
 - a path group that is not in the input's `required`, or a `{param}` not
-  declared and required inside it - a caller who cannot supply a path
-  parameter makes every call unservable, and a paid one settles first.
+  declared and required inside it, which would make calls unservable.
 
 At request time the same rules run **before pricing**, so a malformed request
 shape can never settle a payment and then fail to reach the backend.
@@ -299,11 +299,11 @@ presenter can confirm where money goes.
 
 ### `payments.mpp`
 
-MPP supports the `USDC` currency label on two networks: `eip155:84532`, shared
-by Base Sepolia and the local development chain, and Base mainnet
-`eip155:8453`. The default is `eip155:84532`; `asset` selects the token
-contract. A `payments.x402` block is not required because the gateway builds an
-internal x402 provider for settlement without offering x402 as a resource rail.
+MPP accepts the `USDC` currency label on `eip155:84532`, shared by Base Sepolia
+and the local development chain, and on Base mainnet `eip155:8453`. It defaults
+to `eip155:84532`; `asset` selects the token contract. The gateway builds its
+settlement provider from this block, so `payments.x402` need not be enabled as a
+resource rail.
 
 ```yaml
 payments:
@@ -323,12 +323,12 @@ payments:
       url: ${MPP_FACILITATOR_URL}
 ```
 
-`facilitator` accepts the same local and remote forms as x402. Address and
-facilitator checks at config load report errors under `payments.mpp`. Checks at
-startup, such as a development key or recipient used with a public RPC, come
-from the internal x402 provider and report as `x402 provider`, naming `payTo`
-for the recipient. A resource that names an enabled MPP rail must use the
-`USDC` currency label and no more than 6 fractional digits.
+`facilitator` accepts the same local and remote forms as x402. Config-level
+address, facilitator and mainnet errors use the `payments.mpp` path. Provider
+construction performs additional RPC/key safety checks as `x402 provider` and
+uses `payTo` for the MPP recipient in those messages. While
+`payments.mpp.enabled` is true, every paid resource that lists `mpp` must use
+the `USDC` currency label with at most 6 fractional digits.
 
 On `eip155:8453`, `payments.mpp` uses the same
 [mainnet guardrails](#mainnet-guardrails) as x402. It requires
@@ -359,7 +359,7 @@ facilitator:
 
 ```yaml
 facilitator:
-  mode: remote # HTTP; this gateway holds no key at all
+  mode: remote # HTTP; this gateway holds no facilitator signing key
   url: ${X402_FACILITATOR_URL}
   auth:
     type: none # bearer and cdp are also supported
@@ -370,47 +370,44 @@ statement that this facilitator takes no credential, not a fallback. Supported
 types are `none`, `bearer` (a static token) and `cdp` (a fresh JWT per request).
 The `cdp` type requires the optional `@coinbase/x402` peer.
 
-**What this deployment is** - `local`, `testnet` or `mainnet` - is derived
-from the pair, not from the network alone, because chain id 84532 is shared
-between the local dev chain and public Base Sepolia. It is reported by
-`doctor`, by `health()`, and at `/.well-known/agent-commerce`.
+Deployment mode - `local`, `testnet` or `mainnet` - comes from the network and
+facilitator together. Chain id 84532 identifies both the local chain and public
+Base Sepolia. `doctor`, `health()` and `/.well-known/agent-commerce` report the
+resolved mode.
 
 ## Mainnet guardrails
 
 `eip155:8453` moves real money, so a config naming it must also say so. All of
 these are refused at config load, before the gateway starts:
 
-| Refused                             | Because                                                     |
-| ----------------------------------- | ----------------------------------------------------------- |
-| `allowMainnet` absent or false      | mainnet is never a default                                  |
-| `facilitator.mode: local`           | a funded gas key inside the resource server                 |
-| `facilitator.auth.type: none`       | unless `allowUnauthenticatedFacilitator` accepts it by name |
-| a non-HTTPS `facilitator.url`       | authorisations and settlement results in the clear          |
-| a well-known Anvil `payTo`          | its private key is public knowledge                         |
-| an `asset` that is not USDC on Base | settling in an unintended token                             |
-| an `assetName` that is not the EIP-712 domain USDC reports | every payment refused after the buyer signed |
+| Refused                                                    | Because                                                     |
+| ---------------------------------------------------------- | ----------------------------------------------------------- |
+| `allowMainnet` absent or false                             | mainnet is never a default                                  |
+| `facilitator.mode: local`                                  | it puts a funded gas key in the resource server             |
+| `facilitator.auth.type: none` without explicit acceptance  | an unauthenticated counterparty must be acknowledged        |
+| a non-HTTPS `facilitator.url`                              | authorisations and settlement results would be unencrypted  |
+| a well-known Anvil `payTo` or MPP `recipient`              | its private key is public                                   |
+| an `asset` other than canonical USDC on Base               | it could settle an unintended token                         |
+| the wrong USDC `assetName` or `assetVersion`               | the buyer signs that EIP-712 domain                         |
 
 The same rules apply to any non-local deployment where they make sense: plain
 HTTP is allowed only to a local/private host, and a development `payTo` is
 refused on testnet too.
 
-`agent-commerce validate` and `agent-commerce doctor` run exactly the checks
-the gateway runs at startup - the same function, not a second copy of the
-rules.
+`agent-commerce validate` applies the config-level guardrails. Provider
+construction repeats the shared guardrails and adds RPC/key checks. `doctor`
+reports the parsed configuration and, when reachable, the live provider health.
 
 ### `assetName` is the EIP-712 domain, not the symbol
 
-The two USDC deployments disagree. Base Sepolia's reports `"USDC"`; Base
-mainnet's reports `"USD Coin"` - it predates the rename. The buyer signs that
-string into their EIP-712 domain and the scheme checks it, so naming the
-obvious-looking value gets every payment refused
-`invalid_exact_evm_token_name_mismatch` *after* they have signed. Both values
-are pinned in the network registry (`src/payments/x402/networks.ts`) and
-checked at config load, so a mismatch stops the gateway starting instead.
+Base Sepolia USDC reports `"USDC"`; Base mainnet reports `"USD Coin"`. The buyer
+signs this name in the EIP-712 domain, so a mismatch would reject every payment
+after signing. The network registry (`src/payments/x402/networks.ts`) pins both
+values, and config validation rejects a mainnet mismatch before startup.
 
 ### Running against a public network
 
-Worked configurations live in `examples/base-sepolia/` and
+Working configurations live in `examples/base-sepolia/` and
 `examples/base-mainnet/` (plus `examples/base-mainnet-payai/`, which uses an
 unauthenticated facilitator). `npm run test:testnet` and `npm run test:mainnet`
 drive the whole flow against the real chains and read balances and the
@@ -424,11 +421,10 @@ The input validator supports `type`, `properties`, `required`,
 and friends are **silently ignored**, and `agent-commerce validate` warns when a
 resource schema uses one.
 
-That is not merely "weaker validation". If a resource's backend URL contains a
-`{param}` template, you have **no configuration-level way to reject an empty
-string** for it - `minLength: 1` will not be enforced. The gateway rejects
-empty, `.` and `..` path parameters itself, before any payment is taken, but
-anything else you intended `pattern` to exclude will reach your backend.
+For a backend URL with a `{param}` template, `minLength: 1` cannot reject an
+empty value because it is not enforced. The gateway separately rejects empty,
+`.` and `..` path parameters before pricing, but values that only `pattern`
+would exclude can reach the backend.
 
 Validate what matters in your own API, and do not rely on a keyword the warning
 told you is ignored.

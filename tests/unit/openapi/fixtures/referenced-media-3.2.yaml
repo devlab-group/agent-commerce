@@ -1,0 +1,43 @@
+openapi: 3.2.0
+info:
+  title: Referenced media
+  version: 1.0.0
+servers:
+  - url: https://api.example.com
+paths:
+  /orders:
+    post:
+      operationId: referencedMedia
+      requestBody:
+        $ref: '#/components/requestBodies/OrderRequest'
+      responses:
+        '200':
+          $ref: '#/components/responses/OrderResponse'
+components:
+  requestBodies:
+    OrderRequest:
+      required: true
+      content:
+        application/json:
+          $ref: '#/x-media/OrderRequest'
+  responses:
+    OrderResponse:
+      description: ok
+      content:
+        application/json:
+          $ref: '#/x-media/OrderResponse'
+x-media:
+  OrderRequest:
+    schema:
+      type: object
+      properties:
+        productId:
+          type: string
+      required:
+        - productId
+  OrderResponse:
+    schema:
+      type: object
+      properties:
+        id:
+          type: string

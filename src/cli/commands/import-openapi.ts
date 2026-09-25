@@ -2,10 +2,8 @@
  * `agent-commerce import openapi <source>`.
  *
  * Generates reviewable resource drafts from a local OpenAPI description. It
- * never touches config.yaml and never invents commerce policy: without
- * `--free` / `--expose` the generated file is deliberately incomplete, so a
- * human has to decide what an operation costs and who can see it before
- * anything can load.
+ * does not merge them into gateway config or invent commerce policy. A caller
+ * may deliberately target config.yaml with `--output` and `--force`.
  */
 import { existsSync } from 'node:fs';
 import { rename, rm, writeFile } from 'node:fs/promises';
@@ -38,7 +36,7 @@ export interface ImportOpenApiDeps {
   readonly writeFile?: (path: string, content: string) => Promise<void>;
 }
 
-/** `<source-basename>.agent-commerce.yaml`, in the working directory. */
+/** The source file name without its extension, plus `.agent-commerce.yaml`, in the working directory */
 export function defaultOutputPath(source: string): string {
   const name = basename(source);
   const stem = name.slice(0, name.length - extname(name).length) || name;

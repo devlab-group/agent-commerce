@@ -7,7 +7,7 @@
  * your API description" into "the gateway machine makes outbound requests to
  * whatever the file names".
  */
-import { readFile, stat } from 'node:fs/promises';
+import { open, stat } from 'node:fs/promises';
 import { extname } from 'node:path';
 import { validate } from '@scalar/openapi-parser';
 import { parse as parseYaml } from 'yaml';
@@ -29,6 +29,33 @@ function invalid(
     details,
     ...(cause !== undefined ? { cause } : {}),
   });
+}
+
+// The size from `stat` does not bound the read: a device or a pipe reports 0
+async function readCapped(sourcePath: string, details: Record<string, unknown>): Promise<string> {
+  const buffer = Buffer.alloc(MAX_SOURCE_BYTES + 1);
+  let length = 0;
+  try {
+    const handle = await open(sourcePath, 'r');
+    try {
+      while (length < buffer.length) {
+        const { bytesRead } = await handle.read(buffer, length, buffer.length - length, null);
+        if (bytesRead === 0) break;
+        length += bytesRead;
+      }
+    } finally {
+      await handle.close();
+    }
+  } catch (error) {
+    throw invalid(`OpenAPI document "${sourcePath}" could not be read`, details, error);
+  }
+  if (length > MAX_SOURCE_BYTES) {
+    throw invalid(`OpenAPI document "${sourcePath}" is over the ${MAX_SOURCE_BYTES}-byte limit`, {
+      ...details,
+      maxBytes: MAX_SOURCE_BYTES,
+    });
+  }
+  return buffer.toString('utf8', 0, length);
 }
 
 export async function loadOpenApiDocument(sourcePath: string): Promise<LoadedOpenApiDocument> {
@@ -58,7 +85,7 @@ export async function loadOpenApiDocument(sourcePath: string): Promise<LoadedOpe
     );
   }
 
-  const source = await readFile(sourcePath, 'utf8');
+  const source = await readCapped(sourcePath, details);
   if (source.trim() === '') {
     throw invalid(`OpenAPI document "${sourcePath}" is empty`, details);
   }

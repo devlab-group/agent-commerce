@@ -1,181 +1,180 @@
-# Writing an adapter
+# Writing adapters and payment providers
 
-Two extension points exist, and neither should require changing
-`src/core`. If yours does, raise it as a contract change before writing
-code — see [contracts.md](contracts.md).
+Protocol adapters and payment providers translate external protocols into the
+canonical contracts in `src/core`; they must not copy protocol-specific types
+into core.
 
-## A protocol adapter
+`ProtocolName` and `PaymentMethodName` are closed frozen-contract unions. A new
+implementation for an existing name needs no core change. A new protocol or
+rail name requires approval and a contract update before implementation; see
+[contracts.md](contracts.md).
 
-Implement `ProtocolAdapter` (or `HttpProtocolAdapter` if the protocol is served
-over HTTP). You get exactly one thing to work with: a
-`ProtocolAdapterContext` — the pipeline, the resource registry, an event sink, a
-logger, a clock, an id generator and the public base URL.
+## Registering a new protocol or rail name
+
+A new name crosses the public contract and runtime wiring. After approval and
+an ADR:
+
+1. Update `ProtocolName` and `PROTOCOL_NAMES`, or `PaymentMethodName` and
+   `PAYMENT_METHOD_NAMES`, in `src/core/domain/common.ts`.
+2. Add its strict config block and normalization in `src/config/schema.ts`.
+3. Wire a protocol adapter in `src/gateway/main.ts`, or build a payment rail in
+   `src/gateway/payment-providers.ts`.
+4. For a rail, add its incoming proof and payment-challenge branches in
+   `src/gateway/routes.ts`; add a receipt branch only if the rail defines one.
+   The route already sends `Cache-Control: no-store` on every challenge and
+   `PAYMENT-RESPONSE` after settlement. MCP and A2A use rail-independent proof
+   and result envelopes. Update `src/protocols/mcp/tool-mapping.ts` if the new
+   rail needs distinct proof instructions in tool discovery.
+5. If it has distinct optional dependencies, add the narrow subpath, build
+   entry, package export, optional peer and the real-package check in
+   `tests/unit/cli/packaging.test.ts`.
+6. Add its descriptor, discovery and `doctor` output. Update the frozen
+   contract, conformance coverage, and a dedicated section in
+   [protocols.md](protocols.md).
+
+## Protocol adapters
+
+Implement `ProtocolAdapter`, or `HttpProtocolAdapter` for an HTTP-mounted
+protocol. `start()` receives a `ProtocolAdapterContext` containing the pipeline,
+resource registry, event sink, logger, clock, id generator and public base URL.
+
+For adapters whose protocol payload carries invocation input as an object, such
+as MCP and A2A, the core flow is:
 
 ```ts
-import type {
-  HttpProtocolAdapter,
-  ProtocolAdapterContext,
-} from '@devlab.group/agent-commerce';
-import {
-  PAYMENT_INPUT_FIELD,
-  toErrorEnvelope,
-  toPaymentRequiredEnvelope,
-  toCommerceError,
-} from '@devlab.group/agent-commerce';
+try {
+  const requestId = context.ids.next(protocol);
+  const resource = context.resources.get(resourceId);
+  const { input, payment, authorization } = extractReservedInputFields(
+    rawInput,
+    resource,
+    requestId,
+  );
+  const outcome = await context.pipeline.execute({
+    requestId,
+    resourceId,       // parsed from the protocol request
+    input,            // reserved proof fields removed
+    protocol,
+    receivedAt: context.clock.nowIso(),
+    ...(payment ? { payment } : {}),
+    ...(authorization ? { authorization } : {}),
+  });
 
-export function createExampleAdapter: HttpProtocolAdapter {
-  let ctx: ProtocolAdapterContext | undefined;
-
-  return {
-    name: 'example',
-    mountPath: '/example',
-    descriptor: {
-      name: 'example',
-      kind: 'protocol',
-      implementationVersion: '1.0.0',
-      supportedSpec: 'example-spec@2026-01-01', // pin it, do not hand-wave
-      capabilities: ['discovery', 'invoke'],
-      unsupported: ['subscriptions', 'batch'], // be explicit
-      status: 'experimental',
-    },
-
-    async start(context) {
-      ctx = context;
-      // register the resources this protocol exposes
-      for (const resource of context.resources.listExposedVia('example')) {
-        // map resource.inputSchema into your protocol's schema language
-      }
-    },
-
-    async handleHttp(req, res) {
-      if (!ctx) throw new Error('adapter not started');
-      const requestId = ctx.ids.next('req');
-      try {
-        const outcome = await ctx.pipeline.execute({
-          requestId,
-          resourceId: /* from the wire */ '',
-          input: /* from the wire, with the payment field removed */ {},
-          protocol: 'example',
-          receivedAt: ctx.clock.nowIso,
-          // payment: { method: 'x402', payload } when a proof was supplied
-        });
-
-        if (outcome.kind === 'payment-required') {
-          // ALWAYS use the shared envelope — do not invent your own shape
-          respond(res, 402, toPaymentRequiredEnvelope(outcome));
-          return;
-        }
-        respond(res, 200, outcome.body);
-      } catch (error) {
-        const commerceError = toCommerceError(error);
-        respond(res, commerceError.httpStatus, toErrorEnvelope(commerceError));
-      }
-    },
-
-    async health {
-      return { status: ctx ? 'pass': 'fail', checkedAt: new Date.toISOString };
-    },
-
-    async stop {
-      ctx = undefined;
-    },
-  };
+  return mapProtocolOutcome(outcome);
+} catch (error) {
+  return mapProtocolError(toCommerceError(error));
 }
 ```
 
-### Rules
+The adapter owns wire parsing and response mapping. Its preliminary resource
+lookup supports carrier parsing and protocol exposure checks; the pipeline
+resolves the resource again for execution. MCP and A2A embed canonical
+payment-required and error envelopes in their protocol results, while ACP maps
+them to ACP bodies. The canonical HTTP invoke route uses headers and lives in
+`src/gateway/routes.ts`; an `HttpProtocolAdapter` instead owns a protocol-specific
+raw HTTP mount. The pipeline owns authoritative resource lookup, input
+validation, authorization, payment, backend execution and receipts.
 
-- **Never call a merchant backend.** Everything goes through
-  `pipeline.execute`. An adapter that fetches a backend directly bypasses
-  payment enforcement, and that is the one bug this architecture exists to make
-  impossible.
-- **Never implement payment logic.** You surface `PaymentRequiredOutcome`; you
-  do not decide what is owed or whether a proof is valid.
-- **Never redeclare a canonical type.** Import it.
-- **Map errors deterministically.** `toErrorEnvelope(toCommerceError(e))`. No
-  stack traces, no internal messages on the wire.
-- **Fail in isolation.** A throw inside your adapter must not take down the
-  process or another adapter.
-- **Be honest in `descriptor`.** `supportedSpec` is a pinned revision;
-  `unsupported` is a real list; `status` is `experimental` until conformance
-  tests say otherwise.
+### Adapter rules
 
-### Checklist before review
+- Send every invocation through `pipeline.execute()`; never call a merchant
+  backend directly.
+- Surface `PaymentRequiredOutcome`; do not calculate prices or verify proofs.
+- Import canonical types instead of redeclaring them.
+- Use `toPaymentRequiredEnvelope()` and
+  `toErrorEnvelope(toCommerceError(error))` where the wire contract permits.
+  Protocols such as ACP map canonical outcomes and errors into their own
+  response bodies. Never expose stack traces or internal errors.
+- For input-object protocols, call
+  `extractReservedInputFields(rawInput, resource, requestId)`. It removes and
+  parses `_payment` and `_authorization`, and labels a payment proof with the
+  resource's first payment method. The canonical HTTP invoke route parses both
+  carriers from headers.
+- Keep handler failures inside the adapter and report health through
+  `health()`.
+- Pin `descriptor.supportedSpec`, list real `capabilities` and `unsupported`
+  features, and keep `status: experimental` until conformance coverage supports
+  promotion.
 
-- [ ] schema mapping from `CommerceResource`
-- [ ] request normalisation into `CanonicalRequest`, `_payment` stripped from input
-- [ ] `PaymentRequiredEnvelope` and `ErrorEnvelope` used verbatim
-- [ ] honest `AdapterDescriptor`
-- [ ] conformance fixtures pinning the spec revision
-- [ ] contract tests driven through a **real client** of the protocol, not just
-      the adapter's internal functions
-- [ ] `docs/protocols.md` row and a support-matrix update
-- [ ] no new dependency in `src/core`
+### Adapter review checklist
 
-## A payment provider
+- [ ] map `CommerceResource` schemas into the protocol's discovery format
+- [ ] normalize requests into `CanonicalRequest`
+- [ ] use the shared envelopes where the wire contract permits; otherwise test
+      the protocol-specific mapping
+- [ ] publish an accurate `AdapterDescriptor`
+- [ ] pin the specification revision in fixtures
+- [ ] run contract tests through a real protocol client, not only adapter
+      internals
+- [ ] update the support matrix in [protocols.md](protocols.md)
+- [ ] keep protocol-specific dependencies and types out of `src/core`
 
-Implement `PaymentProvider`: `createRequirement`, `verify`, `settle`, `health`.
+## Payment providers
+
+Implement `PaymentProvider`: `createRequirement`, `verify`, `settle` and
+`health`. The sketch below is partial; each rail defines the contents of its
+challenge envelope.
 
 ```ts
-export function createExampleProvider(options: ExampleOptions): PaymentProvider {
-  return {
-    name: 'example-rail',
-    descriptor: { /* honest */ },
+const provider: PaymentProvider = {
+  name,
+  descriptor,
 
-    async createRequirement(context) {
-      return {
-        id: /* … */,
-        requestId: context.requestId,
-        resourceId: context.resource.id,
-        provider: 'example-rail',
-        amount: context.amount, // decimal display units, unchanged
-        currency: context.currency,
-        destination: options.payTo, // merchant-controlled
-        challenge: {
-          provider: 'example-rail',
-          version: '1',
-          accepts: [/* your rail's native requirement object, opaque to core */],
-        },
-      };
-    },
+  async createRequirement(context) {
+    return {
+      id: ids.next('payment'),
+      requestId: context.requestId,
+      resourceId: context.resource.id,
+      provider: name,
+      amount: context.amount,
+      currency: context.currency,
+      destination: options.destination, // merchant-controlled
+      challenge: { provider: name, version, accepts, envelope },
+    };
+  },
 
-    async verify(context) {
-      // No side effects that move money. Ever.
-      // Return { status: 'rejected', rejectionReason } instead of throwing
-      // for an invalid proof; throw PAYMENT_PROVIDER_UNAVAILABLE only when the
-      // rail itself is unreachable.
-      // MUST return a replayKey derived ONLY from the authorisation.
-    },
+  async verify(context) {
+    // Validate only. Return rejected for a bad proof and include a replayKey
+    // derived only from the authorization when verification succeeds.
+  },
 
-    async settle(context) {
-      // Runs only after verify succeeded AND the replay key was reserved.
-    },
+  async settle(context) {
+    // The pipeline calls this after verification and replay reservation.
+  },
 
-    async health { /* fast, never throws */ },
-  };
-}
+  async health() {
+    return { status: 'pass', checkedAt: clock.nowIso() };
+  },
+};
 ```
 
-### Rules
+### Provider rules
 
-- `verify` must not move funds. `settle` is the only place that does.
-- `replayKey` must be derived **only** from the payment authorisation, never
-  from the request id — otherwise a replay against a different request slips
-  through.
-- Distinguish *rejected* (the payment is bad — not retryable) from
-  *unavailable* (the rail is down — retryable). The pipeline treats them
-  differently and so do clients.
-- The gateway must never need a merchant or buyer private key to use your rail.
-  If it does, the design is wrong for this project.
-- Amounts arrive as decimal strings in display units. Do the base-unit
-  conversion yourself, deterministically, without floating point.
+- `verify` must not move funds; settlement belongs in `settle`.
+- Derive `replayKey` only from the payment authorization, never from the
+  request id. The same authorization must collide across requests.
+- Return `rejected` for an invalid proof. If the provider cannot reach a
+  verdict, throw a `CommerceError` with code `PAYMENT_PROVIDER_UNAVAILABLE` so
+  clients can distinguish a bad payment from an outage. An untyped throw from
+  `verify` becomes `PAYMENT_INVALID`.
+- Accept decimal display-unit strings and convert to base units without
+  floating point.
+- Set `destination` from merchant configuration. It must never be a
+  gateway-owned wallet.
+- Never require a buyer or merchant production private key. If the rail uses a
+  facilitator key, keep that role separate from buyer and merchant custody.
+- Keep `health()` fast. Its `detail` is optional and may be dynamic; the
+  framework does not sanitize it, so treat it as operator-visible and avoid
+  secrets. Prefer a failed health result to throwing.
 
-### Checklist before review
+### Provider review checklist
 
-- [ ] negative tests: no payment, malformed, wrong amount, wrong recipient,
-      wrong network, wrong asset, replay, expired, provider unavailable
-- [ ] a deterministic settlement proof — a real state change, not a mocked
+- [ ] negative tests cover missing, malformed, expired, replayed, wrong-amount,
+      wrong-recipient, wrong-network and wrong-asset proofs, plus provider
+      unavailability and backend failure after successful settlement
+- [ ] settlement tests prove a real deterministic state change, not a mocked
       success
-- [ ] no key material held by the gateway
-- [ ] honest `descriptor` with a real `unsupported` list
-- [ ] `docs/protocols.md` and `docs/payment-flow.md` updated
+- [ ] no buyer or merchant production key is held by the gateway
+- [ ] the descriptor lists supported and unsupported behavior accurately
+- [ ] [protocols.md](protocols.md) and [payment-flow.md](payment-flow.md) are
+      updated

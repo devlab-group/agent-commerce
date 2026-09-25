@@ -57,6 +57,43 @@ describe('buildResourceDrafts', () => {
     expect(resource('ping')).not.toHaveProperty('output');
   });
 
+  it('dereferences OpenAPI 3.2 response and media-type objects', async () => {
+    const referenced = buildResourceDrafts(
+      await loadOpenApiDocument(fixture('referenced-media-3.2.yaml')),
+    );
+
+    expect(referenced.drafts[0]?.resource['output']).toEqual({
+      type: 'object',
+      properties: { id: { type: 'string' } },
+      additionalProperties: false,
+    });
+  });
+
+  it('warns when the selected JSON response has no schema', () => {
+    const withoutSchema = buildResourceDrafts({
+      version: '3.1',
+      sourcePath: '/tmp/no-schema.yaml',
+      document: {
+        openapi: '3.1.0',
+        info: { title: 'No output schema', version: '1.0.0' },
+        servers: [{ url: 'https://api.example.com' }],
+        paths: {
+          '/status': {
+            get: {
+              operationId: 'status',
+              responses: {
+                '200': { description: 'ok', content: { 'application/json': {} } },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(withoutSchema.drafts[0]?.resource).not.toHaveProperty('output');
+    expect(withoutSchema.diagnostics.map(({ code }) => code)).toContain('missing-output-schema');
+  });
+
   it('omits an output schema it cannot represent, and keeps the operation', () => {
     expect(draft('union')).toBeDefined();
     expect(resource('union')).not.toHaveProperty('output');
@@ -117,6 +154,14 @@ describe('buildResourceDrafts', () => {
     expect(filtered.unmatchedOperationIds).toEqual(['nope']);
   });
 
+  it('keeps discovery warnings about unselected operations out of a filtered result', async () => {
+    const petstore = await loadOpenApiDocument(fixture('petstore-3.0.yaml'));
+    const all = buildResourceDrafts(petstore);
+    expect(all.diagnostics.map((d) => d.code)).toContain('unsupported-method');
+    const filtered = buildResourceDrafts(petstore, { include: { operationIds: ['listPets'] } });
+    expect(filtered.diagnostics.map((d) => d.code)).not.toContain('unsupported-method');
+  });
+
   it('filters by tag, OR-ing several', () => {
     const filtered = buildResourceDrafts(loaded, { include: { tags: ['read', 'write'] } });
     expect(filtered.drafts.map((entry) => entry.id)).toEqual(['getOrder', 'cancelOrder']);
@@ -137,6 +182,9 @@ describe('renderResourcesYaml', () => {
     expect(commentIndex).toBeGreaterThan(-1);
     expect(commentIndex).toBeLessThan(yaml.indexOf('getOrder:'));
     expect(yaml).toContain('#   pricing: { type: free }');
+    expect(yaml).toContain('#   expose: [http]           # http | mcp | a2a | acp');
+    // Fixed pricing without payments fails config validation
+    expect(yaml).toContain('with payments: [x402]');
     expect(yaml).toContain('backend authentication');
   });
 

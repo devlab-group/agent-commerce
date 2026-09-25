@@ -120,6 +120,22 @@ describe('mapRequest', () => {
     expect(result.inputSchema['required']).toBeUndefined();
   });
 
+  it('dereferences an OpenAPI 3.2 request body and its selected media type', async () => {
+    const referenced = await loadOpenApiDocument(fixture('referenced-media-3.2.yaml'));
+    const candidate = discoverOperations(referenced).operations[0];
+    expect(candidate).toBeDefined();
+    if (candidate === undefined) return;
+    const result = mapRequest(referenced, candidate);
+
+    expect(result.supported && result.inputSchema['properties']).toMatchObject({
+      body: {
+        type: 'object',
+        properties: { productId: { type: 'string' } },
+        required: ['productId'],
+      },
+    });
+  });
+
   it('skips an operation whose required body is multipart', () => {
     const result = mapping('upload');
     expect(result.supported).toBe(false);

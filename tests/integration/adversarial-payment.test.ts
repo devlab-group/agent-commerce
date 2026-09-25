@@ -34,6 +34,8 @@ import type {
 } from '../../src/core/index.js';
 import { isCommerceError } from '../../src/core/index.js';
 import { createGateway, type GatewayInstance } from '../../src/gateway/index.js';
+import { LOCAL_FACILITATOR_ACCOUNT } from '../../src/payments/x402/local-chain/accounts.js';
+import { createX402PaymentProvider } from '../../src/payments/x402/provider.js';
 import { createSqliteReceiptStore } from '../../src/storage/receipts/index.js';
 
 const RESOURCE_ID = 'paid_report';
@@ -140,6 +142,7 @@ function countingProvider(settleDelayMs: number): PaymentProvider & { settleCall
 async function buildGateway(
   storePath: string,
   provider: PaymentProvider,
+  onBackendCall: () => void = () => {},
 ): Promise<{ gateway: GatewayInstance; store: ReceiptStore }> {
   const config = parseConfig(rawConfig(storePath), {});
   const store = createSqliteReceiptStore({ path: storePath });
@@ -150,7 +153,10 @@ async function buildGateway(
     paymentProviders: [provider],
     protocolAdapters: [],
     backend: {
-      call: async () => ({ status: 200, headers: {}, body: { ok: true }, durationMs: 1 }),
+      call: async () => {
+        onBackendCall();
+        return { status: 200, headers: {}, body: { ok: true }, durationMs: 1 };
+      },
     },
   });
   return { gateway, store };
@@ -212,6 +218,32 @@ describe('adversarial: duplicate concurrent request', () => {
     // And nothing was settled the second time round.
     expect(second.gateway).toBeDefined();
     await second.gateway.close();
+  });
+
+  it('rejects a malformed PAYMENT-SIGNATURE over HTTP before calling the backend', async () => {
+    let backendCalls = 0;
+    const provider = createX402PaymentProvider({
+      network: 'eip155:84532',
+      rpcUrl: 'http://127.0.0.1:8545',
+      asset: '0x5FbDB2315678afecb367f032d93F642f64180aa3',
+      assetName: 'MockUSDC',
+      assetVersion: '2',
+      assetDecimals: 6,
+      payTo: '0x70997970C51812dc3A010C7d01b50e0d17dc79C8',
+      facilitator: {
+        mode: 'local',
+        signerPrivateKey: LOCAL_FACILITATOR_ACCOUNT.privateKey,
+      },
+    });
+    const { gateway } = await buildGateway(join(dir, 'malformed-http.sqlite'), provider, () => {
+      backendCalls += 1;
+    });
+
+    const response = await invoke(gateway, 'not-base64-or-json');
+    expect(response.statusCode).toBe(402);
+    expect(response.json().code).toBe('PAYMENT_INVALID');
+    expect(backendCalls).toBe(0);
+    await gateway.close();
   });
 });
 

@@ -170,9 +170,9 @@ commerce flow.
   needs at least one of its named rails enabled, so a resource that names only
   `mpp` needs `payments.mpp` enabled but no x402 block.
 - The `./mpp` entry exports `createMppPaymentProvider` (also as `mpp`) beside
-  the pinned profile metadata and descriptor. The provider verifies locally,
-  uses x402-compatible replay keys, and delegates settlement to a supplied x402
-  provider.
+  the pinned profile metadata and descriptor. The provider runs local checks,
+  calls the supplied x402 provider's read-only facilitator check, uses
+  x402-compatible replay keys, and delegates settlement to that provider.
 
 ## Published entry points
 
@@ -298,11 +298,12 @@ domain or recipient differs (`CONFIG_INVALID`), and an amount that is not a
 positive decimal with at most 6 fractional digits (`PAYMENT_INVALID`). Each
 challenge binds the resource id in its HMAC-covered `opaque` field.
 
-`verify` derives the same replay key as x402, so an authorization collides across
-both rails. `settle` rewraps it for x402, verifies it again, checks the replay
-key, then delegates settlement. Errors before the final call return
-`settlement_unavailable`; negative results remain rejections. Throws from x402
-`settle` propagate, so the pipeline records `settlement-uncertain` and returns
+`verify` performs local checks, calls the supplied x402 provider's read-only
+facilitator check, and confirms that both providers derived the same replay key.
+The shared key makes an authorization collide across both rails. `settle`
+rewraps the credential and delegates directly to x402 settlement. Negative
+settlement results remain rejections; thrown settlement errors propagate, so
+the pipeline records `settlement-uncertain` and returns
 `PAYMENT_SETTLEMENT_FAILED`. Returned results name `mpp`; `health` delegates
 unchanged.
 

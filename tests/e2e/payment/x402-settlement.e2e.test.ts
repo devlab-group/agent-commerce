@@ -171,20 +171,71 @@ describe('x402 settlement — real local chain', () => {
     }
   });
 
-  it('4. wrong amount (value below the required amount) is rejected before settlement', async () => {
+  it('3b. a signature or signed authorization field changed after signing is rejected', async () => {
     const before = await balances();
-    const { requirement, proof } = await buildValidProof('1.00', { value: '1' }); // far below 1,000,000
-    const verifyResult = await provider.verify({
-      requestId: requirement.requestId,
-      resource: RESOURCE,
-      requirement,
-      submission: { method: 'x402', payload: proof },
-    });
-    expect(verifyResult.status).toBe('rejected');
-    expect(verifyResult.rejectionReason).toBe('wrong_amount');
+    const { requirement, proof } = await buildValidProof('1.00');
+    const decoded = JSON.parse(Buffer.from(proof, 'base64').toString('utf8'));
+    const signature = decoded.payload.signature as string;
+    const tampered = [
+      {
+        ...decoded,
+        payload: {
+          ...decoded.payload,
+          signature: `${signature.slice(0, 2)}${signature[2] === '0' ? '1' : '0'}${signature.slice(3)}`,
+        },
+      },
+      {
+        ...decoded,
+        payload: {
+          ...decoded.payload,
+          authorization: { ...decoded.payload.authorization, nonce: `0x${'ab'.repeat(32)}` },
+        },
+      },
+      {
+        ...decoded,
+        payload: {
+          ...decoded.payload,
+          authorization: {
+            ...decoded.payload.authorization,
+            from: deployment.merchant.address,
+          },
+        },
+      },
+    ];
+
+    for (const changed of tampered) {
+      const verifyResult = await provider.verify({
+        requestId: requirement.requestId,
+        resource: RESOURCE,
+        requirement,
+        submission: {
+          method: 'x402',
+          payload: Buffer.from(JSON.stringify(changed)).toString('base64'),
+        },
+      });
+      expect(verifyResult.status).toBe('rejected');
+    }
     const after = await balances();
     expect(after).toEqual(before);
   });
+
+  it.each(['1', '1000001'])(
+    '4. an amount below or above the required amount is rejected before settlement: %s',
+    async (value) => {
+      const before = await balances();
+      const { requirement, proof } = await buildValidProof('1.00', { value });
+      const verifyResult = await provider.verify({
+        requestId: requirement.requestId,
+        resource: RESOURCE,
+        requirement,
+        submission: { method: 'x402', payload: proof },
+      });
+      expect(verifyResult.status).toBe('rejected');
+      expect(verifyResult.rejectionReason).toBe('wrong_amount');
+      const after = await balances();
+      expect(after).toEqual(before);
+    },
+  );
 
   it('5. wrong recipient is rejected before settlement', async () => {
     const before = await balances();
@@ -223,7 +274,7 @@ describe('x402 settlement — real local chain', () => {
     expect(after).toEqual(before);
   });
 
-  it('7. wrong asset (a real, but different, deployed token) is rejected before settlement', async () => {
+  it('7. another deployed token is rejected in the requirement or buyer proof', async () => {
     // Deploy a second, independent MockUSDC instance on the same live chain.
     const otherToken = await deployLocalChain({
       rpcUrl: anvil.rpcUrl,
@@ -250,6 +301,21 @@ describe('x402 settlement — real local chain', () => {
     });
     expect(verifyResult.status).toBe('rejected');
     expect(verifyResult.rejectionReason).toBe('wrong_asset');
+
+    const proofForOtherAsset = await createPaymentProof({
+      buyerPrivateKey: deployment.buyer.privateKey,
+      rpcUrl: anvil.rpcUrl,
+      accepts: { ...accepted, asset: otherToken.asset },
+    });
+    const buyerProofResult = await provider.verify({
+      requestId: requirement.requestId,
+      resource: RESOURCE,
+      requirement,
+      submission: { method: 'x402', payload: proofForOtherAsset },
+    });
+    expect(buyerProofResult.status).toBe('rejected');
+    expect(buyerProofResult.rejectionReason).toBe('invalid_exact_evm_signature');
+
     const after = await balances();
     expect(after).toEqual(before);
   });
@@ -384,9 +450,13 @@ describe('x402 settlement — real local chain', () => {
         requirement,
         submission: { method: 'x402', payload: proof },
       }),
-    ).rejects.toSatisfy(
-      (err: unknown) => isCommerceError(err) && err.code === 'PAYMENT_PROVIDER_UNAVAILABLE',
-    );
+    ).rejects.toSatisfy((err: unknown) => {
+      return (
+        isCommerceError(err) &&
+        err.code === 'PAYMENT_PROVIDER_UNAVAILABLE' &&
+        err.details === undefined
+      );
+    });
 
     const health = await unavailableProvider.health();
     expect(health.status).toBe('fail');

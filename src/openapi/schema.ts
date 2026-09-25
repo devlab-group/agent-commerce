@@ -230,6 +230,7 @@ function mergeAllOf(
   const merged: Record<string, unknown> = { type: 'object', properties: {}, required: [] };
   const properties = merged['properties'] as Record<string, unknown>;
   const required = new Set<string>();
+  let open = false;
 
   const parts = [...branches, ...(Object.keys(siblings).length > 0 ? [siblings] : [])];
   for (const branch of parts) {
@@ -259,14 +260,26 @@ function mergeAllOf(
         throw new UnsupportedSchema(`allOf branch uses "${keyword}", which cannot be merged`);
       }
     }
-    if (typeof converted['description'] === 'string' && merged['description'] === undefined) {
-      merged['description'] = converted['description'];
+    for (const keyword of METADATA_KEYWORDS) {
+      if (Object.hasOwn(converted, keyword) && !Object.hasOwn(merged, keyword)) {
+        merged[keyword] = converted[keyword];
+      }
+    }
+    // A branch that allows extra properties keeps the merge open. A schema for
+    // them constrains the other branches' properties too, which the merged
+    // `properties` cannot express
+    const additional = converted['additionalProperties'];
+    if (additional === true) open = true;
+    else if (isRecord(additional)) {
+      throw new UnsupportedSchema(
+        'allOf branch constrains additionalProperties, which cannot be merged',
+      );
     }
   }
 
   if (required.size > 0) merged['required'] = [...required];
   else delete merged['required'];
-  merged['additionalProperties'] = false;
+  merged['additionalProperties'] = open;
   return merged;
 }
 

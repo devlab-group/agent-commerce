@@ -380,35 +380,37 @@ describe('MPP settlement - real local chain', () => {
     expect((await invoke(gateway, { authorization: credential })).statusCode).toBe(200);
     const replayed = await invoke(gateway, { authorization: credential });
 
-    expect(replayed.statusCode).toBe(409);
-    expect(replayed.body['code']).toBe('PAYMENT_REPLAYED');
+    // The facilitator check in verify sees the authorization already used on
+    // chain; the gateway's replay reservation covers a concurrent second copy
+    expect(replayed.statusCode).toBe(402);
+    expect(replayed.body['code']).toBe('PAYMENT_INVALID');
     const after = await balances();
     expect(before.buyer - after.buyer).toBe(ONE_USDC);
     expect(after.merchant - before.merchant).toBe(ONE_USDC);
   });
 
-  it('5. an unreachable settlement RPC refuses the payment and moves nothing', async () => {
+  it('5. an unreachable settlement RPC is a retryable outage that uses up nothing', async () => {
     const { gateway } = await startGateway({ mpp: { rpcUrl: 'http://127.0.0.1:1' } });
-    await expectRefused(gateway, await mppCredential(gateway), {
-      statusCode: 502,
-      code: 'PAYMENT_SETTLEMENT_FAILED',
-      message: 'settlement_unavailable',
-    });
+    const credential = await mppCredential(gateway);
+    const unavailable = { statusCode: 503, code: 'PAYMENT_PROVIDER_UNAVAILABLE' };
+
+    await expectRefused(gateway, credential, unavailable);
+    // Nothing was reserved, so the same credential is not a replay
+    await expectRefused(gateway, credential, unavailable);
   });
 
-  it('6. a buyer with no funds is refused by the facilitator before broadcast', async () => {
+  it('6. a buyer with no funds is refused by the facilitator check in verify', async () => {
     const { gateway } = await startGateway();
     const unfunded = privateKeyToAccount(generatePrivateKey());
     const refused = await expectRefused(
       gateway,
       await mppCredential(gateway, { account: unfunded }),
       {
-        statusCode: 502,
-        code: 'PAYMENT_SETTLEMENT_FAILED',
+        statusCode: 402,
+        code: 'PAYMENT_INVALID',
         message: 'invalid_exact_evm_transaction_simulation_failed',
       },
     );
-    // A returned rejection, not an uncertain settlement
     expect(refused.body['details']).toBeUndefined();
   });
 
