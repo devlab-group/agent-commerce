@@ -383,6 +383,7 @@ export function createExecutionPipeline(
               requestId: request.requestId,
               resourceId: resource.id,
               cause: error,
+              ...retryChallenge(requirement),
             });
         await safeEmit(
           buildEvent({
@@ -416,6 +417,7 @@ export function createExecutionPipeline(
           {
             requestId: request.requestId,
             resourceId: resource.id,
+            ...retryChallenge(requirement),
           },
         );
       }
@@ -702,6 +704,9 @@ export function createExecutionPipeline(
                 ...(paymentResult.externalReference !== undefined
                   ? { externalReference: paymentResult.externalReference }
                   : {}),
+                ...(typeof paymentResult.metadata?.['receipt'] === 'string'
+                  ? { receipt: paymentResult.metadata['receipt'] }
+                  : {}),
               },
             },
           },
@@ -807,6 +812,13 @@ function resolveAuthorizationProviders(
     }
     return found;
   });
+}
+
+// A rejected proof leaves this request's challenge unused. Returning it lets a
+// client pay again without another round trip for a fresh one
+function retryChallenge(requirement: PaymentRequirement): { details?: Record<string, unknown> } {
+  const envelope = requirement.challenge.envelope;
+  return envelope === undefined ? {} : { details: { challenge: envelope } };
 }
 
 function pickProvider(

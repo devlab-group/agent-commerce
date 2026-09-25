@@ -94,7 +94,10 @@ const backend: BackendExecutor = {
   },
 };
 
-async function startGateway(store: ReceiptStore = createFakeStore()): Promise<GatewayInstance> {
+async function startGateway(
+  store: ReceiptStore = createFakeStore(),
+  backendExecutor: BackendExecutor = backend,
+): Promise<GatewayInstance> {
   gateway = await createGateway({
     config: config(),
     store,
@@ -115,7 +118,7 @@ async function startGateway(store: ReceiptStore = createFakeStore()): Promise<Ga
       }),
     ],
     protocolAdapters: [createMcpAdapter(), createA2aAdapter()],
-    backend,
+    backend: backendExecutor,
   });
   return gateway;
 }
@@ -228,6 +231,42 @@ describe('MPP over HTTP', () => {
     });
     expect(facilitator.settle).toHaveBeenCalledTimes(1);
     await store.close();
+  });
+
+  it('answers a rejected credential with a fresh challenge the client can pay', async () => {
+    const gw = await startGateway();
+    const first = (await invokeHttp(gw)).headers['www-authenticate'];
+    facilitator.verify.mockResolvedValueOnce({
+      isValid: false,
+      invalidReason: 'insufficient_funds',
+    });
+
+    const refused = await invokeHttp(gw, { authorization: await credentialFor(first) });
+
+    expect(refused.statusCode).toBe(402);
+    expect(refused.json()).toMatchObject({ code: 'PAYMENT_INVALID' });
+    expect(refused.headers['cache-control']).toBe('no-store');
+    const fresh = refused.headers['www-authenticate'];
+    expect(fresh).not.toBe(first);
+    const paid = await invokeHttp(gw, { authorization: await credentialFor(fresh) });
+    expect(paid.statusCode).toBe(200);
+  });
+
+  it('returns Payment-Receipt when the backend fails after settlement', async () => {
+    const failing: BackendExecutor = {
+      async call() {
+        throw new Error('backend down');
+      },
+    };
+    const gw = await startGateway(createFakeStore(), failing);
+    const credential = await credentialFor((await invokeHttp(gw)).headers['www-authenticate']);
+
+    const res = await invokeHttp(gw, { authorization: credential });
+
+    expect(res.json()).toMatchObject({ code: 'BACKEND_ERROR' });
+    expect(res.headers['payment-response']).toBeDefined();
+    const receipt = Receipt.deserialize(String(res.headers['payment-receipt']));
+    expect(receipt).toMatchObject({ method: 'evm', reference: '0xabc', status: 'success' });
   });
 
   it('treats an Authorization header in another scheme as no payment', async () => {

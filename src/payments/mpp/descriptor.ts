@@ -25,7 +25,7 @@ export const MPP_DESCRIPTOR: AdapterDescriptor = {
     'verify-before-settle',
     'payment-receipt',
   ],
-  // One experimental profile, disabled by default in gateway config
+  // The pinned specs are -00 drafts and mppx is pre-1.0, so the wire format can still change
   status: 'experimental',
   unsupported: [
     // Name other methods as a class instead of maintaining a second list

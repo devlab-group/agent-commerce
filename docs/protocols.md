@@ -12,7 +12,7 @@ This page records the implemented subset and pinned revision for each protocol.
 | **A2A** | Experimental | v1.0.0; negotiation `1.0`; `JSONRPC` binding | Agent Card, `SendMessage`, terminal tasks and paid flow |
 | **ACP** | Experimental | stable snapshot `2026-04-17`; REST binding | discovery and the five checkout operations |
 | **AP2** | Experimental | v0.2.0, tag 2026-04-28, commit `b4587ac`; Direct mode | closed Checkout Mandate verification before settlement |
-| **MPP** | Experimental | drafts at `tempoxyz/mpp-specs@806fdb8`; `mppx@0.10.1` | `charge`/`evm`/EIP-3009 over HTTP, MCP and A2A |
+| **MPP** | Experimental | `-00` drafts at `tempoxyz/mpp-specs@806fdb8`; `mppx@0.10.1` | `charge`/`evm`/EIP-3009 over HTTP, MCP and A2A |
 | UCP | Planned | - | no implementation |
 
 Experimental components are disabled unless configured and support only the
@@ -377,6 +377,12 @@ remote mode and the guardrails in
 
 **Experimental.** Enable with `payments.mpp.enabled: true`.
 
+The wire format follows three `-00` drafts read at `tempoxyz/mpp-specs@806fdb8`
+and the pre-1.0 `mppx@0.10.1`, which the package pins exactly as an optional
+peer. A later draft or `mppx` release can change the wire format, so a buyer on
+another `mppx` version may fail to pay. MPP stays experimental until the
+specification is stable.
+
 The implemented profile is `charge` intent, `evm` method and EIP-3009
 `authorization` credential, using USDC on Base Sepolia or Base. The challenge
 is HMAC-bound to the resource and terms. The credential is verified locally,
@@ -410,10 +416,13 @@ sessions and discovery extension.
 
 The invoke route uses the selected rail's headers:
 
-| Rail | Proof | Challenge on 402 | Delivered response | Backend error after settlement |
-| --- | --- | --- | --- | --- |
-| x402 | `PAYMENT-SIGNATURE` | `PAYMENT-REQUIRED` | `PAYMENT-RESPONSE` | `PAYMENT-RESPONSE` |
-| MPP | `Authorization: Payment ...` | `WWW-Authenticate: Payment ...` | `Payment-Receipt` and `PAYMENT-RESPONSE` | `PAYMENT-RESPONSE` |
+| Rail | Proof | Challenge on 402 | Rejected proof (402) | Delivered response | Backend error after settlement |
+| --- | --- | --- | --- | --- | --- |
+| x402 | `PAYMENT-SIGNATURE` | `PAYMENT-REQUIRED` | none | `PAYMENT-RESPONSE` | `PAYMENT-RESPONSE` |
+| MPP | `Authorization: Payment ...` | `WWW-Authenticate: Payment ...` | a fresh `WWW-Authenticate: Payment ...` | `Payment-Receipt` and `PAYMENT-RESPONSE` | `Payment-Receipt` and `PAYMENT-RESPONSE` |
+
+The body of a rejected proof's error carries the rail's fresh challenge as
+`details.challenge` on both rails.
 
 ## Adding an integration
 

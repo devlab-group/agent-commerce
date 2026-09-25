@@ -411,7 +411,9 @@ describe('MPP settlement - real local chain', () => {
         message: 'invalid_exact_evm_transaction_simulation_failed',
       },
     );
-    expect(refused.body['details']).toBeUndefined();
+    // Nothing settled, so no payment is reported, but a fresh challenge is
+    expect(refused.body['details']).not.toHaveProperty('payment');
+    expect(refused.headers['www-authenticate']).toMatch(/^Payment /);
   });
 
   it('7. a broadcast that is never confirmed is reported as uncertain, and the transfer lands once mined', async () => {

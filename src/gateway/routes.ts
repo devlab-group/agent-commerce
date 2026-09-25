@@ -280,6 +280,18 @@ async function handleInvoke(
     const settledPayment = errorPaymentSummary(commerceError);
     if (settledPayment !== undefined) {
       reply.header(PAYMENT_RESPONSE_HEADER, encodePaymentSummary(settledPayment));
+      if (settledPayment.provider === 'mpp' && settledPayment.receipt !== undefined) {
+        reply.header('payment-receipt', settledPayment.receipt);
+      }
+    }
+    // An MPP client pays again only from a fresh WWW-Authenticate challenge
+    const challenge = commerceError.details?.['challenge'] as Record<string, unknown> | undefined;
+    if (
+      commerceError.code === 'PAYMENT_INVALID' &&
+      typeof challenge?.['wwwAuthenticate'] === 'string'
+    ) {
+      reply.header('www-authenticate', challenge['wwwAuthenticate']);
+      reply.header('cache-control', 'no-store');
     }
     reply.status(commerceError.httpStatus).send(toErrorEnvelope(commerceError));
   }
@@ -306,6 +318,8 @@ interface PaymentSummary {
   readonly currency: string;
   readonly network?: string;
   readonly externalReference?: string;
+  // Serialised MPP `Payment-Receipt`, when the provider issued one
+  readonly receipt?: string;
 }
 
 function errorPaymentSummary(
@@ -314,7 +328,7 @@ function errorPaymentSummary(
   const payment = error.details?.['payment'];
   if (typeof payment !== 'object' || payment === null) return undefined;
   const rec = payment as Record<string, unknown>;
-  const { status, provider, amount, currency, network, externalReference } = rec;
+  const { status, provider, amount, currency, network, externalReference, receipt } = rec;
   if (
     typeof status !== 'string' ||
     typeof provider !== 'string' ||
@@ -330,6 +344,7 @@ function errorPaymentSummary(
     currency,
     ...(typeof network === 'string' ? { network } : {}),
     ...(typeof externalReference === 'string' ? { externalReference } : {}),
+    ...(typeof receipt === 'string' ? { receipt } : {}),
   };
 }
 
