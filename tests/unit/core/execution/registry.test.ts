@@ -1,16 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { isCommerceError } from '../../../../src/core/errors/index.js';
-import {
-  createResourceRegistry,
-  ResourceRegistryImpl,
-} from '../../../../src/core/execution/registry.js';
-import { makeResource } from './helpers.js';
+import { isCommerceError } from '../../../../src/core/errors';
+import { createResourceRegistry } from '../../../../src/core/execution/registry';
+import { makeResource } from './helpers';
 
-describe('ResourceRegistryImpl', () => {
+describe('createResourceRegistry', () => {
   it('resolves resources by id', () => {
     const a = makeResource({ id: 'a' });
     const b = makeResource({ id: 'b', exposedVia: ['mcp'] });
-    const registry = new ResourceRegistryImpl([a, b]);
+    const registry = createResourceRegistry([a, b]);
 
     expect(registry.get('a')).toBe(a);
     expect(registry.get('b')).toBe(b);
@@ -40,9 +37,9 @@ describe('ResourceRegistryImpl', () => {
     const a = makeResource({ id: 'dup' });
     const b = makeResource({ id: 'dup' });
 
-    expect(() => new ResourceRegistryImpl([a, b])).toThrowError();
+    expect(() => createResourceRegistry([a, b])).toThrowError();
     try {
-      new ResourceRegistryImpl([a, b]);
+      createResourceRegistry([a, b]);
       expect.unreachable();
     } catch (error) {
       expect(isCommerceError(error)).toBe(true);

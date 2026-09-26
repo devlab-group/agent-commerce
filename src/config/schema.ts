@@ -1,27 +1,20 @@
 /**
- * `config.yaml` schema, validation and normalisation into the
- * canonical `GatewayConfig` (docs/contracts.md).
+ * `config.yaml` schema, validation and normalization into the canonical
+ * `GatewayConfig` (docs/contracts.md).
  *
- * Two-phase validation:
- * 1. Zod validates *shape* (types, required fields, unknown-key rejection).
- * Numeric/boolean leaves accept either their native type or a string
- * (env substitution always produces a string), and are left as-is here -
- * Zod's typed transforms have surprising inference interactions with
- * `.strict()` objects, so numeric/boolean coercion is done explicitly,
- * in plain TypeScript, in the normalisation pass below.
- * 2. A manual business-rule pass validates cross-references that need a
- * specific, actionable message (duplicate ids, disabled protocols/payment
- * methods, dynamic pricing, destination-address plausibility) and
- * performs the numeric/boolean coercion.
+ * 1. Zod validates shape: types, required fields, unknown keys. Numeric and
+ *    boolean leaves accept their native type or a string, because env
+ *    substitution produces strings. Zod transforms interact badly with
+ *    `.strict()` inference, so coercion happens in plain TypeScript in step 2.
+ * 2. A business-rule pass coerces those leaves and checks what needs a
+ *    specific message: cross-references, disabled protocols and payment
+ *    methods, dynamic pricing, addresses, duplicate trust entries.
  *
- * Env substitution (`${VAR}` / `${VAR:-default}`) runs over the raw parsed
- * value *before* either phase, so numeric/boolean fields can be templated too.
- * One exception, deliberate: `checkVersion` runs **before** substitution, so
- * `version:` cannot itself be templated. It is the compatibility gate that
- * decides whether this parser understands the document at all; resolving
- * environment variables to find out which schema version to expect would be
- * backwards. The order is intended; `version:` is the one exception to the
- * substitution rule, which this sentence exists to record.
+ * Env substitution (`${VAR}` / `${VAR:-default}`) runs over the raw value
+ * before both steps, so numeric and boolean fields can be templated. The one
+ * exception is `version:`, checked before substitution: it decides whether this
+ * parser understands the document at all, so it cannot depend on the
+ * environment.
  */
 
 import { type ZodError, type ZodIssue, type ZodTypeAny, z } from 'zod';
@@ -35,17 +28,8 @@ import {
   AP2_MODES,
   AP2_SIGNING_ALGORITHM,
   AP2_SPEC_VERSION,
-} from '../authorization/ap2/constants.js';
-import type {
-  Ap2AuthorizationConfig,
-  Ap2Mode,
-  Ap2TrustedIssuer,
-} from '../authorization/ap2/types.js';
-import {
-  extractPathParameterNames,
-  findUnparsedBraceToken,
-  isObjectSchemaNode,
-} from '../core/execution/index.js';
+} from '../authorization/ap2/constants';
+import type { Ap2AuthorizationConfig, Ap2Mode, Ap2TrustedIssuer } from '../authorization/ap2/types';
 import {
   type AuthorizationMethodName,
   CommerceError,
@@ -54,7 +38,13 @@ import {
   PROTOCOL_NAMES,
   type Pricing,
   RESERVED_INPUT_FIELDS,
-} from '../core/index.js';
+} from '../core';
+import {
+  extractPathParameterNames,
+  findUnparsedBraceToken,
+  isObjectSchemaNode,
+} from '../core/execution';
+import { isRecord } from '../core/is-record';
 import {
   isMppNetwork,
   MPP_DEFAULT_NETWORK,
@@ -62,38 +52,31 @@ import {
   MPP_NETWORKS,
   MPP_PROFILE,
   type MppNetwork,
-} from '../payments/mpp/constants.js';
-import { resolveX402Deployment, type X402FacilitatorConfig } from '../payments/x402/guardrails.js';
+} from '../payments/mpp/constants';
+import { resolveX402Deployment, type X402FacilitatorConfig } from '../payments/x402/guardrails';
 import {
   ACP_CHECKOUT_OPERATIONS,
   ACP_OPERATION_INPUT_KEYS,
+  ACP_OPERATION_OPTIONAL_INPUT_KEYS,
   ACP_WELL_KNOWN_PATH,
   type AcpCheckoutOperation,
-} from '../protocols/acp/constants.js';
-import { substituteEnv } from './env.js';
+} from '../protocols/acp/constants';
+import { MCP_TOOL_NAME_PATTERN } from '../protocols/mcp/constants';
+import { substituteEnv } from './env';
 
 const SUPPORTED_CONFIG_VERSION = 1;
 
-/** `0x` + 40 hex chars. Checksum-insensitive: casing is not enforced. */
+// `0x` + 40 hex chars. Casing (the EIP-55 checksum) is not checked
 const ADDRESS_PATTERN = /^0x[0-9a-fA-F]{40}$/;
 const ZERO_ADDRESS_PATTERN = /^0x0{40}$/i;
 
-/**
- * A resource `id` doubles as its MCP tool name (protocol-mcp registers one
- * tool per resource, named by id). Value verified against the regex actually
- * shipped in the installed `@modelcontextprotocol/sdk@1.30.0`
- * (`shared/toolNameValidation.js`, SEP-986 "Specify Format for Tool Names") -
- * not duplicated as an SDK dependency, since config stays protocol-agnostic.
- */
-const MCP_TOOL_NAME_PATTERN = /^[A-Za-z0-9._-]{1,128}$/;
-
 // ---------------------------------------------------------------------------
-// Zod schema for the *shape* of the raw (post-substitution) document.
+// Zod schema for the shape of the raw (post-substitution) document
 // ---------------------------------------------------------------------------
 
-/** Accepts a real number or a (post env-substitution) numeric string. */
+// A number, or a numeric string from env substitution
 const NumberOrString = z.union([z.number(), z.string()]);
-/** Accepts a real boolean or a (post env-substitution) "true"/"false" string. */
+// A boolean, or a "true"/"false" string from env substitution
 const BooleanOrString = z.union([z.boolean(), z.string()]);
 
 const MerchantSchema = z
@@ -108,14 +91,14 @@ const ServerSchema = z
   .object({
     port: NumberOrString,
     host: z.string().min(1),
-    /** Shared secret gating /api/receipts, /api/events, /api/events/stream. No token -> those routes 404. */
+    // Shared secret gating /api/receipts and /api/events. Without it both
+    // routes 404.
     adminToken: z.string().min(1).optional(),
-    /** Browser origins allowed to read the dashboard-facing routes. Empty by default: closed. */
-    // Entries are matched literally against the browser's
-    // `Origin` header, so `"*"` and a trailing slash match nothing at all -
-    // fail-closed (a lockout, not a bypass), but silently, and a lockout with
-    // no explanation is the kind of thing an operator "fixes" by disabling the
-    // check. Reject those two shapes with a pointer instead.
+    // Browser origins allowed to call the gateway; none by default. A request
+    // with any other `Origin` gets 403 on every route. Entries match the
+    // `Origin` header exactly (ignoring case), so `"*"` and a trailing slash
+    // would match nothing: a silent lockout that an operator might "fix" by
+    // disabling the check. Both are refused with a pointer.
     allowedOrigins: z
       .array(
         z
@@ -145,37 +128,27 @@ const StorageSchema = z
   })
   .strict();
 
-/**
- * Every path the gateway registers itself (`src/gateway/routes.ts`), plus the
- * fixed discovery paths adapters own. An adapter mount that equals one of
- * these makes Fastify's `.all()` a duplicate of the registered route; one that
- * is a path-prefix of them swallows their 404s through the mount's
- * `${mountPath}/*` wildcard.
- */
+// Every path the gateway registers (`src/gateway/routes.ts`), plus the fixed
+// discovery paths adapters own. A mount equal to one duplicates that route; a
+// mount that is a prefix of one swallows it through its `${mountPath}/*` wildcard.
 const RESERVED_GATEWAY_PATHS = [
   '/health',
   '/ready',
   '/.well-known/agent-commerce',
-  // Fixed by the A2A specification, so it is the adapter's to serve and never
-  // a configurable mount's to claim.
+  // Fixed by the A2A specification and served by the adapter
   '/.well-known/agent-card.json',
-  // Likewise fixed by the ACP specification.
+  // Fixed by the ACP specification
   ACP_WELL_KNOWN_PATH,
   '/api/resources',
   '/api/resources/:id/invoke',
   '/api/receipts',
   '/api/events',
-  '/api/events/stream',
 ] as const;
 
-/**
- * `mountPath` reaches Fastify as a route pattern, and a bad one throws inside
- * route registration - deferred to `server.ready()`, so `createGateway` fails
- * wholesale with an opaque `FST_ERR_*` instead of the adapter alone degrading.
- * Catching the shape here turns that into a CONFIG_INVALID naming the value.
- * Fastify pattern syntax (`:param`, `*`) is rejected rather than supported:
- * the mount registers its own wildcard, so a pattern here has no meaning.
- */
+// A bad `mountPath` would throw inside Fastify route registration at
+// `server.ready()`, failing the whole gateway with an opaque `FST_ERR_*`.
+// Checked here it is a CONFIG_INVALID naming the value. Pattern syntax (`:`,
+// `*`) is refused because the mount registers its own wildcard.
 const MountPathSchema = z
   .string()
   .min(1)
@@ -198,21 +171,18 @@ const MountPathSchema = z
     },
   );
 
-/** Bearer is the only ACP auth scheme - `none` is not offered. */
+// Bearer is the only ACP auth scheme; there is no `none`
 const AcpAuthSchema = z.object({ type: z.literal('bearer'), token: z.string().min(1) }).strict();
 
 const AcpIdempotencySchema = z
   .object({ path: z.string().min(1), retentionHours: NumberOrString.optional() })
   .strict();
 
-/**
- * Operation ids are validated against `ACP_CHECKOUT_OPERATIONS` in the business
- * pass rather than spelled out again here: one list of the five names, and a
- * missing or misspelled key gets a message naming the operation.
- */
+// Operation names are checked against `ACP_CHECKOUT_OPERATIONS` in the
+// business pass, which names a missing or misspelled operation
 const AcpCheckoutSchema = z.object({ operations: z.record(z.string().min(1)) }).strict();
 
-/** Optional discovery metadata. Omitted when not configured - never guessed. */
+// Optional discovery metadata, omitted when not configured
 const AcpDiscoverySchema = z
   .object({
     documentationUrl: z.string().min(1).optional(),
@@ -231,8 +201,7 @@ const ProtocolsSchema = z
         mountPath: MountPathSchema,
       })
       .strict(),
-    // Optional block: A2A is off unless an operator asks for it, and an
-    // existing config predating the adapter stays valid.
+    // Optional; A2A is off unless configured
     a2a: z
       .object({
         enabled: BooleanOrString,
@@ -240,10 +209,9 @@ const ProtocolsSchema = z
       })
       .strict()
       .optional(),
-    // Likewise optional and off by default. The sub-blocks are optional here
-    // and required by the business pass only when ACP is enabled, so a
-    // disabled placeholder block stays writable and an enabled one gets a
-    // message naming the piece it is missing.
+    // Optional and off by default. The business pass requires the sub-blocks
+    // only when ACP is enabled, so a disabled placeholder stays valid and an
+    // enabled block gets a message naming what it lacks.
     acp: z
       .object({
         enabled: BooleanOrString,
@@ -258,27 +226,21 @@ const ProtocolsSchema = z
   })
   .strict();
 
-/** Applied when `protocols.a2a` is absent or names no mount. */
+// Applied when `protocols.a2a` is absent or names no mount
 const DEFAULT_A2A_MOUNT_PATH = '/a2a';
 
-/** Applied when `protocols.acp` is absent or names no mount. */
+// Applied when `protocols.acp` is absent or names no mount
 const DEFAULT_ACP_MOUNT_PATH = '/acp';
 
-/**
- * Idempotency records must outlive the window in which a client may retry, and
- * ACP fixes that window at 24 hours. A shorter retention would let a replayed
- * key past an expired record and run a checkout side effect twice, so it is
- * both the default and the floor.
- */
+// Idempotency records must outlive ACP's 24-hour retry window, or a replayed
+// key could pass an expired record and run a checkout side effect twice. It is
+// both the default and the floor.
 const ACP_RETENTION_HOURS = 24;
 
 const BackendMethodSchema = z.enum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
 
-/**
- * Names the top-level input properties carrying each part of the backend
- * request. Strict: a typo like `bodyy` must fail at load, not silently mean
- * "no body binding" and ship a request missing its payload.
- */
+// Strict, so a typo like `bodyy` fails at load instead of silently meaning
+// "no body binding"
 const BackendInputBindingsSchema = z
   .object({
     path: z.string().min(1).optional(),
@@ -336,17 +298,13 @@ const ResourceEntrySchema = z
 
 const ResourcesMapSchema = z.record(z.string().min(1), ResourceEntrySchema);
 
-/**
- * Facilitator credentials, kept generic on purpose: x402 facilitators are not
- * a single-vendor category, and an auth block shaped around one provider's
- * credentials would make the abstraction a fiction. A facilitator needing a
- * credential type outside this union is refused rather than sent nothing.
- */
+// Facilitator credentials. `none` and `bearer` fit any facilitator; `cdp` is
+// the one vendor-specific type. Any other type is refused at load.
 const FacilitatorAuthSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('none') }).strict(),
   z.object({ type: z.literal('bearer'), token: z.string().min(1) }).strict(),
   // Coinbase Developer Platform. Needs the optional peer `@coinbase/x402`,
-  // which signs a fresh JWT per request; a static header cannot express it.
+  // which signs a fresh JWT per request.
   z
     .object({
       type: z.literal('cdp'),
@@ -367,10 +325,8 @@ const FacilitatorSchema = z.discriminatedUnion('mode', [
     .object({
       mode: z.literal('remote'),
       url: z.string().min(1),
-      // Absent means "this facilitator takes no credential" - an explicit
-      // statement, normalised to `{ type: 'none' }` below. On a mainnet that
-      // combination is refused outright, so the default can never quietly
-      // become an unauthenticated production facilitator.
+      // Absent auth sends no credential and normalizes to `{ type: 'none' }`,
+      // which on mainnet requires `allowUnauthenticatedFacilitator`
       auth: FacilitatorAuthSchema.optional(),
     })
     .strict(),
@@ -388,9 +344,9 @@ const X402Schema = z
     payTo: z.string().min(1),
     maxTimeoutSeconds: NumberOrString,
     facilitator: FacilitatorSchema,
-    /** Real funds. Never defaulted - see src/payments/x402/guardrails.ts. */
+    // Real funds. Never defaulted; see src/payments/x402/guardrails.ts
     allowMainnet: BooleanOrString.optional(),
-    /** Accepts a mainnet facilitator that takes no credential. Never defaulted. */
+    // Accepts credential-free facilitator access on mainnet. Never defaulted
     allowUnauthenticatedFacilitator: BooleanOrString.optional(),
   })
   .strict();
@@ -408,9 +364,9 @@ const MppSchema = z
     challengeSecret: z.string().min(1),
     challengeTtlSeconds: NumberOrString.optional(),
     facilitator: FacilitatorSchema,
-    // Real funds. Never defaulted - see src/payments/x402/guardrails.ts
+    // Real funds. Never defaulted; see src/payments/x402/guardrails.ts
     allowMainnet: BooleanOrString.optional(),
-    // Accepts a mainnet facilitator that takes no credential. Never defaulted
+    // Accepts credential-free facilitator access on mainnet. Never defaulted
     allowUnauthenticatedFacilitator: BooleanOrString.optional(),
   })
   .strict();
@@ -422,16 +378,10 @@ const PaymentsSchema = z
   })
   .strict();
 
-/**
- * A public verification key, given inline.
- *
- * Inline only: there is no `jwksUri`, no `jku`, no discovery URL. AP2 still
- * has an open standardisation question around secure key distribution, and
- * inventing dynamic trust here would mean fetching keys from a location a
- * mandate can influence. The JWK's own members are checked against
- * `AP2_JWK_MEMBERS` in the business pass, which stops `x5u` reintroducing the
- * same fetch one level down.
- */
+// A public verification key, inline only: no `jwksUri`, `jku` or discovery
+// URL. AP2 leaves secure key distribution open, and fetching keys would mean
+// fetching from a location a mandate can influence. The business pass checks
+// the JWK's members against `AP2_JWK_MEMBERS`, which also keeps out `x5u`.
 const Ap2KeySchema = z
   .object({
     kid: z.string().min(1),
@@ -442,11 +392,8 @@ const Ap2KeySchema = z
 const Ap2IssuerSchema = z
   .object({
     issuer: z.string().min(1),
-    /**
-     * Required, not defaulted. Without it, a mandate minted for another
-     * merchant would verify here, and there is no value worth guessing for
-     * something that decides that.
-     */
+    // Required, not defaulted: without it a mandate minted for another
+    // merchant would verify here
     audience: z.string().min(1),
     keys: z.array(Ap2KeySchema).min(1),
   })
@@ -472,12 +419,8 @@ const Ap2Schema = z
   })
   .strict();
 
-/**
- * Optional block, off by default. A config predating AP2 stays valid, and the
- * sub-blocks are optional here so a disabled placeholder is writable; the
- * business pass requires each of them only once AP2 is enabled, and names the
- * missing piece.
- */
+// Optional and off by default. The business pass requires the sub-blocks only
+// when AP2 is enabled, and names the missing piece.
 const AuthorizationSchema = z.object({ ap2: Ap2Schema.optional() }).strict();
 
 const RawConfigSchema = z
@@ -497,10 +440,10 @@ type RawConfig = z.infer<typeof RawConfigSchema>;
 type RawResourceEntry = z.infer<typeof ResourceEntrySchema>;
 
 // ---------------------------------------------------------------------------
-// Public shape (docs/contracts.md - exact).
+// Public shape (docs/contracts.md)
 // ---------------------------------------------------------------------------
 
-/** Optional ACP discovery metadata. Absent fields are omitted from the document. */
+/** Optional ACP discovery metadata. Absent fields are omitted from the document */
 export interface AcpDiscoveryConfig {
   readonly documentationUrl?: string;
   readonly supportedCurrencies?: readonly string[];
@@ -509,9 +452,8 @@ export interface AcpDiscoveryConfig {
 }
 
 /**
- * Discriminated on `enabled` so an enabled ACP config carries everything the
- * adapter needs, with no optional-field assertions at the mount point: a
- * half-configured checkout lifecycle is rejected at load instead.
+ * Discriminated on `enabled`, so an enabled ACP config carries everything the
+ * adapter needs; a half-configured checkout is rejected at load
  */
 export type AcpProtocolConfig =
   | { readonly enabled: false; readonly mountPath: string }
@@ -542,7 +484,7 @@ export interface GatewayConfig {
     readonly a2a: { readonly enabled: boolean; readonly mountPath: string };
     readonly acp: AcpProtocolConfig;
   };
-  /** Canonical resources, already normalised. */
+  /** Canonical resources, already normalized */
   readonly resources: readonly CommerceResource[];
   readonly payments: {
     readonly x402?: {
@@ -575,10 +517,7 @@ export interface GatewayConfig {
       readonly allowUnauthenticatedFacilitator?: boolean;
     };
   };
-  /**
-   * Absent when no `authorization:` block is configured, which is how every
-   * config written before AP2 existed reads.
-   */
+  /** Absent when no `authorization:` block is configured */
   readonly authorization?: { readonly ap2: Ap2AuthorizationConfig };
 }
 
@@ -587,7 +526,7 @@ export interface GatewayConfig {
 // ---------------------------------------------------------------------------
 
 export function parseConfig(raw: unknown, env: NodeJS.ProcessEnv): GatewayConfig {
-  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+  if (!isRecord(raw)) {
     throw new CommerceError(
       'CONFIG_INVALID',
       'Configuration root must be a mapping (object) at "$"',
@@ -597,11 +536,11 @@ export function parseConfig(raw: unknown, env: NodeJS.ProcessEnv): GatewayConfig
     );
   }
 
-  checkVersion(raw as Record<string, unknown>);
+  checkVersion(raw);
 
   const substituted = substituteEnv(raw, env);
   const parsed = parseWithZod(RawConfigSchema, substituted);
-  return normalise(parsed);
+  return normalize(parsed);
 }
 
 function checkVersion(raw: Record<string, unknown>): void {
@@ -610,12 +549,12 @@ function checkVersion(raw: Record<string, unknown>): void {
       details: { path: 'version' },
     });
   }
-  const rawVersion = raw['version'];
-  const version = typeof rawVersion === 'string' ? Number(rawVersion) : rawVersion;
+  const version = raw['version'];
   if (version !== SUPPORTED_CONFIG_VERSION) {
+    const hint = typeof version === 'string' ? ', written as a number without quotes' : '';
     throw new CommerceError(
       'CONFIG_INVALID',
-      `Unsupported config version "${String(rawVersion)}": this gateway only supports version ${SUPPORTED_CONFIG_VERSION}`,
+      `Unsupported config version "${String(version)}": this gateway only supports version ${SUPPORTED_CONFIG_VERSION}${hint}`,
       { details: { path: 'version', supported: SUPPORTED_CONFIG_VERSION } },
     );
   }
@@ -644,7 +583,7 @@ function describeIssue(issue: ZodIssue): { path: string; message: string; code: 
 }
 
 // ---------------------------------------------------------------------------
-// Numeric / boolean coercion (explicit, not via Zod - see file header).
+// Numeric and boolean coercion (plain TypeScript, not Zod; see file header)
 // ---------------------------------------------------------------------------
 
 function toNumber(
@@ -652,13 +591,9 @@ function toNumber(
   path: string,
   bounds: { min?: number; max?: number } = {},
 ): number {
-  // `Number('')` is 0 - finite, integral, and inside
-  // `server.port`'s deliberate `min: 0` ("let the OS pick"). So `port: ${PORT:-}`
-  // or an exported-but-empty PORT validated PASS and the gateway bound a random
-  // port, after which `doctor` derived `http://127.0.0.1:0`, failed to connect,
-  // and reported the gateway unreachable while it was serving. `Number` also
-  // accepts `"0x50"` (80) and `"1e3"` (1000) for fields that are decimal
-  // integers everywhere they are documented. Require plain digits instead.
+  // Plain decimal digits only. `Number('')` is 0, which `server.port` accepts
+  // ("let the OS pick"), so an empty `${PORT:-}` would bind a random port.
+  // `Number` also accepts `"0x50"` and `"1e3"` for fields documented as decimal.
   if (typeof value === 'string' && !/^\s*\d+\s*$/.test(value)) {
     throw new CommerceError(
       'CONFIG_INVALID',
@@ -710,14 +645,14 @@ function toBoolean(value: boolean | string, path: string): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// Business-rule validation + normalisation into the canonical shape.
+// Business rules and normalization into the canonical shape
 // ---------------------------------------------------------------------------
 
 const SUPPORTED_PROTOCOLS: ReadonlySet<string> = new Set(PROTOCOL_NAMES);
 const SUPPORTED_PAYMENT_METHODS: ReadonlySet<string> = new Set(PAYMENT_METHOD_NAMES);
 const SUPPORTED_AUTHORIZATION_METHODS: ReadonlySet<string> = new Set(['ap2']);
 
-function normalise(raw: RawConfig): GatewayConfig {
+function normalize(raw: RawConfig): GatewayConfig {
   const protocols = {
     http: { enabled: toBoolean(raw.protocols.http.enabled, 'protocols.http.enabled') },
     mcp: {
@@ -728,7 +663,7 @@ function normalise(raw: RawConfig): GatewayConfig {
       enabled: toBoolean(raw.protocols.a2a?.enabled ?? false, 'protocols.a2a.enabled'),
       mountPath: raw.protocols.a2a?.mountPath ?? DEFAULT_A2A_MOUNT_PATH,
     },
-    acp: normaliseAcp(raw.protocols.acp),
+    acp: normalizeAcp(raw.protocols.acp),
   };
   validateMountPaths(protocols);
 
@@ -754,7 +689,7 @@ function normalise(raw: RawConfig): GatewayConfig {
               min: 1,
             },
           ),
-          facilitator: normaliseFacilitator(x402Raw.facilitator),
+          facilitator: normalizeFacilitator(x402Raw.facilitator),
           ...(x402Raw.allowMainnet !== undefined
             ? { allowMainnet: toBoolean(x402Raw.allowMainnet, 'payments.x402.allowMainnet') }
             : {}),
@@ -772,9 +707,8 @@ function normalise(raw: RawConfig): GatewayConfig {
   if (x402) {
     validateAddress('payments.x402.payTo', x402.payTo);
     validateAddress('payments.x402.asset', x402.asset);
-    // The same call the provider makes at construction, run here so
-    // `agent-commerce validate` reports an unsafe deployment where an operator
-    // expects to hear about it, rather than at first boot.
+    // The provider makes the same call at construction; running it here lets
+    // `agent-commerce validate` report an unsafe deployment before boot
     resolveX402Deployment({
       network: x402.network,
       payTo: x402.payTo,
@@ -789,15 +723,15 @@ function normalise(raw: RawConfig): GatewayConfig {
     });
   }
 
-  const mpp = normaliseMpp(raw.payments.mpp);
+  const mpp = normalizeMpp(raw.payments.mpp);
 
-  const ap2 = normaliseAp2(raw.authorization?.ap2);
+  const ap2 = normalizeAp2(raw.authorization?.ap2);
   if (ap2?.enabled) {
     validateReplayStoreIsolated(ap2.replay.path, raw.storage.receipts.path, protocols.acp);
   }
 
   const resources = Object.entries(raw.resources).map(([id, entry]) =>
-    normaliseResource(id, entry, protocols, x402, mpp, ap2),
+    normalizeResource(id, entry, protocols, x402, mpp, ap2),
   );
   if (protocols.acp.enabled) validateAcpCheckoutMapping(protocols.acp, resources);
 
@@ -808,8 +742,7 @@ function normalise(raw: RawConfig): GatewayConfig {
       name: raw.merchant.name,
       publicBaseUrl: raw.merchant.publicBaseUrl,
     },
-    // min 0, not 1: port 0 is the standard "let the OS pick a free port"
-    // convention, useful for tests and ephemeral dev/demo instances.
+    // Port 0 lets the OS pick a free port, for tests and throwaway instances
     server: {
       port: toNumber(raw.server.port, 'server.port', { min: 0, max: 65535 }),
       host: raw.server.host,
@@ -827,19 +760,17 @@ function normalise(raw: RawConfig): GatewayConfig {
   };
 }
 
-interface NormalisedProtocols {
+interface NormalizedProtocols {
   readonly http: { readonly enabled: boolean };
   readonly mcp: { readonly enabled: boolean; readonly mountPath: string };
   readonly a2a: { readonly enabled: boolean; readonly mountPath: string };
   readonly acp: AcpProtocolConfig;
 }
 
-/**
- * Two enabled mounts may not overlap: each registers a `${mountPath}/*`
- * wildcard, so a shared prefix means one adapter silently answers for the
- * other. Disabled protocols mount nothing and are not compared.
- */
-function validateMountPaths(protocols: NormalisedProtocols): void {
+// Two enabled mounts may not overlap: each registers a `${mountPath}/*`
+// wildcard, so a shared prefix lets one adapter answer for the other. Disabled
+// protocols mount nothing and are not compared.
+function validateMountPaths(protocols: NormalizedProtocols): void {
   const mounts = (
     [
       ['mcp', protocols.mcp],
@@ -877,7 +808,7 @@ function ap2Invalid(
   return new CommerceError('CONFIG_INVALID', message, { details: { path, ...extra } });
 }
 
-function normaliseAp2(raw: RawAp2 | undefined): Ap2AuthorizationConfig | undefined {
+function normalizeAp2(raw: RawAp2 | undefined): Ap2AuthorizationConfig | undefined {
   if (raw === undefined) return undefined;
   if (!toBoolean(raw.enabled, 'authorization.ap2.enabled')) return { enabled: false };
 
@@ -900,15 +831,15 @@ function normaliseAp2(raw: RawAp2 | undefined): Ap2AuthorizationConfig | undefin
   if (raw.replay === undefined) {
     throw ap2Invalid(
       'authorization.ap2.replay',
-      'authorization.ap2.replay is required when AP2 is enabled - it names the SQLite file recording which mandates have been spent, and without it a verified mandate could authorise a second settlement',
+      'authorization.ap2.replay is required when AP2 is enabled - it names the SQLite file recording which mandates have been spent, and without it a verified mandate could authorize a second settlement',
     );
   }
 
-  const mandateIssuers = normaliseIssuers(
+  const mandateIssuers = normalizeIssuers(
     raw.trust?.mandateIssuers,
     'authorization.ap2.trust.mandateIssuers',
   );
-  const checkoutIssuers = normaliseIssuers(
+  const checkoutIssuers = normalizeIssuers(
     raw.trust?.checkoutIssuers,
     'authorization.ap2.trust.checkoutIssuers',
   );
@@ -927,15 +858,11 @@ function normaliseAp2(raw: RawAp2 | undefined): Ap2AuthorizationConfig | undefin
   };
 }
 
-/**
- * Both issuer lists are required and non-empty when AP2 is on.
- *
- * Two signatures have to be checked: the issuer's over the Checkout Mandate,
- * and the merchant's over the checkout JWT it binds. An empty list would make
- * every mandate fail verification, which reads as a broken deployment rather
- * than as the misconfiguration it is.
- */
-function normaliseIssuers(
+// Both issuer lists must be non-empty when AP2 is on: verification checks the
+// issuer's signature over the Checkout Mandate and the merchant's over the
+// checkout JWT it binds. An empty list would fail every mandate at request
+// time instead of at load.
+function normalizeIssuers(
   raw: readonly z.infer<typeof Ap2IssuerSchema>[] | undefined,
   path: string,
 ): readonly Ap2TrustedIssuer[] {
@@ -976,15 +903,9 @@ function normaliseIssuers(
   });
 }
 
-/**
- * Checks a configured verification key against the one shape this release
- * accepts: a public P-256 key, nothing else.
- *
- * Every member is checked here rather than passed through to the JOSE library
- * at first purchase, so a key that is wrong is wrong at deploy time. The
- * alternative is learning about it from a buyer whose valid mandate was
- * refused.
- */
+// Accepts only a public P-256 key. Every member is checked at load rather than
+// by the JOSE library at the first purchase, so a bad key fails the deploy
+// instead of a buyer's valid mandate.
 function validateJwk(
   jwk: Record<string, unknown>,
   kid: string,
@@ -996,10 +917,9 @@ function validateJwk(
 
   for (const member of Object.keys(jwk)) {
     if ((AP2_JWK_MEMBERS as readonly string[]).includes(member)) continue;
-    // `d` is the private scalar; naming it is worth the extra branch, because
-    // an operator who pasted a full key pair into the gateway has put signing
-    // material where only verification material belongs, and needs to know
-    // that rather than read "unsupported member".
+    // `d` (an EC private scalar) or `k` (a symmetric key) means signing
+    // material was pasted where only verification material belongs, which the
+    // operator needs to hear about specifically
     if (member === 'd' || member === 'k') {
       fail(
         `carries private key material ("${member}"). The gateway verifies signatures and never produces them; publish only the public half. Treat the pasted key as compromised and rotate it.`,
@@ -1049,28 +969,24 @@ function validateJwk(
     fail(`declares kid "${value('kid')}", which disagrees with the configured kid "${kid}"`);
   }
 
-  const normalised: Record<string, string> = {};
+  const normalized: Record<string, string> = {};
   for (const member of AP2_JWK_MEMBERS) {
-    if (jwk[member] !== undefined) normalised[member] = value(member);
+    if (jwk[member] !== undefined) normalized[member] = value(member);
   }
-  return normalised;
+  return normalized;
 }
 
-/**
- * The AP2 replay store gets its own SQLite file.
- *
- * Reserved mandates, payment attempts and ACP idempotency records have
- * different schemas and different retention rules. Pointing two of them at one
- * file gives either a migration conflict at startup or a shared write lock on
- * the settlement path.
- */
+// The AP2 replay store gets its own SQLite file. Reserved mandates, payment
+// attempts and ACP idempotency records have different schemas and retention
+// rules, and a shared file means a migration conflict at startup or a shared
+// write lock on the settlement path.
 function validateReplayStoreIsolated(
   replayPath: string,
   receiptsPath: string,
   acp: AcpProtocolConfig,
 ): void {
-  // Every `:memory:` handle is its own private database, so two of them are
-  // not the collision the literal comparison would call them.
+  // Every `:memory:` handle is its own private database, so equal strings do
+  // not collide
   if (replayPath === ':memory:') return;
 
   const others: [string, string][] = [['storage.receipts.path', receiptsPath]];
@@ -1085,15 +1001,10 @@ function validateReplayStoreIsolated(
   }
 }
 
-/**
- * Resolves a resource's `authorization.required` list against the configured
- * provider.
- *
- * A requirement that cannot be enforced is worse than none, because the
- * resource looks protected in config and settles unprotected in production.
- * Everything that would produce that gap is refused here.
- */
-function normaliseResourceAuthorization(
+// Resolves a resource's `authorization.required` list against the configured
+// provider. A requirement that cannot be enforced is refused: the resource
+// would look protected in config and settle unprotected.
+function normalizeResourceAuthorization(
   id: string,
   entry: RawResourceEntry,
   pricing: Pricing,
@@ -1128,9 +1039,8 @@ function normaliseResourceAuthorization(
     methods.push(method as AuthorizationMethodName);
   }
 
-  // A mandate binds an exact amount and currency, so there has to be one. It
-  // also never unlocks a resource by itself, which makes requiring one on a
-  // free resource a statement the pipeline has no way to act on.
+  // A mandate binds an exact amount and currency and never unlocks a resource
+  // by itself, so it only means something on a fixed-price resource
   if (pricing.type !== 'fixed') {
     throw ap2Invalid(
       path,
@@ -1157,7 +1067,7 @@ function acpInvalid(
   return new CommerceError('CONFIG_INVALID', message, { details: { path, ...extra } });
 }
 
-function normaliseAcp(raw: RawAcp | undefined): AcpProtocolConfig {
+function normalizeAcp(raw: RawAcp | undefined): AcpProtocolConfig {
   const mountPath = raw?.mountPath ?? DEFAULT_ACP_MOUNT_PATH;
   if (raw === undefined || !toBoolean(raw.enabled, 'protocols.acp.enabled')) {
     return { enabled: false, mountPath };
@@ -1190,9 +1100,8 @@ function normaliseAcp(raw: RawAcp | undefined): AcpProtocolConfig {
         { min: ACP_RETENTION_HOURS },
       ),
     },
-    checkout: { operations: normaliseAcpOperations(raw.checkout) },
-    // Built key by key rather than passed through: absent metadata must stay
-    // absent from the discovery document, not appear there as `undefined`.
+    checkout: { operations: normalizeAcpOperations(raw.checkout) },
+    // Built key by key so absent metadata stays absent rather than `undefined`
     ...(discovery !== undefined
       ? {
           discovery: {
@@ -1214,16 +1123,10 @@ function normaliseAcp(raw: RawAcp | undefined): AcpProtocolConfig {
   };
 }
 
-/**
- * All five operations, each on its own resource.
- *
- * Partial mappings are refused because ACP discovery advertises `checkout` as
- * one service: a seller announcing it must be able to serve the whole
- * lifecycle. One resource serving two operations is refused because the
- * operations differ in method, canonical input and success status - a resource
- * that satisfies both is a resource that implements neither faithfully.
- */
-function normaliseAcpOperations(
+// All five operations, each on its own resource. ACP discovery advertises
+// `checkout` as one service, so a partial mapping is refused. Operations differ
+// in method, input and success status, so one resource cannot serve two.
+function normalizeAcpOperations(
   checkout: RawAcp['checkout'],
 ): Readonly<Record<AcpCheckoutOperation, string>> {
   const configured: Record<string, string> = checkout?.operations ?? {};
@@ -1286,10 +1189,9 @@ function validateAcpCheckoutMapping(
         { resourceId },
       );
     }
-    // ACP checkout carries its own purchase payment (`payment_data` on
-    // completion). Charging an Agent Commerce payment to *invoke* the operation
-    // would stack a second, unrelated payment layer on one call, and ACP has no
-    // wire representation for our payment-required outcome to negotiate it.
+    // ACP checkout carries the merchant's own purchase payment (`payment_data`
+    // on completion), and ACP has no wire form for our payment-required
+    // outcome, so the invocation itself must be free
     if (resource.pricing.type !== 'free' || resource.paymentMethods.length > 0) {
       throw acpInvalid(
         path,
@@ -1301,12 +1203,10 @@ function validateAcpCheckoutMapping(
   }
 }
 
-/**
- * The adapter sends a fixed canonical envelope per operation, so a resource
- * whose input schema forbids a key ACP always sends - or demands one ACP never
- * sends - can only ever fail at request time with INPUT_INVALID. Cheaper to
- * say so at load.
- */
+// A schema that forbids a key the adapter sends, or requires one it may not
+// send, fails requests with INPUT_INVALID. Refused at load instead. An optional
+// key counts as sent: a closed cancel schema without `body` would pass a bare
+// cancel and refuse every one that carries `intent_trace`.
 function validateAcpOperationInput(
   path: string,
   operation: AcpCheckoutOperation,
@@ -1315,14 +1215,16 @@ function validateAcpOperationInput(
   const schema = resource.inputSchema;
   if (schema === undefined) return;
   const keys: readonly string[] = ACP_OPERATION_INPUT_KEYS[operation];
+  const optionalKeys: readonly string[] = ACP_OPERATION_OPTIONAL_INPUT_KEYS[operation] ?? [];
   const properties = schema['properties'];
 
-  if (schema['additionalProperties'] === false && isPlainObject(properties)) {
-    for (const key of keys) {
+  if (schema['additionalProperties'] === false && isRecord(properties)) {
+    for (const key of [...keys, ...optionalKeys]) {
       if (!Object.hasOwn(properties, key)) {
+        const when = keys.includes(key) ? 'always sends' : 'sends when the caller supplies it';
         throw acpInvalid(
           path,
-          `Resource "${resource.id}" implements ACP operation "${operation}" but its input schema sets additionalProperties: false without declaring "${key}", which the adapter always sends for this operation`,
+          `Resource "${resource.id}" implements ACP operation "${operation}" but its input schema sets additionalProperties: false without declaring "${key}", which the adapter ${when} for this operation`,
           { resourceId: resource.id },
         );
       }
@@ -1335,7 +1237,7 @@ function validateAcpOperationInput(
       if (typeof entry === 'string' && !keys.includes(entry)) {
         throw acpInvalid(
           path,
-          `Resource "${resource.id}" implements ACP operation "${operation}" but its input schema requires "${entry}", which that operation never supplies (it sends: ${keys.join(', ')})`,
+          `Resource "${resource.id}" implements ACP operation "${operation}" but its input schema requires "${entry}", which that operation does not always supply (it always sends: ${keys.join(', ')})`,
           { resourceId: resource.id },
         );
       }
@@ -1343,20 +1245,20 @@ function validateAcpOperationInput(
   }
 }
 
-interface NormalisedX402 {
+interface NormalizedX402 {
   readonly enabled: boolean;
   readonly assetDecimals: number;
 }
 
-function normaliseFacilitator(raw: z.infer<typeof FacilitatorSchema>): X402FacilitatorConfig {
+function normalizeFacilitator(raw: z.infer<typeof FacilitatorSchema>): X402FacilitatorConfig {
   return raw.mode === 'local'
     ? { mode: 'local', signerPrivateKey: raw.signerPrivateKey }
     : { mode: 'remote', url: raw.url, auth: raw.auth ?? { type: 'none' } };
 }
 
-type NormalisedMpp = NonNullable<GatewayConfig['payments']['mpp']>;
+type NormalizedMpp = NonNullable<GatewayConfig['payments']['mpp']>;
 
-function normaliseMpp(raw: RawConfig['payments']['mpp']): NormalisedMpp | undefined {
+function normalizeMpp(raw: RawConfig['payments']['mpp']): NormalizedMpp | undefined {
   if (raw === undefined) return undefined;
   const network = raw.network ?? MPP_DEFAULT_NETWORK;
   if (!isMppNetwork(network)) {
@@ -1366,7 +1268,7 @@ function normaliseMpp(raw: RawConfig['payments']['mpp']): NormalisedMpp | undefi
       { details: { path: 'payments.mpp.network' } },
     );
   }
-  const mpp: NormalisedMpp = {
+  const mpp: NormalizedMpp = {
     enabled: toBoolean(raw.enabled, 'payments.mpp.enabled'),
     network,
     rpcUrl: raw.rpcUrl,
@@ -1385,7 +1287,7 @@ function normaliseMpp(raw: RawConfig['payments']['mpp']): NormalisedMpp | undefi
           ),
         }
       : {}),
-    facilitator: normaliseFacilitator(raw.facilitator),
+    facilitator: normalizeFacilitator(raw.facilitator),
     ...(raw.allowMainnet !== undefined
       ? { allowMainnet: toBoolean(raw.allowMainnet, 'payments.mpp.allowMainnet') }
       : {}),
@@ -1414,8 +1316,8 @@ function normaliseMpp(raw: RawConfig['payments']['mpp']): NormalisedMpp | undefi
       { details: { path: 'payments.mpp.challengeSecret' } },
     );
   }
-  // Apply the shared x402 address, facilitator and mainnet guards under the MPP
-  // config path
+  // The shared x402 address, facilitator and mainnet guards, reported under the
+  // MPP config path
   resolveX402Deployment({
     network: mpp.network,
     payTo: mpp.recipient,
@@ -1433,12 +1335,12 @@ function normaliseMpp(raw: RawConfig['payments']['mpp']): NormalisedMpp | undefi
   return mpp;
 }
 
-function normaliseResource(
+function normalizeResource(
   id: string,
   entry: RawResourceEntry,
-  protocols: NormalisedProtocols,
-  x402: NormalisedX402 | undefined,
-  mpp: NormalisedMpp | undefined,
+  protocols: NormalizedProtocols,
+  x402: NormalizedX402 | undefined,
+  mpp: NormalizedMpp | undefined,
   ap2: Ap2AuthorizationConfig | undefined,
 ): CommerceResource {
   if (entry.input !== undefined) validateResourceSchemaKeywords(id, 'input', entry.input);
@@ -1509,6 +1411,7 @@ function normaliseResource(
   }
 
   validateBackendUrl(id, entry.backend.url);
+  validateBackendHeaders(id, entry.backend.headers);
   const pathScope = validateInputBindings(id, entry.backend, entry.input);
   validatePathParametersDeclared(id, entry.backend.url, pathScope.schema, pathScope.where);
 
@@ -1543,9 +1446,8 @@ function normaliseResource(
         );
       }
     }
-    // A paid resource needs at least one named rail enabled, but not every
-    // named rail. Rejecting it here leaves the composition-root check as a
-    // drift detector rather than the first enforceable guard.
+    // At least one named rail must be enabled, not every one. `main.ts` checks
+    // again at composition as defense in depth.
     const enabledRails = [...(x402?.enabled ? ['x402'] : []), ...(mpp?.enabled ? ['mpp'] : [])];
     if (!paymentMethods.some((method) => enabledRails.includes(method))) {
       throw new CommerceError(
@@ -1572,7 +1474,7 @@ function normaliseResource(
       ? { type: 'free' }
       : { type: 'fixed', amount: entry.pricing.amount, currency: entry.pricing.currency };
 
-  const authorization = normaliseResourceAuthorization(id, entry, pricing, ap2);
+  const authorization = normalizeResourceAuthorization(id, entry, pricing, ap2);
 
   return {
     id,
@@ -1607,50 +1509,27 @@ function normaliseResource(
 }
 
 /**
- * `{param}` templates (e.g. `.../weather/{city}`) parse fine as a URL - the
- * WHATWG parser just percent-encodes the braces - so this only rejects
- * genuinely malformed strings and non-http(s) schemes, not templating.
- */
-/**
- * Permissive-by-default is the wrong default for a value forwarded to
- * someone else's API: an object schema that
- * omits `additionalProperties` defaults, per JSON Schema itself, to
- * "anything goes" - so default it to `false` here instead, unless the
- * operator set it explicitly (including explicitly to `true`, which is
- * respected).
+ * Closes every object schema at every depth: a node without
+ * `additionalProperties` gets `false`, so unknown keys never reach the
+ * merchant's API. An explicit value, including `true`, is kept.
  *
- * An earlier fix only stamped the ROOT schema, so
- * `filter: { type: object }` *looked* closed (the top level really was)
- * while every key one level down under `properties.filter` still passed
- * verbatim - `core`'s validator (execution/validation.ts) only enforces
- * `additionalProperties` where the schema states it explicitly, at every
- * level independently. Recurse into `properties` and `items` the same way
- * `validateResourceSchemaKeywords` below already does, so "closed" actually
- * means closed at every depth, not just the one an operator happened to
- * write `additionalProperties: false` on.
- *
- * `type` can be an array (`["object","null"]`, valid JSON
- * Schema) - a bare `=== 'object'` string comparison missed it, so a schema
- * in that shape got stamped as open. `declaresObjectType` below is the same
- * check `core`'s validator now makes (`execution/validation.ts`'s
- * `isObjectSchemaNode`) so the two stay in agreement.
+ * JSON Schema itself defaults to open, and core's validator enforces
+ * `additionalProperties` only where a node states it, so this recurses into
+ * `properties`, `items` and schema-valued `additionalProperties`, the same
+ * places the validator descends. Object-ness comes from `isObjectSchemaNode`,
+ * the validator's own definition.
  */
 function defaultClosedObjectSchema(schema: Record<string, unknown>): Record<string, unknown> {
-  // imported, never re-implemented. The local predicate this
-  // replaces recognised `type`/`properties` but not `required`, while core's
-  // validator recognised `properties`/`required` - so `input: { required: [q] }`
-  // was an object to the validator and not to the stamper, and every unknown
-  // key sailed through to the merchant backend. One definition, one drift.
   const isObjectSchema = isObjectSchemaNode(schema);
   const result: Record<string, unknown> = { ...schema };
 
   if (isObjectSchema) {
     const properties = schema['properties'];
-    if (isPlainObject(properties)) {
+    if (isRecord(properties)) {
       result['properties'] = Object.fromEntries(
         Object.entries(properties).map(([key, sub]) => [
           key,
-          isPlainObject(sub) ? defaultClosedObjectSchema(sub) : sub,
+          isRecord(sub) ? defaultClosedObjectSchema(sub) : sub,
         ]),
       );
     }
@@ -1660,48 +1539,34 @@ function defaultClosedObjectSchema(schema: Record<string, unknown>): Record<stri
   }
 
   const items = schema['items'];
-  if (isPlainObject(items)) {
+  if (isRecord(items)) {
     result['items'] = defaultClosedObjectSchema(items);
   }
 
-  // The third place this stamper drifted from the validator, after `required`
-  // and tuple `items`. `additionalProperties: {schema}` is the idiomatic
-  // "map of typed objects" shape, and core's validator applies that subschema
-  // recursively at unbounded depth - so without this branch, every node under
-  // it stayed open and unknown keys reached the merchant backend. Recursion
-  // here is not conditional on `isObjectSchema`: the validator applies the
-  // subschema wherever it finds one.
+  // `additionalProperties: {schema}` (a map of typed objects) is closed too.
+  // Not conditional on `isObjectSchema`: the validator applies the subschema
+  // wherever it finds one.
   const additional = schema['additionalProperties'];
-  if (isPlainObject(additional)) {
+  if (isRecord(additional)) {
     result['additionalProperties'] = defaultClosedObjectSchema(additional);
   }
 
   return result;
 }
 
-/**
- * A resource that declares no `input:` at all got
- * `inputSchema: undefined`, and `compileJsonSchema(undefined)` is an
- * always-valid validator - every caller key was forwarded to the merchant
- * backend verbatim. The decision: default "declared nothing" to "accepts
- * nothing" (an empty closed object) rather than rejecting the config at load
- * time - a no-argument resource that omits `input:` is a legitimate shape,
- * and rejecting it would break every existing config that uses it.
- */
+// The input schema of a resource that declares no `input:`. Declaring nothing
+// accepts nothing: without this, `compileJsonSchema(undefined)` would accept
+// any input and forward every key to the backend. A no-argument resource
+// omitting `input:` is a legitimate shape, so it is not refused.
 const EMPTY_CLOSED_OBJECT_SCHEMA: Record<string, unknown> = {
   type: 'object',
   properties: {},
   additionalProperties: false,
 };
 
-/**
- * `src/core`'s validator only enforces the subset documented in
- * `execution/validation.ts` (type/properties/required/additionalProperties/
- * enum/items) - everything else (`pattern`, `minLength`, `format`, `oneOf`,
- * …) is silently ignored at runtime. An operator who writes `pattern` and
- * never sees it enforced has no way to know that from the config alone, so
- * warn at load time instead of letting them find out the hard way.
- */
+// Keywords core's validator ignores (see `execution/validation.ts` for the
+// enforced subset). Config warns at load, since an operator who writes
+// `pattern` cannot otherwise tell that it is not enforced.
 const UNSUPPORTED_SCHEMA_KEYWORDS = [
   'pattern',
   'minLength',
@@ -1724,15 +1589,9 @@ const UNSUPPORTED_SCHEMA_KEYWORDS = [
   'uniqueItems',
 ];
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-/** `type` explicitly set to something that rules out "object" (a bare
- * value, or an array not containing "object"). `undefined` - no `type` at
- * all - is deliberately NOT treated as excluding: core's validator treats
- * `properties`/`required` with no `type` as an object schema, so that shape
- * is fine, not another instance of this bug. */
+// `type` set to something that rules out "object". No `type` at all does not
+// exclude it: the validator treats `properties`/`required` alone as an object
+// schema.
 function excludesObjectType(schema: Record<string, unknown>): boolean {
   const type = schema['type'];
   if (type === undefined || type === 'object') return false;
@@ -1741,17 +1600,11 @@ function excludesObjectType(schema: Record<string, unknown>): boolean {
 }
 
 /**
- * Walks a resource's input schema once, both warning (existing, unenforced
- * keywords) and rejecting (a node whose declared `type`
- * cannot structurally be an object, yet which still carries `properties` or
- * `required`). The `properties`/`required`-with-no-`type` shape is not
- * this function's problem any more, since the
- * validator now treats that shape as an object; what's still a trap is a
- * `type` that actively rules "object" out while `properties`/`required`
- * imply it was meant to be one, e.g. a copy-pasted sibling schema whose
- * `type` was never updated. Rejecting (not just warning) here is the
- * decision - a warning is exactly what let this bug class ship silently in
- * the first place (`validate`/`doctor` both said PASS).
+ * Walks a resource's input schema once. Warns about unenforced keywords and
+ * tuple `items`. Rejects a node whose `type` rules out "object" while it
+ * declares `properties` or `required`, which then go unchecked (often a
+ * copy-pasted sibling whose `type` was never updated), and a closed node
+ * requiring a property it never declares, which no input can satisfy.
  */
 function validateResourceSchemaKeywords(
   id: string,
@@ -1760,7 +1613,6 @@ function validateResourceSchemaKeywords(
 ): void {
   for (const keyword of UNSUPPORTED_SCHEMA_KEYWORDS) {
     if (Object.hasOwn(schema, keyword)) {
-      // eslint-disable-next-line no-console
       console.warn(
         `[agent-commerce] resource "${id}" ${path} uses JSON Schema keyword "${keyword}", which this gateway does not enforce (see src/core/execution/validation.ts for the supported subset). Remove it or treat it as documentation only.`,
       );
@@ -1776,20 +1628,16 @@ function validateResourceSchemaKeywords(
       { details: { path: `resources.${id}.${path}`, resourceId: id } },
     );
   }
-  // the other half. Closing a `required`-only node is
-  // correct JSON Schema and quietly unsatisfiable: `required: ["q"]` demands a
-  // property that `properties` never declares, so the stamped
-  // `additionalProperties: false` rejects `q` as an unknown key - the schema
-  // can never be satisfied by any input at all. Fail-closed, so no money is at
-  // risk, but every call would 400 with a config that loaded cleanly. Say so
-  // at load instead. Only when the node really will be closed: an explicit
-  // `additionalProperties` other than `false` leaves the name reachable.
+  // A closed node that requires a property it never declares rejects that
+  // property as unknown, so no input can satisfy it and every call would 400.
+  // Only when the node is closed: an explicit `additionalProperties`
+  // other than `false` leaves the name reachable.
   const requiredRaw = schema['required'];
   const closed = !Object.hasOwn(schema, 'additionalProperties')
     ? true
     : schema['additionalProperties'] === false;
   if (Array.isArray(requiredRaw) && closed && isObjectSchemaNode(schema)) {
-    const declared = isPlainObject(schema['properties']) ? schema['properties'] : {};
+    const declared = isRecord(schema['properties']) ? schema['properties'] : {};
     const undeclared = requiredRaw.filter(
       (name): name is string => typeof name === 'string' && !Object.hasOwn(declared, name),
     );
@@ -1803,38 +1651,30 @@ function validateResourceSchemaKeywords(
   }
 
   const properties = schema['properties'];
-  if (isPlainObject(properties)) {
+  if (isRecord(properties)) {
     for (const [key, sub] of Object.entries(properties)) {
-      if (isPlainObject(sub)) validateResourceSchemaKeywords(id, `${path}.properties.${key}`, sub);
+      if (isRecord(sub)) validateResourceSchemaKeywords(id, `${path}.properties.${key}`, sub);
     }
   }
   const additional = schema['additionalProperties'];
-  if (isPlainObject(additional)) {
+  if (isRecord(additional)) {
     validateResourceSchemaKeywords(id, `${path}.additionalProperties`, additional);
   }
   const items = schema['items'];
-  if (isPlainObject(items)) {
+  if (isRecord(items)) {
     validateResourceSchemaKeywords(id, `${path}.items`, items);
   } else if (Array.isArray(items)) {
-    // tuple-form `items` (an array of per-position
-    // schemas) is valid JSON Schema, but `core`'s validator only supports
-    // the single-schema form applied to every element - a tuple silently
-    // enforces nothing, invisibly rather than wrongly, so warn the same way
-    // an unsupported keyword does.
-    // eslint-disable-next-line no-console
+    // Tuple-form `items` is valid JSON Schema, but the validator supports only
+    // one schema for every element, so a tuple enforces nothing
     console.warn(
       `[agent-commerce] resource "${id}" ${path}.items is a tuple (an array of schemas), which this gateway does not enforce - only a single schema applied to every array element is supported (see src/core/execution/validation.ts). Each position's schema is unenforced; treat it as documentation only.`,
     );
   }
 }
 
-/**
- * `amount: z.string().min(1)` alone let "0,01", "$0.01", "1e-2", "-1" and an
- * over-precise "0.0000001" all pass config + `doctor`, then throw on every
- * purchase. A plain
- * positive decimal only - no currency symbol, no thousands separator, no
- * exponent notation.
- */
+// A plain decimal: no currency symbol, thousands separator, sign or exponent.
+// "0,01", "$0.01", "1e-2" and "-1" would otherwise load and then fail every
+// purchase.
 const PRICING_AMOUNT_PATTERN = /^\d+(?:\.\d+)?$/;
 const ZERO_AMOUNT_PATTERN = /^0(?:\.0+)?$/;
 
@@ -1848,8 +1688,7 @@ function validatePricingAmount(id: string, amount: string, decimals: number | un
     );
   }
   if (ZERO_AMOUNT_PATTERN.test(amount)) {
-    // A zero-priced "paid" resource settles a zero-value transfer, which is
-    // nonsense - if something is free, it should say so.
+    // A zero-priced paid resource would settle a zero-value transfer
     throw new CommerceError(
       'CONFIG_INVALID',
       `Resource "${id}" has pricing.amount "0" - a paid resource cannot cost zero; use "pricing: { type: free }" instead`,
@@ -1869,16 +1708,13 @@ function validatePricingAmount(id: string, amount: string, decimals: number | un
 }
 
 /**
- * `backend.inputBindings` names top-level input properties; this is the gate
- * that makes those names mean something at load time rather than at the first
- * paid call. Input schemas are closed by default at every depth
- * (`defaultClosedObjectSchema`), so a binding naming a property the schema
- * never declares can never be satisfied - the group would be silently empty
- * on every request, which on a paid resource is payment for a request the
- * backend receives incomplete.
+ * Checks `backend.inputBindings` against the input schema at load. Schemas are
+ * closed by default at every depth, so a binding naming an undeclared property
+ * could never be supplied, and on a paid resource the backend would get an
+ * incomplete request after payment.
  *
- * Returns the schema node `{param}` declarations must be found in: the path
- * group in explicit mode, the whole input in legacy mode.
+ * Returns the schema node `{param}` names must be declared in: the path group
+ * with bindings, the whole input without.
  */
 function validateInputBindings(
   id: string,
@@ -1917,7 +1753,7 @@ function validateInputBindings(
   }
 
   const seen = new Map<string, string>();
-  const properties = isPlainObject(input?.['properties']) ? input['properties'] : {};
+  const properties = isRecord(input?.['properties']) ? input['properties'] : {};
   const required = new Set(
     Array.isArray(input?.['required'])
       ? input['required'].filter((value): value is string => typeof value === 'string')
@@ -1943,10 +1779,10 @@ function validateInputBindings(
         { location, property },
       );
     }
-    // `body` may legitimately be any JSON value; only the two groups the
-    // executor iterates as key/value pairs have to be objects.
+    // `body` may be any JSON value; only the path and query groups are read as
+    // name/value pairs
     const declared = properties[property];
-    if (location !== 'body' && isPlainObject(declared) && !isObjectSchemaNode(declared)) {
+    if (location !== 'body' && isRecord(declared) && !isObjectSchemaNode(declared)) {
       fail(
         `binds "${location}" to input property "${property}", which is not an object schema - ${location} parameters are read as an object of name/value pairs`,
         { location, property },
@@ -1964,12 +1800,12 @@ function validateInputBindings(
   if (bindings.path === undefined) return { schema: undefined, where: 'its input schema' };
   const group = properties[bindings.path];
   return {
-    schema: isPlainObject(group) ? group : undefined,
+    schema: isRecord(group) ? group : undefined,
     where: `input.properties.${bindings.path}`,
   };
 }
 
-/** Strips absent optional keys so the result satisfies `exactOptionalPropertyTypes`. */
+// Strips absent optional keys so the result satisfies `exactOptionalPropertyTypes`
 function pickDefined<T extends Record<string, string | undefined>>(
   value: T,
 ): { [K in keyof T]?: string } {
@@ -1979,19 +1815,12 @@ function pickDefined<T extends Record<string, string | undefined>>(
 }
 
 /**
- * The root-cause half. `validateBackendRequestShape`
- * (src/core) rejects a missing path parameter at request time - after
- * schema validation but, without this check, on every single call, because
- * a schema that never declares `{city}` can never satisfy it. A paid
- * resource in that shape settles the buyer's payment and then always fails
- * to reach the backend: no refund, replay key burned, on every call, not an
- * unlucky one. Every `{param}` in `backend.url` must be BOTH declared in
- * `properties` AND listed in `required` - an optional value hits the exact
- * same "caller structurally cannot supply it on every call that omits it"
- * problem as an undeclared one, just less often. This is the config-load
- * gate `agent-commerce validate`/`doctor` catch it at; the runtime
- * `INPUT_INVALID` in `validateBackendRequestShape` is defence in depth for
- * a hand-built `CommerceResource` this check never saw.
+ * Every `{param}` in `backend.url` must be declared in `properties` and listed
+ * in `required`. Otherwise a call can arrive without it, and core's
+ * `validateBackendRequestShape` rejects the request, which for a schema that
+ * never declares the parameter means every call. Checked at load so
+ * `validate` and `doctor` report it; the runtime check covers a hand-built
+ * `CommerceResource`.
  */
 function validatePathParametersDeclared(
   id: string,
@@ -1999,16 +1828,13 @@ function validatePathParametersDeclared(
   input: Record<string, unknown> | undefined,
   where: string,
 ): void {
-  // Before anything else: a brace token the canonical grammar does not
-  // recognise is neither extracted here nor substituted at request time, so it
-  // would travel to the backend as a percent-encoded literal. On a paid
-  // resource that is payment-without-delivery on every single call. Refuse it
-  // at load rather than letting "matches nothing" mean "nothing to check".
+  // A brace token the grammar does not recognize is neither extracted nor
+  // substituted, so it would reach the backend as a percent-encoded literal
   const stray = findUnparsedBraceToken(url);
   if (stray !== undefined) {
     throw new CommerceError(
       'CONFIG_INVALID',
-      `Resource "${id}" has backend.url containing "${stray}", which is not a valid path parameter (allowed characters: A-Z a-z 0-9 _ . -). It would be sent to the backend literally, so a paid resource would settle payment and then never reach the backend`,
+      `Resource "${id}" has backend.url containing "${stray}", which is not a valid path parameter (allowed characters: A-Z a-z 0-9 _ . -). It would reach the backend as literal text, so a paid resource would take payment for a request the backend cannot serve`,
       { details: { path: `resources.${id}.backend.url`, resourceId: id, token: stray } },
     );
   }
@@ -2016,18 +1842,13 @@ function validatePathParametersDeclared(
   const params = extractPathParameterNames(url);
   if (params.length === 0) return;
 
-  // Every defence around `{param}` guards the *path* position, and in the host
-  // position all of them fail open at once: `new URL('http://{host}/api')`
-  // parses (the hostname is literally `{host}`) so the URL check passes; the
-  // runtime containment check is skipped because its literal prefix
-  // (`http://`) does not itself parse as a URL; and `encodeURIComponent` does
-  // not escape dots, so a hostname survives it whole. Caller input then chooses
-  // which host the gateway calls - the metadata service, an internal address,
-  // anything. `http://{region}.api.internal/...` is an ordinary-looking
-  // multi-tenant template, so this is refused here rather than warned about.
-  //
-  // The rule: everything before the first `{` must already be a complete
-  // authority - a parseable origin followed by the path's leading `/`.
+  // Everything before the first `{` must be a complete origin followed by the
+  // path's leading `/`. In the host, every other `{param}` defense fails open:
+  // `http://{host}/api` parses, the runtime prefix check skips a prefix that
+  // is not a URL, and `encodeURIComponent` keeps dots. Caller input would pick
+  // the host the gateway calls, such as a metadata service or an internal
+  // address, and `http://{region}.api.internal/...` looks ordinary enough to
+  // be written by mistake.
   const firstBrace = url.indexOf('{');
   if (firstBrace !== -1) {
     const prefix = url.slice(0, firstBrace);
@@ -2036,7 +1857,7 @@ function validatePathParametersDeclared(
       const parsedPrefix = new URL(prefix);
       origin = parsedPrefix.hostname === '' ? undefined : parsedPrefix.origin;
     } catch {
-      // Not a URL at all - the parameter starts before the authority is done.
+      // Not a URL: the parameter starts before the authority is complete
     }
     if (origin === undefined || !prefix.startsWith(`${origin}/`)) {
       throw new CommerceError(
@@ -2048,7 +1869,7 @@ function validatePathParametersDeclared(
   }
 
   const propertiesRaw = input?.['properties'];
-  const properties = isPlainObject(propertiesRaw) ? propertiesRaw : {};
+  const properties = isRecord(propertiesRaw) ? propertiesRaw : {};
   const requiredRaw = input?.['required'];
   const required = new Set(
     Array.isArray(requiredRaw)
@@ -2061,20 +1882,22 @@ function validatePathParametersDeclared(
     if (!Object.hasOwn(properties, param)) {
       throw new CommerceError(
         'CONFIG_INVALID',
-        `Resource "${id}" has backend.url path parameter "{${param}}" which is not declared in ${where} - the caller has no way to supply it, so every call would settle payment (if priced) and then fail to reach the backend`,
+        `Resource "${id}" has backend.url path parameter "{${param}}" which is not declared in ${where} - the caller has no way to supply it, so every call would be refused`,
         { details: { path, resourceId: id, param } },
       );
     }
     if (!required.has(param)) {
       throw new CommerceError(
         'CONFIG_INVALID',
-        `Resource "${id}" has backend.url path parameter "{${param}}" declared in ${where} but not listed in its "required" - a caller that omits it hits the same unservable-request problem as an undeclared parameter`,
+        `Resource "${id}" has backend.url path parameter "{${param}}" declared in ${where} but not listed in its "required" - a call that omits it would be refused`,
         { details: { path, resourceId: id, param } },
       );
     }
   }
 }
 
+// `{param}` templates parse as URLs (the WHATWG parser percent-encodes the
+// braces), so this refuses only malformed URLs and non-http(s) schemes
 function validateBackendUrl(id: string, url: string): void {
   let parsed: URL;
   try {
@@ -2092,6 +1915,24 @@ function validateBackendUrl(id: string, url: string): void {
       `Resource "${id}" has a backend.url with scheme "${parsed.protocol}": must be http:// or https://`,
       { details: { path: `resources.${id}.backend.url`, resourceId: id } },
     );
+  }
+}
+
+// Checked with fetch's own `Headers` rules. Otherwise an illegal name, or a
+// substituted value with a line break inside it, would load cleanly and then
+// refuse every call. The error names the key, never the value, which may be a
+// credential.
+function validateBackendHeaders(id: string, headers: Record<string, string> | undefined): void {
+  for (const [name, value] of Object.entries(headers ?? {})) {
+    try {
+      new Headers([[name, value]]);
+    } catch {
+      throw new CommerceError(
+        'CONFIG_INVALID',
+        `Resource "${id}" has backend header "${name}" with an illegal name or value (a name must be an HTTP token; a value must not contain NUL, a character above U+00FF, or a line break except at either end, which fetch trims)`,
+        { details: { path: `resources.${id}.backend.headers.${name}`, resourceId: id } },
+      );
+    }
   }
 }
 

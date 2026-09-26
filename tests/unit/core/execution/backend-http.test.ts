@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { BackendHandler } from '../../../../src/core/domain/resource.js';
-import { isCommerceError } from '../../../../src/core/errors/index.js';
+import type { BackendHandler } from '../../../../src/core/domain/resource';
+import { isCommerceError } from '../../../../src/core/errors';
 import {
   HttpBackendExecutor,
   validateBackendRequestShape,
-} from '../../../../src/core/execution/backend-http.js';
-import { NOOP_LOGGER } from '../../../../src/core/interfaces/logger.js';
+} from '../../../../src/core/execution/backend-http';
+import { NOOP_LOGGER } from '../../../../src/core/interfaces/logger';
 
 function jsonResponse(
   status: number,
@@ -155,6 +155,33 @@ describe('HttpBackendExecutor', () => {
     expect(capturedHeaders['x-api-key']).toBe('secret-value');
   });
 
+  it('refuses an illegal configured header as BACKEND_ERROR without quoting its value', async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse(200, {}));
+    const executor = new HttpBackendExecutor({ fetchImpl: fetchImpl as unknown as typeof fetch });
+    const handler: BackendHandler = {
+      type: 'http',
+      method: 'GET',
+      url: 'http://backend.local/api',
+      headers: { 'x-api-key': 'secret\nvalue' },
+    };
+    const context = { requestId: 'r', resourceId: 'res' };
+
+    for (const attempt of [
+      () => executor.call(handler, { ...context, input: {} }),
+      async () => validateBackendRequestShape(handler, {}, context),
+    ]) {
+      const error = await attempt().then(
+        () => undefined,
+        (e: unknown) => e,
+      );
+      expect(isCommerceError(error) && error.code).toBe('BACKEND_ERROR');
+      expect(isCommerceError(error) && error.details).toEqual({ reason: 'invalid-header' });
+      expect(JSON.stringify(error)).not.toContain('secret');
+      expect((error as Error).cause).toBeUndefined();
+    }
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it('throws BACKEND_TIMEOUT on abort', async () => {
     const fetchImpl = vi.fn(async () => {
       const error = new DOMException('The operation was aborted', 'TimeoutError');
@@ -208,7 +235,7 @@ describe('HttpBackendExecutor', () => {
       }
     }
     expect(debugCalls).toHaveLength(1);
-    expect(debugCalls[0]?.['bodySnippet']).toBe(bigBody.slice(0, 512) + '…');
+    expect(debugCalls[0]?.['bodySnippet']).toBe(`${bigBody.slice(0, 512)}…`);
   });
 
   it('throws BACKEND_ERROR on transport failure', async () => {
@@ -266,11 +293,8 @@ describe('HttpBackendExecutor', () => {
   });
 
   it('throws INPUT_INVALID (not BACKEND_ERROR) when a path parameter is missing from input', async () => {
-    // As BACKEND_ERROR this surfaces only after verify -> reserve -> settle,
-    // so a paid resource whose {param} nothing can supply would charge the
-    // buyer on every call. INPUT_INVALID lets
-    // validateBackendRequestShape (which the pipeline calls before payment)
-    // catch it first; this test covers call()'s own defence-in-depth copy.
+    // INPUT_INVALID is what validateBackendRequestShape raises before payment;
+    // this covers call()'s own copy of the check
     const fetchImpl = vi.fn();
     const executor = new HttpBackendExecutor({ fetchImpl: fetchImpl as unknown as typeof fetch });
     const handler: BackendHandler = {
@@ -396,7 +420,7 @@ describe('HttpBackendExecutor', () => {
     expect((snippet as string).length).toBeLessThanOrEqual(513);
   });
 
-  it('recognises AbortError (not only TimeoutError) as a timeout', async () => {
+  it('recognizes AbortError (not only TimeoutError) as a timeout', async () => {
     const fetchImpl = vi.fn(async () => {
       throw new DOMException('aborted', 'AbortError');
     });
@@ -462,7 +486,7 @@ describe('HttpBackendExecutor', () => {
     expect(capturedUrl?.searchParams.get('city')).toBe('paris');
   });
 
-  it('rejects a ".." path-parameter value rather than letting the URL normalise it away', async () => {
+  it('rejects a ".." path-parameter value rather than letting the URL normalize it away', async () => {
     const fetchImpl = vi.fn();
     const executor = new HttpBackendExecutor({ fetchImpl: fetchImpl as unknown as typeof fetch });
     const handler: BackendHandler = {

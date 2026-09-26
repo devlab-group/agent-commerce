@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { compileJsonSchema } from '../../../../src/core/execution/validation.js';
+import { compileJsonSchema } from '../../../../src/core/execution/validation';
 
 describe('compileJsonSchema', () => {
   it('accepts anything when no schema is given', () => {
@@ -104,7 +104,7 @@ describe('compileJsonSchema', () => {
       pattern: '^impossible$$$',
     });
     // Would fail if minLength/pattern were enforced; must pass since these are
-    // documented as unsupported and therefore not checked.
+    // documented as unsupported and therefore not checked
     expect(validate('short').valid).toBe(true);
   });
 
@@ -152,7 +152,7 @@ describe('compileJsonSchema', () => {
     }
   });
 
-  it('ignores an unrecognised type keyword rather than rejecting everything', () => {
+  it('ignores an unrecognized type keyword rather than rejecting everything', () => {
     const validate = compileJsonSchema({ type: 'unsupported-future-type' });
     expect(validate('anything').valid).toBe(true);
   });
@@ -163,13 +163,20 @@ describe('compileJsonSchema', () => {
     expect(validate({ a: 1, extra: true }).valid).toBe(false);
   });
 
+  it('matches an object enum value whatever the key order', () => {
+    const validate = compileJsonSchema({ enum: [{ a: 1, b: [2, { c: 3, d: 4 }] }, 0] });
+    expect(validate({ b: [2, { d: 4, c: 3 }], a: 1 }).valid).toBe(true);
+    expect(validate({ b: [{ d: 4, c: 3 }, 2], a: 1 }).valid).toBe(false);
+    expect(validate(-0).valid).toBe(true);
+  });
+
   it('short-circuits nested validation on a type mismatch', () => {
     const validate = compileJsonSchema({
       type: 'object',
       properties: { count: { type: 'integer' } },
     });
     // Wrong top-level type: nested property checks never run, only the
-    // top-level type error is reported.
+    // top-level type error is reported
     const result = validate('not-an-object');
     expect(result.valid).toBe(false);
     if (!result.valid) expect(result.errors).toHaveLength(1);
@@ -192,13 +199,13 @@ describe('compileJsonSchema', () => {
       });
       // `key in {}` is true for every one of these (inherited), so a naive
       // `!(key in value)` required-check would never fire even though the
-      // field was genuinely never supplied.
+      // caller never supplied the field
       const result = validate({ city: 'Berlin' });
       expect(result.valid, `expected "${key}" to be reported as missing`).toBe(false);
       if (!result.valid) {
         expect(result.errors).toContainEqual({ path: `$.${key}`, message: 'is required' });
       }
-      // Control: supplying it as an own property satisfies the requirement.
+      // Control: supplying it as an own property satisfies the requirement
       const supplied = JSON.parse(`{"city":"Berlin","${key}":"present"}`);
       expect(validate(supplied).valid).toBe(true);
     }
@@ -231,7 +238,7 @@ describe('compileJsonSchema', () => {
       }
     }
 
-    // Control: a genuinely unknown key is still rejected the same way.
+    // Control: an unknown key is still rejected the same way
     const control = validate({ city: 'paris', evil: true });
     expect(control.valid).toBe(false);
   });
@@ -245,7 +252,7 @@ describe('compileJsonSchema', () => {
     // properties['toString'] would resolve to Object.prototype.toString (a
     // function) via plain lookup; own-property lookup must not treat that as
     // "this key has a declared schema" and must fall through to
-    // additionalProperties instead.
+    // additionalProperties instead
     const result = validate(JSON.parse('{"toString":123}'));
     expect(result.valid).toBe(false);
   });

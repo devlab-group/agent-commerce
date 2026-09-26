@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { substituteEnv } from '../../../src/config/env.js';
-import { isCommerceError } from '../../../src/core/index.js';
+import { substituteEnv } from '../../../src/config/env';
+import { isCommerceError } from '../../../src/core';
 
 describe('substituteEnv', () => {
   it('leaves non-template strings unchanged', () => {
@@ -77,38 +77,28 @@ describe('substituteEnv', () => {
 });
 
 describe('nested placeholders and the unresolved-placeholder promise', () => {
-  // `${A:-${B}}` is not resolvable: `[^}]*` cannot span the inner `}`, so the
-  // match consumes `${A:-${B` and a stray `}` is left as ordinary text.
-  //
-  // The first fix caught this by scanning the *result*, which only works on the
-  // branch where `A` is unset — the leftover `${B}` is visible. With `A` set —
-  // the normal case, and the entire reason someone writes a default —
-  // substitution succeeded and the stray `}` was appended to the value with
-  // nothing to notice it. For `adminToken` that means the gateway compares
-  // against a credential the operator does not hold. So the decision moved to
-  // the *template*, and `A` set is the case that matters most here.
+  // `${A:-${B}}` is refused from the template, whichever variables are set.
+  // With `A` set, substitution would otherwise succeed and leave a stray `}`
+  // in the value (see assertTemplateIsSupported).
   it.each([
     ['neither variable set', {}],
     ['the inner variable set', { B: 'bee' }],
-    ['the outer variable set — the branch the result-scan missed', { A: 'real-secret-token' }],
+    ['the outer variable set', { A: 'real-secret-token' }],
     ['both set', { A: 'real-secret-token', B: 'bee' }],
   ])('rejects ${A:-${B}} when %s', (_label, env) => {
     expect(() => substituteEnv({ x: '${A:-${B}}' }, env)).toThrowError(/nests placeholders/);
   });
 
   it('never quotes a resolved value back in an error', () => {
-    // The result-scan reproduced a verbatim fragment of the resolved secret
-    // into the message and into `details`. Deciding from the template means a
-    // value that merely looks like a placeholder is passed through untouched.
+    // Checks run on the template, so a resolved value that looks like a
+    // placeholder passes through untouched and never appears in an error
     expect(substituteEnv({ x: '${SECRET}' }, { SECRET: 'prefix-${INNER}-suffix' })).toEqual({
       x: 'prefix-${INNER}-suffix',
     });
   });
 
-  // Valid shell, unsupported here, and previously loaded as literal text. Most
-  // fields reject the literal downstream; `adminToken` does not, and would run
-  // the gateway with `"${ADMIN_TOKEN-fallback}"` as the ledger credential while
-  // the operator believed an env secret gated it.
+  // Valid shell, unsupported here. Loaded literally, `adminToken` would make
+  // `"${ADMIN_TOKEN-fallback}"` the ledger credential.
   it.each(['${VAR-default}', '${VAR:=default}', '${VAR:?message}'])(
     'rejects the unsupported shell form %s rather than loading it literally',
     (template) => {
@@ -118,7 +108,7 @@ describe('nested placeholders and the unresolved-placeholder promise', () => {
     },
   );
 
-  it('control: a bare $VAR is left alone — it is not brace-shaped', () => {
+  it('control: a bare $VAR is left alone, since it is not brace-shaped', () => {
     expect(substituteEnv({ x: 'pa$$word and $VAR' }, { VAR: 'v' })).toEqual({
       x: 'pa$$word and $VAR',
     });
