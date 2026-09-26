@@ -1,6 +1,6 @@
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import { describe, expect, it } from 'vitest';
-import { buildToolArguments, isPaidTool } from '../src/tool-args.js';
+import { buildToolArguments, isPaidTool } from '../src/tool-args';
 
 function makeTool(overrides: Partial<Tool> = {}): Tool {
   return {

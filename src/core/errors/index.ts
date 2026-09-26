@@ -1,2 +1,2 @@
-export * from './codes.js';
-export * from './commerce-error.js';
+export * from './codes';
+export * from './commerce-error';

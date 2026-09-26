@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createDemoLogger } from '../src/log.js';
+import { createDemoLogger } from '../src/log';
 
 describe('createDemoLogger', () => {
   it('prefixes each source distinctly', () => {

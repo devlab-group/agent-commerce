@@ -6,9 +6,9 @@
  *
  * Importing the descriptor does not load `mppx`.
  */
-import type { AdapterDescriptor } from '../../core/public-types.js';
-import { PACKAGE_VERSION } from '../../version.js';
-import { MPP_NETWORKS, MPP_PROFILE, MPP_SUPPORTED_SPEC } from './constants.js';
+import type { AdapterDescriptor } from '../../core/public-types';
+import { PACKAGE_VERSION } from '../../version';
+import { MPP_NETWORKS, MPP_PROFILE, MPP_SUPPORTED_SPEC } from './constants';
 
 export const MPP_DESCRIPTOR: AdapterDescriptor = {
   name: 'mpp',

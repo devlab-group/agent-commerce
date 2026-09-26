@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createDefaultIdGenerator } from '../../../src/gateway/ids.js';
+import { createDefaultIdGenerator } from '../../../src/gateway/ids';
 
 describe('createDefaultIdGenerator', () => {
   it('generates unique ids', () => {

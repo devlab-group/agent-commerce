@@ -1,1 +1,1 @@
-export { createSqliteReceiptStore, type SqliteReceiptStoreOptions } from './store.js';
+export { createSqliteReceiptStore, type SqliteReceiptStoreOptions } from './store';

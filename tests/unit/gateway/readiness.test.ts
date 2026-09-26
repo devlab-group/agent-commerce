@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import type { Clock, Logger } from '../../../src/core/index.js';
-import { createReadinessProbe } from '../../../src/gateway/readiness.js';
-import { createFakePaymentProvider, createFakeStore } from './helpers.js';
+import type { Clock, Logger } from '../../../src/core';
+import { createReadinessProbe } from '../../../src/gateway/readiness';
+import { createFakePaymentProvider, createFakeStore } from './helpers';
 
 const NOOP_LOGGER: Logger = {
   debug: () => {},

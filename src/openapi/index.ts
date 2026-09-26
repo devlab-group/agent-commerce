@@ -4,7 +4,7 @@
  * path or in the frozen contract.
  */
 
-export { type DiscoverOptions, type DiscoveryResult, discoverOperations } from './discover.js';
+export { type DiscoverOptions, type DiscoveryResult, discoverOperations } from './discover';
 export {
   buildResourceDrafts,
   type ImportOptions,
@@ -12,14 +12,14 @@ export {
   type ImportResult,
   type ResourceDraft,
   renderResourcesYaml,
-} from './draft.js';
-export { loadOpenApiDocument, MAX_SOURCE_BYTES } from './load.js';
-export { dereference, isRefNode } from './refs.js';
-export { mapRequest, type RequestBindings, type RequestMapping } from './request.js';
-export { convertSchema, isPrimitiveSchema, type SchemaConversion } from './schema.js';
+} from './draft';
+export { loadOpenApiDocument, MAX_SOURCE_BYTES } from './load';
+export { dereference, isRefNode } from './refs';
+export { mapRequest, type RequestBindings, type RequestMapping } from './request';
+export { convertSchema, isPrimitiveSchema, type SchemaConversion } from './schema';
 export type {
   ImportDiagnostic,
   LoadedOpenApiDocument,
   OpenApiOperationCandidate,
   OpenApiVersion,
-} from './types.js';
+} from './types';

@@ -3,10 +3,10 @@
  * statically imports both rail implementations and their static peer
  * dependencies, so the peer-free main entry and CLI must not import it.
  */
-import type { GatewayConfig } from '../config/index.js';
-import type { Logger, PaymentProvider } from '../core/index.js';
-import { createMppPaymentProvider } from '../payments/mpp/provider.js';
-import { createX402PaymentProvider } from '../payments/x402/index.js';
+import type { GatewayConfig } from '../config';
+import type { Logger, PaymentProvider } from '../core';
+import { createMppPaymentProvider } from '../payments/mpp/provider';
+import { createX402PaymentProvider } from '../payments/x402';
 
 export function createConfiguredPaymentProviders(
   payments: GatewayConfig['payments'],

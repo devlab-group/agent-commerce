@@ -6,5 +6,5 @@
  * See docs/contracts.md for the exact factory signature this package exports.
  */
 
-export type { McpAdapterOptions } from './adapter.js';
-export { createMcpAdapter } from './adapter.js';
+export type { McpAdapterOptions } from './adapter';
+export { createMcpAdapter } from './adapter';

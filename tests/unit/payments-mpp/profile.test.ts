@@ -7,7 +7,7 @@ import {
   MPP_SPEC_COMMIT,
   MPP_SPEC_DRAFTS,
   MPPX_VERSION,
-} from '../../../src/payments/mpp/index.js';
+} from '../../../src/payments/mpp';
 
 // The profile avoids a runtime peer import; these checks catch copied values
 // that drift from the pinned mppx release
