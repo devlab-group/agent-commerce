@@ -1,20 +1,11 @@
 /**
- * x402 payment provider — protocol version 2, `exact` scheme, EVM,
- * EIP-3009 `transferWithAuthorization`.
+ * x402 payment provider: protocol v2, `exact` scheme, EVM, EIP-3009
+ * `transferWithAuthorization`.
  *
- * Implements the frozen `PaymentProvider` interface (src/core/domain/payment.ts).
- * `verify()` never moves funds; only `settle()` does, and only after a
- * successful `verify()` (enforced by the gateway's execution pipeline, not by
- * this file, but this file never calls settle-like RPCs from verify()).
- *
- * Verification and settlement run through the SDK's own `x402Facilitator`
- * with the `exact`/EVM scheme registered against a single CAIP-2 network. The
- * facilitator is in-process — it is the same code a hosted facilitator runs,
- * pointed at the local dev chain — so there is no network hop and no third
- * party in the settlement path.
- *
- * The SDK behaviour relied on here is verified, not assumed: see the notes
- * beside each call site below.
+ * `verify()` never moves funds. `settle()` does, and throws unless it is handed
+ * a successful verification. Both run through a facilitator (see
+ * `facilitator.ts`): the SDK's own `x402Facilitator` in this process, or a
+ * remote HTTP facilitator.
  */
 
 import type {
@@ -25,8 +16,9 @@ import type {
   VerifyResponse,
 } from '@x402/core/types';
 import {
-  ContractFunctionExecutionError,
+  BaseError,
   ContractFunctionRevertedError,
+  formatUnits,
   getAddress,
   HttpRequestError,
   isAddress,
@@ -48,55 +40,49 @@ import {
   type PaymentSettlementContext,
   type PaymentVerificationContext,
   systemClock,
-} from '../../core/index.js';
-import { PACKAGE_VERSION } from '../../version.js';
-import { formatCanonicalAmount, parseCanonicalAmount } from './amount.js';
+} from '../../core';
+import { redactedErrorText } from '../../core/errors';
+import { PACKAGE_VERSION } from '../../version';
+import { parseCanonicalAmount } from './amount';
 import {
-  chainIdFromCaip2,
   createLocalFacilitatorClient,
   createLocalPublicClient,
   type LocalFacilitatorClient,
-} from './chain.js';
-import {
-  assertDevKeyIsLocalOnly,
-  assertPayToIsNotDevAddress,
-  describeRpc,
-} from './dev-key-guard.js';
+} from './chain';
+import { assertDevKeyIsLocalOnly, assertPayToIsNotDevAddress, describeRpc } from './dev-key-guard';
 import {
   createLocalFacilitatorBinding,
   createRemoteFacilitatorBinding,
   type FacilitatorBinding,
-} from './facilitator.js';
-import { resolveX402Deployment, type X402FacilitatorConfig } from './guardrails.js';
-import { describeDeploymentMode } from './networks.js';
-import { decodePaymentSubmission, isExactEvmPayload } from './payload.js';
-import { computeReplayKey } from './replay-key.js';
+} from './facilitator';
+import { resolveX402Deployment, type X402FacilitatorConfig } from './guardrails';
+import { describeDeploymentMode } from './networks';
+import { decodePaymentSubmission, isExactEvmPayload } from './payload';
+import { computeReplayKey } from './replay-key';
 
 const X402_VERSION = 2;
 const X402_PROTOCOL_VERSION = String(X402_VERSION);
 const DEFAULT_MAX_TIMEOUT_SECONDS = 60;
 const DEFAULT_MIME_TYPE = 'application/json';
 const HEALTH_TIMEOUT_MS = 4_000;
-/** `SettleResponse.errorReason` the SDK uses for "broadcast, not confirmed". */
+// `SettleResponse.errorReason` the SDK uses for "broadcast, not confirmed"
 const SETTLEMENT_PENDING_REASON = 'settlement_pending';
 /**
  * The SDK's catch-all for a throw from the broadcast call, and its reason for
  * a mined transaction that reverted. Only the second carries a hash. A revert
- * the SDK recognises during gas estimation gets its own reason instead.
+ * the SDK recognizes during gas estimation gets its own reason instead.
  */
 const TRANSACTION_FAILED_REASON = 'invalid_exact_evm_transaction_failed';
 /**
- * `invalidReason`/`errorReason` are `z.string()` in the SDK schema — no length
- * or charset bound. They become the message a buyer is told about their own
- * payment, a persisted and SSE-streamed event field, and a column in the
- * merchant's ledger. A remote facilitator is a counterparty this design
- * explicitly contemplates having no account or terms with, so treat its
- * strings as untrusted input rather than as diagnostics.
+ * `invalidReason`/`errorReason` are `z.string()` in the SDK schema, with no
+ * length or charset bound. They reach the buyer's error, the persisted events
+ * and the merchant's ledger. A remote facilitator controls these values, so
+ * they are treated as untrusted input rather than diagnostic text.
  */
 const MAX_REASON_LENGTH = 64;
 const REASON_SHAPE = /^[a-z0-9_.-]+$/i;
 
-function sanitiseReason(reason: string | undefined, fallback: string): string {
+function sanitizeReason(reason: string | undefined, fallback: string): string {
   if (reason === undefined) return fallback;
   const trimmed = reason.trim();
   if (trimmed.length === 0 || trimmed.length > MAX_REASON_LENGTH) return fallback;
@@ -112,41 +98,34 @@ export interface X402ProviderOptions {
   readonly network: string;
   /** RPC endpoint. Local chain: http://127.0.0.1:8545 */
   readonly rpcUrl: string;
-  /** ERC-20 (EIP-3009) asset address used for settlement. */
+  /** ERC-20 (EIP-3009) asset address used for settlement */
   readonly asset: `0x${string}`;
-  /** EIP-712 domain name of the asset, e.g. 'MockUSDC'. */
+  /** EIP-712 domain name of the asset, e.g. 'MockUSDC' */
   readonly assetName: string;
-  /** EIP-712 domain version of the asset, e.g. '2'. */
+  /** EIP-712 domain version of the asset, e.g. '2' */
   readonly assetVersion: string;
   readonly assetDecimals: number;
-  /** Merchant-controlled settlement destination. Never a gateway-owned wallet. */
+  /** Merchant-controlled settlement destination. Never a gateway-owned wallet */
   readonly payTo: `0x${string}`;
   readonly maxTimeoutSeconds?: number;
   /**
-   * Which facilitator verifies and broadcasts.
-   *
-   * `local` runs the facilitator in this process against the dev chain, and
-   * its `signerPrivateKey` must be an Anvil well-known key — LOCAL DEVELOPMENT
-   * ONLY — DO NOT FUND. `remote` calls an HTTP facilitator, and this gateway
-   * then holds no signing key at all.
+   * Which facilitator verifies and broadcasts. `local` runs one in this process
+   * against a dev chain, and its `signerPrivateKey` pays gas there, usually
+   * an Anvil well-known key (LOCAL DEVELOPMENT ONLY - DO NOT FUND). `remote`
+   * calls an HTTP facilitator, and the gateway then holds no signing key.
    */
   readonly facilitator: X402FacilitatorConfig;
-  /**
-   * Required to be `true` before anything settles on a mainnet. Never a
-   * default — see `guardrails.ts`.
-   */
+  /** Must be `true` before anything settles on a mainnet. Never a default */
   readonly allowMainnet?: boolean;
-  /**
-   * Required to be `true` to settle on a mainnet through a facilitator that
-   * takes no credential. Never a default.
-   */
+  /** Required on mainnet when facilitator auth is `none` */
   readonly allowUnauthenticatedFacilitator?: boolean;
   readonly logger?: Logger;
   readonly clock?: Clock;
   readonly ids?: IdGenerator;
 }
 
-const DEFAULT_IDS: IdGenerator = {
+/** Prefixed random UUIDs, shared with the MPP rail */
+export const DEFAULT_IDS: IdGenerator = {
   next: (prefix?: string) => `${prefix ? `${prefix}_` : ''}${crypto.randomUUID()}`,
 };
 
@@ -163,11 +142,8 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
       `x402 provider: "payTo" is not a valid EVM address: ${options.payTo}`,
     );
   }
-  // Applies regardless of facilitator.mode — which account signs settlement
-  // has no bearing on whether the destination address's private key is
-  // public knowledge. `resolveX402Deployment` below covers the other half of
-  // the same question: a dev payTo on any non-local *deployment*, where the
-  // RPC host says nothing about where the money lands.
+  // In every facilitator mode. `resolveX402Deployment` below also refuses a dev
+  // payTo on any non-local deployment, whatever the RPC host.
   assertPayToIsNotDevAddress(options.rpcUrl, options.payTo);
   if (!Number.isInteger(options.assetDecimals) || options.assetDecimals < 0) {
     throw new CommerceError(
@@ -175,11 +151,8 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
       `x402 provider: "assetDecimals" must be a non-negative integer`,
     );
   }
-  // The chain id is not a display detail: it is signed into the buyer's
-  // EIP-712 domain, so a network identifier we cannot resolve one from is a
-  // startup failure, never a request-time default. `resolveX402Deployment`
-  // also decides what this deployment *is* — local, testnet or mainnet — and
-  // refuses every combination that could move real money by accident.
+  // The chain id is signed into the buyer's EIP-712 domain, so a network it
+  // cannot be resolved from fails here, never at request time
   const { profile, mode } = resolveX402Deployment({
     network: options.network,
     payTo: options.payTo,
@@ -193,14 +166,9 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
       : {}),
   });
   const network = options.network as Network;
-  // Constructed once, here, rather than inside settle(): assertDevKeyIsLocalOnly
-  // above already proves the key is well-formed, so privateKeyToAccount is not
-  // expected to throw — but if it somehow does (or the key/RPC combination is
-  // otherwise unusable), that is a *configuration* problem, and a bad key
-  // should fail the provider at startup, not on the first paying customer's
-  // request, after their replayKey is already reserved. This mirrors the other
-  // CONFIG_INVALID checks above, which are all one-time, construction-time
-  // validation rather than per-request checks.
+  // Built once, here, rather than in settle(): an unusable key fails the
+  // provider at startup, not on the first paid request after that buyer's
+  // replay key is already reserved
   let binding: FacilitatorBinding;
   if (options.facilitator.mode === 'local') {
     assertDevKeyIsLocalOnly(options.rpcUrl, options.facilitator.signerPrivateKey);
@@ -214,7 +182,7 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
       throw new CommerceError(
         'CONFIG_INVALID',
         'x402 provider: could not construct a local facilitator signer from ' +
-          'facilitator.signerPrivateKey — it must be a valid 32-byte hex private key',
+          'facilitator.signerPrivateKey. It must be a valid 32-byte hex private key.',
         { cause },
       );
     }
@@ -226,11 +194,9 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
     });
   }
 
-  // health()'s own read-only client, with a real transport-level timeout (see
-  // createLocalPublicClient's doc comment). Verification and settlement read
-  // the chain through the facilitator signer instead, so this is the only
-  // public client the provider builds.
-  // Health details are logged, so they name the RPC by origin only
+  // health() reads the chain through its own client, whose timeout aborts the
+  // request. Verification and settlement go through the facilitator instead.
+  // Health details can reach logs, so they name the RPC by origin only.
   const rpcOrigin = describeRpc(options.rpcUrl);
   const healthPublicClient = createLocalPublicClient(
     options.rpcUrl,
@@ -256,7 +222,7 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
       `mode=${mode}`,
     ],
     status: 'stable',
-    unsupported: ['svm', 'permit2', 'upto scheme'],
+    unsupported: ['svm', 'permit2', 'upto scheme', 'deferred scheme'],
   };
 
   async function createRequirement(context: PaymentContext): Promise<PaymentRequirement> {
@@ -269,15 +235,10 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
       amount,
       payTo: options.payTo,
       maxTimeoutSeconds,
-      // `name`/`version` are what let a buyer and the facilitator build the
-      // same EIP-712 domain without an on-chain `version()` call, so
-      // verification stays deterministic against a token that has none.
-      //
-      // `assetTransferMethod` is stated rather than left to default: x402 v2's
-      // `exact`/EVM scheme also has a Permit2 path, and a client that picked it
-      // would produce a payload this provider cannot settle. Declaring the one
-      // supported method turns that into a client-side non-choice instead of a
-      // server-side rejection.
+      // `name`/`version` let the buyer and the facilitator build the same
+      // EIP-712 domain without calling `version()` on the token.
+      // `assetTransferMethod` names the one method this provider settles, so a
+      // conforming client never picks the `exact` scheme's Permit2 path.
       extra: {
         name: options.assetName,
         version: options.assetVersion,
@@ -285,18 +246,14 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
       },
     };
 
-    // The v2 challenge document, verbatim on the wire: the HTTP adapter
-    // base64-encodes this into `PAYMENT-REQUIRED`, and MCP passes it through
-    // in the payment-required envelope. Built once, here, so both surfaces
-    // describe the same challenge rather than each assembling their own.
+    // The v2 challenge document as sent on the wire. The HTTP adapter
+    // base64-encodes it into `PAYMENT-REQUIRED` and MCP passes it through, so
+    // both surfaces offer the same challenge.
     //
-    // `resource.url` is descriptive metadata: nothing in the EIP-3009
-    // authorisation (`from`/`to`/`value`/`validAfter`/`validBefore`/`nonce`)
-    // covers it, nothing verifies against it, and the replay key is keyed on
-    // the authorisation instead. It still carries `network` and `payTo` —
-    // both already public in this same challenge — because the
-    // `agent-commerce` authority is not reserved to us across the wider x402
-    // ecosystem, so the pair is what keeps it unambiguous.
+    // `resource.url` is descriptive: the EIP-3009 authorization does not cover
+    // it and nothing verifies against it. It carries `network` and `payTo`,
+    // both already public in the challenge, because other x402 servers may use
+    // the `agent-commerce` authority too.
     const envelope: PaymentRequired = {
       x402Version: X402_VERSION,
       resource: {
@@ -330,21 +287,13 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
   }
 
   /**
-   * Verifies a payment submission against a payment requirement.
+   * Checks a submission against the requirement this provider built, never
+   * against `payload.accepted`, the copy the client echoes back.
    *
-   * Every check below runs against *our* requirement — the one this provider
-   * built and the pipeline held onto — never against `payload.accepted`, the
-   * copy of the requirements the client echoes back. That echo is attacker
-   * data; the SDK's scheme facilitator likewise takes the requirements as an
-   * explicit argument rather than reading them off the payload.
-   *
-   * The amount must match **exactly**. This once accepted overpayment on the
-   * reading that `amount` names a floor — but the pinned `@x402/evm@2.23.0`
-   * exact/EVM scheme compares with `!==` and rejects anything else as
-   * `invalid_exact_evm_payload_authorization_value_mismatch`, in both verify
-   * and settle, and hosted facilitators run that same code. Accepting more
-   * here only moved the rejection downstream and turned a clean
-   * `wrong_amount` into an opaque SDK reason.
+   * The amount must match exactly. The pinned `@x402/evm` exact/EVM scheme
+   * rejects any other value as
+   * `invalid_exact_evm_payload_authorization_value_mismatch`, so an
+   * overpayment is refused here as `wrong_amount`, a reason the buyer can act on.
    */
   async function verify(context: PaymentVerificationContext): Promise<PaymentResult> {
     const { requirement, submission } = context;
@@ -368,13 +317,9 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
       return rejected('missing_payment_requirements');
     }
 
-    // Defence in depth, not the real expiry: the pipeline calls
-    // createRequirement() fresh on every request, so by the time verify()
-    // runs this requirement is only ever seconds old — this check will
-    // essentially never fire in the current flow. The actual expiry
-    // enforcement is EIP-3009's validBefore, checked inside the SDK's scheme
-    // facilitator. Kept because it is cheap and correct, not because it is
-    // load-bearing.
+    // Defense in depth only: the pipeline builds a fresh requirement for every
+    // request, so this rarely fires. The real expiry is EIP-3009's
+    // `validBefore`, which the facilitator checks.
     if (
       requirement.expiresAt !== undefined &&
       Date.parse(requirement.expiresAt) < clock.now().getTime()
@@ -382,10 +327,9 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
       return rejected('requirement_expired');
     }
 
-    // Defensive invariant: the requirement we're verifying against must still
-    // describe *this* provider's configured asset. It always will in normal
-    // operation (we generated it), but a corrupted/mismatched requirement
-    // must never be allowed to authorise a transfer for a different asset.
+    // This provider built the requirement, so the asset always matches in
+    // normal operation. A corrupted one must still never authorize a transfer
+    // of a different asset.
     if (
       !isAddress(requirements.asset) ||
       getAddress(requirements.asset) !== getAddress(options.asset)
@@ -409,9 +353,8 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
     if (!isAddress(authorization.from) || !isAddress(authorization.to)) {
       return rejected('malformed_payment_payload');
     }
-    // The network the buyer signed for is `accepted.network` — it is what the
-    // scheme derives the EIP-712 chain id from — so a mismatch here means the
-    // signature is bound to a different chain than the one we settle on.
+    // `accepted.network` names the chain the buyer signed for, so a mismatch
+    // means a signature bound to a chain we do not settle on
     if (payload.accepted.network !== options.network) {
       return rejected('wrong_network');
     }
@@ -427,9 +370,6 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
       return rejected('malformed_payment_payload');
     }
     if (authorizedValue !== required) {
-      // Both directions: the scheme enforces equality, so an overpayment is
-      // rejected here with a reason the buyer can act on rather than by the
-      // facilitator with one they cannot.
       return rejected('wrong_amount');
     }
 
@@ -438,21 +378,20 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
     try {
       sdkResult = await scope.verify(payload, requirements);
     } catch (err) {
-      if (isProviderUnavailableError(err) || scope.transportFailed()) {
-        throw new CommerceError(
-          'PAYMENT_PROVIDER_UNAVAILABLE',
-          `x402 provider: ${binding.kind} facilitator unreachable during verify()`,
-          {
-            cause: err,
-          },
-        );
+      // A throw means no verdict was obtained, so it is never held against the
+      // buyer. Only an unclassified one is logged, as it may be an SDK fault.
+      if (!isProviderUnavailableError(err) && !scope.transportFailed()) {
+        logger.warn({ err: redactedErrorText(err) }, 'x402 verify(): unexpected SDK error');
       }
-      logger.warn({ err: describeError(err) }, 'x402 verify(): unexpected SDK error');
-      return rejected('unexpected_verify_error');
+      throw new CommerceError(
+        'PAYMENT_PROVIDER_UNAVAILABLE',
+        `x402 provider: ${binding.kind} facilitator returned no verdict during verify()`,
+        { cause: err },
+      );
     }
 
     if (!sdkResult.isValid) {
-      // An RPC that never answered is not a payment that failed a check.
+      // An RPC that never answered is not a payment that failed a check
       if (scope.transportFailed()) {
         if (sdkResult.invalidReason !== undefined) {
           logger.debug(
@@ -465,26 +404,21 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
           `x402 provider: ${binding.kind} facilitator unreachable during verify()`,
         );
       }
-      // The raw string still reaches the operator's logs below; only what is
-      // shown to the buyer and written to the ledger is constrained.
+      // The raw reason is logged at debug level. Only what the buyer sees and
+      // the ledger records is constrained.
       if (sdkResult.invalidReason !== undefined) {
         logger.debug(
           { reportedReason: sdkResult.invalidReason },
           'x402 verify(): facilitator rejection reason',
         );
       }
-      return rejected(sanitiseReason(sdkResult.invalidReason, 'invalid_payment'));
+      return rejected(sanitizeReason(sdkResult.invalidReason, 'invalid_payment'));
     }
 
-    // Derived from the chain id the authorisation is actually bound to, never
-    // from a provider-instance constant, so the key stays correct the moment
-    // there is more than one chain id in play.
-    const payloadChainId = chainIdFromCaip2(payload.accepted.network);
-    if (payloadChainId === undefined) {
-      return rejected('wrong_network');
-    }
+    // `accepted.network` equals the configured network (checked above), so the
+    // profile's chain id is the one the authorization is bound to
     const replayKey = computeReplayKey({
-      chainId: payloadChainId,
+      chainId: profile.chainId,
       asset: getAddress(requirements.asset),
       from: getAddress(authorization.from),
       nonce: authorization.nonce,
@@ -495,7 +429,7 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
       provider: 'x402',
       payer: getAddress(authorization.from),
       payee: getAddress(authorization.to),
-      amount: formatCanonicalAmount(authorizedValue, options.assetDecimals),
+      amount: formatUnits(authorizedValue, options.assetDecimals),
       currency: requirement.currency,
       network: payload.accepted.network,
       asset: getAddress(requirements.asset),
@@ -552,15 +486,15 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
           { cause: err },
         );
       }
-      // A revert is the chain's own statement that the transfer did not
-      // happen, so it is a real rejection and the pipeline may release what
-      // it holds. Anything else out of settle() is unclassified: we cannot
-      // tell whether the transfer was broadcast, so it must not come back as
-      // a rejection the buyer can be blamed for. It goes back as an
-      // unavailable provider, and the pipeline records it unresolved.
+      // The pinned SDK returns a result for every failure from gas estimation
+      // on, so a throw comes from its checks before anything is sent. A revert
+      // there is a real rejection, which releases any mandate the pipeline
+      // holds for the purchase. Any other throw goes back as an unavailable
+      // provider, which the pipeline records as `settlement-uncertain`, never
+      // as a rejection blamed on the buyer.
       if (!isOnChainRevertError(err)) {
         logger.warn(
-          { err: describeError(err) },
+          { err: redactedErrorText(err) },
           'x402 settle(): settlement failed with an unclassified error; outcome unknown',
         );
         throw new CommerceError(
@@ -570,7 +504,7 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
         );
       }
       logger.warn(
-        { err: describeError(err), rejectionReason: 'transaction_reverted' },
+        { err: redactedErrorText(err), rejectionReason: 'transaction_reverted' },
         'x402 settle(): settlement transaction reverted on chain',
       );
       return rejectedSettlement('transaction_reverted');
@@ -578,12 +512,11 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
 
     if (!sdkResult.success) {
       // "Broadcast, never confirmed" is not "did not happen": the transfer may
-      // already be on-chain, so it surfaces as an *unavailable* provider
-      // carrying the hash, letting the pipeline record the attempt
-      // `settlement-uncertain` rather than `failed`. The SDK's catch-all with
-      // no hash is treated the same way: its throw may have followed a
-      // broadcast, and the message cannot tell, because viem reports an RPC
-      // error on the send as a revert. Everything else is a real rejection.
+      // be on-chain, so it throws as an unavailable provider carrying the hash,
+      // and the pipeline records the attempt `settlement-uncertain`, not
+      // `rejected`. The SDK's catch-all without a hash is treated the same way,
+      // because its throw may have followed a broadcast and viem reports an
+      // RPC error on the send as a revert. Everything else is a real rejection.
       if (
         sdkResult.errorReason === TRANSACTION_FAILED_REASON &&
         !/^0x[0-9a-f]{64}$/i.test(sdkResult.transaction)
@@ -615,7 +548,7 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
         );
       }
       return {
-        ...rejectedSettlement(sanitiseReason(sdkResult.errorReason, 'settlement_failed')),
+        ...rejectedSettlement(sanitizeReason(sdkResult.errorReason, 'settlement_failed')),
         network: sdkResult.network,
         ...(sdkResult.payer !== undefined ? { payer: sdkResult.payer } : {}),
       };
@@ -662,9 +595,8 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
       }
 
       if (binding.kind === 'remote') {
-        // "Reachable" is not the question — "will it settle *this*" is. A
-        // facilitator that is up but does not carry our scheme on our network
-        // fails every payment, and does it after the buyer has signed.
+        // Reachable is not enough: a facilitator that does not carry our
+        // scheme on our network fails every payment after the buyer has signed
         const kinds = await binding.supported();
         const supportsUs = kinds.some(
           (kind) =>
@@ -685,7 +617,7 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
         return {
           status: 'pass',
           detail:
-            `${describeDeploymentMode(mode)} — RPC ${rpcOrigin} reachable, chain id ` +
+            `${describeDeploymentMode(mode)}: RPC ${rpcOrigin} reachable, chain id ` +
             `${profile.chainId} (${profile.displayName}), asset ${options.asset} has code, ` +
             `facilitator ${binding.describe} supports exact/${options.network}`,
           checkedAt,
@@ -693,17 +625,16 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
         };
       }
 
-      // Chain id alone cannot prove this is a dev chain: real Base Sepolia
-      // reports the same id (84532) as this project's local chain, by design.
-      // Probe an Anvil-only RPC method — present only on a real Anvil node —
-      // before trusting a well-known dev key against it.
+      // Chain id alone cannot prove this is a dev chain, because Base Sepolia
+      // reports the same 84532 as the local chain. An Anvil-only RPC method
+      // must answer before a local facilitator counts as healthy.
       const isAnvil = await probeIsAnvilNode(healthPublicClient);
       if (!isAnvil) {
         return {
           status: 'fail',
           detail:
             `RPC at ${rpcOrigin} reports chain id ${profile.chainId} but does not answer ` +
-            '"anvil_nodeInfo" — it does not look like a local Anvil dev node. Refusing to treat it ' +
+            '"anvil_nodeInfo", so it does not look like a local Anvil dev node. Refusing to treat it ' +
             'as safe for a local-facilitator dev key.',
           checkedAt,
           durationMs: clock.monotonicMs() - startedAt,
@@ -713,7 +644,7 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
       return {
         status: 'pass',
         detail:
-          `${describeDeploymentMode(mode)} — RPC ${rpcOrigin} reachable, chain id ` +
+          `${describeDeploymentMode(mode)}: RPC ${rpcOrigin} reachable, chain id ` +
           `${profile.chainId}, asset ${options.asset} has code, confirmed Anvil dev node`,
         checkedAt,
         durationMs: clock.monotonicMs() - startedAt,
@@ -721,42 +652,19 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
     } catch (err) {
       return {
         status: 'fail',
-        detail: `x402 health check failed: ${describeError(err)}`,
+        detail: `x402 health check failed: ${redactedErrorText(err)}`,
         checkedAt,
         durationMs: clock.monotonicMs() - startedAt,
       };
     }
   }
 
-  // /ready has no auth, no cache and no
-  // rate limit, and called computeHealth() — 3 live RPC calls — on every
-  // single request; measured 3x amplification of billed upstream calls
-  // under an unauthenticated flood. Memoise behind a short TTL and collapse
-  // concurrent callers onto one in-flight probe, so N requests within the
-  // window produce at most one round-trip instead of N.
-  //
-  // 5s: short enough that a readiness probe (Kubernetes' own default
-  // `periodSeconds` is 10s) never observes data older than its own poll
-  // interval, long enough to fully decouple RPC call volume from HTTP
-  // request volume — which is the property that closes the amplification,
-  // not the exact number of seconds.
-  //
-  // pass and fail are cached for the same TTL, deliberately: a shorter TTL
-  // for fail would re-introduce the amplification exactly when an upstream
-  // outage makes every call expensive/slow, which is the worst possible time
-  // to remove the cache's protection. 5s of recovery latency after the RPC
-  // comes back is an acceptable trade — it is already within the noise of a
-  // single health probe's own round-trip time, and well inside a normal
-  // probe's own poll interval.
-  //
-  // This only memoises this provider's own RPC probe. `core` separately
-  // memoises the whole /ready aggregation (src/gateway/readiness.ts)
-  // — a second, independent layer at a different scope; the two compose
-  // without conflict since neither assumes anything about the other's TTL.
-  //
-  // Does not affect `doctor`'s deployment-mismatch cross-check: that reads
-  // asset/network/payTo straight from `/.well-known/agent-commerce` (static
-  // provider config, echoed live, never cached), not from health().
+  // A probe makes several upstream calls, and `/ready` is unauthenticated.
+  // A short TTL plus one shared in-flight probe keeps upstream volume independent
+  // of request volume, for library callers as well as the gateway, whose
+  // readiness probe adds its own cache on top. Pass and fail share the TTL: a
+  // shorter one for fail would bring the load back during an RPC outage,
+  // exactly when each call is slowest.
   const HEALTH_CACHE_MS = 5_000;
   let cachedHealth: { at: number; value: AdapterHealth } | undefined;
   let inFlightHealth: Promise<AdapterHealth> | undefined;
@@ -789,25 +697,23 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
   };
 }
 
+// viem wraps every failed contract call in ContractFunctionExecutionError, so
+// only the cause chain can show a revert. A revert alone does not prove nothing
+// moved, because viem also reports an RPC error on a send as one; settle()
+// relies on the SDK throwing only before the broadcast.
 function isOnChainRevertError(err: unknown): boolean {
   return (
-    err instanceof ContractFunctionRevertedError || err instanceof ContractFunctionExecutionError
+    err instanceof BaseError && err.walk((e) => e instanceof ContractFunctionRevertedError) !== null
   );
 }
 
 /**
- * `instanceof` checks first — these are the real error classes the pinned
- * viem@2.55.18 HTTP transport throws (see viem's `utils/rpc/http.js`, which
- * wraps every fetch failure, including connection-refused, in
- * `HttpRequestError` unless it is already a `TimeoutError`), plus the error
- * `waitForTransactionReceipt` itself throws when it gives up polling for a
- * receipt — precisely the "broadcast succeeded, confirmation didn't" case
- * this classification exists to catch. Substring matching
- * is kept only as a fallback for shapes not covered by a typed viem class
- * (e.g. a raw Node/undici error surfacing through some other path) — pinning
- * behaviour to message text is brittle across viem/undici upgrades, so the
- * instanceof checks should be preferred and grown over time as more real
- * failure shapes are seen.
+ * The `instanceof` checks cover what the pinned viem HTTP transport throws
+ * (`HttpRequestError` for every fetch failure, including connection refused,
+ * or `TimeoutError`) and what `waitForTransactionReceipt` throws when it stops
+ * polling after a broadcast. Message matching is only a fallback for errors
+ * outside those classes, such as a raw undici error, because message text can
+ * change with any viem or undici upgrade.
  */
 function isProviderUnavailableError(err: unknown): boolean {
   if (
@@ -817,7 +723,7 @@ function isProviderUnavailableError(err: unknown): boolean {
   ) {
     return true;
   }
-  const message = describeError(err).toLowerCase();
+  const message = redactedErrorText(err).toLowerCase();
   return (
     message.includes('econnrefused') ||
     message.includes('fetch failed') ||
@@ -828,23 +734,14 @@ function isProviderUnavailableError(err: unknown): boolean {
   );
 }
 
-// Error class name and message. viem puts the request URL in its messages and
-// an RPC URL often carries an API key, so each URL is cut to its origin.
-function describeError(err: unknown): string {
-  const text = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
-  return text.replace(/\bhttps?:\/\/[^\s"'<>]+/gi, (url) => describeRpc(url));
-}
-
 /**
- * True only when the RPC answers Anvil's own `anvil_nodeInfo` method — a
- * real network (including real Base Sepolia, which shares chain id 84532
- * with this project's local chain by design) returns a JSON-RPC "method
- * not found" error instead. Never throws.
+ * True only when the RPC answers Anvil's own `anvil_nodeInfo` method. A public
+ * node, Base Sepolia included, answers "method not found". Never throws.
  */
 async function probeIsAnvilNode(
   client: ReturnType<typeof createLocalPublicClient>,
 ): Promise<boolean> {
-  // Anvil-only method: not part of viem's typed PublicRpcSchema, hence the cast.
+  // Anvil-only method, absent from viem's typed PublicRpcSchema, hence the cast
   const request = client.request as unknown as (args: {
     method: string;
     params: unknown[];

@@ -1,36 +1,28 @@
 /**
- * CLIENT-SIDE payment helper.
+ * Client-side payment helper: builds and EIP-712-signs an x402 v2 `exact`/EVM
+ * authorization on the buyer's side. The demo buyer agent and the test suites
+ * use it, and the `/x402` entry exports it. The gateway never calls it and
+ * never holds a buyer key.
  *
- * This module is used by the demo buyer agent (`demo/agent`) and by the
- * payment E2E test suite to build and EIP-712-sign an x402 v2 `exact`/EVM
- * payment authorisation, entirely on the buyer's side.
- *
- * The gateway NEVER calls this module and NEVER holds a buyer private key.
- * `buyerPrivateKey` here is always an Anvil well-known
- * development key (LOCAL DEVELOPMENT ONLY — DO NOT FUND) supplied by whoever
- * is driving the demo/test, not something the provider or gateway manages.
- *
- * It signs the EIP-712 authorisation directly rather than going through the
- * SDK's `x402Client`, for one reason: `overrides`. The negative payment tests
- * need authorisations that are deliberately wrong — wrong recipient, short
- * amount, reused nonce, expired window — and a conforming client will not
- * produce those. Interop with a real SDK client is proved separately, by a
- * test that pays the gateway using `x402Client` itself.
+ * It signs directly rather than through the SDK's `x402Client` because of
+ * `overrides`: negative tests need deliberately wrong authorizations that a
+ * conforming client will not produce. The x402 settlement E2E suite also
+ * settles a payment built by `x402Client` itself to cover interoperability.
  */
 
 import { PaymentRequirementsV2Schema } from '@x402/core/schemas';
 import type { PaymentPayload, PaymentRequirements } from '@x402/core/types';
 import { getAddress, toHex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
-import { chainIdFromCaip2 } from './chain.js';
+import { CommerceError } from '../../core';
+import { chainIdFromCaip2 } from './chain';
 
 export interface CreatePaymentProofOptions {
-  /** Buyer's dev-only private key. LOCAL DEVELOPMENT ONLY — DO NOT FUND. */
+  /** The buyer's private key. It signs locally and is never sent anywhere */
   readonly buyerPrivateKey: `0x${string}`;
-  readonly rpcUrl: string;
-  /** One entry from PaymentRequiredEnvelope.payment.accepts, verbatim. */
+  /** One entry from PaymentRequiredEnvelope.payment.accepts, verbatim */
   readonly accepts: Readonly<Record<string, unknown>>;
-  /** Overrides used only by negative tests (wrong amount/recipient/nonce…). */
+  /** For negative tests only: a wrong amount, recipient, nonce or validity window */
   readonly overrides?: {
     readonly value?: string;
     readonly payTo?: string;
@@ -53,7 +45,7 @@ const TRANSFER_WITH_AUTHORIZATION_TYPES = {
   ],
 } as const;
 
-/** Returns the base64 `PAYMENT-SIGNATURE` value to send back to the gateway. */
+/** Returns the base64 `PAYMENT-SIGNATURE` value to send back to the gateway */
 export async function createPaymentProof(options: CreatePaymentProofOptions): Promise<string> {
   const requirements = PaymentRequirementsV2Schema.parse(options.accepts);
   if (
@@ -61,31 +53,26 @@ export async function createPaymentProof(options: CreatePaymentProofOptions): Pr
     typeof requirements.extra['name'] !== 'string' ||
     typeof requirements.extra['version'] !== 'string'
   ) {
-    throw new Error(
-      'createPaymentProof: payment requirement is missing extra.name/extra.version — cannot build the EIP-712 domain',
+    throw new CommerceError(
+      'INPUT_INVALID',
+      'createPaymentProof: payment requirement is missing extra.name/extra.version, so the EIP-712 domain cannot be built',
     );
   }
 
   const chainId = chainIdFromCaip2(requirements.network);
   if (chainId === undefined) {
-    throw new Error(
-      `createPaymentProof: network "${requirements.network}" is not a CAIP-2 eip155 identifier — cannot determine the chain id to sign against`,
+    throw new CommerceError(
+      'INPUT_INVALID',
+      `createPaymentProof: network "${requirements.network}" is not a CAIP-2 eip155 identifier, so there is no chain id to sign against`,
     );
   }
 
   const account = privateKeyToAccount(options.buyerPrivateKey);
-  // `rpcUrl` is part of the frozen `CreatePaymentProofOptions` shape for
-  // interface parity with other providers, but the `exact`/EVM scheme signs
-  // fully offline: the chain id comes from the CAIP-2 network identifier
-  // (matching what the facilitator's verify()/settle() compute), and the
-  // nonce is a fresh random value, not one read from chain state.
-  void options.rpcUrl;
 
   const nonce = options.overrides?.nonce ?? randomNonce();
   const nowSeconds = Math.floor(Date.now() / 1000);
-  // 0, matching the SDK's own v2 client: `validAfter` exists to delay an
-  // authorisation, and nothing here wants one delayed. A backdated value would
-  // only paper over clock skew that `validBefore` has to tolerate anyway.
+  // 0, as in the SDK's own v2 client: nothing here wants the authorization
+  // delayed
   const validAfter = options.overrides?.validAfter ?? 0;
   const validBefore = options.overrides?.validBefore ?? nowSeconds + requirements.maxTimeoutSeconds;
   const to = getAddress((options.overrides?.payTo ?? requirements.payTo) as `0x${string}`);
@@ -110,10 +97,9 @@ export async function createPaymentProof(options: CreatePaymentProofOptions): Pr
     },
   });
 
-  // v2 carries the selected requirement back to the server as `accepted`
-  // rather than repeating scheme/network at the top level. The server treats
-  // that echo as untrusted and verifies against its own copy; it is on the
-  // wire so a stateless facilitator knows which offer was taken.
+  // v2 echoes the chosen requirement back as `accepted` so a stateless
+  // facilitator knows which offer was taken. The gateway verifies against its
+  // own copy.
   const payload: PaymentPayload = {
     x402Version: X402_VERSION,
     accepted: requirements as PaymentRequirements,

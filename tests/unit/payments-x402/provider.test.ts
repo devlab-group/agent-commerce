@@ -3,17 +3,16 @@ import type {
   CommerceResource,
   PaymentContext,
   PaymentVerificationContext,
-} from '../../../src/core/index.js';
-import { isCommerceError } from '../../../src/core/index.js';
-import { createPaymentProof } from '../../../src/payments/x402/client.js';
+} from '../../../src/core';
+import { isCommerceError } from '../../../src/core';
+import { createPaymentProof } from '../../../src/payments/x402/client';
 import {
   createX402PaymentProvider,
   type X402ProviderOptions,
-} from '../../../src/payments/x402/provider.js';
+} from '../../../src/payments/x402/provider';
 
-// A plausible-looking RPC URL nobody is listening on — connection refuses
-// immediately, letting us exercise the "provider unavailable" path without
-// booting a real chain (that happens in tests/e2e/payment).
+// Nothing listens here, so the connection is refused at once and the "provider
+// unavailable" path runs without a chain (tests/e2e/payment boots a real one)
 const UNREACHABLE_RPC_URL = 'http://127.0.0.1:18999';
 
 const ASSET = '0x5FbDB2315678afecb367f032d93F642f64180aa3' as const;
@@ -66,11 +65,12 @@ describe('descriptor', () => {
     expect(provider.descriptor.supportedSpec).toContain('x402/v2');
     expect(provider.descriptor.capabilities).toContain('exact-evm');
     expect(provider.descriptor.capabilities).toContain('eip-3009');
-    // Alpha honesty: things this provider does NOT implement must be listed.
+    // What the provider does not implement must be listed
     expect(provider.descriptor.unsupported).toContain('svm');
     expect(provider.descriptor.unsupported).toContain('permit2');
-    // The deployment this provider is configured for is part of its
-    // description: chain id 84532 alone cannot say local from Base Sepolia.
+    expect(provider.descriptor.unsupported).toContain('deferred scheme');
+    // The descriptor names the deployment, because chain id 84532 alone cannot
+    // tell local from Base Sepolia
     expect(provider.descriptor.capabilities).toContain('local-facilitator');
     expect(provider.descriptor.capabilities).toContain('mode=local');
   });
@@ -97,10 +97,8 @@ describe('createRequirement', () => {
     expect(accepted['amount']).toBe('10000'); // 0.01 * 10^6
     expect(accepted['payTo']).toBe(PAY_TO);
     expect(accepted['asset']).toBe(ASSET);
-    // extra.name/version is REQUIRED — the facilitator must never
-    // need an on-chain version() call to build the EIP-712 domain.
-    // assetTransferMethod pins the one method this provider settles, so a
-    // conforming client never picks the Permit2 path.
+    // extra.name/version are required so the EIP-712 domain needs no on-chain
+    // version() call, and assetTransferMethod keeps clients off Permit2
     expect(accepted['extra']).toEqual({
       name: 'MockUSDC',
       version: '2',
@@ -116,9 +114,7 @@ describe('createRequirement', () => {
     expect(envelope).toBeDefined();
     expect(envelope?.['x402Version']).toBe(2);
     expect(requirement.challenge.version).toBe('2');
-    // The envelope must offer the same requirement the challenge lists —
-    // two surfaces describing different offers is the drift this exists to
-    // prevent.
+    // The envelope must offer the same requirement the challenge lists
     expect(envelope?.['accepts']).toEqual(requirement.challenge.accepts);
 
     const resource = envelope?.['resource'] as Record<string, unknown>;
@@ -145,7 +141,7 @@ describe('createRequirement', () => {
   });
 });
 
-describe('verify — rejects before touching the network', () => {
+describe('verify - rejects before touching the network', () => {
   it('rejects a payload that is not valid base64/JSON', async () => {
     const provider = makeProvider();
     const requirement = await provider.createRequirement(paymentContext());
@@ -205,7 +201,6 @@ describe('verify — rejects before touching the network', () => {
     const expired = { ...requirement, expiresAt: new Date(Date.now() - 60_000).toISOString() };
     const proof = await createPaymentProof({
       buyerPrivateKey: BUYER_PRIVATE_KEY,
-      rpcUrl: UNREACHABLE_RPC_URL,
       accepts: requirement.challenge.accepts[0] as Record<string, unknown>,
     });
     const result = await provider.verify({
@@ -258,11 +253,10 @@ describe('verify — rejects before touching the network', () => {
     const requirement = await provider.createRequirement(paymentContext());
     const proof = await createPaymentProof({
       buyerPrivateKey: BUYER_PRIVATE_KEY,
-      rpcUrl: UNREACHABLE_RPC_URL,
       accepts: requirement.challenge.accepts[0] as Record<string, unknown>,
     });
-    // Decode, tamper with the network, re-encode using the same wire format.
-    // v2 carries the network on the accepted requirement, not at the top level.
+    // Decode, change the network, re-encode. v2 carries the network on the
+    // accepted requirement, not at the top level.
     const decoded = JSON.parse(Buffer.from(proof, 'base64').toString('utf8'));
     decoded.accepted.network = 'eip155:8453';
     const tamperedProof = Buffer.from(JSON.stringify(decoded)).toString('base64');
@@ -282,7 +276,6 @@ describe('verify — rejects before touching the network', () => {
     const requirement = await provider.createRequirement(paymentContext());
     const proof = await createPaymentProof({
       buyerPrivateKey: BUYER_PRIVATE_KEY,
-      rpcUrl: UNREACHABLE_RPC_URL,
       accepts: requirement.challenge.accepts[0] as Record<string, unknown>,
       overrides: { payTo: '0x00000000000000000000000000000000000000ee' },
     });
@@ -301,7 +294,6 @@ describe('verify — rejects before touching the network', () => {
     const requirement = await provider.createRequirement(paymentContext());
     const proof = await createPaymentProof({
       buyerPrivateKey: BUYER_PRIVATE_KEY,
-      rpcUrl: UNREACHABLE_RPC_URL,
       accepts: requirement.challenge.accepts[0] as Record<string, unknown>,
       overrides: { value: '1' }, // far less than the required 10000
     });
@@ -320,7 +312,6 @@ describe('verify — rejects before touching the network', () => {
     const requirement = await provider.createRequirement(paymentContext());
     const proof = await createPaymentProof({
       buyerPrivateKey: BUYER_PRIVATE_KEY,
-      rpcUrl: UNREACHABLE_RPC_URL,
       accepts: requirement.challenge.accepts[0] as Record<string, unknown>,
     });
     const decoded = JSON.parse(Buffer.from(proof, 'base64').toString('utf8'));
@@ -337,12 +328,11 @@ describe('verify — rejects before touching the network', () => {
     expect(result.rejectionReason).toBe('malformed_payment_payload');
   });
 
-  it('rejects a malformed "from" address in the authorisation', async () => {
+  it('rejects a malformed "from" address in the authorization', async () => {
     const provider = makeProvider();
     const requirement = await provider.createRequirement(paymentContext());
     const proof = await createPaymentProof({
       buyerPrivateKey: BUYER_PRIVATE_KEY,
-      rpcUrl: UNREACHABLE_RPC_URL,
       accepts: requirement.challenge.accepts[0] as Record<string, unknown>,
     });
     const decoded = JSON.parse(Buffer.from(proof, 'base64').toString('utf8'));
@@ -359,7 +349,7 @@ describe('verify — rejects before touching the network', () => {
     expect(result.rejectionReason).toBe('malformed_payment_payload');
   });
 
-  it('rejects a v1 payload — this gateway speaks x402 v2 only', async () => {
+  it('rejects a v1 payload - this gateway speaks x402 v2 only', async () => {
     const provider = makeProvider();
     const requirement = await provider.createRequirement(paymentContext());
     const v1Payload = {
@@ -390,7 +380,7 @@ describe('verify — rejects before touching the network', () => {
     expect(result.rejectionReason).toBe('malformed_payment_payload');
   });
 
-  it('rejects a Permit2 payload — the challenge asks for EIP-3009', async () => {
+  it('rejects a Permit2 payload - the challenge asks for EIP-3009', async () => {
     const provider = makeProvider();
     const requirement = await provider.createRequirement(paymentContext());
     const permit2Payload = {
@@ -435,7 +425,7 @@ describe('verify — rejects before touching the network', () => {
     expect(result.asset).toBeUndefined();
   });
 
-  it('never throws for a garbage submission — always returns a rejected result', async () => {
+  it('never throws for a garbage submission - always returns a rejected result', async () => {
     const provider = makeProvider();
     const requirement = await provider.createRequirement(paymentContext());
     const verifyOnce = (payload: string) =>
@@ -457,13 +447,12 @@ describe('verify — rejects before touching the network', () => {
   });
 });
 
-describe('verify — provider unavailable', () => {
+describe('verify - provider unavailable', () => {
   it('throws PAYMENT_PROVIDER_UNAVAILABLE when the RPC is unreachable for an otherwise well-formed payload', async () => {
     const provider = makeProvider(); // rpcUrl points at nothing listening
     const requirement = await provider.createRequirement(paymentContext());
     const proof = await createPaymentProof({
       buyerPrivateKey: BUYER_PRIVATE_KEY,
-      rpcUrl: UNREACHABLE_RPC_URL,
       accepts: requirement.challenge.accepts[0] as Record<string, unknown>,
     });
 
@@ -480,13 +469,12 @@ describe('verify — provider unavailable', () => {
   });
 });
 
-describe('createX402PaymentProvider — payTo dev-address guard', () => {
+describe('createX402PaymentProvider - payTo dev-address guard', () => {
   const PUBLIC_RPC_URL = 'https://mainnet.base.org';
   const DEV_PAY_TO = PAY_TO; // fixture PAY_TO is a well-known Anvil address
   const REAL_PAY_TO = `0x${'f0'.repeat(20)}` as const;
-  // Deliberately NOT a well-known Anvil key, so this isolates the payTo
-  // guard from assertDevKeyIsLocalOnly — the "own facilitator key + dev
-  // payTo" case.
+  // Not a well-known Anvil key, so only the payTo guard can fire: the "own
+  // facilitator key, dev payTo" case
   const REAL_FACILITATOR_KEY = `0x${'22'.repeat(32)}` as const;
 
   it("throws CONFIG_INVALID for a dev payTo against a public RPC, even with the operator's own facilitator key", () => {
@@ -511,10 +499,8 @@ describe('createX402PaymentProvider — payTo dev-address guard', () => {
   });
 
   it('throws CONFIG_INVALID for a dev payTo against a public RPC even with a remote facilitator', () => {
-    // The case this covers: an operator who brings their own
-    // facilitator key (so assertDevKeyIsLocalOnly has nothing to say) but
-    // forgets to change payTo away from the local-demo default. The
-    // destination guard must not depend on facilitator.mode.
+    // An operator brings their own facilitator key but keeps the local-demo
+    // payTo. The destination guard must not depend on facilitator.mode.
     expect(() =>
       makeProvider({
         rpcUrl: PUBLIC_RPC_URL,
@@ -535,7 +521,7 @@ describe('createX402PaymentProvider — payTo dev-address guard', () => {
     }
   });
 
-  it('accepts a real (non-dev) payTo against a public RPC — the correct configuration', () => {
+  it('accepts a real (non-dev) payTo against a public RPC - the correct configuration', () => {
     expect(() =>
       makeProvider({
         rpcUrl: PUBLIC_RPC_URL,

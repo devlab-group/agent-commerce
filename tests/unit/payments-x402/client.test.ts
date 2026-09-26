@@ -1,6 +1,6 @@
 import { verifyTypedData } from 'viem';
 import { describe, expect, it } from 'vitest';
-import { createPaymentProof } from '../../../src/payments/x402/client.js';
+import { createPaymentProof } from '../../../src/payments/x402/client';
 
 const BUYER_PRIVATE_KEY =
   '0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a' as const;
@@ -8,8 +8,8 @@ const BUYER_ADDRESS = '0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC';
 const ASSET = '0x5FbDB2315678afecb367f032d93F642f64180aa3' as const;
 const PAY_TO = '0x70997970C51812dc3A010C7d01b50e0d17dc79C8' as const;
 
-// x402 v2 `PaymentRequirements`: the resource description moved up to the
-// `PaymentRequired` envelope, and `maxAmountRequired` became `amount`.
+// An x402 v2 `PaymentRequirements`: the resource description lives on the
+// `PaymentRequired` envelope, and the price is `amount`
 const ACCEPTS = {
   scheme: 'exact',
   network: 'eip155:84532',
@@ -32,7 +32,6 @@ describe('createPaymentProof', () => {
   it('returns a base64 string decoding to a well-formed x402 PaymentPayload', async () => {
     const proof = await createPaymentProof({
       buyerPrivateKey: BUYER_PRIVATE_KEY,
-      rpcUrl: 'http://127.0.0.1:1', // unused for the exact/EVM scheme — never contacted
       accepts: ACCEPTS,
     });
 
@@ -49,7 +48,6 @@ describe('createPaymentProof', () => {
   it('produces a signature that verifies against the EIP-712 domain the provider will check', async () => {
     const proof = await createPaymentProof({
       buyerPrivateKey: BUYER_PRIVATE_KEY,
-      rpcUrl: 'http://127.0.0.1:1',
       accepts: ACCEPTS,
     });
     const decoded = decode(proof);
@@ -97,7 +95,6 @@ describe('createPaymentProof', () => {
   it('applies a value override', async () => {
     const proof = await createPaymentProof({
       buyerPrivateKey: BUYER_PRIVATE_KEY,
-      rpcUrl: 'http://127.0.0.1:1',
       accepts: ACCEPTS,
       overrides: { value: '1' },
     });
@@ -108,7 +105,6 @@ describe('createPaymentProof', () => {
     const wrongRecipient = '0x00000000000000000000000000000000000000ee';
     const proof = await createPaymentProof({
       buyerPrivateKey: BUYER_PRIVATE_KEY,
-      rpcUrl: 'http://127.0.0.1:1',
       accepts: ACCEPTS,
       overrides: { payTo: wrongRecipient },
     });
@@ -121,7 +117,6 @@ describe('createPaymentProof', () => {
     const nonce = `0x${'ab'.repeat(32)}` as const;
     const proof = await createPaymentProof({
       buyerPrivateKey: BUYER_PRIVATE_KEY,
-      rpcUrl: 'http://127.0.0.1:1',
       accepts: ACCEPTS,
       overrides: { nonce },
     });
@@ -132,7 +127,6 @@ describe('createPaymentProof', () => {
     const validBefore = Math.floor(Date.now() / 1000) - 10; // already expired
     const proof = await createPaymentProof({
       buyerPrivateKey: BUYER_PRIVATE_KEY,
-      rpcUrl: 'http://127.0.0.1:1',
       accepts: ACCEPTS,
       overrides: { validBefore },
     });
@@ -142,12 +136,10 @@ describe('createPaymentProof', () => {
   it('generates a fresh random nonce per call when none is supplied', async () => {
     const proofA = await createPaymentProof({
       buyerPrivateKey: BUYER_PRIVATE_KEY,
-      rpcUrl: 'http://127.0.0.1:1',
       accepts: ACCEPTS,
     });
     const proofB = await createPaymentProof({
       buyerPrivateKey: BUYER_PRIVATE_KEY,
-      rpcUrl: 'http://127.0.0.1:1',
       accepts: ACCEPTS,
     });
     expect(decode(proofA).payload.authorization.nonce).not.toBe(
@@ -160,7 +152,6 @@ describe('createPaymentProof', () => {
     await expect(
       createPaymentProof({
         buyerPrivateKey: BUYER_PRIVATE_KEY,
-        rpcUrl: 'http://127.0.0.1:1',
         accepts: withoutExtra,
       }),
     ).rejects.toThrow(/extra/);

@@ -25,11 +25,11 @@ import {
   type PaymentSubmission,
   type PaymentVerificationContext,
   systemClock,
-} from '../../core/index.js';
-import { parseCanonicalAmount } from '../x402/amount.js';
-import type { X402FacilitatorConfig } from '../x402/guardrails.js';
-import { createX402PaymentProvider } from '../x402/provider.js';
-import { computeReplayKey } from '../x402/replay-key.js';
+} from '../../core';
+import { parseCanonicalAmount } from '../x402/amount';
+import type { X402FacilitatorConfig } from '../x402/guardrails';
+import { createX402PaymentProvider, DEFAULT_IDS } from '../x402/provider';
+import { computeReplayKey } from '../x402/replay-key';
 import {
   isMppNetwork,
   MPP_DEFAULT_NETWORK,
@@ -37,12 +37,9 @@ import {
   MPP_NETWORKS,
   MPP_PROFILE,
   MPP_SPEC_DRAFTS,
-} from './constants.js';
-import { MPP_DESCRIPTOR } from './descriptor.js';
+} from './constants';
+import { MPP_DESCRIPTOR } from './descriptor';
 
-const DEFAULT_IDS: IdGenerator = {
-  next: (prefix?: string) => `${prefix ? `${prefix}_` : ''}${crypto.randomUUID()}`,
-};
 const DEFAULT_CHALLENGE_TTL_SECONDS = 300;
 
 export interface MppProviderOptions {
@@ -64,7 +61,7 @@ export interface MppProviderOptions {
   readonly facilitator: X402FacilitatorConfig;
   /** Must be `true` before anything settles on a mainnet. Never a default */
   readonly allowMainnet?: boolean;
-  /** Must be `true` to settle on a mainnet through a facilitator that takes no credential */
+  /** Required on mainnet when facilitator auth is `none` */
   readonly allowUnauthenticatedFacilitator?: boolean;
   readonly logger?: Logger;
   /**
@@ -176,6 +173,9 @@ export function createMppProviderWithSettlement(
   const recipient = getAddress(options.recipient);
   const asset = getAddress(options.asset);
   const ids = options.ids ?? DEFAULT_IDS;
+  // The settlement provider's terms are fixed at construction, so one passing
+  // check covers every later challenge
+  let settlementTermsChecked = false;
 
   // charge() requires a callback even though this provider never invokes the
   // mppx broadcast path. Settlement is delegated to the x402 provider.
@@ -216,7 +216,10 @@ export function createMppProviderWithSettlement(
       });
     }
     // Reject a mismatched settlement requirement before the buyer signs
-    await settlementRequirement(context);
+    if (!settlementTermsChecked) {
+      await settlementRequirement(context);
+      settlementTermsChecked = true;
+    }
     const expires = new Date(clock.now().getTime() + ttlSeconds * 1000);
     const challenge = Challenge.fromMethod(Methods.charge, {
       secretKey: options.challengeSecret,
@@ -249,7 +252,7 @@ export function createMppProviderWithSettlement(
         provider: 'mpp',
         version: MPP_SPEC_DRAFTS.core,
         accepts: [challenge],
-        // Serialised here because the HTTP route, which sends it as
+        // Serialized here because the HTTP route, which sends it as
         // `WWW-Authenticate`, is in the main entry and cannot import mppx
         envelope: { wwwAuthenticate: Challenge.serialize(challenge) },
       },
@@ -309,7 +312,9 @@ export function createMppProviderWithSettlement(
     // The facilitator check runs before the pipeline reserves the replay key,
     // so an outage throws the x402 provider's retryable error and uses up
     // nothing, and a refusal is an ordinary rejection
-    const x402Verification = await settlement.verify(await toX402Context(context));
+    const x402Verification = await settlement.verify(
+      await toX402Context(context, credential.payload as Types.AuthorizationPayload),
+    );
     if (x402Verification.status !== 'verified') {
       return rejected(requirement, x402Verification.rejectionReason ?? 'settlement_rejected');
     }
@@ -334,8 +339,9 @@ export function createMppProviderWithSettlement(
   // The same payment as an x402 requirement and `exact` submission
   async function toX402Context(
     context: PaymentVerificationContext,
+    authorization: Types.AuthorizationPayload,
   ): Promise<PaymentVerificationContext> {
-    const { requestId, requirement, resource, submission } = context;
+    const { requestId, requirement, resource } = context;
     const x402Requirement = await settlementRequirement({
       requestId,
       resource,
@@ -347,7 +353,7 @@ export function createMppProviderWithSettlement(
       requestId,
       resource,
       requirement: x402Requirement,
-      submission: toX402Submission(x402Requirement, submission),
+      submission: toX402Submission(x402Requirement, authorization),
     };
   }
 
@@ -377,11 +383,13 @@ export function createMppProviderWithSettlement(
       );
     }
 
-    // verify() already ran the facilitator check, and x402 settle checks again
-    // before broadcasting. A throw may follow a broadcast, so it propagates and
-    // the pipeline marks the payment uncertain.
+    // verify() already ran the facilitator check, and the facilitator checks
+    // again before broadcasting. A throw may follow a broadcast, so it
+    // propagates and the pipeline marks the payment uncertain.
+    const authorization = Credential.deserialize(submission.payload)
+      .payload as Types.AuthorizationPayload;
     const settled = await settlement.settle({
-      ...(await toX402Context({ requestId, requirement, resource, submission })),
+      ...(await toX402Context({ requestId, requirement, resource, submission }, authorization)),
       verification: { ...verification, provider: 'x402' },
     });
     const result: PaymentResult = {
@@ -392,7 +400,7 @@ export function createMppProviderWithSettlement(
       replayKey: verification.replayKey,
     };
     if (settled.status !== 'settled' || settled.externalReference === undefined) return result;
-    // Serialised for the HTTP route's `Payment-Receipt` header
+    // Serialized for the HTTP route's `Payment-Receipt` header
     const receipt = Receipt.from({
       method: MPP_PROFILE.method,
       reference: settled.externalReference,
@@ -443,11 +451,9 @@ function bindingMismatch(
 // Rewrap the MPP authorization as the x402 `exact` payload expected by settlement
 function toX402Submission(
   x402Requirement: PaymentRequirement,
-  submission: PaymentSubmission,
+  authorization: Types.AuthorizationPayload,
 ): PaymentSubmission {
-  const { signature, from, to, value, validAfter, validBefore, nonce } = Credential.deserialize(
-    submission.payload,
-  ).payload as Types.AuthorizationPayload;
+  const { signature, from, to, value, validAfter, validBefore, nonce } = authorization;
   const payment = {
     x402Version: 2,
     accepted: x402Requirement.challenge.accepts[0],

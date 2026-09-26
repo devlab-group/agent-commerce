@@ -1,33 +1,23 @@
 /**
- * Starts the deterministic local Anvil chain used by the demo and by the
- * payment unit/E2E suites: chain id 84532 — REQUIRED, because the gateway
- * advertises the CAIP-2 network `eip155:84532` and the chain id a buyer signs
- * against is read straight off it. The whole point of this chain is to let the
- * unmodified x402 SDK talk to a private network under a public chain's id.
+ * Starts the local Anvil chain for the demo and the payment test suites. The
+ * chain id defaults to 84532 because the gateway advertises `eip155:84532` and
+ * the buyer's signature is bound to that id.
  *
- * Lives in `src/payments/x402/local-chain` (not `scripts/chain`,
- * which has no `node_modules` of its own — see `deploy-engine.ts`'s header
- * comment) so both `scripts/chain/start-anvil.ts` (the CLI) and this
- * package's own test suites can import it without a `tsc` `rootDir`
- * conflict, since it uses only Node built-ins either way.
- *
- * Note on `--block-time`: an earlier revision of this chain's spec called
- * for `--block-time 0`, but the installed Anvil build (`1.1.0-nightly`)
- * rejects a zero block time ("Duration must be greater than 0"). Omitting
- * `--block-time` entirely gives Anvil's default behaviour instead — mine a
- * new block immediately for every transaction — which is the deterministic,
- * no-empty-blocks behaviour the flag was asked for in the first place, and
- * matches `docker/chain.Dockerfile`, which already omits it for the same
- * reason.
+ * `--block-time` is omitted on purpose: Anvil then mines a block for each
+ * transaction and none in between, and some Anvil builds reject
+ * `--block-time 0`.
  */
 import { type ChildProcess, spawn } from 'node:child_process';
+import { setTimeout as sleep } from 'node:timers/promises';
+import { CommerceError } from '../../../core';
+import { LOCAL_CHAIN_ID } from '../networks';
 
 export interface StartAnvilOptions {
   readonly chainId?: number;
   readonly host?: string;
   readonly port?: number;
   readonly silent?: boolean;
-  /** Max time to wait for the RPC to answer before giving up. */
+  /** Max time to wait for the RPC to answer before giving up */
   readonly readyTimeoutMs?: number;
 }
 
@@ -38,14 +28,13 @@ export interface AnvilHandle {
   stop(): Promise<void>;
 }
 
-export const DEFAULT_LOCAL_CHAIN_ID = 84532;
 const DEFAULT_HOST = '0.0.0.0';
 const DEFAULT_PORT = 8545;
 const DEFAULT_READY_TIMEOUT_MS = 30_000;
 
-/** Starts anvil as a child process and resolves once its RPC answers. */
+/** Starts anvil as a child process and resolves once its RPC answers */
 export async function startAnvil(options: StartAnvilOptions = {}): Promise<AnvilHandle> {
-  const chainId = options.chainId ?? DEFAULT_LOCAL_CHAIN_ID;
+  const chainId = options.chainId ?? LOCAL_CHAIN_ID;
   const host = options.host ?? DEFAULT_HOST;
   const port = options.port ?? DEFAULT_PORT;
   const silent = options.silent ?? true;
@@ -99,6 +88,8 @@ async function waitForRpc(rpcUrl: string, timeoutMs: number): Promise<void> {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_chainId', params: [] }),
+        // A hung probe must not run past the deadline
+        signal: AbortSignal.timeout(Math.max(1, deadline - Date.now())),
       });
       if (response.ok) {
         const body = (await response.json()) as { result?: string };
@@ -107,9 +98,13 @@ async function waitForRpc(rpcUrl: string, timeoutMs: number): Promise<void> {
     } catch (err) {
       lastError = err;
     }
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    await sleep(200);
   }
-  throw new Error(`Timed out waiting for anvil RPC at ${rpcUrl} to answer.`, { cause: lastError });
+  throw new CommerceError(
+    'INTERNAL_ERROR',
+    `Timed out waiting for anvil RPC at ${rpcUrl} to answer.`,
+    { cause: lastError },
+  );
 }
 
 async function stopAnvil(child: ChildProcess): Promise<void> {
@@ -117,7 +112,7 @@ async function stopAnvil(child: ChildProcess): Promise<void> {
   await new Promise<void>((resolve) => {
     child.once('exit', () => resolve());
     child.kill('SIGTERM');
-    // Force-kill if it doesn't exit promptly.
+    // Force-kill if it doesn't exit promptly
     setTimeout(() => {
       if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
     }, 5000).unref();

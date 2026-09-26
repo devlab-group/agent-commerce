@@ -1,40 +1,34 @@
 /**
- * Deploys MockUSDC to the local deterministic chain and funds the demo
- * accounts, using `viem` directly against the compiled Foundry artifact (no
- * `forge script`, so this works from a plain Node process with no Foundry
- * broadcast state to manage).
- *
- * This module lives inside `src/payments/x402` because it is x402 local-chain
- * machinery, next to the facilitator and chain constants it shares. It is
- * deliberately *not* re-exported from the package's public `src/index.ts` —
- * deploying a mock token is a demo affordance, not part of the shipped API.
- * Only `scripts/chain/deploy.ts` imports it, by relative path.
+ * Deploys MockUSDC to the local chain and funds the demo accounts with viem and
+ * the compiled artifact, so it runs from plain Node without `forge script`.
+ * `scripts/chain/deploy.ts` and the tests use it; no package entry exports it.
  */
-import { formatUnits } from 'viem';
-import { parseCanonicalAmount } from '../amount.js';
-import { createLocalFacilitatorClient, createLocalPublicClient, LOCAL_CHAIN_ID } from '../chain.js';
+import { erc20Abi, formatUnits } from 'viem';
+import { CommerceError } from '../../../core';
+import { parseCanonicalAmount } from '../amount';
+import { createLocalFacilitatorClient, createLocalPublicClient } from '../chain';
+import { LOCAL_CHAIN_ID } from '../networks';
 import {
   ANVIL_WELL_KNOWN_ACCOUNTS,
   DEV_KEY_LABEL,
   LOCAL_BUYER_ACCOUNT,
   LOCAL_FACILITATOR_ACCOUNT,
   LOCAL_MERCHANT_ACCOUNT,
-} from './accounts.js';
-import { loadMockUsdcArtifact } from './artifact.js';
+} from './accounts';
+import { loadMockUsdcArtifact } from './artifact';
 
 const MOCK_USDC_NAME = 'MockUSDC';
 const MOCK_USDC_VERSION = '2';
 const MOCK_USDC_DECIMALS = 6;
 
-/** Native-gas top-up threshold. Anvil funds its 10 default accounts with far
- * more than this out of the box; this only matters if someone runs anvil
- * with a non-default account/balance configuration. */
+// Native-gas top-up threshold. Anvil's default accounts start far above it, so
+// it matters only for a non-default account or balance configuration.
 const MIN_GAS_BALANCE_WEI = 1_000_000_000_000_000_000n; // 1 ETH
 const GAS_TOP_UP_WEI = 10_000_000_000_000_000_000n; // 10 ETH
 
 export interface DeployLocalChainOptions {
   readonly rpcUrl: string;
-  /** Canonical decimal display amount, e.g. "100.00". */
+  /** Canonical decimal display amount, e.g. "100.00" */
   readonly buyerInitialBalance: string;
   readonly log?: (message: string) => void;
 }
@@ -50,19 +44,9 @@ export interface DeployLocalChainResult {
   readonly buyer: { readonly address: `0x${string}`; readonly privateKey: `0x${string}` };
   readonly facilitator: { readonly address: `0x${string}`; readonly privateKey: `0x${string}` };
   readonly buyerInitialBalance: string;
-  /** False when an existing deployment on the same live chain was reused. */
+  /** False when an existing deployment on the same running chain was reused */
   readonly freshlyDeployed: boolean;
 }
-
-const ERC20_READ_ABI = [
-  {
-    type: 'function',
-    name: 'balanceOf',
-    stateMutability: 'view',
-    inputs: [{ name: 'account', type: 'address' }],
-    outputs: [{ name: '', type: 'uint256' }],
-  },
-] as const;
 
 export async function deployLocalChain(
   options: DeployLocalChainOptions,
@@ -73,7 +57,8 @@ export async function deployLocalChain(
 
   const chainId = await publicClient.getChainId();
   if (chainId !== LOCAL_CHAIN_ID) {
-    throw new Error(
+    throw new CommerceError(
+      'CONFIG_INVALID',
       `Local chain at ${options.rpcUrl} reports chain id ${chainId}, expected ${LOCAL_CHAIN_ID}. ` +
         'Start it with "npm run chain:start" (anvil --chain-id 84532 ...).',
     );
@@ -90,8 +75,8 @@ export async function deployLocalChain(
   if (asset) {
     const code = await publicClient.getCode({ address: asset });
     if (!code || code === '0x') {
-      // Manifest pointed at a dead deployment (e.g. anvil was restarted) —
-      // fall through and redeploy fresh below.
+      // The manifest names a deployment that is gone (anvil restarted), so
+      // redeploy below
       asset = undefined;
     }
   }
@@ -106,7 +91,10 @@ export async function deployLocalChain(
     });
     const receipt = await publicClient.waitForTransactionReceipt({ hash });
     if (receipt.status !== 'success' || !receipt.contractAddress) {
-      throw new Error(`MockUSDC deployment transaction failed (tx ${hash}).`);
+      throw new CommerceError(
+        'INTERNAL_ERROR',
+        `MockUSDC deployment transaction failed (tx ${hash}).`,
+      );
     }
     asset = receipt.contractAddress;
     freshlyDeployed = true;
@@ -115,18 +103,18 @@ export async function deployLocalChain(
     log(`Reusing existing MockUSDC deployment at ${asset}`);
   }
 
-  // --- ensure gas for buyer / merchant -------------------------------------
+  // --- ensure gas for buyer and merchant ------------------------------------
   await ensureGas(facilitatorClient, publicClient, LOCAL_MERCHANT_ACCOUNT.address, log);
   await ensureGas(facilitatorClient, publicClient, LOCAL_BUYER_ACCOUNT.address, log);
 
   // --- mint buyer up to the target balance ---------------------------------
   const targetBaseUnits = parseCanonicalAmount(options.buyerInitialBalance, MOCK_USDC_DECIMALS);
-  const currentBaseUnits = (await publicClient.readContract({
+  const currentBaseUnits = await publicClient.readContract({
     address: asset,
-    abi: ERC20_READ_ABI,
+    abi: erc20Abi,
     functionName: 'balanceOf',
     args: [LOCAL_BUYER_ACCOUNT.address],
-  })) as bigint;
+  });
 
   if (currentBaseUnits < targetBaseUnits) {
     const shortfall = targetBaseUnits - currentBaseUnits;
@@ -154,7 +142,10 @@ export async function deployLocalChain(
     });
     const receipt = await publicClient.waitForTransactionReceipt({ hash });
     if (receipt.status !== 'success') {
-      throw new Error(`Minting MockUSDC to the buyer failed (tx ${hash}).`);
+      throw new CommerceError(
+        'INTERNAL_ERROR',
+        `Minting MockUSDC to the buyer failed (tx ${hash}).`,
+      );
     }
   } else {
     log(`Buyer already holds >= ${options.buyerInitialBalance} ${MOCK_USDC_NAME}, skipping mint.`);
@@ -191,32 +182,22 @@ async function ensureGas(
   await publicClient.waitForTransactionReceipt({ hash });
 }
 
-/** Exposed for the deploy CLI's startup log — never logs private key material. */
+/** Addresses only, for the deploy CLI's startup log. Never includes a private key */
 export function describeWellKnownAccounts(): string {
   return ANVIL_WELL_KNOWN_ACCOUNTS.map((a, i) => `  (${i}) ${a.address}`).join('\n');
 }
 
 /**
- * Refuses to proceed when the caller has no known MockUSDC deployment (no
- * `existingAsset`) but the facilitator key has already sent transactions on
- * this chain — the account is only ever used by the deploy CLI (see
- * accounts.ts: index 0 is "deployer / local facilitator signer"), so a
- * nonzero nonce with nothing to reuse means an independent deployer (e.g.
- * `docker compose up`'s own chain-deploy service) already used this exact
- * chain without this process knowing. Deploying blindly here would create a
- * second, differently-addressed MockUSDC via CREATE, and anything already
- * configured against the first deployment (a running gateway, a container's
- * own manifest) would keep pointing at it while this process's manifest
- * silently starts pointing at the new one — "doctor reports healthy against
- * the mismatched address" is the failure this refuses instead of causing.
+ * Refuses when the caller knows no MockUSDC deployment (`existingAsset` is
+ * absent) but the deployer account (index 0) has already sent transactions on
+ * this chain. That means another deployer, such as the compose `chain-deploy`
+ * service, used the chain first. A second deployment would get a different
+ * address, and whatever is configured against the first would silently
+ * disagree with the new manifest.
  *
- * Deliberately NOT enforced inside `deployLocalChain` itself: that function
- * is also used by test/tooling code that legitimately deploys more than one
- * independent MockUSDC on the same chain on purpose (e.g. the E2E suite's
- * "wrong asset" case). This is opt-in policy for the CLI entry point only —
- * `scripts/chain/deploy.ts` — which is what an operator actually runs, and
- * the only place "an unexplained deployment already exists" should halt
- * rather than deploy silently.
+ * The deploy CLI (`scripts/chain/deploy.ts`) enforces this; `deployLocalChain`
+ * does not, because the E2E suites deploy a second MockUSDC on purpose for
+ * their wrong-asset cases.
  */
 export async function assertNoUnknownDeployment(
   rpcUrl: string,
@@ -230,13 +211,14 @@ export async function assertNoUnknownDeployment(
   });
   if (deployerNonce === 0) return;
 
-  throw new Error(
+  throw new CommerceError(
+    'CONFIG_INVALID',
     `Local facilitator account ${LOCAL_FACILITATOR_ACCOUNT.address} has already sent ` +
       `${deployerNonce} transaction(s) on ${rpcUrl}, but no known MockUSDC deployment was given. ` +
-      'Refusing to deploy a second one — its address would not match what anything already ' +
+      'Refusing to deploy a second one: its address would not match what anything already ' +
       'configured against the existing deployment expects. Point LOCAL_CHAIN_MANIFEST at the ' +
       "manifest that already knows this chain's deployment (e.g. the one docker-compose's " +
-      'chain-deploy service wrote) so this run can reuse it, or restart anvil for a genuinely ' +
-      'fresh chain ("npm run chain:start").',
+      'chain-deploy service wrote) so this run can reuse it, or restart anvil for a fresh chain ' +
+      '("npm run chain:start").',
   );
 }

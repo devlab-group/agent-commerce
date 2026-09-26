@@ -1,40 +1,28 @@
-import { createPublicClient, http } from 'viem';
+import { createPublicClient, erc20Abi, http } from 'viem';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createLocalFacilitatorClient } from '../../../src/payments/x402/chain.js';
+import { createLocalFacilitatorClient } from '../../../src/payments/x402/chain';
 import {
   ANVIL_WELL_KNOWN_ACCOUNTS,
   DEV_KEY_LABEL,
   LOCAL_BUYER_ACCOUNT,
   LOCAL_FACILITATOR_ACCOUNT,
-} from '../../../src/payments/x402/local-chain/accounts.js';
-import { type AnvilHandle, startAnvil } from '../../../src/payments/x402/local-chain/anvil.js';
+} from '../../../src/payments/x402/local-chain/accounts';
+import { type AnvilHandle, startAnvil } from '../../../src/payments/x402/local-chain/anvil';
 import {
   buildFreshArtifactViaForge,
   isForgeAvailable,
   loadMockUsdcArtifact,
   readCommittedArtifactIfPresent,
-} from '../../../src/payments/x402/local-chain/artifact.js';
+} from '../../../src/payments/x402/local-chain/artifact';
 import {
   assertNoUnknownDeployment,
   deployLocalChain,
   describeWellKnownAccounts,
-} from '../../../src/payments/x402/local-chain/deploy-engine.js';
+} from '../../../src/payments/x402/local-chain/deploy-engine';
 
-// These tests exercise the *real* deploy engine against a real, ephemeral,
-// local Anvil process (not a mock) — it is deployment tooling, not business
-// logic, and the only honest way to cover it is to actually run it. This is
-// still a "unit"-tier test: the chain is private to this test file, started
-// and torn down here, never touching a public network.
-
-const BALANCE_OF_ABI = [
-  {
-    type: 'function',
-    name: 'balanceOf',
-    stateMutability: 'view',
-    inputs: [{ name: 'account', type: 'address' }],
-    outputs: [{ name: '', type: 'uint256' }],
-  },
-] as const;
+// The real deploy engine against a real, ephemeral Anvil. Deployment tooling is
+// only covered by running it, and the chain is private to this file, so this
+// stays an offline unit test.
 
 describe('local-chain well-known accounts', () => {
   it('has exactly 3 accounts with distinct addresses', () => {
@@ -72,10 +60,8 @@ describe('MockUSDC artifact', () => {
     expect(overloads).toHaveLength(2);
   });
 
-  // Guards against the committed contracts/artifacts/MockUSDC.json (the
-  // fallback Docker's chain-deploy step uses, since that image has no
-  // Foundry) silently rotting when MockUSDC.sol changes. Skips gracefully
-  // when forge isn't installed; must run in CI, where it is.
+  // Catches a committed contracts/artifacts/MockUSDC.json that does not match
+  // MockUSDC.sol. Skips without forge; CI installs it.
   it.runIf(isForgeAvailable())(
     'committed artifact matches a fresh forge build (regenerate with "npx tsx scripts/chain/build-artifact.ts" if this fails)',
     () => {
@@ -89,19 +75,16 @@ describe('MockUSDC artifact', () => {
 });
 
 /**
- * The three suites below spawn a real ephemeral Anvil, so they need Foundry on
- * PATH. Skipping when it is absent keeps `npm test` runnable on a machine that
- * only has Node — but a *silent* skip is how a lost CI step reads as a pass, so
- * in CI a missing toolchain is a hard failure instead.
- *
- * `forge` is the probe because Foundry installs `forge` and `anvil` as one
- * toolchain, and `isForgeAvailable` already exists for the artifact check.
+ * The suites below spawn a real Anvil, so they need Foundry on PATH. Without
+ * it they skip, so `npm test` runs on a Node-only machine, except in CI, where
+ * a silent skip would hide a lost setup step. `forge` is the probe because
+ * Foundry installs it together with `anvil`.
  */
 const HAS_FOUNDRY = isForgeAvailable();
 if (!HAS_FOUNDRY && process.env['CI']) {
   throw new Error(
     'Foundry is not on PATH, but CI is set. These suites spawn a real Anvil and ' +
-      'must not be skipped in CI — add foundry-rs/foundry-toolchain to the job.',
+      'must not be skipped in CI - add foundry-rs/foundry-toolchain to the job.',
   );
 }
 const describeWithAnvil = HAS_FOUNDRY ? describe : describe.skip;
@@ -121,7 +104,7 @@ describeWithAnvil('deployLocalChain (real ephemeral anvil)', () => {
     const client = createPublicClient({ transport: http(anvil.rpcUrl) });
     return client.readContract({
       address: asset,
-      abi: BALANCE_OF_ABI,
+      abi: erc20Abi,
       functionName: 'balanceOf',
       args: [address],
     });
@@ -173,7 +156,7 @@ describeWithAnvil('deployLocalChain (real ephemeral anvil)', () => {
   }, 30_000);
 });
 
-describeWithAnvil('deployLocalChain — wrong chain id', () => {
+describeWithAnvil('deployLocalChain - wrong chain id', () => {
   it('rejects when pointed at a chain that is not id 84532', async () => {
     const wrongChain = await startAnvil({ port: 18714, chainId: 31337, silent: true });
     try {
@@ -187,13 +170,8 @@ describeWithAnvil('deployLocalChain — wrong chain id', () => {
 });
 
 describeWithAnvil('assertNoUnknownDeployment', () => {
-  // The CLI-only guard (see its own doc comment in deploy-engine.ts) against
-  // the failure dx's investigation found: running `npm run chain:deploy` on the
-  // host while a dockerised stack already deployed to the same chain, with
-  // no local manifest to tell this process about it — which used to deploy a
-  // second, differently-addressed MockUSDC silently. Not exercised through
-  // deployLocalChain itself, which legitimately deploys more than one
-  // independent token on purpose elsewhere (e.g. the E2E "wrong asset" case).
+  // The CLI-only guard against a host `npm run chain:deploy` silently deploying
+  // a second MockUSDC to a chain a dockerized stack already deployed to
   it('does nothing when an existingAsset is already known, regardless of nonce', async () => {
     const freshChain = await startAnvil({ port: 18715, silent: true });
     try {
@@ -219,9 +197,7 @@ describeWithAnvil('assertNoUnknownDeployment', () => {
   it('throws when the facilitator key has already transacted on this chain and no existingAsset is known', async () => {
     const freshChain = await startAnvil({ port: 18717, silent: true });
     try {
-      // Simulate an independent deployer having already used this exact
-      // chain (e.g. docker-compose's own chain-deploy step) without this
-      // process's manifest knowing about it.
+      // Another deployer has used this chain, and no manifest here knows it
       const facilitatorClient = createLocalFacilitatorClient(
         freshChain.rpcUrl,
         LOCAL_FACILITATOR_ACCOUNT.privateKey,

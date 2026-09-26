@@ -1,19 +1,14 @@
 /**
- * Deterministic decimal <-> base-unit conversion.
+ * Exact conversion from display amounts ("0.01" USDC) to the integer base
+ * units x402 and EIP-3009 carry ("10000" at 6 decimals).
  *
- * `DecimalAmount` (see src/core) is a decimal string in
- * *display* units ("0.01" USDC). x402 / EIP-3009 need base units (integer
- * string, e.g. "10000" for 0.01 USDC at 6 decimals). This conversion must
- * never go through a JS `number` — floating point cannot represent most
- * decimal fractions exactly, and a silently-rounded payment amount is a
- * security bug in a payment provider.
- *
- * viem's own `parseUnits` rounds silently when given more fractional digits
- * than `decimals` supports; we need a hard error instead (a merchant asking
- * for "0.0000001" against a 6-decimal asset is a configuration bug, not a
- * roundable amount), so this module implements its own strict parser.
+ * It never goes through a JS `number`, which cannot represent most decimal
+ * fractions. viem's `parseUnits` is not used either: it silently rounds excess
+ * fractional digits, and "0.0000001" against a 6-decimal asset is a
+ * configuration bug that must be refused, not rounded. The reverse direction
+ * is viem's `formatUnits`, which is exact.
  */
-import { CommerceError } from '../../core/index.js';
+import { CommerceError } from '../../core';
 
 const DECIMAL_STRING_PATTERN = /^\d+(?:\.\d+)?$/;
 
@@ -51,28 +46,5 @@ export function parseCanonicalAmount(amount: string, decimals: number): bigint {
 
   const paddedFraction = fractionPart.padEnd(decimals, '0');
   const combined = `${integerPart}${paddedFraction}`;
-  // Strip leading zeros so BigInt doesn't choke on e.g. "007" — BigInt() is
-  // fine with leading zeros in decimal strings, but normalise defensively.
   return BigInt(combined);
-}
-
-/**
- * Formats base units back into a canonical decimal display string.
- *
- * Exact (no rounding is possible going from integer base units to a wider
- * decimal representation), so this is safe to implement directly.
- */
-export function formatCanonicalAmount(baseUnits: bigint, decimals: number): string {
-  if (!Number.isInteger(decimals) || decimals < 0) {
-    throw new CommerceError('INTERNAL_ERROR', `Invalid asset decimals: ${decimals}`);
-  }
-  const negative = baseUnits < 0n;
-  const abs = negative ? -baseUnits : baseUnits;
-  const digits = abs.toString().padStart(decimals + 1, '0');
-  const integerPart = digits.slice(0, digits.length - decimals) || '0';
-  const fractionPart = digits.slice(digits.length - decimals).replace(/0+$/, '');
-  const sign = negative ? '-' : '';
-  return fractionPart.length > 0
-    ? `${sign}${integerPart}.${fractionPart}`
-    : `${sign}${integerPart}`;
 }

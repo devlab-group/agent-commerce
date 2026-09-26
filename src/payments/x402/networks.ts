@@ -1,43 +1,36 @@
 /**
- * The networks this gateway will settle on, as data.
+ * The networks this gateway settles on, as data: the chain id to sign against,
+ * a display name, and whether real money is involved.
  *
- * x402 v2 identifies a network by its CAIP-2 id, so the only thing an
- * operator has to change to move between environments is that string. What
- * the code needs on top of it — the chain id to sign against, a name a human
- * recognises, and whether real money is involved — lives here rather than
- * being derived at each call site.
+ * A registry rather than "parse any `eip155:*`": the chain id parses from any
+ * such string, but whether it is a mainnet does not, and the guardrails key off
+ * that. An unknown id is refused at startup instead of passing as a testnet.
  *
- * A registry rather than "parse any `eip155:*`" on purpose. The chain id is
- * parseable from any such string, but `mainnet` is not, and every guardrail in
- * `guardrails.ts` keys off it. An unknown id is refused at startup instead of
- * being quietly treated as a testnet.
- *
- * Base Sepolia and the local dev chain share the id `eip155:84532`: the local
- * chain deliberately reuses Base Sepolia's chain id so the unmodified x402 SDK
- * can talk to it. Nothing may infer "public network" from the network id alone
- * — that is what `resolveDeploymentMode` and the Anvil probe in `provider.ts`
- * are for.
+ * The local dev chain runs under Base Sepolia's `eip155:84532`, so nothing may
+ * infer "public network" from the id alone. `resolveDeploymentMode` derives
+ * the mode from the facilitator too, and the provider's health check confirms
+ * that a local facilitator's node is Anvil.
  */
-import { CommerceError } from '../../core/index.js';
+import { CommerceError } from '../../core';
+
+/** Chain id of the local dev chain, which Base Sepolia uses too */
+export const LOCAL_CHAIN_ID = 84532;
 
 export interface NetworkProfile {
-  /** CAIP-2 identifier, e.g. `eip155:84532`. */
+  /** CAIP-2 identifier, e.g. `eip155:84532` */
   readonly id: string;
-  /** Signed into the buyer's EIP-712 domain. */
+  /** Signed into the buyer's EIP-712 domain */
   readonly chainId: number;
   readonly displayName: string;
   readonly kind: 'testnet' | 'mainnet';
   /**
-   * The USDC deployment this network is expected to settle in, with the EIP-712
-   * domain the token actually reports. Enforced only on mainnet (see
-   * `guardrails.ts`) — a testnet is where a mock token is a legitimate thing to
-   * point at.
+   * The USDC deployment this network settles in, with the EIP-712 domain the
+   * token reports. Enforced on mainnet only, since a testnet may use a mock
+   * token.
    *
-   * `name` is not decorative and is not the symbol: it is signed into every
-   * buyer's EIP-712 domain, and the two USDC deployments disagree. Base Sepolia
-   * reports `"USDC"`; Base mainnet reports `"USD Coin"`. Configure the wrong
-   * one and every payment is refused `invalid_exact_evm_token_name_mismatch`
-   * after the buyer has signed. Read back from the contracts, not assumed.
+   * `name` is the signed EIP-712 domain name, not the symbol, and the two
+   * deployments differ: `"USDC"` on Base Sepolia, `"USD Coin"` on Base. The
+   * values were read back from the contracts.
    */
   readonly canonicalAsset?: {
     readonly symbol: string;
@@ -95,13 +88,10 @@ export function requireNetworkProfile(id: string, path: string): NetworkProfile 
 }
 
 /**
- * What this deployment actually is, as opposed to what it is called.
- *
- * `local` is a property of the *facilitator*, not the network: settling
- * through the in-process facilitator against a dev node is local regardless of
- * the CAIP-2 id that node answers to. This distinction is the whole reason
- * diagnostics can say `eip155:84532` without claiming to be on public Base
- * Sepolia.
+ * What a deployment is, as opposed to the network it names. `local` comes from
+ * the facilitator: the in-process facilitator makes a deployment local whatever
+ * CAIP-2 id it is configured with, which lets diagnostics show `eip155:84532`
+ * without claiming public Base Sepolia.
  */
 export type DeploymentMode = 'local' | 'testnet' | 'mainnet';
 
@@ -113,8 +103,8 @@ export function resolveDeploymentMode(
   return profile.kind;
 }
 
-/** The banner an operator must not be able to miss. Never printed for anything else. */
-export const LIVE_MAINNET_BANNER = 'LIVE MAINNET MODE — REAL FUNDS';
+// The banner an operator must not miss. Printed for mainnet only
+const LIVE_MAINNET_BANNER = 'LIVE MAINNET MODE - REAL FUNDS';
 
 export function describeDeploymentMode(mode: DeploymentMode): string {
   return mode === 'mainnet' ? LIVE_MAINNET_BANNER : mode.toUpperCase();

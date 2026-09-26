@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { computeReplayKey } from '../../../src/payments/x402/replay-key.js';
+import { computeReplayKey } from '../../../src/payments/x402/replay-key';
 
 const BASE = {
   chainId: 84532,
@@ -9,17 +9,15 @@ const BASE = {
 };
 
 describe('computeReplayKey', () => {
-  it('is deterministic for the same authorisation', () => {
+  it('is deterministic for the same authorization', () => {
     const a = computeReplayKey(BASE);
     const b = computeReplayKey(BASE);
     expect(a).toBe(b);
   });
 
-  it('is independent of any request id — it only depends on the authorisation', () => {
-    // The function signature does not even accept a requestId; this test
-    // documents that guarantee by proving two logically-identical
-    // authorisations (as would be replayed against two different requests)
-    // produce the same key.
+  it('is independent of any request id - it only depends on the authorization', () => {
+    // The signature takes no request id. Two identical authorizations, as a
+    // replay on two requests would present, must produce the same key.
     const first = computeReplayKey(BASE);
     const second = computeReplayKey({ ...BASE });
     expect(first).toBe(second);

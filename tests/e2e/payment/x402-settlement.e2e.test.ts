@@ -1,14 +1,8 @@
 /**
- * Deterministic end-to-end x402 settlement suite.
- *
- * Boots a real, ephemeral local Anvil chain, deploys a real MockUSDC
- * contract, and drives the real `createX402PaymentProvider` through
- * `verify()`/`settle()` against it. Every assertion here is about *actual*
- * on-chain state — ERC-20 balance deltas and real transaction receipts —
- * never a mocked or console-only "payment successful".
- *
- * Never touches a public RPC or public chain: the chain is spawned by this
- * file and torn down in `afterAll`.
+ * End-to-end x402 settlement against an ephemeral Anvil this file spawns and
+ * tears down, with a real MockUSDC and the real `createX402PaymentProvider`.
+ * Settlement assertions read on-chain state: ERC-20 balance deltas and
+ * transaction receipts. No public RPC or chain is touched.
  */
 
 import { x402Client } from '@x402/core/client';
@@ -21,20 +15,16 @@ import type {
   PaymentContext,
   PaymentProvider,
   PaymentRequirement,
-} from '../../../src/core/index.js';
-import { isCommerceError } from '../../../src/core/index.js';
-import { createPaymentProof, createX402PaymentProvider } from '../../../src/payments/x402/index.js';
-import {
-  type AnvilHandle,
-  deployLocalChain,
-  startAnvil,
-} from '../../../src/payments/x402/testing.js';
-import { startLossyRpc } from '../../fixtures/x402/lossy-rpc.js';
+} from '../../../src/core';
+import { isCommerceError } from '../../../src/core';
+import { createPaymentProof, createX402PaymentProvider } from '../../../src/payments/x402';
+import { type AnvilHandle, deployLocalChain, startAnvil } from '../../../src/payments/x402/testing';
+import { startLossyRpc } from '../../fixtures/x402/lossy-rpc';
 import {
   assertBalanceDelta,
   expectRealSettlement,
   readBalances,
-} from '../../fixtures/x402/settlement.js';
+} from '../../fixtures/x402/settlement';
 
 const PORT = 18790;
 
@@ -72,7 +62,7 @@ async function balances() {
   });
 }
 
-/** Builds a requirement + a validly-signed proof for it in one step. */
+// Builds a requirement and a validly signed proof for it
 async function buildValidProof(
   amount: string,
   overrides?: Parameters<typeof createPaymentProof>[0]['overrides'],
@@ -80,7 +70,6 @@ async function buildValidProof(
   const requirement = await provider.createRequirement(paymentContext({ amount }));
   const proof = await createPaymentProof({
     buyerPrivateKey: deployment.buyer.privateKey,
-    rpcUrl: anvil.rpcUrl,
     accepts: requirement.challenge.accepts[0] as Record<string, unknown>,
     ...(overrides !== undefined ? { overrides } : {}),
   });
@@ -106,7 +95,7 @@ afterAll(async () => {
   await anvil?.stop();
 });
 
-describe('x402 settlement — real local chain', () => {
+describe('x402 settlement - real local chain', () => {
   it('1. valid payment: buyer balance decreases, merchant balance increases, real tx on chain', async () => {
     const { requirement, proof } = await buildValidProof('1.00');
     const before = await balances();
@@ -241,7 +230,7 @@ describe('x402 settlement — real local chain', () => {
   it('5. wrong recipient is rejected before settlement', async () => {
     const before = await balances();
     const { requirement, proof } = await buildValidProof('1.00', {
-      payTo: deployment.buyer.address, // a real, valid address — just not the merchant
+      payTo: deployment.buyer.address, // a valid address, just not the merchant
     });
     const verifyResult = await provider.verify({
       requestId: requirement.requestId,
@@ -259,7 +248,7 @@ describe('x402 settlement — real local chain', () => {
     const before = await balances();
     const { requirement, proof } = await buildValidProof('1.00');
     const decoded = JSON.parse(Buffer.from(proof, 'base64').toString('utf8'));
-    // v2 carries the network on the accepted requirement, not at the top level.
+    // v2 carries the network on the accepted requirement, not at the top level
     decoded.accepted.network = 'eip155:8453';
     const tamperedProof = Buffer.from(JSON.stringify(decoded)).toString('base64');
 
@@ -276,7 +265,7 @@ describe('x402 settlement — real local chain', () => {
   });
 
   it('7. another deployed token is rejected in the requirement or buyer proof', async () => {
-    // Deploy a second, independent MockUSDC instance on the same live chain.
+    // A second, independent MockUSDC on the same chain
     const otherToken = await deployLocalChain({
       rpcUrl: anvil.rpcUrl,
       buyerInitialBalance: '10.00',
@@ -305,7 +294,6 @@ describe('x402 settlement — real local chain', () => {
 
     const proofForOtherAsset = await createPaymentProof({
       buyerPrivateKey: deployment.buyer.privateKey,
-      rpcUrl: anvil.rpcUrl,
       accepts: { ...accepted, asset: otherToken.asset },
     });
     const buyerProofResult = await provider.verify({
@@ -333,10 +321,9 @@ describe('x402 settlement — real local chain', () => {
     });
     expect(verify1.status).toBe('verified');
 
-    // The same authorisation presented against a *different* request id,
-    // before anything has settled — the case the gateway's own replay
-    // reservation exists for, because nothing on chain has happened yet and
-    // both requests could otherwise proceed to settle concurrently.
+    // The same authorization on a different request id before anything has
+    // settled: nothing on chain can stop it yet, so only the gateway's
+    // reservation can
     const verifyAgainBeforeSettling = await provider.verify({
       requestId: 'req-replay-2',
       resource: RESOURCE,
@@ -359,10 +346,9 @@ describe('x402 settlement — real local chain', () => {
     const afterFirst = await balances();
     assertBalanceDelta(before, afterFirst, 2_000_000n);
 
-    // Once the nonce is spent on chain, verify() catches the replay too — a
-    // second line of defence, not the first. It only exists after settlement,
-    // which is why the gateway reserves the replayKey before settling rather
-    // than relying on this.
+    // Once the nonce is spent on chain, verify() catches the replay too. That
+    // check exists only after settlement, which is why the gateway reserves
+    // the replay key before settling.
     const verifyAfterSettling = await provider.verify({
       requestId: 'req-replay-3',
       resource: RESOURCE,
@@ -371,9 +357,9 @@ describe('x402 settlement — real local chain', () => {
     });
     expect(verifyAfterSettling.status).toBe('rejected');
 
-    // And settling the already-spent authorisation anyway moves nothing.
-    // MockUSDC's custom revert is not in the SDK's ABI, so the SDK reports its
-    // catch-all, which the provider must treat as an unknown outcome
+    // Settling the spent authorization anyway moves nothing. MockUSDC's custom
+    // revert is not in the SDK's ABI, so the SDK reports its catch-all, which
+    // the provider must treat as an unknown outcome.
     const settle2 = provider.settle({
       requestId: 'req-replay-2',
       resource: RESOURCE,
@@ -386,12 +372,12 @@ describe('x402 settlement — real local chain', () => {
     );
 
     const afterSecond = await balances();
-    // Merchant balance must NOT have increased a second time.
+    // The merchant balance must not increase a second time
     expect(afterSecond.merchant).toBe(afterFirst.merchant);
     expect(afterSecond.buyer).toBe(afterFirst.buyer);
   });
 
-  it('9. an expired authorisation (validBefore in the past) is rejected before settlement', async () => {
+  it('9. an expired authorization (validBefore in the past) is rejected before settlement', async () => {
     const before = await balances();
     const expiredValidBefore = Math.floor(Date.now() / 1000) - 60;
     const { requirement, proof } = await buildValidProof('1.00', {
@@ -409,11 +395,9 @@ describe('x402 settlement — real local chain', () => {
     expect(after).toEqual(before);
   });
 
-  it('9b. an authorisation that is not yet valid (validAfter in the future) is rejected before settlement', async () => {
-    // The mirror image of test 9, and the half that had no test: EIP-3009
-    // bounds an authorisation at both ends, `MockUSDC` enforces both, and the
-    // SDK has its own `ErrValidAfterInFuture`. Untested enforcement is
-    // indistinguishable from absent enforcement.
+  it('9b. an authorization that is not yet valid (validAfter in the future) is rejected before settlement', async () => {
+    // The mirror image of test 9: EIP-3009 bounds an authorization at both
+    // ends, and `MockUSDC` and the SDK (`ErrValidAfterInFuture`) enforce both
     const before = await balances();
     const notYetValid = Math.floor(Date.now() / 1000) + 3600;
     const { requirement, proof } = await buildValidProof('1.00', { validAfter: notYetValid });
@@ -444,7 +428,6 @@ describe('x402 settlement — real local chain', () => {
     const requirement = await unavailableProvider.createRequirement(paymentContext());
     const proof = await createPaymentProof({
       buyerPrivateKey: deployment.buyer.privateKey,
-      rpcUrl: anvil.rpcUrl,
       accepts: requirement.challenge.accepts[0] as Record<string, unknown>,
     });
 
@@ -483,7 +466,6 @@ describe('x402 settlement — real local chain', () => {
       const requirement = await lossyProvider.createRequirement(paymentContext());
       const proof = await createPaymentProof({
         buyerPrivateKey: deployment.buyer.privateKey,
-        rpcUrl: anvil.rpcUrl,
         accepts: requirement.challenge.accepts[0] as Record<string, unknown>,
       });
       const submission = { method: 'x402' as const, payload: proof };
@@ -522,19 +504,15 @@ describe('x402 settlement — real local chain', () => {
   });
 
   it('12. interop: a payment built by the x402 SDK client settles against this gateway', async () => {
-    // Everything else in this file signs through our own `createPaymentProof`,
-    // which exists so the negative cases can produce deliberately-wrong
-    // authorisations. That makes it possible for our challenge and our
-    // verification to agree with each other and with nothing else. This case
-    // hands the challenge to the SDK's own client — the same one an
-    // off-the-shelf buyer agent uses — and settles what it produces.
+    // Every other case signs with our own `createPaymentProof`, so our
+    // challenge and verification could agree with each other and nothing else.
+    // This one pays with the SDK's own client, as an off-the-shelf buyer would.
     const buyer = privateKeyToAccount(deployment.buyer.privateKey);
     const client = new x402Client();
     registerExactEvmScheme(client, { signer: buyer, networks: ['eip155:84532'] });
-    // MockUSDC is not one of the assets the SDK recognises by default, and the
-    // default spend controls allow only recognised ones. A real buyer would
-    // allowlist the asset it intends to pay in; the demo chain's token has no
-    // entry to allowlist, so controls are off for this local-only case.
+    // The SDK's default spend controls allow only assets it recognizes, and
+    // MockUSDC is not one, so they are off for this local-only case. A real
+    // buyer would allowlist its asset.
     client.setSpendControls(false);
 
     const requirement = await provider.createRequirement(paymentContext({ amount: '1.00' }));

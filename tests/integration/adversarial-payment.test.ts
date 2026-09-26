@@ -1,18 +1,16 @@
 /**
- * Adversarial payment scenarios that only mean anything above the unit level.
+ * Adversarial payment cases that need the pipeline, the store or a real HTTP
+ * facilitator. The provider's own negative cases run against a real chain in
+ * `tests/e2e/payment`. Covered here:
  *
- * The provider's own negative cases (wrong amount, wrong recipient, wrong
- * network, wrong asset, tampered payload, expired authorisation) are covered
- * against a real chain in `tests/e2e/payment`. What is here is the set that
- * needs the *pipeline*, the *store* or a real *HTTP facilitator* to be
- * meaningful:
+ * - two identical requests in flight at once
+ * - the same authorization replayed after a process restart
+ * - a malformed PAYMENT-SIGNATURE, refused before the backend is called
+ * - a facilitator that answers 401, 500, or a 200 that is not a verify response
+ * - a facilitator that refuses the payment with a 400 and a reason
  *
- * - two identical requests genuinely in flight at once
- * - the same authorisation replayed after the process restarts
- * - a facilitator that answers 401, 500, or with something unparseable
- *
- * Deterministic and offline: the facilitator is a loopback HTTP server this
- * file starts, and the chain is not involved at all.
+ * Offline: the facilitator is a loopback HTTP server started here, and no
+ * chain is involved.
  */
 
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -21,7 +19,7 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { parseConfig } from '../../src/config/index.js';
+import { parseConfig } from '../../src/config';
 import type {
   AdapterDescriptor,
   PaymentContext,
@@ -31,12 +29,12 @@ import type {
   PaymentSettlementContext,
   PaymentVerificationContext,
   ReceiptStore,
-} from '../../src/core/index.js';
-import { isCommerceError } from '../../src/core/index.js';
-import { createGateway, type GatewayInstance } from '../../src/gateway/index.js';
-import { LOCAL_FACILITATOR_ACCOUNT } from '../../src/payments/x402/local-chain/accounts.js';
-import { createX402PaymentProvider } from '../../src/payments/x402/provider.js';
-import { createSqliteReceiptStore } from '../../src/storage/receipts/index.js';
+} from '../../src/core';
+import { isCommerceError } from '../../src/core';
+import { createGateway, type GatewayInstance } from '../../src/gateway';
+import { LOCAL_FACILITATOR_ACCOUNT } from '../../src/payments/x402/local-chain/accounts';
+import { createX402PaymentProvider } from '../../src/payments/x402/provider';
+import { createSqliteReceiptStore } from '../../src/storage/receipts';
 
 const RESOURCE_ID = 'paid_report';
 const VALID_PROOF = 'valid-proof';
@@ -84,11 +82,9 @@ const descriptor: AdapterDescriptor = {
 };
 
 /**
- * A provider whose `settle()` is slow and counted.
- *
- * Slow on purpose: the replay reservation is a race, and a settle that returns
- * instantly lets two "concurrent" requests serialise by accident, which would
- * make this test pass without proving anything.
+ * A provider whose `settle()` is slow and counted. An instant settle would let
+ * two "concurrent" requests serialize by accident, and the replay test would
+ * pass without proving anything.
  */
 function countingProvider(settleDelayMs: number): PaymentProvider & { settleCalls: () => number } {
   let settleCalls = 0;
@@ -113,7 +109,7 @@ function countingProvider(settleDelayMs: number): PaymentProvider & { settleCall
             provider: 'x402',
             amount: '0.01',
             currency: 'USDC',
-            // One authorisation, one key — the whole point of the reservation.
+            // One authorization, one key
             replayKey: '0xreplaykey',
           }
         : {
@@ -182,14 +178,13 @@ describe('adversarial: duplicate concurrent request', () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  it('settles exactly once when the same authorisation arrives twice at the same moment', async () => {
+  it('settles exactly once when the same authorization arrives twice at the same moment', async () => {
     const provider = countingProvider(150);
     const { gateway } = await buildGateway(join(dir, 'concurrent.sqlite'), provider);
 
-    // Genuinely in flight together: neither has finished settling when the
-    // other starts. On-chain nonce checks cannot help here — the first
-    // transaction has not landed yet — so the gateway's own reservation is the
-    // only thing standing between one authorisation and two deliveries.
+    // Both are in flight together. The first transaction has not landed, so no
+    // on-chain nonce check helps; only the gateway's reservation stops one
+    // authorization buying two deliveries.
     const [a, b] = await Promise.all([invoke(gateway, VALID_PROOF), invoke(gateway, VALID_PROOF)]);
 
     const statuses = [a.statusCode, b.statusCode].sort();
@@ -202,21 +197,21 @@ describe('adversarial: duplicate concurrent request', () => {
     await gateway.close();
   });
 
-  it('still refuses the authorisation after the gateway restarts', async () => {
-    // The reservation lives in SQLite, not in memory. A process restart is the
-    // cheapest way to find out whether that is true.
+  it('still refuses the authorization after the gateway restarts', async () => {
+    // The reservation lives in SQLite, so it must survive a restart
     const storePath = join(dir, 'restart.sqlite');
 
     const first = await buildGateway(storePath, countingProvider(0));
     expect((await invoke(first.gateway, VALID_PROOF)).statusCode).toBe(200);
     await first.gateway.close();
 
-    const second = await buildGateway(storePath, countingProvider(0));
+    const secondProvider = countingProvider(0);
+    const second = await buildGateway(storePath, secondProvider);
     const replayed = await invoke(second.gateway, VALID_PROOF);
     expect(replayed.statusCode).toBe(409);
     expect(replayed.json().code).toBe('PAYMENT_REPLAYED');
-    // And nothing was settled the second time round.
-    expect(second.gateway).toBeDefined();
+    // Refused at the replay reservation, which runs before settle()
+    expect(secondProvider.settleCalls()).toBe(0);
     await second.gateway.close();
   });
 
@@ -264,26 +259,44 @@ describe('adversarial: a facilitator that does not answer properly', () => {
 
   async function verifyThrough(handler: (res: ServerResponse) => void): Promise<unknown> {
     respond = handler;
-    const { createRemoteFacilitatorBinding } = await import(
-      '../../src/payments/x402/facilitator.js'
-    );
+    const { createRemoteFacilitatorBinding } = await import('../../src/payments/x402/facilitator');
     const binding = createRemoteFacilitatorBinding({ url, auth: { type: 'none' } });
     const session = binding.open();
     try {
-      // Shapes do not matter: the transport answer is what is under test.
-      await session.verify({} as never, {} as never);
-      return { threw: false, transportFailed: session.transportFailed() };
+      // Only the transport answer is under test, not the payload shape
+      const result = await session.verify({} as never, {} as never);
+      return { threw: false, transportFailed: session.transportFailed(), result };
     } catch (err) {
       return { threw: true, transportFailed: session.transportFailed(), err };
     }
   }
 
   it('treats 401 as the facilitator failing, not the buyer', async () => {
-    // A credential problem is ours. Recording it against the payer would blame
-    // them for our misconfiguration and burn an authorisation nothing checked.
+    // A credential problem is ours and must not be recorded against the payer
     const outcome = (await verifyThrough((res) => {
       res.writeHead(401, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ error: 'unauthorized' }));
+    })) as { threw: boolean; transportFailed: boolean };
+    expect(outcome.threw).toBe(true);
+    expect(outcome.transportFailed).toBe(true);
+  });
+
+  it('reads a 400 with an invalidReason as a verdict against the payment', async () => {
+    const outcome = (await verifyThrough((res) => {
+      res.writeHead(400, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ isValid: false, invalidReason: 'insufficient_funds' }));
+    })) as { threw: boolean; transportFailed: boolean; result?: unknown };
+    expect(outcome).toEqual({
+      threw: false,
+      transportFailed: false,
+      result: { isValid: false, invalidReason: 'insufficient_funds' },
+    });
+  });
+
+  it('never reads a 401 as a verdict, even with a verify-shaped body', async () => {
+    const outcome = (await verifyThrough((res) => {
+      res.writeHead(401, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ isValid: false, invalidReason: 'unauthorized' }));
     })) as { threw: boolean; transportFailed: boolean };
     expect(outcome.threw).toBe(true);
     expect(outcome.transportFailed).toBe(true);
@@ -299,8 +312,7 @@ describe('adversarial: a facilitator that does not answer properly', () => {
   });
 
   it('refuses to read a verdict out of an unparseable 200', async () => {
-    // The dangerous shape: a 200 that is not a verify response. Anything that
-    // guessed "looks fine" here would deliver a paid resource on no evidence.
+    // A 200 that is not a verify response must never deliver the resource
     const outcome = (await verifyThrough((res) => {
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end('<html>gateway timeout</html>');
@@ -315,7 +327,7 @@ describe('adversarial: a facilitator that does not answer properly', () => {
       res.end(JSON.stringify({ totally: 'unrelated' }));
     })) as { threw: boolean; transportFailed: boolean; err?: unknown };
     expect(outcome.threw).toBe(true);
-    // Never `isValid: true` by omission.
+    // Never `isValid: true` by omission
     if (outcome.err !== undefined) {
       expect(isCommerceError(outcome.err) || outcome.err instanceof Error).toBe(true);
     }

@@ -48,7 +48,7 @@ contract MockUSDCTest is Test {
         (v, r, s) = vm.sign(signerKey, digest);
     }
 
- // --- metadata ---------------------------------------------------------------------
+    // --- metadata ---------------------------------------------------------------------
 
     function test_metadata() public view {
         assertEq(token.name(), "MockUSDC");
@@ -58,7 +58,7 @@ contract MockUSDCTest is Test {
         assertTrue(token.DOMAIN_SEPARATOR() != bytes32(0));
     }
 
- // --- valid authorisation -----------------------------------------------------------
+    // --- valid authorization -----------------------------------------------------------
 
     function test_validAuthorization_transfers_and_emits() public {
         bytes32 nonce = keccak256("nonce-1");
@@ -100,7 +100,7 @@ contract MockUSDCTest is Test {
         assertEq(token.balanceOf(merchant), merchantBefore + value);
     }
 
- // --- replay -------------------------------------------------------------------------
+    // --- replay -------------------------------------------------------------------------
 
     function test_replayedNonce_reverts() public {
         bytes32 nonce = keccak256("nonce-replay");
@@ -117,7 +117,7 @@ contract MockUSDCTest is Test {
         token.transferWithAuthorization(buyer, merchant, value, validAfter, validBefore, nonce, v, r, s);
     }
 
- // --- expiry / not-yet-valid ----------------------------------------------------------
+    // --- expiry / not-yet-valid ----------------------------------------------------------
 
     function test_expiredAuthorization_reverts() public {
         bytes32 nonce = keccak256("nonce-expired");
@@ -145,7 +145,7 @@ contract MockUSDCTest is Test {
         token.transferWithAuthorization(buyer, merchant, value, validAfter, validBefore, nonce, v, r, s);
     }
 
- // --- wrong signer ---------------------------------------------------------------------
+    // --- wrong signer ---------------------------------------------------------------------
 
     function test_wrongSigner_reverts() public {
         bytes32 nonce = keccak256("nonce-wrong-signer");
@@ -154,7 +154,7 @@ contract MockUSDCTest is Test {
         uint256 validBefore = block.timestamp + 1 days;
 
         uint256 strangerKey = 0x51521;
- // Sign with the wrong key, but claim `buyer` as `from`.
+        // Sign with the wrong key, but claim `buyer` as `from`
         (uint8 v, bytes32 r, bytes32 s) =
             _signAuthorization(strangerKey, buyer, merchant, value, validAfter, validBefore, nonce);
 
@@ -162,10 +162,10 @@ contract MockUSDCTest is Test {
         token.transferWithAuthorization(buyer, merchant, value, validAfter, validBefore, nonce, v, r, s);
     }
 
- // --- signature malleability -----------------------------------------------------------
+    // --- signature malleability -----------------------------------------------------------
 
- /// @dev secp256k1 group order — used to derive the "other" valid (v, s) pair for the same
- /// signature (s' = n - s, v' flipped), the classic ECDSA malleability trick.
+    /// @dev secp256k1 group order, used to derive the other valid (v, s) pair for the same
+    /// signature: s' = n - s with v flipped, the classic ECDSA malleability trick
     uint256 internal constant _SECP256K1N =
         0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141;
 
@@ -178,9 +178,8 @@ contract MockUSDCTest is Test {
         (uint8 v, bytes32 r, bytes32 s) =
             _signAuthorization(buyerKey, buyer, merchant, value, validAfter, validBefore, nonce);
 
- // vm.sign already returns the canonical low-s signature; flip to the
- // mathematically-equivalent high-s one that `ecrecover` also accepts for the same
- // digest, and that Circle's FiatTokenV2 — the ABI this mock imitates — rejects.
+        // vm.sign returns the canonical low-s signature. Flip it to the equivalent high-s
+        // form, which `ecrecover` also accepts and Circle's FiatTokenV2 rejects.
         bytes32 highS = bytes32(_SECP256K1N - uint256(s));
         uint8 flippedV = v == 27 ? 28 : 27;
 

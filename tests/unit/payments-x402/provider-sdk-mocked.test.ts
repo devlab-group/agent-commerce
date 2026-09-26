@@ -1,30 +1,29 @@
 /**
- * Exercises the branches of provider.ts that depend on what the x402 SDK
- * facilitator or the underlying RPC client return — success,
- * rejection-with-reason, rejection-without-reason, and various thrown-error
- * shapes. These are mocked at the SDK/client boundary rather than driven
- * through a live chain so this stays a fast, deterministic unit test; real,
- * unmocked on-chain settlement is proven separately in tests/e2e/payment.
+ * The branches of provider.ts that depend on what the SDK facilitator returns
+ * or throws: success, rejection with and without a reason, and thrown errors of
+ * several shapes. Mocked at the SDK boundary; tests/e2e/payment covers real
+ * on-chain settlement.
  */
 
 import {
+  BaseError,
+  ContractFunctionExecutionError,
   ContractFunctionRevertedError,
   HttpRequestError,
   TimeoutError,
   WaitForTransactionReceiptTimeoutError,
 } from 'viem';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { CommerceResource, PaymentContext } from '../../../src/core/index.js';
-import { isCommerceError } from '../../../src/core/index.js';
-import { createPaymentProof } from '../../../src/payments/x402/client.js';
-import { createX402PaymentProvider } from '../../../src/payments/x402/provider.js';
+import type { CommerceResource, PaymentContext } from '../../../src/core';
+import { isCommerceError } from '../../../src/core';
+import { createPaymentProof } from '../../../src/payments/x402/client';
+import { createX402PaymentProvider } from '../../../src/payments/x402/provider';
 
 const verifyMock = vi.fn();
 const settleMock = vi.fn();
 
-// The provider drives `x402Facilitator.verify()/settle()`; the scheme
-// registration is a no-op here because the mocked facilitator answers
-// directly instead of routing to a scheme.
+// The mocked facilitator answers verify() and settle() itself, so scheme
+// registration is a no-op
 vi.mock('@x402/core/facilitator', () => ({
   x402Facilitator: class {
     verify(...args: unknown[]) {
@@ -44,7 +43,7 @@ const ASSET = '0x5FbDB2315678afecb367f032d93F642f64180aa3' as const;
 const PAY_TO = '0x70997970C51812dc3A010C7d01b50e0d17dc79C8' as const;
 const BUYER_PRIVATE_KEY =
   '0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a' as const;
-const RPC_URL = 'http://127.0.0.1:19321'; // never actually contacted — verify/settle are mocked
+const RPC_URL = 'http://127.0.0.1:19321'; // never contacted: verify and settle are mocked
 
 const RESOURCE: CommerceResource = {
   id: 'demo.report',
@@ -65,7 +64,7 @@ function paymentContext(): PaymentContext {
   };
 }
 
-describe('provider — SDK-boundary branches (mocked x402/facilitator)', () => {
+describe('provider - SDK-boundary branches (mocked x402/facilitator)', () => {
   beforeEach(() => {
     verifyMock.mockReset();
     settleMock.mockReset();
@@ -91,8 +90,8 @@ describe('provider — SDK-boundary branches (mocked x402/facilitator)', () => {
       ...paymentContext(),
       resource: resourceWithoutDescription,
     });
-    // v2 keeps the human-readable description on the PaymentRequired
-    // envelope's `resource`, not on the individual requirement.
+    // v2 keeps the description on the envelope's `resource`, not on the
+    // requirement
     const envelope = requirement.challenge.envelope as { resource: Record<string, unknown> };
     expect(envelope.resource['description']).toBe(RESOURCE.name);
   });
@@ -134,7 +133,6 @@ describe('provider — SDK-boundary branches (mocked x402/facilitator)', () => {
     const requirement = await provider.createRequirement(paymentContext());
     const proof = await createPaymentProof({
       buyerPrivateKey: BUYER_PRIVATE_KEY,
-      rpcUrl: RPC_URL,
       accepts: requirement.challenge.accepts[0] as Record<string, unknown>,
     });
     const decoded = JSON.parse(Buffer.from(proof, 'base64').toString('utf8'));
@@ -156,7 +154,6 @@ describe('provider — SDK-boundary branches (mocked x402/facilitator)', () => {
     const requirement = await provider.createRequirement(paymentContext());
     const proof = await createPaymentProof({
       buyerPrivateKey: BUYER_PRIVATE_KEY,
-      rpcUrl: RPC_URL,
       accepts: requirement.challenge.accepts[0] as Record<string, unknown>,
     });
     verifyMock.mockResolvedValueOnce({ isValid: true });
@@ -178,7 +175,6 @@ describe('provider — SDK-boundary branches (mocked x402/facilitator)', () => {
     const requirement = await provider.createRequirement(paymentContext());
     const proof = await createPaymentProof({
       buyerPrivateKey: BUYER_PRIVATE_KEY,
-      rpcUrl: RPC_URL,
       accepts: requirement.challenge.accepts[0] as Record<string, unknown>,
     });
     verifyMock.mockResolvedValueOnce({ isValid: false });
@@ -204,7 +200,6 @@ describe('provider — SDK-boundary branches (mocked x402/facilitator)', () => {
     const requirement = await provider.createRequirement(paymentContext());
     const proof = await createPaymentProof({
       buyerPrivateKey: BUYER_PRIVATE_KEY,
-      rpcUrl: RPC_URL,
       accepts: requirement.challenge.accepts[0] as Record<string, unknown>,
     });
     verifyMock.mockResolvedValueOnce({ isValid: false, invalidReason });
@@ -219,24 +214,25 @@ describe('provider — SDK-boundary branches (mocked x402/facilitator)', () => {
     expect(result.rejectionReason).toBe(expected);
   });
 
-  it('verify() returns rejected("unexpected_verify_error") when the SDK throws a non-connection error', async () => {
+  it('verify() throws PAYMENT_PROVIDER_UNAVAILABLE when the SDK throws a non-connection error', async () => {
     const provider = makeProvider();
     const requirement = await provider.createRequirement(paymentContext());
     const proof = await createPaymentProof({
       buyerPrivateKey: BUYER_PRIVATE_KEY,
-      rpcUrl: RPC_URL,
       accepts: requirement.challenge.accepts[0] as Record<string, unknown>,
     });
     verifyMock.mockRejectedValueOnce(new TypeError('something exploded'));
 
-    const result = await provider.verify({
-      requestId: 'req-1',
-      resource: RESOURCE,
-      requirement,
-      submission: { method: 'x402', payload: proof },
-    });
-    expect(result.status).toBe('rejected');
-    expect(result.rejectionReason).toBe('unexpected_verify_error');
+    await expect(
+      provider.verify({
+        requestId: 'req-1',
+        resource: RESOURCE,
+        requirement,
+        submission: { method: 'x402', payload: proof },
+      }),
+    ).rejects.toSatisfy(
+      (err: unknown) => isCommerceError(err) && err.code === 'PAYMENT_PROVIDER_UNAVAILABLE',
+    );
   });
 
   it('verify() throws PAYMENT_PROVIDER_UNAVAILABLE when the SDK throws a connection-shaped error', async () => {
@@ -244,7 +240,6 @@ describe('provider — SDK-boundary branches (mocked x402/facilitator)', () => {
     const requirement = await provider.createRequirement(paymentContext());
     const proof = await createPaymentProof({
       buyerPrivateKey: BUYER_PRIVATE_KEY,
-      rpcUrl: RPC_URL,
       accepts: requirement.challenge.accepts[0] as Record<string, unknown>,
     });
     verifyMock.mockRejectedValueOnce(new Error('fetch failed: ECONNREFUSED'));
@@ -266,7 +261,6 @@ describe('provider — SDK-boundary branches (mocked x402/facilitator)', () => {
     const requirement = await provider.createRequirement(paymentContext());
     const proof = await createPaymentProof({
       buyerPrivateKey: BUYER_PRIVATE_KEY,
-      rpcUrl: RPC_URL,
       accepts: requirement.challenge.accepts[0] as Record<string, unknown>,
     });
     settleMock.mockResolvedValueOnce({
@@ -305,7 +299,6 @@ describe('provider — SDK-boundary branches (mocked x402/facilitator)', () => {
     const requirement = await provider.createRequirement(paymentContext());
     const proof = await createPaymentProof({
       buyerPrivateKey: BUYER_PRIVATE_KEY,
-      rpcUrl: RPC_URL,
       accepts: requirement.challenge.accepts[0] as Record<string, unknown>,
     });
     settleMock.mockResolvedValueOnce({
@@ -330,7 +323,6 @@ describe('provider — SDK-boundary branches (mocked x402/facilitator)', () => {
     const requirement = await provider.createRequirement(paymentContext());
     const proof = await createPaymentProof({
       buyerPrivateKey: BUYER_PRIVATE_KEY,
-      rpcUrl: RPC_URL,
       accepts: requirement.challenge.accepts[0] as Record<string, unknown>,
     });
 
@@ -383,7 +375,6 @@ describe('provider — SDK-boundary branches (mocked x402/facilitator)', () => {
     const requirement = await provider.createRequirement(paymentContext());
     const proof = await createPaymentProof({
       buyerPrivateKey: BUYER_PRIVATE_KEY,
-      rpcUrl: RPC_URL,
       accepts: requirement.challenge.accepts[0] as Record<string, unknown>,
     });
     settleMock.mockResolvedValueOnce({
@@ -408,7 +399,6 @@ describe('provider — SDK-boundary branches (mocked x402/facilitator)', () => {
     const requirement = await provider.createRequirement(paymentContext());
     const proof = await createPaymentProof({
       buyerPrivateKey: BUYER_PRIVATE_KEY,
-      rpcUrl: RPC_URL,
       accepts: requirement.challenge.accepts[0] as Record<string, unknown>,
     });
 
@@ -436,21 +426,45 @@ describe('provider — SDK-boundary branches (mocked x402/facilitator)', () => {
     expect(reverted.asset).toBe(ASSET);
     expect(reverted.replayKey).toBe('0xreverted');
 
-    // An unclassified throw says nothing about whether the transfer was
-    // broadcast, so it is not a rejection the buyer can be blamed for. It goes
-    // back as an unavailable provider, and the pipeline records it unresolved.
-    settleMock.mockRejectedValueOnce(new TypeError('boom'));
-    await expect(
-      provider.settle({
-        requestId: 'req-1',
-        resource: RESOURCE,
-        requirement,
-        submission: { method: 'x402', payload: proof },
-        verification: { status: 'verified', provider: 'x402', amount: '0.01', currency: 'USD' },
-      }),
-    ).rejects.toSatisfy(
-      (error: unknown) => isCommerceError(error) && error.code === 'PAYMENT_PROVIDER_UNAVAILABLE',
+    // viem's wrapper around a revert is still a revert
+    settleMock.mockRejectedValueOnce(
+      new ContractFunctionExecutionError(
+        new ContractFunctionRevertedError({ abi: [], functionName: 'transferWithAuthorization' }),
+        { abi: [], functionName: 'transferWithAuthorization' },
+      ),
     );
+    const wrapped = await provider.settle({
+      requestId: 'req-1',
+      resource: RESOURCE,
+      requirement,
+      submission: { method: 'x402', payload: proof },
+      verification: { status: 'verified', provider: 'x402', amount: '0.01', currency: 'USD' },
+    });
+    expect(wrapped.rejectionReason).toBe('transaction_reverted');
+
+    // An unclassified throw leaves the broadcast unknown, so it must come back
+    // as an unavailable provider, never a rejection. The same wrapper around an
+    // RPC error is one of those.
+    for (const thrown of [
+      new TypeError('boom'),
+      new ContractFunctionExecutionError(new BaseError('nonce too low'), {
+        abi: [],
+        functionName: 'transferWithAuthorization',
+      }),
+    ]) {
+      settleMock.mockRejectedValueOnce(thrown);
+      await expect(
+        provider.settle({
+          requestId: 'req-1',
+          resource: RESOURCE,
+          requirement,
+          submission: { method: 'x402', payload: proof },
+          verification: { status: 'verified', provider: 'x402', amount: '0.01', currency: 'USD' },
+        }),
+      ).rejects.toSatisfy(
+        (error: unknown) => isCommerceError(error) && error.code === 'PAYMENT_PROVIDER_UNAVAILABLE',
+      );
+    }
   });
 
   it('settle() throws PAYMENT_PROVIDER_UNAVAILABLE when the SDK throws a connection-shaped error', async () => {
@@ -458,7 +472,6 @@ describe('provider — SDK-boundary branches (mocked x402/facilitator)', () => {
     const requirement = await provider.createRequirement(paymentContext());
     const proof = await createPaymentProof({
       buyerPrivateKey: BUYER_PRIVATE_KEY,
-      rpcUrl: RPC_URL,
       accepts: requirement.challenge.accepts[0] as Record<string, unknown>,
     });
     settleMock.mockRejectedValueOnce(new Error('connect ECONNREFUSED 127.0.0.1:19321'));
@@ -487,7 +500,6 @@ describe('provider — SDK-boundary branches (mocked x402/facilitator)', () => {
       const requirement = await provider.createRequirement(paymentContext());
       const proof = await createPaymentProof({
         buyerPrivateKey: BUYER_PRIVATE_KEY,
-        rpcUrl: RPC_URL,
         accepts: requirement.challenge.accepts[0] as Record<string, unknown>,
       });
       settleMock.mockResolvedValueOnce({
@@ -516,16 +528,13 @@ describe('provider — SDK-boundary branches (mocked x402/facilitator)', () => {
   );
 
   it('settle() attaches transactionHash to PAYMENT_PROVIDER_UNAVAILABLE when the broadcast succeeded but confirmation timed out', async () => {
-    // The SDK bounds its own receipt wait and reports the outcome rather than
-    // throwing: `settlement_pending` means the transfer was broadcast and may
-    // well be on-chain. That becomes an *unavailable* provider
-    // carrying the hash, never a plain rejection, so the attempt is recorded
-    // `settlement-uncertain` and the payer is told what to check.
+    // `settlement_pending` means the transfer was broadcast and may be on-chain,
+    // so it becomes an unavailable provider carrying the hash, never a
+    // rejection
     const provider = makeProvider();
     const requirement = await provider.createRequirement(paymentContext());
     const proof = await createPaymentProof({
       buyerPrivateKey: BUYER_PRIVATE_KEY,
-      rpcUrl: RPC_URL,
       accepts: requirement.challenge.accepts[0] as Record<string, unknown>,
     });
 
@@ -555,14 +564,12 @@ describe('provider — SDK-boundary branches (mocked x402/facilitator)', () => {
   });
 
   it('settle() omits transactionHash from PAYMENT_PROVIDER_UNAVAILABLE when the broadcast itself never happened', async () => {
-    // Contrast case: the RPC was unreachable before any writeContract call,
-    // so waitForTransactionReceipt was never invoked and there is no hash to
-    // report. A fabricated hash here would be worse than none.
+    // The RPC failed before any broadcast, so there is no hash to report and
+    // none may be invented
     const provider = makeProvider();
     const requirement = await provider.createRequirement(paymentContext());
     const proof = await createPaymentProof({
       buyerPrivateKey: BUYER_PRIVATE_KEY,
-      rpcUrl: RPC_URL,
       accepts: requirement.challenge.accepts[0] as Record<string, unknown>,
     });
     settleMock.mockRejectedValueOnce(new Error('connect ECONNREFUSED 127.0.0.1:19321'));
@@ -599,14 +606,10 @@ describe('provider — SDK-boundary branches (mocked x402/facilitator)', () => {
   });
 });
 
-describe('provider — provider-unavailable classification against real viem error types', () => {
-  // Regression coverage for the fact that classifying
-  // provider-unavailability by substring-matching error *messages* is
-  // brittle across viem/undici upgrades. These construct the actual error
-  // classes the pinned viem@2.55.18 HTTP transport (and
-  // waitForTransactionReceipt) throw, rather than a hand-made
-  // `Error("timed out")` whose shape has no guaranteed relationship to what
-  // viem really produces.
+describe('provider - provider-unavailable classification against real viem error types', () => {
+  // Uses the error classes the pinned viem HTTP transport and
+  // waitForTransactionReceipt throw, not a hand-made
+  // `Error("timed out")`, because message matching breaks across upgrades
   beforeEach(() => {
     verifyMock.mockReset();
     settleMock.mockReset();
@@ -640,7 +643,6 @@ describe('provider — provider-unavailable classification against real viem err
     const requirement = await provider.createRequirement(paymentContext());
     const proof = await createPaymentProof({
       buyerPrivateKey: BUYER_PRIVATE_KEY,
-      rpcUrl: RPC_URL,
       accepts: requirement.challenge.accepts[0] as Record<string, unknown>,
     });
     verifyMock.mockRejectedValueOnce(makeError());
@@ -672,7 +674,6 @@ describe('provider — provider-unavailable classification against real viem err
     const requirement = await provider.createRequirement(paymentContext());
     const proof = await createPaymentProof({
       buyerPrivateKey: BUYER_PRIVATE_KEY,
-      rpcUrl: RPC_URL,
       accepts: requirement.challenge.accepts[0] as Record<string, unknown>,
     });
     settleMock.mockRejectedValueOnce(makeError());
