@@ -1,9 +1,7 @@
-import { spawn } from 'node:child_process';
-import * as http from 'node:http';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
-// Keep test output quiet and avoid spawning a pino-pretty worker thread per
-// Fastify instance created below (many are created across this file).
+// Quiet output, and no pino-pretty worker thread for each of the many Fastify
+// instances this file creates
 process.env['NODE_ENV'] = 'test';
 
 import type {
@@ -13,16 +11,16 @@ import type {
   ExecutionPipeline,
   IdGenerator,
   Logger,
-} from '../../../src/core/index.js';
-import { PAYMENT_HEADER, PAYMENT_RESPONSE_HEADER } from '../../../src/core/index.js';
-import { createGateway, type GatewayInstance } from '../../../src/gateway/server.js';
+} from '../../../src/core';
+import { PAYMENT_HEADER, PAYMENT_RESPONSE_HEADER } from '../../../src/core';
+import { createGateway, type GatewayInstance } from '../../../src/gateway/server';
 import {
   createFakeHttpAdapter,
   createFakePaymentProvider,
   createFakeProtocolAdapter,
   createFakeStore,
   makeGatewayConfig,
-} from './helpers.js';
+} from './helpers';
 
 function createFakeClock(): Clock {
   let counter = 0;
@@ -73,9 +71,9 @@ function createFakeBackend(
 }
 
 /**
- * Wraps the live `execute()` on the gateway's own pipeline instance (the same
- * object reference the invoke route closed over) so we can assert on the
- * exact `CanonicalRequest` the route built, without re-implementing routing.
+ * Wraps `execute()` on the gateway's own pipeline instance, the object the
+ * invoke route closed over, to assert on the exact `CanonicalRequest` the
+ * route built
  */
 function spyOnPipelineExecute(gateway: GatewayInstance): CanonicalRequest[] {
   const captured: CanonicalRequest[] = [];
@@ -113,16 +111,21 @@ afterEach(async () => {
 });
 
 describe('createGateway HTTP surface', () => {
-  it('accepts a well-formed client x-request-id as the correlation key', async () => {
+  it('mints the audit request id even when the client sends a well-formed x-request-id', async () => {
     const gateway = await buildGateway();
     const captured = spyOnPipelineExecute(gateway);
-    await gateway.server.inject({
-      method: 'POST',
-      url: '/api/resources/weather_basic/invoke',
-      headers: { 'x-request-id': 'client-flow-abc.123:v2' },
-      payload: { city: 'Berlin' },
-    });
-    expect(captured[0]?.requestId).toBe('client-flow-abc.123:v2');
+    for (let i = 0; i < 2; i++) {
+      await gateway.server.inject({
+        method: 'POST',
+        url: '/api/resources/weather_basic/invoke',
+        headers: { 'x-request-id': 'client-flow-abc.123:v2' },
+        payload: { city: 'Berlin' },
+      });
+    }
+    // Two flows sending the same client id still get distinct audit keys
+    expect(captured).toHaveLength(2);
+    expect(captured[0]?.requestId).not.toBe('client-flow-abc.123:v2');
+    expect(captured[0]?.requestId).not.toBe(captured[1]?.requestId);
   });
 
   it('mints its own request id when the caller supplies an out-of-pattern one', async () => {
@@ -142,7 +145,7 @@ describe('createGateway HTTP surface', () => {
     expect(captured[0]?.requestId.length).toBeLessThan(200);
   });
 
-  it('rejects a request id containing characters outside the allowed set', async () => {
+  it('ignores a request id containing characters outside the allowed set', async () => {
     const gateway = await buildGateway();
     const captured = spyOnPipelineExecute(gateway);
 
@@ -188,7 +191,7 @@ describe('createGateway HTTP surface', () => {
     expect(res.statusCode).toBe(503);
   });
 
-  it('GET /ready is 503 when a payment provider is unhealthy (informational: wire payment health into readiness)', async () => {
+  it('GET /ready is 503 when a payment provider is unhealthy', async () => {
     const badProvider = {
       ...createFakePaymentProvider(),
       health: async () => ({ status: 'fail' as const, checkedAt: 'x' }),
@@ -234,7 +237,37 @@ describe('createGateway HTTP surface', () => {
     expect(raw).not.toContain('signerPrivateKey');
   });
 
-  it('never publishes rpcUrl on.well-known', async () => {
+  it('serves /.well-known adapter health from the memoized readiness probe, detail dropped', async () => {
+    let healthCalls = 0;
+    const adapter = createFakeProtocolAdapter({
+      health: async () => {
+        healthCalls += 1;
+        return {
+          status: 'warn',
+          detail: 'internal-host:5432',
+          checkedAt: '2026-01-01T00:00:00.000Z',
+        };
+      },
+    });
+    const gateway = await buildGateway({ protocolAdapters: [adapter] });
+
+    await gateway.server.inject({ method: 'GET', url: '/ready' });
+    const first = await gateway.server.inject({
+      method: 'GET',
+      url: '/.well-known/agent-commerce',
+    });
+    await gateway.server.inject({ method: 'GET', url: '/.well-known/agent-commerce' });
+
+    // The fake clock moves 1 ms per read, so every call lands inside one TTL window
+    expect(healthCalls).toBe(1);
+    expect(first.json().adapters[0].health).toEqual({
+      status: 'warn',
+      checkedAt: '2026-01-01T00:00:00.000Z',
+    });
+    expect(first.payload).not.toContain('internal-host');
+  });
+
+  it('never publishes rpcUrl on /.well-known', async () => {
     const base = makeGatewayConfig();
     const config = makeGatewayConfig({
       payments: {
@@ -250,7 +283,7 @@ describe('createGateway HTTP surface', () => {
     expect(res.payload).not.toContain('SUPER-SECRET-ALCHEMY-KEY');
     expect(res.payload).not.toContain('alchemy.com');
     expect(res.json().payments.x402.rpcUrl).toBeUndefined();
-    // What a payer actually needs is still there.
+    // What a payer needs is still there
     expect(res.json().payments.x402.network).toBeDefined();
     expect(res.json().payments.x402.asset).toBeDefined();
     expect(res.json().payments.x402.payTo).toBeDefined();
@@ -302,9 +335,8 @@ describe('createGateway HTTP surface', () => {
   });
 
   it('the invoke route still gets normal JSON body parsing with an HttpProtocolAdapter mounted alongside it (content-type-parser encapsulation regression)', async () => {
-    // Guards the exact-match no-op parsers added for the MCP content-type
-    // fix: they're registered inside the adapter's own encapsulated plugin
-    // and must not leak out and break the main server's JSON body parsing.
+    // The adapter mount's no-op content-type parsers live in its encapsulated
+    // plugin and must not break the main server's JSON body parsing
     const backend = createFakeBackend(async () => ({
       status: 200,
       headers: {},
@@ -454,7 +486,7 @@ describe('createGateway HTTP surface', () => {
 
   it('maps a backend error to 502', async () => {
     const backend = createFakeBackend(async () => {
-      const { CommerceError } = await import('../../../src/core/index.js');
+      const { CommerceError } = await import('../../../src/core');
       throw new CommerceError('BACKEND_ERROR', 'upstream exploded');
     });
     const gateway = await buildGateway({ backend });
@@ -469,7 +501,7 @@ describe('createGateway HTTP surface', () => {
 
   it('a backend failure after settlement sets X-PAYMENT-RESPONSE and tells the buyer the payment settled', async () => {
     const backend = createFakeBackend(async () => {
-      const { CommerceError } = await import('../../../src/core/index.js');
+      const { CommerceError } = await import('../../../src/core');
       throw new CommerceError('BACKEND_ERROR', 'upstream exploded after payment', {
         details: { status: 500 },
       });
@@ -496,7 +528,7 @@ describe('createGateway HTTP surface', () => {
 
   it('does not set X-PAYMENT-RESPONSE on an ordinary backend error with no settlement in scope (control)', async () => {
     const backend = createFakeBackend(async () => {
-      const { CommerceError } = await import('../../../src/core/index.js');
+      const { CommerceError } = await import('../../../src/core');
       throw new CommerceError('BACKEND_ERROR', 'upstream exploded');
     });
     const gateway = await buildGateway({ backend });
@@ -511,7 +543,7 @@ describe('createGateway HTTP surface', () => {
 
   it('maps a backend timeout to 504', async () => {
     const backend = createFakeBackend(async () => {
-      const { CommerceError } = await import('../../../src/core/index.js');
+      const { CommerceError } = await import('../../../src/core');
       throw new CommerceError('BACKEND_TIMEOUT', 'too slow');
     });
     const gateway = await buildGateway({ backend });
@@ -601,8 +633,6 @@ describe('createGateway HTTP surface', () => {
     expect(receipts.statusCode).toBe(404);
     const events = await gateway.server.inject({ method: 'GET', url: '/api/events' });
     expect(events.statusCode).toBe(404);
-    const stream = await gateway.server.inject({ method: 'GET', url: '/api/events/stream' });
-    expect(stream.statusCode).toBe(404);
   });
 
   it('GET /api/receipts and /api/events require the admin token once configured, and reject a wrong one', async () => {
@@ -817,9 +847,8 @@ describe('createGateway HTTP surface', () => {
     });
     const gateway = await buildGateway({ config: configWithRemote });
     const res = await gateway.server.inject({ method: 'GET', url: '/.well-known/agent-commerce' });
-    // The facilitator URL is never published: it is a per-deployment
-    // operational detail that can carry a tenant path or an API key, exactly
-    // like rpcUrl.
+    // The facilitator URL is never published: like rpcUrl, it can carry a
+    // tenant path or an API key
     expect(res.json().payments.x402.facilitator).toEqual({ mode: 'remote' });
     expect(JSON.stringify(res.json())).not.toContain('facilitator.example.com');
     expect(res.json().payments.x402.mode).toBe('testnet');
@@ -833,7 +862,7 @@ describe('createGateway HTTP surface', () => {
   });
 
   it('createGateway works end to end with no injected logger/clock/ids/backend (real defaults)', async () => {
-    const { createGateway } = await import('../../../src/gateway/server.js');
+    const { createGateway } = await import('../../../src/gateway/server');
     const gateway = await createGateway({
       config: makeGatewayConfig({ resources: [] }),
       store: createFakeStore(),
@@ -855,16 +884,16 @@ describe('createGateway HTTP surface', () => {
     const goodAdapter = createFakeHttpAdapter({ mountPath: '/mcp' });
     const gateway = await buildGateway({ protocolAdapters: [badAdapter, goodAdapter] });
 
-    // The server started at all — health responds.
+    // The server started: health responds
     const health = await gateway.server.inject({ method: 'GET', url: '/health' });
     expect(health.statusCode).toBe(200);
 
-    // Readiness reflects the failed adapter.
+    // Readiness reflects the failed adapter
     const ready = await gateway.server.inject({ method: 'GET', url: '/ready' });
     expect(ready.statusCode).toBe(503);
     expect(ready.json().adapters.some((a: { status: string }) => a.status === 'fail')).toBe(true);
 
-    // The good adapter is still mounted and reachable.
+    // The good adapter is still mounted and reachable
     const mounted = await gateway.server.inject({ method: 'GET', url: '/mcp' });
     expect(mounted.statusCode).toBe(200);
     expect(mounted.payload).toBe('fake-adapter-response');
@@ -914,151 +943,36 @@ describe('createGateway HTTP surface', () => {
     gateways = gateways.filter((g) => g !== gateway);
   });
 
-  it('emits events over SSE for a live request', async () => {
+  it('does not accept the admin token as a query parameter on any operator route', async () => {
     const config = makeGatewayConfig({
       server: { ...makeGatewayConfig().server, adminToken: ADMIN_TOKEN },
     });
     const gateway = await buildGateway({ config });
     const { url } = await gateway.listen();
 
-    const chunks: string[] = [];
-    let resolveConnected: () => void = () => {};
-    const connected = new Promise<void>((resolve) => {
-      resolveConnected = resolve;
-    });
+    // With a token configured, a query token is rejected (401) on every operator
+    // route
+    for (const path of ['/api/receipts', '/api/events']) {
+      const res = await fetch(`${url}${path}?adminToken=${ADMIN_TOKEN}`);
+      expect(res.status, `${path}?adminToken=... should 401`).toBe(401);
+    }
 
-    const req = http.get(
-      `${url}/api/events/stream`,
-      { headers: adminHeaders(ADMIN_TOKEN) },
-      (res) => {
-        res.setEncoding('utf8');
-        res.on('data', (chunk: string) => {
-          chunks.push(chunk);
-          if (chunk.includes('connected')) resolveConnected();
-        });
-      },
-    );
-    await connected;
+    // The header still authenticates
+    const authed = await fetch(`${url}/api/events`, { headers: adminHeaders(ADMIN_TOKEN) });
+    expect(authed.status).toBe(200);
 
-    await fetch(`${url}/api/resources/weather_basic/invoke`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ city: 'Berlin' }),
-    });
-
-    await vi.waitFor(
-      () => {
-        expect(chunks.join('')).toContain('resource.delivered');
-      },
-      { timeout: 2000 },
-    );
-
-    // invariant, checked on the real wire (split 3): every
-    // frame is a bare `data:...` line, never a named `event:...` line. A
-    // named frame only reaches an EventSource listener added via
-    // addEventListener(type,...), never the default onmessage — and since
-    // no browser EventSource can authenticate against this route any more
-    // (see the test below), onmessage is the only handler a real dashboard
-    // can use, so this property is load-bearing even though nothing here
-    // drives an actual EventSource.
-    const raw = chunks.join('');
-    expect(raw).not.toMatch(/^event:/m);
-    expect(raw).toMatch(/^data: .*resource\.delivered/m);
-
-    req.destroy();
     await gateway.close();
     gateways = gateways.filter((g) => g !== gateway);
   });
-
-  it(
-    'does not accept the admin token as a query parameter on any operator route ' +
-      '(removed; see SECURITY.md: the query-token exception was ' +
-      'documented as removed while the code still honoured it)',
-    async () => {
-      const config = makeGatewayConfig({
-        server: { ...makeGatewayConfig().server, adminToken: ADMIN_TOKEN },
-      });
-      const gateway = await buildGateway({ config });
-      const { url } = await gateway.listen();
-
-      // Configured token: a query token must be REJECTED (401), not
-      // silently accepted, on every operator route including the SSE one.
-      for (const path of ['/api/events/stream', '/api/receipts', '/api/events']) {
-        const res = await fetch(`${url}${path}?adminToken=${ADMIN_TOKEN}`);
-        expect(res.status, `${path}?adminToken=... should 401`).toBe(401);
-      }
-
-      // The header path must still work — the removal must not have taken
-      // the whole route's authentication with it.
-      const authed = await fetch(`${url}/api/events/stream`, {
-        headers: adminHeaders(ADMIN_TOKEN),
-      });
-      expect(authed.status).toBe(200);
-      authed.body?.cancel();
-
-      await gateway.close();
-      gateways = gateways.filter((g) => g !== gateway);
-    },
-  );
 
   it('no adminToken configured -> a query token still 404s, same as no token at all', async () => {
     const gateway = await buildGateway({ config: makeGatewayConfig() });
     const { url } = await gateway.listen();
 
-    const res = await fetch(`${url}/api/events/stream?adminToken=${ADMIN_TOKEN}`);
+    const res = await fetch(`${url}/api/events?adminToken=${ADMIN_TOKEN}`);
     expect(res.status).toBe(404);
 
     await gateway.close();
     gateways = gateways.filter((g) => g !== gateway);
   });
-
-  it('a real EventSource can never reach the gated SSE route, in either posture ' +
-    '(do not "fix" this by reopening the route — ' +
-    'see the frame-format assertion above for the invariant this test used ' +
-    'to protect via a real EventSource, back when the query-token exception ' +
-    'was the only way a header-less client could authenticate)', async () => {
-    // Token configured: EventSource cannot send the Authorization header,
-    // so the connection gets a 401 and never opens.
-    const withToken = makeGatewayConfig({
-      server: { ...makeGatewayConfig().server, adminToken: ADMIN_TOKEN },
-    });
-    const gatewayWithToken = await buildGateway({ config: withToken });
-    const urlWithToken = (await gatewayWithToken.listen()).url;
-
-    // No token configured: the operator routes fail closed (404) rather
-    // than open — decision, restated by the earlier README/
-    // SECURITY.md fix — so this posture is no more reachable than the
-    // token-configured one.
-    const withoutToken = makeGatewayConfig();
-    const gatewayWithoutToken = await buildGateway({ config: withoutToken });
-    const urlWithoutToken = (await gatewayWithoutToken.listen()).url;
-
-    for (const url of [urlWithToken, urlWithoutToken]) {
-      const clientScript = `
-          const es = new EventSource(process.argv[1]);
-          let opened = false;
-          es.onopen = () => { opened = true; process.stdout.write('OPEN\\n'); };
-          setTimeout(() => {
-            process.stdout.write('DONE opened=' + opened + '\\n');
-            es.close();
-            process.exit(0);
-          }, 800);
-        `;
-      const child = spawn(
-        process.execPath,
-        ['--experimental-eventsource', '-e', clientScript, `${url}/api/events/stream`],
-        { stdio: ['ignore', 'pipe', 'ignore'] },
-      );
-      let output = '';
-      child.stdout?.on('data', (chunk: Buffer) => {
-        output += chunk.toString('utf8');
-      });
-      await new Promise<void>((resolve) => child.on('exit', () => resolve()));
-      expect(output, `EventSource against ${url}`).not.toContain('OPEN');
-    }
-
-    await gatewayWithToken.close();
-    await gatewayWithoutToken.close();
-    gateways = gateways.filter((g) => g !== gatewayWithToken && g !== gatewayWithoutToken);
-  }, 10_000);
 });

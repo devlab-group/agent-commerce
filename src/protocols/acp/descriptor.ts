@@ -2,14 +2,15 @@
  * Adapter self-description.
  *
  * `supportedSpec` is the pinned ACP snapshot, never this package's version.
- * Status is `experimental` and stays that way until the unsupported list below
- * shrinks on purpose rather than by omission.
+ * Status is `experimental` while the adapter lacks the features in the
+ * unsupported list below; an entry leaves that list only when its feature is
+ * implemented.
  */
-import type { AdapterDescriptor } from '../../core/index.js';
-import { ACP_CHECKOUT_OPERATIONS, ACP_SPEC_VERSION } from './constants.js';
+import type { AdapterDescriptor } from '../../core';
+import { ACP_CHECKOUT_OPERATIONS, ACP_SPEC_VERSION } from './constants';
 
-/** What this adapter actually implements. */
-export const ACP_CAPABILITIES: readonly string[] = [
+// What this adapter implements
+const ACP_CAPABILITIES: readonly string[] = [
   'rest transport',
   'well-known discovery',
   'bearer authentication',
@@ -19,10 +20,9 @@ export const ACP_CAPABILITIES: readonly string[] = [
 ];
 
 /**
- * Everything an ACP client may reasonably expect and will not get here.
- * Complete on purpose: a short list reads as "mostly compatible", which is
- * exactly the blanket claim alpha honesty forbids. `doctor` and
- * `/.well-known/agent-commerce` surface this verbatim.
+ * Major ACP features this adapter does not implement, served on
+ * `/.well-known/agent-commerce` and printed by `doctor`, so no client assumes
+ * full protocol support
  */
 export const ACP_UNSUPPORTED: readonly string[] = [
   // Services this seller does not implement, named as ACP names them. The
@@ -32,15 +32,15 @@ export const ACP_UNSUPPORTED: readonly string[] = [
   'standalone orders service',
   'delegate_payment',
   'delegate_authentication',
-  // Bindings and delivery directions.
+  // Bindings and delivery directions
   'ACP MCP transport binding',
   'webhooks',
   'outbound merchant-to-agent delivery',
   'ACP client role',
-  // Request authentication beyond the bearer token.
+  // Request authentication beyond the bearer token
   'Signature header verification',
   'Timestamp replay-window verification',
-  // Extensions and versioning.
+  // Extensions, versioning and payment handlers
   'discount extension',
   'general ACP extension framework',
   'multiple ACP API versions',

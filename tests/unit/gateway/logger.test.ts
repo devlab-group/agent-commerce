@@ -4,13 +4,13 @@ import { PassThrough } from 'node:stream';
 import Fastify from 'fastify';
 import pino from 'pino';
 import { describe, expect, it } from 'vitest';
-import { AUTHORIZATION_HEADER, PAYMENT_HEADER } from '../../../src/core/index.js';
+import { AUTHORIZATION_HEADER, PAYMENT_HEADER } from '../../../src/core';
 import {
   buildNotFoundHandler,
   createGatewayLogger,
   fastifyLoggerOptions,
   REDACT_PATHS,
-} from '../../../src/gateway/logger.js';
+} from '../../../src/gateway/logger';
 
 describe('createGatewayLogger', () => {
   it('redacts configured secret-shaped paths from logged output', async () => {
@@ -71,7 +71,7 @@ describe('createGatewayLogger', () => {
     const child = core.child({ requestId: 'req-1' });
     expect(typeof child.info).toBe('function');
     expect(typeof child.child).toBe('function');
-    // Should not throw even though nothing is asserted on output (level: silent).
+    // Must not throw; nothing is asserted on output (level: silent)
     child.debug({ apiKey: 'should-be-redacted' }, 'noop-debug');
     child.info({ apiKey: 'should-be-redacted' }, 'noop-info');
     child.warn({ apiKey: 'should-be-redacted' }, 'noop-warn');
@@ -101,12 +101,9 @@ describe('createGatewayLogger', () => {
   });
 
   it('names a transport target that actually exists on disk', () => {
-    // pino-pretty is a devDependency, so it is always present here and never
-    // guaranteed in a consumer. `pino()` throws outright on a target it cannot
-    // resolve — that took down `createGateway()` for every library consumer,
-    // because NODE_ENV is unset in a normal process and "development" was
-    // inferred. Asserting the target resolves is what this repo *can* check;
-    // the clean-consumer step in CI covers the it-is-absent half.
+    // pino-pretty is a devDependency: always present here, never guaranteed in a
+    // consumer, and `pino()` throws on a target it cannot resolve. This repo can
+    // check that the target resolves; CI's clean-consumer step covers its absence.
     const options = fastifyLoggerOptions({ nodeEnv: 'development' });
     const target = (options.transport as { target?: string } | undefined)?.target;
     expect(target).toBeDefined();
@@ -115,25 +112,25 @@ describe('createGatewayLogger', () => {
   });
 
   it('degrades to JSON rather than throwing when pretty-printing is unavailable', () => {
-    // The inverse control: an explicit prettyPrint:true must never produce an
-    // unresolvable target. Constructing the logger proves pino accepts it.
+    // An explicit prettyPrint: true must never produce an unresolvable target.
+    // Constructing the logger proves pino accepts it.
     expect(() => createGatewayLogger({ level: 'silent', prettyPrint: true })).not.toThrow();
   });
 
-  it('redacts the query string from the logged request URL (SSE ?adminToken=)', () => {
+  it('redacts the query string from the logged request URL (?adminToken=)', () => {
     const options = fastifyLoggerOptions({ level: 'silent' });
     const reqSerializer = options.serializers?.['req'] as (req: unknown) => Record<string, unknown>;
     expect(typeof reqSerializer).toBe('function');
 
     const serialized = reqSerializer({
       method: 'GET',
-      url: '/api/events/stream?adminToken=super-secret-token',
+      url: '/api/events?adminToken=super-secret-token',
       host: 'localhost:8080',
       ip: '127.0.0.1',
       socket: { remotePort: 5555 },
     });
 
-    expect(serialized['url']).toBe('/api/events/stream?[REDACTED]');
+    expect(serialized['url']).toBe('/api/events?[REDACTED]');
     expect(JSON.stringify(serialized)).not.toContain('super-secret-token');
     expect(serialized['method']).toBe('GET');
   });
@@ -147,12 +144,9 @@ describe('createGatewayLogger', () => {
 });
 
 describe('buildNotFoundHandler (Fastify default 404 logs the raw URL)', () => {
-  // Real Fastify + real pino, production mode (no pino-pretty transport —
-  // that writes from a transport worker thread and swallows a naive
-  // process.stdout.write patch, which is exactly how this leak's first
-  // reproduction attempt falsely reported "no leak"). `stream:` is pino's
-  // own supported way to redirect output for a test, and Fastify passes it
-  // straight through to `pino(opts, opts.stream)`.
+  // Real Fastify and pino in production mode: a pino-pretty transport writes
+  // from a worker thread that a stdout patch cannot capture. `stream:` is pino's
+  // supported redirect, and Fastify passes it through to `pino(opts, opts.stream)`.
   const SECRET = 'SUPER-SECRET-TOKEN-XYZ';
 
   async function captureNotFoundLog(useFix: boolean): Promise<string> {
@@ -173,7 +167,7 @@ describe('buildNotFoundHandler (Fastify default 404 logs the raw URL)', () => {
     return chunks.join('');
   }
 
-  it('does not put the admin token in the captured production log line on a 404 (fixed)', async () => {
+  it('does not put the admin token in the captured production log line on a 404', async () => {
     const output = await captureNotFoundLog(true);
     expect(output).not.toContain(SECRET);
     expect(output).toContain('/api/receipts/?[REDACTED]');
@@ -200,8 +194,8 @@ describe('redaction depth', () => {
   }
 
   it('redacts a bare top-level secret field, not only a nested one', () => {
-    // `'*.privateKey'` matches `{wallet:{privateKey}}` and NOT `{privateKey}`,
-    // so the top-level form was printed in full. Both forms are generated now.
+    // `'*.privateKey'` matches `{wallet:{privateKey}}` but not `{privateKey}`,
+    // so the bare path is generated too
     const out = logAndCapture({ privateKey: 'MUST-NOT-APPEAR' });
     expect(out).not.toContain('MUST-NOT-APPEAR');
     expect(out).toContain('[REDACTED]');
@@ -212,10 +206,9 @@ describe('redaction depth', () => {
     expect(out).not.toContain('MUST-NOT-APPEAR');
   });
 
-  it('documents its limit honestly: depth two is NOT redacted', () => {
-    // Asserting the gap rather than pretending it does not exist. If someone
-    // later adds deeper paths, this test fails and the docs get updated with
-    // it — which is the outcome we want, not a silently stale promise.
+  it('documents its limit: depth two is NOT redacted', () => {
+    // Pins the gap described in logger.ts: adding deeper paths fails this
+    // test, so that comment gets updated with it
     const out = logAndCapture({ a: { b: { privateKey: 'DEEP-VALUE' } } });
     expect(out).toContain('DEEP-VALUE');
   });

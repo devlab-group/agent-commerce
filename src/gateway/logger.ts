@@ -1,43 +1,30 @@
 /**
- * Pino logger factory with redaction. Never log secrets: the credential and
- * proof headers (`authorization`, `payment-signature`, `agent-authorization`),
- * private keys, seeds, mnemonics, signatures.
+ * Pino logger factory that redacts the credential and proof headers in
+ * `SECRET_HEADERS` and the fields named in `SECRET_FIELD_NAMES`.
  *
- * Two independent things are built here, deliberately not the same pino
- * instance (Fastify's `loggerInstance` option forces its generic `Logger`
- * type into `FastifyInstance`, which then conflicts with our own `Logger`
- * shape under `exactOptionalPropertyTypes`):
- * - `fastifyLoggerOptions()` — a plain options object handed to Fastify's
- * `logger` option, so Fastify builds its own internally-typed pino
- * instance (still redacted, still pino-pretty in development) for HTTP
- * access logs.
- * - `createGatewayLogger()` — a standalone pino instance wrapped to the
- * `src/core` `Logger` shape, injected into the
- * execution pipeline and protocol adapters.
- * Both share the same redaction paths and level/pretty-print policy.
+ * Two separate pino instances, because Fastify's `loggerInstance` option forces
+ * its generic `Logger` type into `FastifyInstance`, which conflicts with our
+ * `Logger` shape under `exactOptionalPropertyTypes`:
+ * - `fastifyLoggerOptions()`: options for Fastify's `logger` option, so
+ * Fastify builds its own instance for HTTP access logs.
+ * - `createGatewayLogger()`: a standalone instance wrapped to the `src/core`
+ * `Logger` shape, injected into the pipeline and protocol adapters.
+ * Both share the redaction paths and the level and pretty-print policy.
  */
 
 import { createRequire } from 'node:module';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import pino, { type LoggerOptions, type Logger as PinoLogger } from 'pino';
-import { AUTHORIZATION_HEADER, type Logger, PAYMENT_HEADER } from '../core/index.js';
+import { AUTHORIZATION_HEADER, type Logger, PAYMENT_HEADER } from '../core';
 
 /**
  * Absolute path to pino-pretty, or `undefined` when it is not installed.
  *
- * pino-pretty is a **devDependency**: it is a developer-experience nicety and
- * making every consumer of the published package install it (and its
- * transitive tree) to get log lines would be the wrong trade. But the pretty
- * default keys off `NODE_ENV`, which is unset in a normal consumer process —
- * so "development" was inferred and `pino()` threw
- * `unable to determine transport target for "pino-pretty"`, taking down
- * `createGateway()` for anyone importing the library. The clean-consumer test
- * caught it; nothing in the repo could, because here it is always installed.
- *
- * Resolving it ourselves answers the only question that matters — *is it
- * actually there* — and passing the resolved absolute path (rather than the
- * bare name) removes the second failure mode, where pino resolves transport
- * targets from a different directory than we do.
+ * pino-pretty is a devDependency, so a consumer of the published package
+ * usually lacks it, yet an unset `NODE_ENV` still selects the pretty default.
+ * An unresolvable transport makes `pino()` throw and takes `createGateway()`
+ * down with it. Passing the absolute path also stops pino resolving the
+ * target from a different directory than this module.
  */
 const PINO_PRETTY_PATH: string | undefined = (() => {
   try {
@@ -47,13 +34,10 @@ const PINO_PRETTY_PATH: string | undefined = (() => {
   }
 })();
 
-// pino/fast-redact paths below are single-level wildcards: '*.privateKey'
-// matches privateKey one level deep (e.g. `wallet.privateKey`), not at
-// arbitrary nesting (`a.b.privateKey` is not covered). Call sites narrow
-// errors in different ways: some use describeError(), while protocol adapters
-// may log CommerceError details. Do not put secrets in error details or log a
-// raw object that might carry a secret at depth > 1 without extending these
-// paths or selecting safe fields first.
+// Each name is redacted at the top level and one level down ('*.privateKey'
+// matches `wallet.privateKey`). Pino's redact wildcards are single-level, so
+// `a.b.privateKey` is not covered: never put a secret in error details or log
+// a raw object that may nest one deeper without extending these paths.
 const SECRET_FIELD_NAMES = [
   'privateKey',
   'signerPrivateKey',
@@ -67,23 +51,8 @@ const SECRET_FIELD_NAMES = [
   'token',
 ] as const;
 
-/**
- * The bare top-level form was missing — `'*.privateKey'`
- * matches `{ wallet: { privateKey } }` but not `{ privateKey }`, so a
- * `logger.error({ privateKey })` would have printed it. Both forms are
- * generated now. The depth limit is real and unchanged: fast-redact wildcards
- * are single-level, so a secret at depth ≥ 2 is still not covered, and the
- * documentation says so rather than promising "any field".
- */
-/**
- * Request headers carrying a credential or a proof, read from the wire
- * constants rather than written out again here.
- *
- * A hardcoded copy is how this drifted before: `x-payment` became
- * `payment-signature` for x402 v2, and a literal list would still be redacting
- * a header no client sends. `agent-authorization` carries an AP2 mandate and
- * belongs here for the same reason a payment proof does.
- */
+// Credential and proof headers. The proof headers come from the wire constants,
+// so a renamed one stays redacted; `agent-authorization` carries an AP2 mandate.
 const SECRET_HEADERS = ['authorization', PAYMENT_HEADER, AUTHORIZATION_HEADER] as const;
 
 export const REDACT_PATHS: readonly string[] = [
@@ -100,21 +69,18 @@ export interface CreateGatewayLoggerOptions {
 }
 
 export interface CreatedGatewayLogger {
-  /** Raw pino instance, not shared with Fastify — see file header. */
+  /** Raw pino instance, not shared with Fastify (see file header) */
   readonly pino: PinoLogger;
-  /** `src/core` `Logger`-shaped wrapper. */
+  /** `src/core` `Logger`-shaped wrapper */
   readonly core: Logger;
 }
 
 function baseLoggerOptions(options: CreateGatewayLoggerOptions): LoggerOptions {
   const nodeEnv = options.nodeEnv ?? process.env['NODE_ENV'] ?? 'development';
-  // Never spawn a pino-pretty worker thread in tests: many short-lived
-  // Fastify/pino instances are created per test run, and pretty-printing is a
-  // pure developer-experience nicety, not a functional requirement there.
+  // No pino-pretty worker thread in tests, which create many short-lived loggers
   const wantPretty = options.prettyPrint ?? (nodeEnv !== 'production' && nodeEnv !== 'test');
-  // Asked for *and* available. An explicit `prettyPrint: true` cannot conjure
-  // an uninstalled module, so it degrades to JSON rather than throwing —
-  // pretty-printing is cosmetic, and losing colour beats losing the gateway.
+  // Even an explicit `prettyPrint: true` falls back to JSON when pino-pretty
+  // is missing, rather than throwing
   const usePretty = wantPretty && PINO_PRETTY_PATH !== undefined;
 
   return {
@@ -126,25 +92,18 @@ function baseLoggerOptions(options: CreateGatewayLoggerOptions): LoggerOptions {
 }
 
 /**
- * Strips the query string from a request URL before it reaches a log line
- * or an echoed-back response body. The admin token is header-only, with no
- * `?adminToken=` exception for the SSE route (see access-control.ts's doc
- * comment), so this is not the only thing keeping it out of logs — but any
- * query parameter, on any route, could carry something sensitive, and a
- * blanket redaction costs nothing to keep. Single source of truth: every place that puts a
- * request URL in front of a log or a client must call this, not re-derive
- * its own redaction — two redactors drift (Fastify's
- * default 404 handler built its own message string from the raw URL,
- * bypassing the `req` serializer below entirely; see server.ts's
- * `setNotFoundHandler`, which uses this same function).
+ * Replaces a URL's query string with `?[REDACTED]` before it reaches a log line
+ * or a response body: the admin token is header only, but any query parameter
+ * on any route may carry something sensitive. Every place that shows a request
+ * URL to a log or a client calls this instead of redacting its own way.
  */
-export function sanitizeUrl(url: string | undefined): string | undefined {
+function sanitizeUrl(url: string | undefined): string | undefined {
   if (url === undefined) return undefined;
   const queryIndex = url.indexOf('?');
   return queryIndex === -1 ? url : `${url.slice(0, queryIndex)}?[REDACTED]`;
 }
 
-/** Overrides (not extends) Fastify's default `req` serializer — see sanitizeUrl. */
+// Replaces Fastify's default `req` serializer, so the logged URL is sanitized
 function redactedReqSerializer(req: {
   method?: string;
   url?: string;
@@ -161,7 +120,7 @@ function redactedReqSerializer(req: {
   };
 }
 
-/** Plain options object for Fastify's own `logger` option (see file header). */
+/** Options for Fastify's own `logger` option (see file header) */
 export function fastifyLoggerOptions(options: CreateGatewayLoggerOptions = {}): LoggerOptions {
   return {
     ...baseLoggerOptions(options),
@@ -170,15 +129,9 @@ export function fastifyLoggerOptions(options: CreateGatewayLoggerOptions = {}): 
 }
 
 /**
- * Fastify's own default 404 handler (four-oh-four.js's `basic404` ->
- * log-controller.js's `routeNotFound`) builds its log line by interpolating
- * `request.raw.url` into a template string — bypassing the `req` serializer
- * above entirely, since it's a plain string, not a structured log call.
- * Registering a `setNotFoundHandler` replaces Fastify's internal one outright
- * (it is only ever invoked when none is set), so this is the only fix point.
- * Exported (not inlined in server.ts) so production and tests share the exact
- * same handler — a second, test-only reimplementation is exactly the kind of
- * thing that quietly drifts from what actually ships.
+ * Replaces Fastify's default 404 handler, whose log line interpolates
+ * `request.raw.url` into a plain string and so bypasses the `req` serializer.
+ * Exported so the tests exercise the handler that ships.
  */
 export function buildNotFoundHandler(): (request: FastifyRequest, reply: FastifyReply) => void {
   return (request, reply) => {

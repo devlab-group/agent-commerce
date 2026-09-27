@@ -1,5 +1,5 @@
 /**
- * A2A (Agent2Agent) protocol adapter — experimental.
+ * A2A (Agent2Agent) protocol adapter, experimental.
  *
  * Serves two paths: the configured mount (`/a2a`), where the JSON-RPC endpoint
  * lives, and the specification-fixed `/.well-known/agent-card.json`, declared
@@ -22,9 +22,11 @@ import {
   type HttpProtocolAdapter,
   type ProtocolAdapterContext,
   toCommerceError,
-} from '../../core/index.js';
-import { PACKAGE_VERSION } from '../../version.js';
-import { buildAgentCard } from './agent-card.js';
+} from '../../core';
+import { toLogInfo } from '../../core/errors';
+import { PACKAGE_VERSION } from '../../version';
+import { readCappedBody } from '../http';
+import { buildAgentCard } from './agent-card';
 import {
   A2A_AGENT_CARD_PATH,
   A2A_DEFAULT_AGENT_NAME,
@@ -34,8 +36,8 @@ import {
   A2A_PROTOCOL_VERSION,
   A2A_UNSUPPORTED_METHODS,
   A2A_VERSION_HEADER,
-} from './constants.js';
-import { buildDescriptor } from './descriptor.js';
+} from './constants';
+import { buildDescriptor } from './descriptor';
 import {
   A2A_ERROR_UNSUPPORTED_OPERATION,
   JSONRPC_INTERNAL_ERROR,
@@ -47,34 +49,26 @@ import {
   jsonRpcError,
   jsonRpcResult,
   parseJsonRpcRequest,
-} from './jsonrpc.js';
-import { type A2aInvocation, parseInvocation } from './message-mapping.js';
-import {
-  completedTask,
-  failedTask,
-  paymentRequiredTask,
-  type TaskIdentity,
-} from './task-mapping.js';
-import type { A2aAgentCard, A2aTask } from './types.js';
+} from './jsonrpc';
+import { type A2aInvocation, parseInvocation } from './message-mapping';
+import { completedTask, failedTask, paymentRequiredTask, type TaskIdentity } from './task-mapping';
+import type { A2aAgentCard, A2aTask } from './types';
 
-/**
- * The gateway mount already destroys a connection whose body passes its cap,
- * so this is a second line rather than the only one — it bounds what this
- * adapter buffers if it is ever mounted somewhere without that guard.
- */
+// A second line behind the gateway mount's cap, bounding what this adapter
+// buffers if it is mounted without that guard
 const MAX_REQUEST_BODY_BYTES = 256 * 1024;
 
 export interface A2aAdapterOptions {
   readonly mountPath?: string;
-  /** Agent name published on the card. */
+  /** Agent name published on the card */
   readonly agentName?: string;
   readonly agentDescription?: string;
-  /** Version published on the card. Defaults to this package's version. */
+  /** Version published on the card. Defaults to this package's version */
   readonly agentVersion?: string;
 }
 
 const DEFAULT_AGENT_DESCRIPTION =
-  'Agent Commerce Gateway — canonical commerce resources exposed as A2A skills.';
+  'Agent Commerce Gateway: canonical commerce resources exposed as A2A skills.';
 
 export class A2aProtocolAdapter implements HttpProtocolAdapter {
   readonly name = 'a2a' as const;
@@ -88,14 +82,11 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
 
   private context: ProtocolAdapterContext | undefined;
   private started = false;
-  private skills: readonly CommerceResource[] = [];
-  // Same defence in depth MCP applies: the card only advertises a2a-exposed
-  // resources, but nothing stops a caller naming any id, and the adapter must
-  // not rely on the pipeline alone to refuse one scoped to another protocol.
+  // The card lists only a2a-exposed resources, but a caller can name any id,
+  // so the adapter refuses another protocol's resource itself
   private skillsById: ReadonlyMap<string, CommerceResource> = new Map();
-  // Built once at start: resources are fixed at config load, and a card
-  // rebuilt per request would let a discovery GET do work a caller controls
-  // the cost of.
+  // Built once at start: resources are fixed at config load, and a per-request
+  // build would be work an unauthenticated GET could trigger at will
   private card: A2aAgentCard | undefined;
 
   constructor(options: A2aAdapterOptions = {}) {
@@ -122,13 +113,12 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
       resources = context.resources.listExposedVia('a2a');
     } catch (err) {
       context.logger.error(
-        { err: toCommerceError(err).toInfo() },
+        { err: toLogInfo(err) },
         'a2a adapter: failed to list a2a-exposed resources',
       );
       resources = [];
     }
 
-    this.skills = resources;
     this.skillsById = new Map(resources.map((resource) => [resource.id, resource]));
     this.card = buildAgentCard({
       name: this.agentName,
@@ -146,7 +136,7 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
     );
   }
 
-  /** `GET /.well-known/agent-card.json`. */
+  /** `GET /.well-known/agent-card.json` */
   async handleAgentCard(req: IncomingMessage, res: ServerResponse): Promise<void> {
     try {
       if (!this.started || this.card === undefined) {
@@ -159,15 +149,12 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
       }
       this.writeJson(res, 200, this.card);
     } catch (err) {
-      this.context?.logger.error(
-        { err: toCommerceError(err).toInfo() },
-        'a2a adapter: agent card request failed',
-      );
+      this.context?.logger.error({ err: toLogInfo(err) }, 'a2a adapter: agent card request failed');
       this.writeJson(res, 500, { error: 'Internal server error.' });
     }
   }
 
-  /** `POST <mountPath>` — the A2A JSON-RPC endpoint. */
+  /** `POST <mountPath>`: the A2A JSON-RPC endpoint */
   async handleHttp(req: IncomingMessage, res: ServerResponse): Promise<void> {
     try {
       if (!this.started) {
@@ -196,7 +183,7 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
       if (declared !== A2A_PROTOCOL_VERSION) {
         // Missing counts as unsupported: a client that negotiates no version
         // is speaking an older convention, and answering it as if it were v1
-        // would be guessing on its behalf.
+        // would be guessing on its behalf
         this.writeJson(
           res,
           200,
@@ -209,10 +196,8 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
         return;
       }
 
-      let body: string;
-      try {
-        body = await readBody(req, MAX_REQUEST_BODY_BYTES);
-      } catch {
+      const read = await readCappedBody(req, MAX_REQUEST_BODY_BYTES);
+      if (read.kind !== 'ok') {
         this.writeJson(
           res,
           200,
@@ -221,7 +206,7 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
         return;
       }
 
-      const parsed = parseJsonRpcRequest(body);
+      const parsed = parseJsonRpcRequest(read.text);
       if (!parsed.ok) {
         this.writeJson(res, 200, jsonRpcError(parsed.id, parsed.error.code, parsed.error.message));
         return;
@@ -232,12 +217,8 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
         await this.dispatch(parsed.request.id, parsed.request.method, parsed.request.params),
       );
     } catch (err) {
-      // Nothing from `err` reaches the client: stack, exception name and any
-      // upstream detail stay in the log.
-      this.context?.logger.error(
-        { err: toCommerceError(err).toInfo() },
-        'a2a adapter: request handling failed',
-      );
+      // Nothing from `err` reaches the client
+      this.context?.logger.error({ err: toLogInfo(err) }, 'a2a adapter: request handling failed');
       this.writeJson(
         res,
         200,
@@ -272,18 +253,14 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
           ? A2A_ERROR_UNSUPPORTED_OPERATION
           : JSONRPC_INVALID_PARAMS;
       // CommerceError messages are written for a client; nothing else is
-      // relayed.
+      // relayed
       return jsonRpcError(id, code, error.message);
     }
 
     return this.execute(id, invocation);
   }
 
-  /**
-   * One accepted invocation, one `pipeline.execute()`. Nothing here prices a
-   * resource, inspects a proof or talks to a merchant backend — the adapter
-   * builds a `CanonicalRequest` and reads back what the pipeline decided.
-   */
+  // One accepted invocation, one `pipeline.execute()`
   private async execute(
     id: JsonRpcId,
     invocation: A2aInvocation,
@@ -295,10 +272,9 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
 
     const resource = this.skillsById.get(invocation.resourceId);
     if (resource === undefined) {
-      // A commerce outcome, so a failed task rather than a JSON-RPC error —
-      // and identical whether the resource does not exist or is scoped to
-      // another protocol, so a caller cannot probe for what this deployment
-      // does not expose over A2A.
+      // A commerce outcome, so a failed task rather than a JSON-RPC error. It
+      // reads the same whether the resource is missing or scoped to another
+      // protocol, so a caller cannot probe what A2A does not expose.
       return this.taskResult(
         id,
         failedTask(
@@ -315,8 +291,7 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
     const identity = this.taskIdentity(context, requestId);
 
     // Reserved-field extraction sits inside the try: a malformed
-    // `_authorization` envelope is rejected there, and that rejection is a
-    // commerce outcome for the caller like any other, not an escaped throw.
+    // `_authorization` envelope becomes a failed task like any other outcome
     try {
       const { input, payment, authorization } = extractReservedInputFields(
         invocation.input,
@@ -340,12 +315,12 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
           : completedTask(outcome, identity),
       );
     } catch (err) {
-      // Whatever went wrong downstream is the caller's *answer*, not a broken
-      // frame — `toCommerceError` also strips an arbitrary Error's message, so
-      // nothing internal reaches the artifact.
+      // A downstream failure is the caller's answer, not a broken frame.
+      // `toCommerceError` replaces a non-commerce error's message, so nothing
+      // internal reaches the artifact.
       const error = toCommerceError(err);
       context.logger.warn(
-        { resourceId: invocation.resourceId, requestId, err: error.toInfo() },
+        { resourceId: invocation.resourceId, requestId, err: toLogInfo(error) },
         'a2a adapter: execution failed',
       );
       return this.taskResult(id, failedTask(error, identity));
@@ -361,7 +336,7 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
     };
   }
 
-  /** A2A's JSON-RPC result wraps the terminal task. */
+  // A2A's JSON-RPC result wraps the terminal task
   private taskResult(id: JsonRpcId, task: A2aTask): Record<string, unknown> {
     return jsonRpcResult(id, { task });
   }
@@ -371,13 +346,12 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
     if (!this.started || this.card === undefined) {
       return { status: 'fail', detail: 'A2A adapter has not been started.', checkedAt };
     }
-    return { status: 'pass', detail: `${this.skills.length} skill(s) published.`, checkedAt };
+    return { status: 'pass', detail: `${this.skillsById.size} skill(s) published.`, checkedAt };
   }
 
   async stop(): Promise<void> {
     this.started = false;
     this.card = undefined;
-    this.skills = [];
     this.skillsById = new Map();
     this.context = undefined;
   }
@@ -387,22 +361,6 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
     res.writeHead(status, { 'content-type': A2A_JSON_MEDIA_TYPE });
     res.end(JSON.stringify(body));
   }
-}
-
-/**
- * Reads the unconsumed request stream the gateway hands over. Stops at the cap
- * rather than buffering whatever arrives.
- */
-async function readBody(req: IncomingMessage, maxBytes: number): Promise<string> {
-  const chunks: Buffer[] = [];
-  let total = 0;
-  for await (const chunk of req) {
-    const buffer = chunk as Buffer;
-    total += buffer.length;
-    if (total > maxBytes) throw new CommerceError('INPUT_INVALID', 'Request body too large.');
-    chunks.push(buffer);
-  }
-  return Buffer.concat(chunks).toString('utf8');
 }
 
 export function createA2aAdapter(options: A2aAdapterOptions = {}): A2aProtocolAdapter {

@@ -1,8 +1,8 @@
 /**
- * Maps execution-pipeline results and payment-proof input to their MCP wire
- * representation. Uses only the frozen wire helpers from core
- * (`toErrorEnvelope`, `toPaymentRequiredEnvelope`) so the MCP adapter, the
- * HTTP route and the demo buyer agent can never drift apart.
+ * Maps pipeline outcomes and errors to MCP tool results through the core wire
+ * helpers (`toErrorEnvelope`, `toPaymentRequiredEnvelope`,
+ * `toDeliverySummary`). The A2A adapter uses all three and the HTTP route the
+ * two envelopes, so each shape is defined once.
  */
 
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
@@ -16,24 +16,24 @@ import {
   toDeliverySummary,
   toErrorEnvelope,
   toPaymentRequiredEnvelope,
-} from '../../core/index.js';
+} from '../../core';
+import { isRecord } from '../../core/is-record';
 
 function toRecord(value: object): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-export function deliveredResult(outcome: DeliveredOutcome): CallToolResult {
+function deliveredResult(outcome: DeliveredOutcome): CallToolResult {
   const body = outcome.body;
   const text = typeof body === 'string' ? body : JSON.stringify(body ?? null);
-  const isStructured = typeof body === 'object' && body !== null && !Array.isArray(body);
   return {
     content: [{ type: 'text', text }],
-    ...(isStructured ? { structuredContent: toRecord(body) } : {}),
+    ...(isRecord(body) ? { structuredContent: body } : {}),
     _meta: { [DELIVERY_SUMMARY_META_KEY]: toRecord(toDeliverySummary(outcome)) },
   };
 }
 
-export function paymentRequiredResult(outcome: PaymentRequiredOutcome): CallToolResult {
+function paymentRequiredResult(outcome: PaymentRequiredOutcome): CallToolResult {
   const envelope = toPaymentRequiredEnvelope(outcome);
   const p = envelope.payment;
   const text = `Payment required: ${p.amount} ${p.currency} to ${p.destination} for resource "${outcome.resourceId}". Retry the call with a ${p.provider} payment proof in the "${PAYMENT_INPUT_FIELD}" input field.`;

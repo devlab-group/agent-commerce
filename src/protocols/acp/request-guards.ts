@@ -1,33 +1,29 @@
 /**
- * Everything that must hold before an ACP request reaches the pipeline.
- *
- * The sequence is fixed and fails closed at the first step that does not hold:
- * route -> bearer auth -> API-Version -> content type -> body size -> JSON ->
- * ACP request schema. Nothing below this file runs for a request that fails
- * any of them, which is what makes "no pipeline call on a guard failure"
- * checkable rather than a claim.
+ * Everything that must hold before an ACP request reaches the pipeline, in a
+ * fixed order that fails closed at the first step that does not hold: route ->
+ * bearer auth -> API-Version -> Idempotency-Key -> body size -> content type
+ * -> JSON -> ACP request schema. A request failing any step never reaches the
+ * pipeline.
  */
 import type { IncomingMessage } from 'node:http';
-import { isAuthorizedBearer } from './auth.js';
+import { readCappedBody } from '../http';
 import {
   ACP_API_VERSION,
   ACP_API_VERSION_HEADER,
   ACP_IDEMPOTENCY_KEY_HEADER,
   ACP_MAX_REQUEST_ID_LENGTH,
   ACP_REQUEST_ID_HEADER,
-} from './constants.js';
-import { type AcpFailure, acpFailure } from './errors.js';
-import { ACP_MAX_IDEMPOTENCY_KEY_LENGTH } from './idempotency/store.js';
-import { type AcpRouteMatch, matchAcpRoute } from './router.js';
-import { type AcpDefinition, validateAcpDocument } from './validation.js';
+} from './constants';
+import { type AcpFailure, acpFailure } from './errors';
+import { ACP_MAX_IDEMPOTENCY_KEY_LENGTH } from './idempotency/store';
+import { type AcpRouteMatch, matchAcpRoute } from './router';
+import { type AcpDefinition, validateAcpDocument } from './validation';
 
-/**
- * A second line behind the gateway mount's own cap, so this adapter bounds
- * what it buffers even if it is ever mounted without that guard.
- */
-export const ACP_MAX_REQUEST_BODY_BYTES = 256 * 1024;
+// A second line behind the gateway mount's cap, bounding what this adapter
+// buffers if it is mounted without that guard
+const ACP_MAX_REQUEST_BODY_BYTES = 256 * 1024;
 
-/** Which released request definition each operation's body is validated against. */
+// Which released request definition each operation's body is validated against
 const REQUEST_DEFINITIONS: Readonly<Record<AcpRouteMatch['operation'], AcpDefinition | undefined>> =
   {
     createCheckoutSession: 'createRequest',
@@ -39,11 +35,11 @@ const REQUEST_DEFINITIONS: Readonly<Record<AcpRouteMatch['operation'], AcpDefini
 
 export interface AcpGuardedRequest {
   readonly route: AcpRouteMatch;
-  /** Validated ACP request document. `{}` for a body-less route. */
+  /** Validated ACP request document. `{}` for a body-less route */
   readonly body: Record<string, unknown>;
-  /** The caller's `Request-Id`, bounded and filtered, when it sent a usable one. */
+  /** The caller's `Request-Id`, bounded and filtered, when it sent a usable one */
   readonly requestId?: string;
-  /** Present on every body-bearing route: ACP makes it mandatory there. */
+  /** Present on every body-bearing route, where ACP makes it mandatory */
   readonly idempotencyKey?: string;
 }
 
@@ -53,7 +49,8 @@ export type AcpGuardResult =
 
 export interface AcpGuardOptions {
   readonly mountPath: string;
-  readonly token: string;
+  /** `createBearerCheck` over the configured token */
+  readonly isAuthorized: (authorizationHeader: string | undefined) => boolean;
   readonly maxBodyBytes?: number;
 }
 
@@ -77,9 +74,10 @@ export async function guardAcpRequest(
   }
   const route = matched.route;
 
-  // Before anything reads a body: an unauthenticated caller must not be able
-  // to make this adapter buffer or parse.
-  if (!isAuthorizedBearer(header(req, 'authorization'), options.token)) {
+  // Before any body is read, so an unauthenticated caller cannot make this
+  // adapter buffer or parse. Only the bearer token authenticates: a
+  // `Signature` header is not verified and never stands in for it.
+  if (!options.isAuthorized(header(req, 'authorization'))) {
     return failed(
       acpFailure(
         401,
@@ -103,8 +101,8 @@ export async function guardAcpRequest(
     );
   }
   if (version.trim() !== ACP_API_VERSION) {
-    // Never mapped to the pinned version. "latest", an older snapshot and a
-    // typo are the same answer: this deployment serves one contract.
+    // Never mapped to the pinned version: "latest", an older snapshot and a
+    // typo get the same answer
     return failed(
       acpFailure(
         400,
@@ -116,9 +114,8 @@ export async function guardAcpRequest(
     );
   }
 
-  // Header-level and cheap, so it runs before a byte of body is read: a POST
-  // without a usable key can never be executed, and reading its body first
-  // would be work an authenticated client could ask for at will.
+  // Checked before the body is read: a POST without a usable key can never be
+  // executed, so reading its body would be wasted work
   let idempotencyKey: string | undefined;
   if (route.acceptsBody) {
     const presented = header(req, ACP_IDEMPOTENCY_KEY_HEADER)?.trim();
@@ -132,9 +129,8 @@ export async function guardAcpRequest(
         ),
       );
     }
-    // Bounded and visible-ASCII for the same reason as Request-Id: the key is
-    // echoed back in a response header, so a CRLF in it is a response-splitting
-    // attempt rather than a key.
+    // Bounded and printable ASCII like Request-Id: the key is echoed in a
+    // response header, where a CRLF would split the response
     if (presented.length > ACP_MAX_IDEMPOTENCY_KEY_LENGTH || !isVisibleAscii(presented)) {
       return failed(
         acpFailure(
@@ -148,7 +144,7 @@ export async function guardAcpRequest(
     idempotencyKey = presented;
   }
 
-  const read = await readBody(req, options.maxBodyBytes ?? ACP_MAX_REQUEST_BODY_BYTES);
+  const read = await readCappedBody(req, options.maxBodyBytes ?? ACP_MAX_REQUEST_BODY_BYTES);
   if (read.kind === 'too-large') {
     return failed(
       acpFailure(
@@ -176,14 +172,14 @@ export async function guardAcpRequest(
 
   const definition = REQUEST_DEFINITIONS[route.operation];
   if (definition === undefined) {
-    // GET carries no document; a body on it is ignored rather than validated.
+    // GET carries no document; a body on it is ignored, not validated
     return ok(route, {}, req, idempotencyKey);
   }
 
   let body: unknown;
   if (raw.trim().length === 0) {
-    // An absent body is an empty document, which the pinned schema then
-    // accepts (cancel) or rejects (create) on its own terms.
+    // An absent body is an empty document, which the schema accepts (cancel)
+    // or rejects (create) on its own terms
     body = {};
   } else {
     try {
@@ -197,7 +193,7 @@ export async function guardAcpRequest(
 
   const failure = validateAcpDocument(definition, body);
   if (failure !== undefined) {
-    // Only the caller's own pointer travels; the Ajv message stays here.
+    // Only the pointer into the caller's document travels, not the Ajv message
     return failed(
       acpFailure(400, 'invalid_request', 'invalid_request_body', 'The request body is invalid.', {
         ...(failure.path !== undefined ? { param: failure.path } : {}),
@@ -215,7 +211,7 @@ function checkContentType(
 ): AcpFailure | undefined {
   if (!route.acceptsBody) return undefined;
   if (contentType === undefined) {
-    // A POST with no body at all (a bare cancel) needs no content type.
+    // A POST with no body at all (a bare cancel) needs no content type
     return raw.trim().length === 0
       ? undefined
       : acpFailure(
@@ -259,11 +255,10 @@ function failed(failure: AcpFailure): AcpGuardResult {
 
 /**
  * The caller's correlation id, echoed back but never used as the gateway's own
- * request identity. It is attacker-controlled text on its way into a response
- * header, so it is bounded and reduced to visible ASCII - a newline in there is
- * a response-splitting attempt, not a correlation id.
+ * request id. It is caller-controlled text bound for a response header, so it
+ * is truncated and dropped unless it is printable ASCII.
  */
-export function normalizeRequestId(value: string | undefined): string | undefined {
+function normalizeRequestId(value: string | undefined): string | undefined {
   if (value === undefined) return undefined;
   const trimmed = value.trim().slice(0, ACP_MAX_REQUEST_ID_LENGTH);
   if (trimmed.length === 0) return undefined;
@@ -279,29 +274,3 @@ function header(req: IncomingMessage, name: string): string | undefined {
   const value = req.headers[name];
   return Array.isArray(value) ? value[0] : value;
 }
-
-/**
- * Reads the unconsumed request stream the gateway hands over, stopping at the
- * cap rather than buffering whatever arrives.
- */
-async function readBody(req: IncomingMessage, maxBytes: number): Promise<BodyRead> {
-  const chunks: Buffer[] = [];
-  let total = 0;
-  try {
-    for await (const chunk of req) {
-      const buffer = chunk as Buffer;
-      total += buffer.length;
-      if (total > maxBytes) return { kind: 'too-large' };
-      chunks.push(buffer);
-    }
-  } catch {
-    return { kind: 'unreadable' };
-  }
-  return { kind: 'ok', text: Buffer.concat(chunks).toString('utf8') };
-}
-
-/** A result object, not a sentinel string: a body whose text *is* "too-large" is a body. */
-type BodyRead =
-  | { readonly kind: 'ok'; readonly text: string }
-  | { readonly kind: 'too-large' }
-  | { readonly kind: 'unreadable' };

@@ -6,13 +6,14 @@
  * until the second half is checked.
  */
 import { describe, expect, it } from 'vitest';
-import type { ProtocolAdapterContext } from '../../../src/core/index.js';
-import { createAcpAdapter } from '../../../src/protocols/acp/adapter.js';
-import { ACP_SPEC_VERSION, ACP_WELL_KNOWN_PATH } from '../../../src/protocols/acp/constants.js';
-import { guardAcpRequest } from '../../../src/protocols/acp/request-guards.js';
-import { matchAcpRoute } from '../../../src/protocols/acp/router.js';
-import { validateAcpDocument } from '../../../src/protocols/acp/validation.js';
-import { adapterOptions, deliveredFor, MOUNT, setup, TOKEN } from './fixtures.js';
+import type { ProtocolAdapterContext } from '../../../src/core';
+import { createAcpAdapter } from '../../../src/protocols/acp/adapter';
+import { ACP_SPEC_VERSION, ACP_WELL_KNOWN_PATH } from '../../../src/protocols/acp/constants';
+import { guardAcpRequest } from '../../../src/protocols/acp/request-guards';
+import { matchAcpRoute } from '../../../src/protocols/acp/router';
+import { validateAcpDocument } from '../../../src/protocols/acp/validation';
+import { createBearerCheck } from '../../../src/protocols/http';
+import { adapterOptions, deliveredFor, MOUNT, setup, TOKEN } from './fixtures';
 
 interface HttpResult {
   status: number;
@@ -62,7 +63,7 @@ function fakeExchange(request: HttpRequest) {
   return { req, res, result };
 }
 
-/** An authenticated, correctly-versioned request. Individual cases override one piece. */
+// An authenticated, correctly-versioned request. Individual cases override one piece
 function goodHeaders(extra: Record<string, string> = {}): Record<string, string> {
   return {
     authorization: `Bearer ${TOKEN}`,
@@ -169,8 +170,8 @@ describe('ACP discovery', () => {
     expect(validateAcpDocument('discoveryResponse', result.body)).toBeUndefined();
   });
 
-  // Configured metadata is free text; publishing a document ACP's own schema
-  // rejects would be exactly the blanket claim this project refuses to make.
+  // Configured metadata is free text, so a document ACP's own schema rejects
+  // is never published
   it('refuses to start when configured metadata would break the document', async () => {
     const { context } = setup();
     const adapter = createAcpAdapter(
@@ -289,8 +290,8 @@ describe('ACP request guards', () => {
   });
 
   // Route matching runs before authentication on purpose: a 404 for an
-  // unimplemented ACP service is not information worth authenticating for, and
-  // it keeps an unauthenticated caller from reaching the body reader.
+  // unimplemented ACP service is not information worth authenticating for.
+  // Authentication still runs before the body reader, which is what this checks.
   it('reads no body for an unauthenticated request', async () => {
     const { context } = setup();
     let consumed = false;
@@ -314,7 +315,7 @@ describe('ACP request guards', () => {
     const { req } = fakeExchange({ headers: goodHeaders(), body: oversized });
     const guard = await guardAcpRequest(req as never, {
       mountPath: MOUNT,
-      token: TOKEN,
+      isAuthorized: createBearerCheck(TOKEN),
       maxBodyBytes: 32,
     });
 
@@ -420,7 +421,7 @@ describe('ACP route matching', () => {
   });
 
   // A percent-encoded separator must not become an extra path segment, and an
-  // id is a single opaque segment - not a place to hide a path.
+  // id is a single opaque segment - not a place to hide a path
   it.each([
     ['an encoded separator in the id', '/acp/checkout_sessions/cs%2F1/complete'],
     ['a traversal segment', '/acp/checkout_sessions/../health'],

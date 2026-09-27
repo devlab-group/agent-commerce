@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildAccessControlHook,
   buildOperatorTokenHook,
-} from '../../../src/gateway/access-control.js';
+} from '../../../src/gateway/access-control';
 
 function fakeReply(): FastifyReply & {
   statusCode?: number;
@@ -52,7 +52,7 @@ function fakeRequest(overrides: {
 
 const BASE = { publicBaseUrl: 'http://localhost:8080', allowedOrigins: [] as string[] };
 
-describe('buildAccessControlHook (Host + CORS only — token gate moved to buildOperatorTokenHook)', () => {
+describe('buildAccessControlHook (Host and CORS only)', () => {
   it('passes a plain request with no Origin and a matching Host', async () => {
     const hook = buildAccessControlHook(BASE);
     const reply = fakeReply();
@@ -100,6 +100,13 @@ describe('buildAccessControlHook (Host + CORS only — token gate moved to build
     expect(reply.statusCode).toBeUndefined();
     expect(reply.headers['access-control-allow-origin']).toBe('https://dash.example');
     expect(reply.headers['vary']).toBe('Origin');
+    // No gateway surface serves DELETE, so a preflight must not advertise it
+    expect(reply.headers['access-control-allow-methods']).toBe('GET,POST,OPTIONS');
+    // The request headers a browser client sends for payment and authorization
+    const allowed = String(reply.headers['access-control-allow-headers']).split(',');
+    expect(allowed).toEqual(
+      expect.arrayContaining(['payment-signature', 'agent-authorization', 'authorization']),
+    );
   });
 
   it('short-circuits an OPTIONS preflight for an allowlisted Origin with 204', async () => {
@@ -126,7 +133,7 @@ describe('buildAccessControlHook (Host + CORS only — token gate moved to build
   });
 });
 
-describe('buildOperatorTokenHook (unit — fakes)', () => {
+describe('buildOperatorTokenHook (unit, fakes)', () => {
   it('404s with no adminToken configured', () => {
     const hook = buildOperatorTokenHook(undefined);
     const reply = fakeReply();
@@ -152,33 +159,33 @@ describe('buildOperatorTokenHook (unit — fakes)', () => {
     expect(reply.statusCode).toBeUndefined();
   });
 
-  it('does not accept the admin token as a query parameter on any route, including the SSE one (removed; see SECURITY.md —)', () => {
-    for (const url of [
-      '/api/events/stream?adminToken=right',
-      '/api/receipts?adminToken=right',
-      '/api/events?adminToken=right',
-    ]) {
+  it('matches the Bearer scheme case-insensitively (RFC 7235) but still needs the token', () => {
+    const hook = buildOperatorTokenHook('right');
+    for (const authorization of ['bearer right', 'BEARER right', 'Bearer  right']) {
+      const reply = fakeReply();
+      hook(fakeRequest({ url: '/api/receipts', authorization }), reply);
+      expect(reply.statusCode, authorization).toBeUndefined();
+    }
+    for (const authorization of ['Bearer ', 'Basic right', 'right']) {
+      const reply = fakeReply();
+      hook(fakeRequest({ url: '/api/receipts', authorization }), reply);
+      expect(reply.statusCode, authorization).toBe(401);
+    }
+  });
+
+  it('does not accept the admin token as a query parameter on any route', () => {
+    for (const url of ['/api/receipts?adminToken=right', '/api/events?adminToken=right']) {
       const hook = buildOperatorTokenHook('right');
       const reply = fakeReply();
       hook(fakeRequest({ url }), reply);
       expect(reply.statusCode, url).toBe(401);
     }
   });
-
-  it('the header path still authenticates the SSE route on its own, unaffected by the query-token removal', () => {
-    const hook = buildOperatorTokenHook('right');
-    const reply = fakeReply();
-    hook(fakeRequest({ url: '/api/events/stream', authorization: 'Bearer right' }), reply);
-    expect(reply.statusCode).toBeUndefined();
-  });
 });
 
 describe('regression: percent-encoded path cannot bypass the token gate', () => {
-  // Real Fastify + real routing — the bug was routing-level (find-my-way
-  // decodes before matching; the old global-hook gate compared the raw,
-  // still-encoded path against a literal string). A unit test against the
-  // hook function in isolation cannot see that class of bug at all; it has
-  // to go through `.inject()` so the real router runs.
+  // Through `.inject()`, so the real router runs: it decodes a path before
+  // matching, which a test of the hook function alone cannot see
   function buildTestServer(adminToken: string | undefined) {
     const server = Fastify({ logger: false });
     server.get('/api/receipts', { onRequest: buildOperatorTokenHook(adminToken) }, async () => ({
@@ -187,15 +194,10 @@ describe('regression: percent-encoded path cannot bypass the token gate', () => 
     server.get('/api/events', { onRequest: buildOperatorTokenHook(adminToken) }, async () => ({
       events: [],
     }));
-    server.get(
-      '/api/events/stream',
-      { onRequest: buildOperatorTokenHook(adminToken) },
-      async () => ({ ok: true }),
-    );
     return server;
   }
 
-  const ENCODED_PATHS = ['/api/%72eceipts', '/api/%65vents', '/api/events/%73tream'];
+  const ENCODED_PATHS = ['/api/%72eceipts', '/api/%65vents'];
 
   it('a percent-encoded path still requires the token (token configured)', async () => {
     const server = buildTestServer('right');
@@ -226,15 +228,13 @@ describe('regression: percent-encoded path cannot bypass the token gate', () => 
   it('double-encoded and malformed-escape paths do not bypass the gate either', async () => {
     const server = buildTestServer('right');
 
-    // %2572 decodes once to the literal string "%72", not to "r" — the
-    // router will not match this to /api/receipts at all (find-my-way
-    // decodes exactly once), so it 404s rather than reaching the handler.
-    // The point of this test is that it must NOT be a 200.
+    // %2572 decodes once, to the literal "%72", so the router matches no route
+    // and answers 404; what matters is that it is never a 200
     const double = await server.inject({ method: 'GET', url: '/api/%2572eceipts' });
     expect(double.statusCode).not.toBe(200);
 
-    // A malformed escape (%zz is not valid percent-encoding) — Fastify/
-    // find-my-way itself rejects this with 400 before a route ever matches.
+    // A malformed escape (%zz): the router rejects it with 400 before any route
+    // matches
     const malformed = await server.inject({ method: 'GET', url: '/api/%zzeceipts' });
     expect(malformed.statusCode).not.toBe(200);
 

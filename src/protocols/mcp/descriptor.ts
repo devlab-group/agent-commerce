@@ -1,41 +1,27 @@
 /**
  * Adapter self-description.
  *
- * `supportedSpec` reports the MCP protocol revision this adapter targets, as
- * negotiated by the installed @modelcontextprotocol/sdk@1.30.0 build.
- *
- * Verified against the shipped SDK (not guessed):
- * `dist/esm/types.js` exports `LATEST_PROTOCOL_VERSION = '2025-11-25'` and
- * `SUPPORTED_PROTOCOL_VERSIONS = [LATEST_PROTOCOL_VERSION, '2025-06-18',
- * '2025-03-26', '2024-11-05', '2024-10-07']`. `dist/esm/server/index.js`
- * (`_oninitialize`) negotiates by echoing the client-requested version when
- * it is in `SUPPORTED_PROTOCOL_VERSIONS`, and falling back to
- * `LATEST_PROTOCOL_VERSION` otherwise — so `LATEST_PROTOCOL_VERSION` is the
- * single most accurate value to report as "the" supported spec revision.
+ * `supportedSpec` is the SDK's `LATEST_PROTOCOL_VERSION`. The SDK's
+ * `initialize` echoes a requested version it supports, older ones included,
+ * and otherwise answers with this one, so it is the best single value to
+ * report.
  */
 import { LATEST_PROTOCOL_VERSION } from '@modelcontextprotocol/sdk/types.js';
-import type { AdapterDescriptor } from '../../core/index.js';
+import type { AdapterDescriptor } from '../../core';
 
-/** This package's own version — independent of the negotiated MCP spec revision. */
-export { PACKAGE_VERSION } from '../../version.js';
+// The MCP protocol revision this adapter targets
+const MCP_SUPPORTED_SPEC = LATEST_PROTOCOL_VERSION;
 
-/** The MCP protocol revision this adapter targets (see module doc above). */
-export const MCP_SUPPORTED_SPEC = LATEST_PROTOCOL_VERSION;
-
-/** Tool-oriented capabilities this adapter actually implements. */
-export const MCP_CAPABILITIES: readonly string[] = ['tools/list', 'tools/call'];
+// Tool-oriented capabilities this adapter implements
+const MCP_CAPABILITIES: readonly string[] = ['tools/list', 'tools/call'];
 
 /**
- * MCP surfaces this adapter does not implement in this release. Kept explicit
- * so `doctor` / the support matrix never imply blanket protocol compatibility.
+ * MCP surfaces this adapter does not implement, listed so its descriptor never
+ * implies blanket protocol compatibility.
  *
- * `dns-rebinding-protection` is not a missing *feature* so much as a
- * delegated one: this transport does not validate `Origin`/`Host` itself
- * (see adapter.ts's module doc for why) — the gateway's `onRequest` hook
- * does, for `/mcp` and the HTTP routes together. Listed here so alpha
- * honesty holds even for a security property, not just a protocol surface:
- * an operator reading this adapter's own descriptor should not conclude it
- * provides Origin validation on its own.
+ * `dns-rebinding-protection` is delegated rather than missing: the gateway's
+ * `onRequest` hook validates Host and Origin for `/mcp` (see adapter.ts), and
+ * the adapter provides none on its own.
  */
 export const MCP_UNSUPPORTED: readonly string[] = [
   'resources',

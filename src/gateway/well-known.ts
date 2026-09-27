@@ -1,59 +1,35 @@
 /**
- * `GET /.well-known/agent-commerce` — merchant + every adapter/provider/store
- * `AdapterDescriptor`, protocol/spec versions. This route is unauthenticated
- * by design, so nothing here may be a credential.
+ * `GET /.well-known/agent-commerce`: the merchant, the `AdapterDescriptor` of
+ * every adapter, provider and store, and the protocol and spec versions. The
+ * route is unauthenticated, so nothing here may be a credential.
  *
- * The x402 settlement destination (`payTo`), `network` and `asset` ARE
- * public information — a payer needs them (plus scheme/amount, which travel
- * in the challenge's `accepts` array) to construct a payment, and `payTo` is
- * visible on-chain the moment any transfer lands. `rpcUrl` is different and
- * is deliberately NOT published here: every commercial EVM RPC
- * provider embeds an API key in the URL itself (Alchemy's `/v2/<KEY>`,
- * Infura's `/v3/<KEY>`, QuickNode's per-endpoint token) — on any non-local
- * deployment, echoing it back on an open route hands out a live credential
- * to anyone who asks. The facilitator URL is withheld for the same reason,
- * and the facilitator private key never appears at all. `doctor`'s
- * live/local cross-check (src/cli) only reads `asset`/`network`/`payTo` from
- * this document, so dropping `rpcUrl` does not affect it.
- *
- * `WellKnownDocument` is also exported via the package's
- * `./well-known.js` subpath (non-frozen — see docs/contracts.md's change
- * log) so `demo/dashboard`'s hand-maintained mirror of this shape
- * (`types.ts`) can assert assignability against the real type instead of
- * silently drifting — which is exactly how it twice shipped `rpcUrl` as
- * non-optional after this file stopped sending it. Consuming this as
- * `import type` only is what keeps the dashboard's browser bundle free of
- * Fastify/pino/better-sqlite3: a type-only import is erased entirely by any
- * TypeScript-aware bundler (esbuild, swc, tsc), independent of whatever
- * runtime code this file also happens to export — the same property
- * `src/core`'s `./execution` subpath already relies on.
+ * The settlement destination, `network` and `asset` are public: a payer needs
+ * them to build a payment, and the destination is visible on-chain after any
+ * transfer. `rpcUrl` and the facilitator URL are withheld, because commercial
+ * providers embed an API key in the URL (Alchemy's `/v2/<KEY>`, Infura's
+ * `/v3/<KEY>`, QuickNode's per-endpoint token). The facilitator private key
+ * never appears.
  */
 
-import type { GatewayConfig } from '../config/index.js';
+import type { GatewayConfig } from '../config';
 import type {
   AdapterDescriptor,
   AdapterHealth,
   AuthorizationProvider,
-  Clock,
   PaymentProvider,
   ReceiptStore,
-} from '../core/index.js';
-import { MPP_PROFILE } from '../payments/mpp/constants.js';
+} from '../core';
+import { MPP_PROFILE } from '../payments/mpp/constants';
 import {
   type DeploymentMode,
   requireNetworkProfile,
   resolveDeploymentMode,
-} from '../payments/x402/networks.js';
-import { PACKAGE_VERSION } from '../version.js';
-import { type AdapterRuntime, getAdapterHealth } from './adapters.js';
+} from '../payments/x402/networks';
+import { PACKAGE_VERSION } from '../version';
+import type { ProbedAdapter } from './readiness';
 
-/**
- * The spec version is deliberately NOT derived from `PACKAGE_VERSION`. It
- * names the wire contract a client negotiates against, which changes only
- * when that contract does — a patch release of this package speaks the same
- * spec, and announcing a new one on every version bump would tell every
- * client the protocol moved when it did not.
- */
+// Not derived from `PACKAGE_VERSION`: it names the wire contract a client
+// negotiates against, which changes only when that contract does
 const GATEWAY_SUPPORTED_SPEC = 'agent-commerce/v1.0.0';
 
 /**
@@ -79,9 +55,9 @@ export interface WellKnownDocument {
   readonly adapters: ReadonlyArray<AdapterDescriptor & { readonly health: AdapterHealth }>;
   readonly paymentProviders: readonly AdapterDescriptor[];
   /**
-   * Empty unless a resource requires authorization. Listed separately from
-   * `paymentProviders` because an authorization method is not a payment rail
-   * and must never be selectable as one.
+   * Empty unless the gateway has an authorization provider (`authorization.ap2.enabled`).
+   * Listed apart from `paymentProviders` because an authorization method is not
+   * a payment rail and must never be selectable as one.
    */
   readonly authorizationProviders: readonly AdapterDescriptor[];
   readonly store: AdapterDescriptor;
@@ -96,7 +72,7 @@ export interface WellKnownDocument {
       readonly payTo: string;
       readonly maxTimeoutSeconds: number;
       readonly facilitator: { readonly mode: 'local' | 'remote' };
-      /** What this deployment actually is. */
+      /** `local`, `testnet` or `mainnet`, from the network and facilitator together */
       readonly mode: DeploymentMode;
     };
     /** Public settlement fields; excludes the challenge secret and facilitator credentials */
@@ -119,21 +95,16 @@ export interface BuildWellKnownOptions {
   readonly paymentProviders: readonly PaymentProvider[];
   readonly authorizationProviders: readonly AuthorizationProvider[];
   readonly store: ReceiptStore;
-  readonly adapterRuntimes: readonly AdapterRuntime[];
-  readonly clock: Clock;
+  /** From the memoized readiness probe, so this route shares `/ready`'s `health()` calls */
+  readonly adapters: readonly ProbedAdapter[];
 }
 
 /**
- * Strips a health result down to what an anonymous caller may see.
- *
- * `/ready` already codifies this rule and maps `detail` to a fixed vocabulary,
- * because the raw string is exactly the internal detail an unauthenticated
- * route must not carry — `getAdapterHealth` puts `describeError()` there for a
- * thrown `health()`, and a start failure puts the raw throw message, routinely
- * a module path or an internal hostname. This route is the same trust level and
- * was returning it verbatim. `createGateway` is public API and accepts
- * arbitrary adapters, so "our own adapters say nothing sensitive" is not a
- * property this code can rely on.
+ * Drops `detail` from a health result; `/ready` replaces it with a fixed
+ * vocabulary. For a thrown `health()` or a start failure `detail` holds the
+ * raw error message, often a module path or an internal hostname, and
+ * `createGateway` accepts arbitrary adapters whose details this code cannot
+ * vouch for.
  */
 function publicHealth(health: AdapterHealth): AdapterHealth {
   const { detail: _detail, ...rest } = health;
@@ -149,15 +120,11 @@ function publicProtocols(protocols: GatewayConfig['protocols']): WellKnownProtoc
   };
 }
 
-export async function buildWellKnownDocument(
-  options: BuildWellKnownOptions,
-): Promise<WellKnownDocument> {
-  const adapters = await Promise.all(
-    options.adapterRuntimes.map(async (runtime) => {
-      const health = await getAdapterHealth(runtime, options.clock);
-      return { ...runtime.adapter.descriptor, health: publicHealth(health) };
-    }),
-  );
+export function buildWellKnownDocument(options: BuildWellKnownOptions): WellKnownDocument {
+  const adapters = options.adapters.map(({ descriptor, health }) => ({
+    ...descriptor,
+    health: publicHealth(health),
+  }));
 
   const { x402, mpp } = options.config.payments;
 
@@ -184,14 +151,11 @@ export async function buildWellKnownDocument(
               assetDecimals: x402.assetDecimals,
               payTo: x402.payTo,
               maxTimeoutSeconds: x402.maxTimeoutSeconds,
-              // Never the signerPrivateKey, and never the facilitator URL:
-              // a facilitator endpoint is a per-deployment operational detail
-              // that can carry a tenant path or an API key, exactly like
-              // `rpcUrl` above. Only whether it is local or remote is public.
+              // Only local or remote is public: the facilitator URL can carry
+              // a tenant path or an API key, and the signer key is secret
               facilitator: { mode: x402.facilitator.mode },
-              // Chain id 84532 is shared between the local dev chain and
-              // public Base Sepolia, so the network id alone cannot say which
-              // one a client is talking to. This can.
+              // Chain id 84532 is both the local dev chain and public Base
+              // Sepolia, so the network id alone cannot say which one this is
               mode: resolveDeploymentMode(
                 requireNetworkProfile(x402.network, 'payments.x402.network'),
                 x402.facilitator.mode,

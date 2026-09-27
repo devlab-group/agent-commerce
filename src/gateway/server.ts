@@ -1,16 +1,8 @@
-/**
- * `createGateway()` — the Fastify server. Fully usable (and tested) with
- * fakes, without `main.ts` (docs/contracts.md "Composition root").
- */
+// `createGateway()`: the Fastify server, usable with injected fakes and without `main.ts`
 
+import type { IncomingMessage } from 'node:http';
 import Fastify, { type FastifyInstance } from 'fastify';
-import type { GatewayConfig } from '../config/index.js';
-import {
-  createEventBus,
-  createExecutionPipeline,
-  createResourceRegistry,
-  HttpBackendExecutor,
-} from '../core/execution/index.js';
+import type { GatewayConfig } from '../config';
 import {
   type AuthorizationProvider,
   type BackendExecutor,
@@ -25,36 +17,48 @@ import {
   type ReceiptStore,
   type ResourceRegistry,
   systemClock,
-} from '../core/index.js';
-import { buildAccessControlHook } from './access-control.js';
+} from '../core';
+import {
+  createExecutionPipeline,
+  createResourceRegistry,
+  createStoreEventSink,
+  HttpBackendExecutor,
+} from '../core/execution';
+import { buildAccessControlHook } from './access-control';
 import {
   type AdapterRuntime,
   MOUNT_BODY_LIMIT_BYTES,
   startAndMountAdapters,
   stopAdapters,
-} from './adapters.js';
-import { createDefaultIdGenerator } from './ids.js';
-import { buildNotFoundHandler, createGatewayLogger, fastifyLoggerOptions } from './logger.js';
-import { registerRoutes } from './routes.js';
+} from './adapters';
+import { createDefaultIdGenerator } from './ids';
+import { buildNotFoundHandler, createGatewayLogger, fastifyLoggerOptions } from './logger';
+import { registerRoutes } from './routes';
 
 const REQUEST_ID_HEADER = 'x-request-id';
-// an unvalidated caller-supplied id becomes the audit trail's
-// correlation key — a caller could reuse a legitimate flow's id to conflate
-// records, or write an unbounded string into every row. A client id is only
-// accepted in this constrained form; anything else gets a gateway-minted one.
+// The audit request id is always minted: a caller-chosen one could repeat
+// another flow's id and interleave its audit rows with that flow's. A
+// caller's X-Request-Id in this bounded form survives only as the
+// `clientRequestId` binding on the request's log lines.
 const CLIENT_REQUEST_ID_PATTERN = /^[A-Za-z0-9._:-]{1,64}$/;
+
+function clientRequestIdOf(raw: IncomingMessage): string | undefined {
+  const header = raw.headers[REQUEST_ID_HEADER];
+  const value = Array.isArray(header) ? header[0] : header;
+  return value !== undefined && CLIENT_REQUEST_ID_PATTERN.test(value) ? value : undefined;
+}
 
 export interface GatewayOptions {
   readonly config: GatewayConfig;
   readonly store: ReceiptStore;
   readonly paymentProviders: readonly PaymentProvider[];
-  /** Absent means no resource requires authorization, which is the default */
+  /** Defaults to none; each resource declares the methods it requires */
   readonly authorizationProviders?: readonly AuthorizationProvider[];
   readonly protocolAdapters: readonly ProtocolAdapter[];
   readonly logger?: Logger;
   readonly clock?: Clock;
   readonly ids?: IdGenerator;
-  /** Override for tests. */
+  /** Override for tests */
   readonly backend?: BackendExecutor;
 }
 
@@ -63,7 +67,7 @@ export interface GatewayInstance {
   readonly resources: ResourceRegistry;
   listen(): Promise<{ url: string }>;
   close(): Promise<void>;
-  /** Fastify instance, for `.inject()` in tests. */
+  /** Fastify instance, for `.inject()` in tests */
   readonly server: FastifyInstance;
 }
 
@@ -97,39 +101,39 @@ export async function createGateway(options: GatewayOptions): Promise<GatewayIns
       withProviderBackedMethodsFirst(resource, options.paymentProviders),
     ),
   );
-  const eventBus = createEventBus({ store: options.store, logger });
+  const events = createStoreEventSink({ store: options.store, logger });
   const pipeline = createExecutionPipeline({
     resources,
     paymentProviders: options.paymentProviders,
     authorizationProviders,
     store: options.store,
     backend,
-    events: eventBus,
+    events,
     logger,
     clock,
     ids,
   });
 
   const server = Fastify({
-    // One number for both surfaces — see adapters.ts's doc comment
-    // on MOUNT_BODY_LIMIT_BYTES for why they're enforced two different ways.
+    // Same cap as adapter mounts, which enforce it on the socket instead
     bodyLimit: MOUNT_BODY_LIMIT_BYTES,
-    genReqId: (rawReq) => {
-      const header = rawReq.headers[REQUEST_ID_HEADER];
-      const value = Array.isArray(header) ? header[0] : header;
-      return value !== undefined && CLIENT_REQUEST_ID_PATTERN.test(value) ? value : ids.next('req');
+    genReqId: () => ids.next('req'),
+    childLoggerFactory: (parent, bindings, childOptions, rawReq) => {
+      const clientRequestId = clientRequestIdOf(rawReq);
+      return parent.child(
+        clientRequestId !== undefined ? { ...bindings, clientRequestId } : bindings,
+        childOptions,
+      );
     },
     logger: fastifyLoggerOptions({ name: `${options.config.merchant.id}-http` }),
   });
 
-  // See buildNotFoundHandler's own doc comment (logger.ts) — this
-  // is what leaked the SSE ?adminToken= query param at info level on any 404
-  // (a typo'd route, even a trailing slash on a real one).
+  // Fastify's default 404 handler logs the raw URL, query string included
   server.setNotFoundHandler(buildNotFoundHandler());
 
-  // Host/Origin/admin-token gate — see access-control.ts. Closed by default:
-  // no allowedOrigins means no browser can read anything cross-origin, and no
-  // adminToken means the ledger routes 404 rather than serving openly.
+  // Host check and CORS for every request. Closed by default: with no
+  // allowedOrigins, every request carrying an Origin is refused. The admin
+  // token gate is per route, in routes.ts.
   server.addHook(
     'onRequest',
     buildAccessControlHook({
@@ -148,7 +152,6 @@ export async function createGateway(options: GatewayOptions): Promise<GatewayIns
     store: options.store,
     paymentProviders: options.paymentProviders,
     authorizationProviders,
-    eventBus,
     clock,
     adapterRuntimes,
     logger,
@@ -157,7 +160,7 @@ export async function createGateway(options: GatewayOptions): Promise<GatewayIns
   const context: ProtocolAdapterContext = {
     pipeline,
     resources,
-    events: eventBus,
+    events,
     logger,
     clock,
     ids,

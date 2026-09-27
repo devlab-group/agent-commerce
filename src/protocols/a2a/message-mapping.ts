@@ -12,38 +12,37 @@
  *               "mediaType": "application/json" }] } }
  * ```
  *
- * A payment proof rides in the reserved `_payment` input field, exactly as it
- * does over MCP — there is deliberately no second, A2A-specific payment
- * representation to keep in sync.
+ * Payment and authorization proofs ride in the reserved `_payment` and
+ * `_authorization` input fields, as over MCP; there is no A2A-specific
+ * representation.
  *
  * The accepted shape is narrow on purpose. Everything richer that A2A allows
- * (text parts, files, multi-part messages, task continuation) is rejected with
- * a code that says which of the two it is: `INPUT_INVALID` for an envelope
- * that is malformed, `PROTOCOL_UNSUPPORTED` for one that is a legal A2A
- * message this adapter does not serve. Guessing at intent — picking the first
- * data part out of several, say — would make a caller's mistake look like a
- * successful, possibly *paid*, call for something they did not ask for.
+ * (text parts, files, multi-part messages, task continuation) is rejected:
+ * `INPUT_INVALID` for a malformed envelope, `PROTOCOL_UNSUPPORTED` for a legal
+ * A2A message this adapter does not serve. Guessing at intent, such as taking
+ * the first of several data parts, could turn a caller's mistake into a
+ * successful, possibly paid, call for something they did not ask for.
  */
 import { z } from 'zod';
-import { CommerceError } from '../../core/index.js';
-import { A2A_JSON_MEDIA_TYPE } from './constants.js';
+import { CommerceError } from '../../core';
+import { isRecord } from '../../core/is-record';
+import { A2A_JSON_MEDIA_TYPE } from './constants';
 
-/** The only role a request message may carry. A2A v1 spells roles this way. */
-export const A2A_USER_ROLE = 'ROLE_USER';
+// The only role a request message may carry. A2A v1 spells roles this way
+const A2A_USER_ROLE = 'ROLE_USER';
 
-/** What a supported envelope reduces to. Nothing protocol-shaped survives. */
+/** What a supported envelope reduces to. Nothing protocol-shaped survives */
 export interface A2aInvocation {
   readonly resourceId: string;
   readonly input: Record<string, unknown>;
-  /** Client-assigned message id, echoed back on the response when present. */
+  /** Client-assigned message id, when the request carried one */
   readonly messageId?: string;
 }
 
 /**
- * Shape only — every semantic rule is checked below, where the failure can
- * name itself. Parts stay untyped records: classifying one is what tells a
- * file part apart from a malformed one, and zod would collapse both into the
- * same union failure.
+ * Shape only; every semantic rule is checked below, where the failure can name
+ * itself. Parts stay untyped records: zod would collapse a file part and a
+ * malformed one into the same union failure.
  */
 const UnknownRecord = z.record(z.string(), z.unknown());
 
@@ -70,14 +69,10 @@ function unsupported(message: string): CommerceError {
   return new CommerceError('PROTOCOL_UNSUPPORTED', message);
 }
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
 /**
  * Continuation is refused rather than ignored: a caller resuming a task would
  * otherwise get a fresh, independently billed execution back and no signal
- * that their task id meant nothing here.
+ * that their task id meant nothing here
  */
 function assertNoContinuation(params: z.infer<typeof ParamsSchema>): void {
   const message = params.message;
@@ -97,11 +92,10 @@ function assertNoContinuation(params: z.infer<typeof ParamsSchema>): void {
 /**
  * Names the part kind so a caller learns which of theirs is the problem.
  *
- * A2A v1 gives `Part` a content oneof — `text`, `data`, `raw` (inline bytes)
- * or `url` — and carries `filename`/`mediaType` beside it, rather than the
- * nested `file` object v0.3 used. Both spellings are refused: a v0.3-shaped
- * client reaching this endpoint should be told its part kind is unsupported,
- * not that its envelope is malformed.
+ * A2A v1 gives `Part` a content oneof (`text`, `data`, `raw` for inline bytes,
+ * or `url`) with `filename` and `mediaType` beside it, where v0.3 used a
+ * nested `file` object. Both spellings are refused as unsupported, so a
+ * v0.3-shaped client is not told its envelope is malformed.
  */
 function assertSupportedPart(part: Record<string, unknown>): void {
   if ('file' in part || 'raw' in part || 'url' in part) {
@@ -123,8 +117,7 @@ function assertSupportedPart(part: Record<string, unknown>): void {
 
 /**
  * Turns `SendMessage` params into a resource id and an input object, or throws
- * a `CommerceError`. Pure: it resolves nothing, checks no resource exists and
- * touches no payment — the pipeline owns all three.
+ * a `CommerceError`. Pure: it resolves no resource and touches no payment.
  */
 export function parseInvocation(rawParams: unknown): A2aInvocation {
   const parsed = ParamsSchema.safeParse(rawParams);
@@ -155,7 +148,7 @@ export function parseInvocation(rawParams: unknown): A2aInvocation {
   assertSupportedPart(part);
 
   const data = part['data'];
-  if (!isPlainObject(data)) {
+  if (!isRecord(data)) {
     throw invalid('Message part "data" must be a JSON object.');
   }
 
@@ -170,7 +163,7 @@ export function parseInvocation(rawParams: unknown): A2aInvocation {
   const rawInput = data['input'];
   // Absent means "no arguments", which is a real case for a zero-input
   // resource. Present-but-not-an-object is a mistake, never an empty call.
-  if (rawInput !== undefined && !isPlainObject(rawInput)) {
+  if (rawInput !== undefined && !isRecord(rawInput)) {
     throw invalid('Message part data "input" must be a JSON object.');
   }
 
