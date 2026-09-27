@@ -4,16 +4,17 @@
  *
  * What this proves is narrow. A trusted issuer signed this mandate, it has not
  * expired, it is addressed to us, and it binds a checkout document the
- * merchant signed. It does NOT prove the mandate authorises the purchase in
- * front of us: that is profile.ts, and a caller treating this as permission to
- * settle has skipped it.
+ * merchant signed. It does NOT prove the mandate authorizes the purchase in
+ * front of us: that is `bindMandateToPurchase`, and a caller treating this as
+ * permission to settle has skipped it.
  */
-import type { Clock } from '../../core/index.js';
-import { verifyCheckoutJwt } from './checkout-jwt.js';
-import { type Ap2ErrorContext, ap2Rejected } from './errors.js';
-import { verifyMandate } from './sd-jwt.js';
-import { createTrustStore } from './trust.js';
-import type { EnabledAp2Config, VerifiedCheckoutMandate } from './types.js';
+import type { Clock } from '../../core';
+import { verifyCheckoutJwt } from './checkout-jwt';
+import { type Ap2ErrorContext, ap2Rejected } from './errors';
+import { verifyMandate } from './sd-jwt';
+import { sha256 } from './sha256';
+import { createTrustStore } from './trust';
+import type { EnabledAp2Config, VerifiedCheckoutMandate } from './types';
 
 export interface Ap2VerifierOptions {
   readonly config: EnabledAp2Config;
@@ -22,7 +23,7 @@ export interface Ap2VerifierOptions {
 
 export interface Ap2MandateVerifier {
   verify(presentation: string, context?: Ap2ErrorContext): Promise<VerifiedCheckoutMandate>;
-  /** Trusted issuer ids, for `doctor`. Counts and names only, never keys */
+  /** Trusted issuer ids, for the provider's health detail. Never keys */
   trustedIssuers(): { readonly mandate: readonly string[]; readonly checkout: readonly string[] };
 }
 
@@ -30,9 +31,8 @@ export interface Ap2MandateVerifier {
  * Algorithm-prefixed so a future digest change is visible in stored references
  * rather than silently producing unequal values for one mandate
  */
-async function mandateReference(signedToken: string): Promise<string> {
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(signedToken));
-  return `sha256:${Buffer.from(digest).toString('base64url')}`;
+function mandateReference(signedToken: string): string {
+  return `sha256:${sha256(signedToken).toString('base64url')}`;
 }
 
 export function createAp2MandateVerifier(options: Ap2VerifierOptions): Ap2MandateVerifier {
@@ -59,12 +59,11 @@ export function createAp2MandateVerifier(options: Ap2VerifierOptions): Ap2Mandat
       );
 
       return {
-        reference: await mandateReference(mandate.signedToken),
+        reference: mandateReference(mandate.signedToken),
         mandateIssuer: mandate.issuer,
         checkoutIssuer: checkout.issuer,
         checkoutJwtId: checkout.jwtId,
         checkoutClaims: checkout.claims,
-        mandateClaims: mandate.claims,
       };
     },
 

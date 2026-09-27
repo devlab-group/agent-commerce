@@ -2,25 +2,25 @@
  * Binding a verified mandate to the purchase in front of us, and spending it
  * exactly once.
  *
- * The verifier proves a mandate is genuine, which on its own authorises
+ * The verifier proves a mandate is genuine, which on its own authorizes
  * nothing: a genuine mandate for a $0.01 report would unlock a $500 one. These
  * own the comparison that stops that, and the reservation that stops one
  * approval paying twice.
  */
 import { beforeAll, describe, expect, it } from 'vitest';
-import { AP2_CHECKOUT_PROFILE } from '../../../src/authorization/ap2/constants.js';
-import { bindMandateToPurchase, computeInputHash } from '../../../src/authorization/ap2/profile.js';
-import { createAp2ReplayStore } from '../../../src/authorization/ap2/replay-store.js';
+import { AP2_CHECKOUT_PROFILE } from '../../../src/authorization/ap2/constants';
+import { bindMandateToPurchase, computeInputHash } from '../../../src/authorization/ap2/profile';
+import { createAp2ReplayStore } from '../../../src/authorization/ap2/replay-store';
 import {
   type Ap2MandateVerifier,
   createAp2MandateVerifier,
-} from '../../../src/authorization/ap2/verifier.js';
+} from '../../../src/authorization/ap2/verifier';
 import type {
   AuthorizationVerificationContext,
   CommerceError,
   PaymentRequirement,
-} from '../../../src/core/index.js';
-import { isCommerceError } from '../../../src/core/index.js';
+} from '../../../src/core';
+import { isCommerceError } from '../../../src/core';
 import {
   assemblePresentation,
   checkoutPayload,
@@ -30,7 +30,7 @@ import {
   mintMandateParts,
   type Party,
   signCheckoutJwt,
-} from './fixtures.js';
+} from './fixtures';
 
 const RESOURCE_ID = 'market_report';
 const INPUT = { city: 'Berlin', detail: { depth: 2, tags: ['a', 'b'] } };
@@ -115,7 +115,7 @@ async function bindRejection(
 
 beforeAll(async () => {
   parties = await createParties();
-  inputHash = await computeInputHash(INPUT);
+  inputHash = computeInputHash(INPUT);
   verifier = createAp2MandateVerifier({
     config: {
       enabled: true,
@@ -133,20 +133,20 @@ describe('the RFC 8785 input hash', () => {
   it('does not depend on the order keys were written in', async () => {
     // Their signer hashed the buyer's request, we hash what arrived. Same
     // content in a different key order is the same request.
-    const a = await computeInputHash({ city: 'Berlin', depth: 2 });
-    const b = await computeInputHash({ depth: 2, city: 'Berlin' });
+    const a = computeInputHash({ city: 'Berlin', depth: 2 });
+    const b = computeInputHash({ depth: 2, city: 'Berlin' });
     expect(a).toBe(b);
   });
 
   it('is stable through nesting', async () => {
-    const a = await computeInputHash({ outer: { x: 1, y: { p: 'a', q: 'b' } } });
-    const b = await computeInputHash({ outer: { y: { q: 'b', p: 'a' }, x: 1 } });
+    const a = computeInputHash({ outer: { x: 1, y: { p: 'a', q: 'b' } } });
+    const b = computeInputHash({ outer: { y: { q: 'b', p: 'a' }, x: 1 } });
     expect(a).toBe(b);
   });
 
   it('does depend on array order, because a reordered list is a different request', async () => {
-    const a = await computeInputHash({ tags: ['a', 'b'] });
-    const b = await computeInputHash({ tags: ['b', 'a'] });
+    const a = computeInputHash({ tags: ['a', 'b'] });
+    const b = computeInputHash({ tags: ['b', 'a'] });
     expect(a).not.toBe(b);
   });
 
@@ -156,23 +156,18 @@ describe('the RFC 8785 input hash', () => {
     ['a number where a string was', { city: 1 }],
     ['an empty object', {}],
   ])('changes for %s', async (_label, input) => {
-    expect(await computeInputHash(input)).not.toBe(await computeInputHash({ city: 'Berlin' }));
+    expect(computeInputHash(input)).not.toBe(computeInputHash({ city: 'Berlin' }));
   });
 
   it('treats absent input as the empty object rather than failing', async () => {
-    expect(await computeInputHash(undefined)).toBe(await computeInputHash({}));
+    expect(computeInputHash(undefined)).toBe(computeInputHash({}));
   });
 });
 
 describe('binding a mandate to the resolved purchase', () => {
-  it('accepts a mandate that authorises exactly this purchase', async () => {
+  it('accepts a mandate that authorizes exactly this purchase', async () => {
     const verified = await verifier.verify(await mandateFor(profileClaims()));
-    await expect(bindMandateToPurchase(verified, context(), {})).resolves.toEqual({
-      resourceId: RESOURCE_ID,
-      amount: '0.01',
-      currency: 'USDC',
-      paymentMethod: 'x402',
-    });
+    await expect(bindMandateToPurchase(verified, context(), {})).resolves.toBeUndefined();
   });
 
   it.each([
@@ -197,7 +192,7 @@ describe('binding a mandate to the resolved purchase', () => {
     ['uppercase', '0x70997970C51812DC3A010C7D01B50E0D17DC79C8'],
   ])('accepts the %s form of a checksummed destination', async (_label, destination) => {
     const verified = await verifier.verify(await mandateFor(profileClaims({ destination })));
-    await expect(bindMandateToPurchase(verified, context(), {})).resolves.toBeDefined();
+    await expect(bindMandateToPurchase(verified, context(), {})).resolves.toBeUndefined();
   });
 
   it('compares network identifiers exactly', async () => {
@@ -230,7 +225,7 @@ describe('binding a mandate to the resolved purchase', () => {
   });
 
   it('refuses a mandate silent about the chain when the requirement names one', async () => {
-    // A mandate that does not say which chain it authorises must not unlock a
+    // A mandate that does not say which chain it authorizes must not unlock a
     // mainnet settlement
     const claims = profileClaims();
     delete claims['network'];
@@ -247,7 +242,7 @@ describe('binding a mandate to the resolved purchase', () => {
     for (const key of ['network', 'asset']) delete claims[key];
     const ctx = context({ requirement: requirementWithoutCoordinates() });
     const verified = await verifier.verify(await mandateFor(claims));
-    await expect(bindMandateToPurchase(verified, ctx, {})).resolves.toBeDefined();
+    await expect(bindMandateToPurchase(verified, ctx, {})).resolves.toBeUndefined();
   });
 
   it('does not report which field disagreed', async () => {
@@ -284,8 +279,8 @@ describe('the replay identity of a mandate', () => {
     const b = await verifier.verify(withoutNote);
     expect(a.reference).toBe(b.reference);
     // And the presentations really did differ in what they disclosed
-    expect(a.mandateClaims['buyer_note']).toBe('hello');
-    expect(b.mandateClaims['buyer_note']).toBeUndefined();
+    expect(withNote).toContain(parts.optional['buyer_note']);
+    expect(withoutNote).not.toContain(parts.optional['buyer_note']);
   });
 
   it('is a digest, carrying nothing readable from the mandate', async () => {
@@ -296,7 +291,7 @@ describe('the replay identity of a mandate', () => {
   it('differs between two mandates', async () => {
     const first = await verifier.verify(await mandateFor(profileClaims()));
     const second = await verifier.verify(
-      await mandateFor(profileClaims({ input_hash: await computeInputHash({ city: 'Paris' }) })),
+      await mandateFor(profileClaims({ input_hash: computeInputHash({ city: 'Paris' }) })),
     );
     expect(first.reference).not.toBe(second.reference);
   });
@@ -323,7 +318,7 @@ describe('verify, bind and reserve together', () => {
     // Same mandate, second request: still valid, still bound, still refused
     const again = await verifier.verify(presentation);
     expect(again.reference).toBe(verified.reference);
-    await expect(bindMandateToPurchase(again, context(), {})).resolves.toBeDefined();
+    await expect(bindMandateToPurchase(again, context(), {})).resolves.toBeUndefined();
     expect(
       store.reserve({
         reference: again.reference,

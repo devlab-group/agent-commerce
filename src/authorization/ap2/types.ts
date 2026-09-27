@@ -1,11 +1,10 @@
 /**
  * AP2 trust configuration and the shape a successful verification produces.
  *
- * Trust types live here, not in `src/config`, so the dependency points the way
- * `X402FacilitatorConfig` does: the subsystem owns its own config shape and
- * the loader imports it.
+ * The subsystem owns its config shape and the config loader imports it, as
+ * with `X402FacilitatorConfig`.
  */
-import type { AP2_SPEC_VERSION, Ap2Mode } from './constants.js';
+import type { AP2_SPEC_VERSION, Ap2Mode } from './constants';
 
 export type { Ap2Mode };
 
@@ -20,8 +19,8 @@ export interface Ap2TrustedKey {
 export interface Ap2TrustedIssuer {
   readonly issuer: string;
   /**
-   * Per issuer, not one gateway-wide value: the mandate is addressed to the
-   * merchant and the checkout JWT it binds to the gateway
+   * Per issuer, not gateway-wide: a mandate is addressed to the merchant, while
+   * the checkout JWT it binds is addressed to the gateway
    */
   readonly audience: string;
   readonly keys: readonly Ap2TrustedKey[];
@@ -55,8 +54,9 @@ export type EnabledAp2Config = Extract<Ap2AuthorizationConfig, { enabled: true }
 /**
  * A Checkout Mandate that passed every cryptographic check.
  *
- * Valid is not the same as authorising *this* purchase. Binding it to the
- * resolved resource, input and price is a separate step (profile.ts).
+ * Valid is not the same as authorizing *this* purchase. Binding it to the
+ * resolved resource, input and price is a separate step
+ * (`bindMandateToPurchase`).
  */
 export interface VerifiedCheckoutMandate {
   /**
@@ -73,6 +73,4 @@ export interface VerifiedCheckoutMandate {
   readonly checkoutJwtId: string;
   /** Signature-verified checkout JWT claims. Carries the checkout profile */
   readonly checkoutClaims: Readonly<Record<string, unknown>>;
-  /** Mandate claims with every presented disclosure resolved into place */
-  readonly mandateClaims: Readonly<Record<string, unknown>>;
 }

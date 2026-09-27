@@ -5,26 +5,20 @@
  * tells the truth about a store it cannot read.
  */
 import { beforeAll, describe, expect, it } from 'vitest';
-import {
-  AP2_CHECKOUT_PROFILE,
-  AP2_SPEC_VERSION,
-} from '../../../src/authorization/ap2/constants.js';
-import { AP2_UNSUPPORTED } from '../../../src/authorization/ap2/descriptor.js';
-import { computeInputHash } from '../../../src/authorization/ap2/profile.js';
+import { AP2_CHECKOUT_PROFILE, AP2_SPEC_VERSION } from '../../../src/authorization/ap2/constants';
+import { AP2_UNSUPPORTED } from '../../../src/authorization/ap2/descriptor';
+import { computeInputHash } from '../../../src/authorization/ap2/profile';
 import {
   type Ap2AuthorizationProvider,
   createAp2AuthorizationProvider,
-} from '../../../src/authorization/ap2/provider.js';
+} from '../../../src/authorization/ap2/provider';
 import {
   type Ap2ReplayStore,
   createAp2ReplayStore,
-} from '../../../src/authorization/ap2/replay-store.js';
-import type { EnabledAp2Config } from '../../../src/authorization/ap2/types.js';
-import type {
-  AuthorizationVerificationContext,
-  PaymentRequirement,
-} from '../../../src/core/index.js';
-import { isCommerceError } from '../../../src/core/index.js';
+} from '../../../src/authorization/ap2/replay-store';
+import type { EnabledAp2Config } from '../../../src/authorization/ap2/types';
+import type { AuthorizationVerificationContext, PaymentRequirement } from '../../../src/core';
+import { isCommerceError } from '../../../src/core';
 import {
   checkoutPayload,
   createParties,
@@ -32,7 +26,7 @@ import {
   mintMandate,
   type Party,
   signCheckoutJwt,
-} from './fixtures.js';
+} from './fixtures';
 
 const RESOURCE_ID = 'market_report';
 const INPUT = { city: 'Berlin' };
@@ -115,7 +109,7 @@ async function codeOf(run: () => Promise<unknown>): Promise<string> {
 
 beforeAll(async () => {
   parties = await createParties();
-  inputHash = await computeInputHash(INPUT);
+  inputHash = computeInputHash(INPUT);
 });
 
 describe('createAp2AuthorizationProvider', () => {
@@ -129,7 +123,7 @@ describe('createAp2AuthorizationProvider', () => {
     provider.close();
   });
 
-  it('names what it does not do, rather than summarising it as a count', () => {
+  it('names what it does not do, rather than summarizing it as a count', () => {
     const provider = makeProvider();
     expect(provider.descriptor.unsupported).toEqual(AP2_UNSUPPORTED);
     // The two an operator is most likely to assume they have
@@ -294,6 +288,26 @@ describe('createAp2AuthorizationProvider', () => {
       expect(health.status).toBe('pass');
       expect(health.detail).toBe('mandate-issuers=1 checkout-issuers=1');
       expect(JSON.stringify(health)).not.toContain(parties.mandateSigner.publicJwk['x']);
+      provider.close();
+    });
+
+    it('times the replay store probe', async () => {
+      let elapsed = 0;
+      const inner = createAp2ReplayStore({ path: ':memory:' });
+      const slowStore: Ap2ReplayStore = {
+        ...inner,
+        stateOf(reference) {
+          elapsed += 7;
+          return inner.stateOf(reference);
+        },
+      };
+      const provider = createAp2AuthorizationProvider({
+        config: config(),
+        clock: { ...fixedClock(), monotonicMs: () => elapsed },
+        replayStore: slowStore,
+      });
+
+      expect((await provider.health()).durationMs).toBe(7);
       provider.close();
     });
 

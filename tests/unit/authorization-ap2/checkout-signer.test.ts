@@ -8,24 +8,21 @@
  */
 import { exportJWK, exportPKCS8, generateKeyPair } from 'jose';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { AP2_CHECKOUT_PROFILE } from '../../../src/authorization/ap2/constants.js';
-import { createCheckoutJwt } from '../../../src/authorization/ap2/index.js';
-import { bindMandateToPurchase, computeInputHash } from '../../../src/authorization/ap2/profile.js';
+import { createCheckoutJwt } from '../../../src/authorization/ap2';
+import { AP2_CHECKOUT_PROFILE } from '../../../src/authorization/ap2/constants';
+import { bindMandateToPurchase, computeInputHash } from '../../../src/authorization/ap2/profile';
 import {
   type Ap2MandateVerifier,
   createAp2MandateVerifier,
-} from '../../../src/authorization/ap2/verifier.js';
-import type {
-  AuthorizationVerificationContext,
-  PaymentRequirement,
-} from '../../../src/core/index.js';
-import { isCommerceError } from '../../../src/core/index.js';
-import { createParties, fixedClock, mintMandate, NOW, type Party } from './fixtures.js';
+} from '../../../src/authorization/ap2/verifier';
+import type { AuthorizationVerificationContext, PaymentRequirement } from '../../../src/core';
+import { isCommerceError } from '../../../src/core';
+import { createParties, fixedClock, mintMandate, NOW, type Party } from './fixtures';
 
 const RESOURCE_ID = 'market_report';
 // Floats and a non-ASCII key: the inputs where a sorted-key JSON.stringify and
 // RFC 8785 part company, and a hand-rolled signer starts producing mandates
-// this gateway refuses.
+// this gateway refuses
 const INPUT = { city: 'Zürich', precision: 1.5e30, tags: ['b', 'a'] };
 
 let parties: Party;
@@ -102,19 +99,12 @@ async function failureOf(run: () => Promise<unknown>): Promise<string> {
 }
 
 describe('createCheckoutJwt', () => {
-  it('produces a checkout JWT that verifies and authorises the purchase', async () => {
+  it('produces a checkout JWT that verifies and authorizes the purchase', async () => {
     const jwt = await createCheckoutJwt(signOptions());
     const presentation = await mintMandate(parties.mandateSigner, jwt);
 
     const mandate = await verifier.verify(presentation);
-    const bound = await bindMandateToPurchase(mandate, context(), {});
-
-    expect(bound).toEqual({
-      resourceId: RESOURCE_ID,
-      amount: '0.01',
-      currency: 'USDC',
-      paymentMethod: 'x402',
-    });
+    await expect(bindMandateToPurchase(mandate, context(), {})).resolves.toBeUndefined();
   });
 
   it('computes the same input hash the gateway computes', async () => {
@@ -122,7 +112,7 @@ describe('createCheckoutJwt', () => {
     const mandate = await verifier.verify(await mintMandate(parties.mandateSigner, jwt));
 
     const profile = mandate.checkoutClaims['agent_commerce'] as Record<string, string>;
-    expect(profile['input_hash']).toBe(await computeInputHash(INPUT));
+    expect(profile['input_hash']).toBe(computeInputHash(INPUT));
     expect(profile['profile']).toBe(AP2_CHECKOUT_PROFILE);
   });
 
@@ -147,7 +137,7 @@ describe('createCheckoutJwt', () => {
     expect('network' in profile).toBe(false);
   });
 
-  it('mints a jti when none is supplied, and honours one that is', async () => {
+  it('mints a jti when none is supplied, and honors one that is', async () => {
     const generated = await createCheckoutJwt(signOptions());
     const supplied = await createCheckoutJwt(signOptions({ jwtId: 'checkout_01KNOWN' }));
 
@@ -158,7 +148,7 @@ describe('createCheckoutJwt', () => {
     expect(second.checkoutJwtId).toBe('checkout_01KNOWN');
   });
 
-  it('expires 15 minutes out by default, and honours an explicit window', async () => {
+  it('expires 15 minutes out by default, and honors an explicit window', async () => {
     const now = Math.floor(NOW.getTime() / 1000);
     const claimsOf = async (jwt: string): Promise<Record<string, number>> =>
       JSON.parse(Buffer.from(jwt.split('.')[1] as string, 'base64url').toString('utf8')) as Record<
@@ -208,7 +198,7 @@ describe('createCheckoutJwt', () => {
     });
 
     it('refuses a non-canonicalizable input rather than hashing something else', async () => {
-      // A BigInt throws inside canonicalize; a function serialises to nothing
+      // A BigInt throws inside canonicalize; a function serializes to nothing
       // and is caught by computeInputHash. Both must fail, neither may sign.
       expect(await failureOf(() => createCheckoutJwt(signOptions({ input: { n: 1n } })))).toContain(
         'BigInt',

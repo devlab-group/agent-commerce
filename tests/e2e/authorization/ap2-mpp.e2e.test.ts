@@ -11,28 +11,24 @@ import { charge as clientCharge } from 'mppx/evm/client';
 import { getAddress } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { AP2_CHECKOUT_PROFILE } from '../../../src/authorization/ap2/constants.js';
 import {
   type Ap2AuthorizationProvider,
   createAp2AuthorizationProvider,
-} from '../../../src/authorization/ap2/index.js';
-import { computeInputHash } from '../../../src/authorization/ap2/profile.js';
-import { parseConfig } from '../../../src/config/index.js';
+} from '../../../src/authorization/ap2';
+import { AP2_CHECKOUT_PROFILE } from '../../../src/authorization/ap2/constants';
+import { computeInputHash } from '../../../src/authorization/ap2/profile';
+import { parseConfig } from '../../../src/config';
 import {
   AUTHORIZATION_HEADER,
   type BackendExecutor,
   NOOP_LOGGER,
   type ReceiptStore,
-} from '../../../src/core/index.js';
-import { createGateway, type GatewayInstance } from '../../../src/gateway/index.js';
-import { createConfiguredPaymentProviders } from '../../../src/gateway/payment-providers.js';
-import {
-  type AnvilHandle,
-  deployLocalChain,
-  startAnvil,
-} from '../../../src/payments/x402/testing.js';
-import { createSqliteReceiptStore } from '../../../src/storage/receipts/index.js';
-import { expectRealSettlement, readBalances } from '../../fixtures/x402/settlement.js';
+} from '../../../src/core';
+import { createGateway, type GatewayInstance } from '../../../src/gateway';
+import { createConfiguredPaymentProviders } from '../../../src/gateway/payment-providers';
+import { type AnvilHandle, deployLocalChain, startAnvil } from '../../../src/payments/x402/testing';
+import { createSqliteReceiptStore } from '../../../src/storage/receipts';
+import { expectRealSettlement, readBalances } from '../../fixtures/x402/settlement';
 import {
   checkoutPayload,
   createParties,
@@ -40,7 +36,7 @@ import {
   mintMandate,
   type Party,
   signCheckoutJwt,
-} from '../../unit/authorization-ap2/fixtures.js';
+} from '../../unit/authorization-ap2/fixtures';
 
 const PORT = 18793;
 const RESOURCE_ID = 'market_report';
@@ -144,7 +140,7 @@ async function mandate(paymentMethod = 'mpp'): Promise<string> {
       agent_commerce: {
         profile: AP2_CHECKOUT_PROFILE,
         resource_id: RESOURCE_ID,
-        input_hash: await computeInputHash(INPUT),
+        input_hash: computeInputHash(INPUT),
         amount: AMOUNT,
         currency: CURRENCY,
         payment_method: paymentMethod,

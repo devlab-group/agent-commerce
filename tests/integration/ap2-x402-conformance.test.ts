@@ -10,10 +10,10 @@
  * 2026-04-28, commit b4587ac), not upstream golden vectors. See fixtures.ts.
  */
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { AP2_CHECKOUT_PROFILE } from '../../src/authorization/ap2/constants.js';
-import { createAp2AuthorizationProvider } from '../../src/authorization/ap2/index.js';
-import { computeInputHash } from '../../src/authorization/ap2/profile.js';
-import { type GatewayConfig, parseConfig } from '../../src/config/index.js';
+import { createAp2AuthorizationProvider } from '../../src/authorization/ap2';
+import { AP2_CHECKOUT_PROFILE } from '../../src/authorization/ap2/constants';
+import { computeInputHash } from '../../src/authorization/ap2/profile';
+import { type GatewayConfig, parseConfig } from '../../src/config';
 import type {
   AdapterDescriptor,
   AuthorizationProvider,
@@ -22,10 +22,10 @@ import type {
   PaymentRequirement,
   PaymentResult,
   ReceiptStore,
-} from '../../src/core/index.js';
-import { AUTHORIZATION_HEADER, CommerceError, PAYMENT_HEADER } from '../../src/core/index.js';
-import { createGateway, type GatewayInstance } from '../../src/gateway/index.js';
-import { createSqliteReceiptStore } from '../../src/storage/receipts/index.js';
+} from '../../src/core';
+import { AUTHORIZATION_HEADER, CommerceError, PAYMENT_HEADER } from '../../src/core';
+import { createGateway, type GatewayInstance } from '../../src/gateway';
+import { createSqliteReceiptStore } from '../../src/storage/receipts';
 import {
   checkoutPayload,
   createParties,
@@ -36,7 +36,7 @@ import {
   type Party,
   sha256Base64url,
   signCheckoutJwt,
-} from '../unit/authorization-ap2/fixtures.js';
+} from '../unit/authorization-ap2/fixtures';
 
 process.env['NODE_ENV'] = 'test';
 
@@ -79,7 +79,7 @@ interface RailOptions {
 }
 
 // Counts what it was asked to do. Its requirement carries the chain
-// coordinates a real x402 challenge does, which the mandate must agree with
+// coordinates a real x402 challenge does, which the mandate must agree with.
 function countingRail(options: RailOptions = {}): PaymentProvider {
   const settled: PaymentResult = {
     status: 'settled',
@@ -185,7 +185,7 @@ function rawConfig(): Record<string, unknown> {
         payTo: MERCHANT,
         maxTimeoutSeconds: 120,
         // Never used: the rail below is a counting double, and no chain is
-        // reached. It is here so the config is the one a real deployment writes
+        // reached. It is here so the config is the one a real deployment writes.
         facilitator: { mode: 'local', signerPrivateKey: '0xKEY' },
       },
     },
@@ -323,7 +323,7 @@ async function purchase(presentation: string, gw = gateway): Promise<Invocation>
 beforeAll(async () => {
   parties = await createParties();
   config = parseConfig(rawConfig(), process.env);
-  inputHash = await computeInputHash(INPUT);
+  inputHash = computeInputHash(INPUT);
 });
 
 afterEach(async () => {
@@ -408,7 +408,7 @@ describe('AP2 over x402: mandates that must not settle', () => {
     const [header, payload, signature] = (token as string).split('.');
     // A flipped bit in the signature's first byte, not the last base64url
     // character: that one has four meaningful bits in an 86-character ES256
-    // signature, so A/B/C/D all decode alike and nothing would change.
+    // signature, so A/B/C/D all decode alike and nothing would change
     const bytes = Buffer.from(signature as string, 'base64url');
     bytes[0] = (bytes[0] as number) ^ 0x01;
     const forged = `${header}.${payload}.${bytes.toString('base64url')}`;
@@ -434,7 +434,7 @@ describe('AP2 over x402: mandates that must not settle', () => {
   it('refuses a mandate that claims a trusted kid but was signed with another key', async () => {
     // The attack `kid` exists to stop: a trusted issuer, a trusted key id, and
     // a real signature from a key nobody trusts. Refused at the signature, so
-    // `kid` selects the verifying key rather than labelling it.
+    // `kid` selects the verifying key rather than labeling it.
     await refuse(
       await mandate({ stranger: true, mandate: { header: { kid: parties.mandateSigner.kid } } }),
       invalid,
@@ -460,7 +460,7 @@ describe('AP2 over x402: mandates that must not settle', () => {
 
   it('refuses a mandate approved for different input', async () => {
     await refuse(
-      await mandate({ profile: { input_hash: await computeInputHash({ city: 'Paris' }) } }),
+      await mandate({ profile: { input_hash: computeInputHash({ city: 'Paris' }) } }),
       invalid,
     );
   });
@@ -491,7 +491,7 @@ describe('AP2 over x402: mandates that must not settle', () => {
   it('refuses a mandate silent about the chain the requirement names', async () => {
     // Fail closed both ways: a mandate that never mentioned a chain must not
     // unlock a settlement on one. `undefined` is dropped when the JWT is
-    // serialised, so these two claims are genuinely absent.
+    // serialized, so the mandate carries neither claim.
     await refuse(await mandate({ profile: { network: undefined, asset: undefined } }), invalid);
   });
 
@@ -602,9 +602,9 @@ describe('AP2 over x402: when settlement goes wrong', () => {
   });
 
   it('does not hand the mandate back when the facilitator drops the response', async () => {
-    // The facilitator took the settlement and then lost the reply, so there
-    // is no transaction hash to report. That absent hash is what used to make
-    // this look like a clean failure and hand the mandate back.
+    // The facilitator took the settlement and then lost the reply, so there is
+    // no transaction hash. A missing hash must not read as a clean failure
+    // that hands the mandate back.
     const gw = await startGateway(
       countingRail({
         settle: async () => {

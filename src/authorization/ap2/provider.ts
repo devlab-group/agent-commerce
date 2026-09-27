@@ -2,8 +2,8 @@
  * The AP2 authorization provider: the seam between core's generic contract and
  * the mandate machinery.
  *
- * The provider owns its replay store. The caller that creates the provider must
- * call `close()`; `createGateway` does not close authorization providers.
+ * It owns its replay store, so whoever creates it must call `close()`:
+ * `createGateway` does not close authorization providers.
  */
 import type {
   AdapterHealth,
@@ -14,16 +14,16 @@ import type {
   AuthorizationVerificationContext,
   Clock,
   Logger,
-} from '../../core/index.js';
-import { NOOP_LOGGER, systemClock } from '../../core/index.js';
-import { PACKAGE_VERSION } from '../../version.js';
-import { AP2_CHECKOUT_PROFILE, AP2_SPEC_VERSION } from './constants.js';
-import { buildAp2Descriptor } from './descriptor.js';
-import { type Ap2ErrorContext, ap2Replayed, ap2Unavailable } from './errors.js';
-import { bindMandateToPurchase } from './profile.js';
-import { type Ap2ReplayStore, createAp2ReplayStore } from './replay-store.js';
-import type { EnabledAp2Config } from './types.js';
-import { createAp2MandateVerifier } from './verifier.js';
+} from '../../core';
+import { NOOP_LOGGER, systemClock } from '../../core';
+import { PACKAGE_VERSION } from '../../version';
+import { AP2_CHECKOUT_PROFILE, AP2_SPEC_VERSION } from './constants';
+import { buildAp2Descriptor } from './descriptor';
+import { type Ap2ErrorContext, ap2Replayed, ap2Unavailable } from './errors';
+import { bindMandateToPurchase } from './profile';
+import { type Ap2ReplayStore, createAp2ReplayStore } from './replay-store';
+import type { EnabledAp2Config } from './types';
+import { createAp2MandateVerifier } from './verifier';
 
 export interface Ap2AuthorizationProviderOptions {
   readonly config: EnabledAp2Config;
@@ -38,11 +38,6 @@ export interface Ap2AuthorizationProvider extends AuthorizationProvider {
   close(): void;
 }
 
-/**
- * A reservation is keyed by the mandate reference, so the handle and the
- * receipt's identity are the same digest. Kept as one name rather than two
- * fields that must never disagree.
- */
 export function createAp2AuthorizationProvider(
   options: Ap2AuthorizationProviderOptions,
 ): Ap2AuthorizationProvider {
@@ -94,6 +89,8 @@ export function createAp2AuthorizationProvider(
       status: 'verified',
       method: 'ap2',
       reference: mandate.reference,
+      // The reservation handle is the reference itself, so the two can never
+      // name different mandates
       reservationId: mandate.reference,
       // Opaque identifiers an operator can reconcile with. Never a claim from
       // the mandate: those carry the buyer's purchase and their personal data.
@@ -137,17 +134,21 @@ export function createAp2AuthorizationProvider(
 
     async health(): Promise<AdapterHealth> {
       const startedAt = clock.monotonicMs();
-      const trusted = verifier.trustedIssuers();
       const checkedAt = clock.nowIso();
-      const durationMs = Math.round(clock.monotonicMs() - startedAt);
+      let available = true;
       try {
         // A read against the real table, so a database that opened but cannot
         // be queried is caught here rather than on the first purchase
         replay.stateOf('health-probe');
       } catch {
+        available = false;
+      }
+      const durationMs = Math.round(clock.monotonicMs() - startedAt);
+      if (!available) {
         // A fixed token, never a sentence built from the caught error
         return { status: 'fail', checkedAt, durationMs, detail: 'replay-store-unavailable' };
       }
+      const trusted = verifier.trustedIssuers();
       return {
         status: 'pass',
         checkedAt,

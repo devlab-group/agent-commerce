@@ -7,12 +7,14 @@
  * that was never going to be delivered.
  */
 import { beforeAll, describe, expect, it } from 'vitest';
-import type { EnabledAp2Config } from '../../../src/authorization/ap2/types.js';
+import { verifyMandate } from '../../../src/authorization/ap2/sd-jwt';
+import { createTrustStore } from '../../../src/authorization/ap2/trust';
+import type { EnabledAp2Config } from '../../../src/authorization/ap2/types';
 import {
   type Ap2MandateVerifier,
   createAp2MandateVerifier,
-} from '../../../src/authorization/ap2/verifier.js';
-import { type CommerceError, isCommerceError } from '../../../src/core/index.js';
+} from '../../../src/authorization/ap2/verifier';
+import { type CommerceError, isCommerceError } from '../../../src/core';
 import {
   CHECKOUT_AUDIENCE,
   CHECKOUT_ISSUER,
@@ -28,7 +30,7 @@ import {
   sha256Base64url,
   signCheckoutJwt,
   trustedIssuer,
-} from './fixtures.js';
+} from './fixtures';
 
 let parties: Party;
 let verifier: Ap2MandateVerifier;
@@ -88,9 +90,17 @@ describe('a valid Direct closed Checkout Mandate', () => {
   });
 
   it('resolves the selectively disclosed checkout JWT into the mandate claims', async () => {
-    const result = await verifier.verify(validPresentation);
-    expect(result.mandateClaims['checkout_jwt']).toBe(checkoutJwt);
-    expect(result.mandateClaims['vct']).toBe('mandate.checkout.1');
+    const mandate = await verifyMandate(
+      validPresentation,
+      {
+        trust: createTrustStore(parties.mandateIssuers),
+        clock: fixedClock(),
+        clockSkewSeconds: 60,
+      },
+      {},
+    );
+    expect(mandate.claims['checkout_jwt']).toBe(checkoutJwt);
+    expect(mandate.claims['vct']).toBe('mandate.checkout.1');
   });
 
   it('hands back the checkout profile the purchase binding will read', async () => {
@@ -194,7 +204,7 @@ describe('signature and trust', () => {
 
   it('refuses a mandate signed by a key that is trusted for checkout documents only', async () => {
     // Signing the merchant's checkout documents must not confer the power to
-    // issue mandates authorising purchases from them
+    // issue mandates authorizing purchases from them
     const presentation = await mintMandate(parties.checkoutSigner, checkoutJwt, {
       header: { kid: parties.mandateSigner.kid },
     });
