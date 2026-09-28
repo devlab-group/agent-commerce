@@ -4,9 +4,9 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { parse as parseYaml } from 'yaml';
-import { defaultOutputPath, runImportOpenApi } from '../../../src/cli/commands/import-openapi.js';
-import { createCapturingIo } from '../../../src/cli/lib/io.js';
-import { buildProgram } from '../../../src/cli/program.js';
+import { defaultOutputPath, runImportOpenApi } from '../../../src/cli/commands/import-openapi';
+import { buildProgram } from '../../../src/cli/program';
+import { createCapturingIo } from './fixtures';
 
 const fixture = (name: string): string =>
   join(fileURLToPath(new URL('../openapi/fixtures/', import.meta.url)), name);

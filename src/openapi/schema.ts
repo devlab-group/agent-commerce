@@ -1,20 +1,20 @@
 /**
- * OpenAPI schema -> the JSON Schema subset this gateway actually enforces.
+ * OpenAPI schema -> the JSON Schema subset this gateway enforces.
  *
- * The honesty rule drives every decision here. `src/core`'s validator enforces
- * `type`/`properties`/`required`/`additionalProperties`/`enum`/`items` and
- * silently ignores everything else, so copying a `pattern` or a `oneOf` into a
- * generated resource would advertise validation to agents that no code
- * performs - and on a paid resource, the request the merchant's backend
- * receives is the one the buyer already paid for. Unenforceable constraints
- * are therefore dropped from the generated schema and reported, never
- * carried along quietly.
+ * `src/core`'s validator enforces `type`/`properties`/`required`/
+ * `additionalProperties`/`enum`/`items` and ignores everything else, so a
+ * copied `pattern` or `oneOf` would advertise validation to agents that no
+ * code performs - and on a paid resource the buyer pays before the backend
+ * sees the request. Unenforceable constraints are dropped from the generated
+ * schema and reported, never carried along quietly.
  */
-import type { JsonSchema } from '../core/domain/common.js';
-import { isCommerceError } from '../core/errors/index.js';
-import { dereference } from './refs.js';
+import { isDeepStrictEqual } from 'node:util';
+import type { JsonSchema } from '../core/domain/common';
+import { isCommerceError } from '../core/errors';
+import { isRecord } from '../core/is-record';
+import { dereference } from './refs';
 
-/** Enforced by `compileJsonSchema`. Everything else is documentation at best. */
+// The types `compileJsonSchema` enforces
 const SUPPORTED_TYPES = new Set([
   'object',
   'string',
@@ -25,7 +25,7 @@ const SUPPORTED_TYPES = new Set([
   'null',
 ]);
 
-/** Copied through: descriptive, never a constraint, so it cannot overstate. */
+// Copied through: descriptive, never a constraint, so it cannot overstate
 const METADATA_KEYWORDS = ['title', 'description', 'default', 'example', 'examples', 'deprecated'];
 
 /**
@@ -50,12 +50,12 @@ export type SchemaConversion =
   | {
       readonly supported: true;
       readonly schema: JsonSchema;
-      /** Keyword names encountered and dropped, deduplicated, in first-seen order. */
+      /** Keyword names encountered and dropped, deduplicated, in first-seen order */
       readonly dropped: readonly string[];
     }
   | { readonly supported: false; readonly reason: string };
 
-/** Types a path or query parameter may have: the executor stringifies one value. */
+/** Types a path or query parameter may have: the executor stringifies one value */
 export function isPrimitiveSchema(schema: JsonSchema): boolean {
   const types = typeList(schema['type']);
   if (types === undefined) return false;
@@ -70,9 +70,7 @@ export function convertSchema(
   const dropped = new Set<string>();
   try {
     const schema = convertNode(document, node, stack, dropped);
-    return schema === undefined
-      ? { supported: false, reason: 'schema could not be represented' }
-      : { supported: true, schema, dropped: [...dropped] };
+    return { supported: true, schema, dropped: [...dropped] };
   } catch (error) {
     if (error instanceof UnsupportedSchema) return { supported: false, reason: error.message };
     // A reference cycle or a dangling pointer arrives as CONFIG_INVALID from
@@ -90,18 +88,15 @@ function convertNode(
   node: unknown,
   stack: readonly string[],
   dropped: Set<string>,
-): JsonSchema | undefined {
+): JsonSchema {
   // OpenAPI 3.1 allows boolean schemas: `true` accepts anything, `false`
-  // accepts nothing - and nothing is not a request shape we can generate.
+  // accepts nothing - and nothing is not a request shape we can generate
   if (node === true) return {};
   if (node === false) throw new UnsupportedSchema('schema is `false`, which accepts no value');
 
   const resolved = dereference(document, node, stack);
-  const source = resolved.value;
-  if (typeof source !== 'object' || source === null || Array.isArray(source)) {
-    throw new UnsupportedSchema('schema node is not an object');
-  }
-  const schemaNode = source as Record<string, unknown>;
+  const schemaNode = resolved.value;
+  if (!isRecord(schemaNode)) throw new UnsupportedSchema('schema node is not an object');
 
   if (Array.isArray(schemaNode['allOf'])) {
     return mergeAllOf(document, schemaNode, resolved.stack, dropped);
@@ -127,8 +122,7 @@ function convertNode(
   if (isRecord(properties)) {
     const converted: Record<string, unknown> = {};
     for (const [name, sub] of Object.entries(properties)) {
-      const child = convertNode(document, sub, resolved.stack, dropped);
-      if (child !== undefined) converted[name] = child;
+      converted[name] = convertNode(document, sub, resolved.stack, dropped);
     }
     result['properties'] = converted;
   }
@@ -147,19 +141,17 @@ function convertNode(
   if (typeof additional === 'boolean') {
     result['additionalProperties'] = additional;
   } else if (additional !== undefined) {
-    const child = convertNode(document, additional, resolved.stack, dropped);
-    if (child !== undefined) result['additionalProperties'] = child;
+    result['additionalProperties'] = convertNode(document, additional, resolved.stack, dropped);
   } else if (isRecord(properties)) {
     result['additionalProperties'] = false;
   }
 
   const items = schemaNode['items'];
   if (Array.isArray(items)) {
-    // Tuple `items` is not enforced; keeping it would look like it was.
+    // Tuple `items` is not enforced; keeping it would look like it was
     dropped.add('items (tuple form)');
   } else if (items !== undefined) {
-    const child = convertNode(document, items, resolved.stack, dropped);
-    if (child !== undefined) result['items'] = child;
+    result['items'] = convertNode(document, items, resolved.stack, dropped);
   }
 
   for (const keyword of Object.keys(schemaNode)) {
@@ -235,7 +227,6 @@ function mergeAllOf(
   const parts = [...branches, ...(Object.keys(siblings).length > 0 ? [siblings] : [])];
   for (const branch of parts) {
     const converted = convertNode(document, branch, stack, dropped);
-    if (converted === undefined) throw new UnsupportedSchema('allOf branch is empty');
     const types = typeList(converted['type']);
     if (types !== undefined && !types.includes('object')) {
       throw new UnsupportedSchema('allOf mixes object and non-object schemas');
@@ -244,7 +235,7 @@ function mergeAllOf(
     if (isRecord(branchProperties)) {
       for (const [name, sub] of Object.entries(branchProperties)) {
         const existing = properties[name];
-        if (existing !== undefined && JSON.stringify(existing) !== JSON.stringify(sub)) {
+        if (existing !== undefined && !isDeepStrictEqual(existing, sub)) {
           throw new UnsupportedSchema(
             `allOf branches declare property "${name}" differently, which cannot be merged`,
           );
@@ -267,7 +258,7 @@ function mergeAllOf(
     }
     // A branch that allows extra properties keeps the merge open. A schema for
     // them constrains the other branches' properties too, which the merged
-    // `properties` cannot express
+    // `properties` cannot express.
     const additional = converted['additionalProperties'];
     if (additional === true) open = true;
     else if (isRecord(additional)) {
@@ -281,8 +272,4 @@ function mergeAllOf(
   else delete merged['required'];
   merged['additionalProperties'] = open;
   return merged;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

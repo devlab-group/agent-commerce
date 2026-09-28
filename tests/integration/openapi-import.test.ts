@@ -20,9 +20,8 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { parse as parseYaml } from 'yaml';
-import { runImportOpenApi } from '../../src/cli/commands/import-openapi.js';
-import { createCapturingIo } from '../../src/cli/lib/io.js';
-import { parseConfig } from '../../src/config/index.js';
+import { runImportOpenApi } from '../../src/cli/commands/import-openapi';
+import { parseConfig } from '../../src/config';
 import {
   type AdapterDescriptor,
   PAYMENT_HEADER,
@@ -31,17 +30,18 @@ import {
   type PaymentRequirement,
   type PaymentResult,
   type PaymentVerificationContext,
-} from '../../src/core/index.js';
-import { createGateway, type GatewayInstance } from '../../src/gateway/index.js';
-import { createA2aAdapter } from '../../src/protocols/a2a/index.js';
-import { createMcpAdapter } from '../../src/protocols/mcp/index.js';
-import { createFakeStore } from '../unit/gateway/helpers.js';
+} from '../../src/core';
+import { createGateway, type GatewayInstance } from '../../src/gateway';
+import { createA2aAdapter } from '../../src/protocols/a2a';
+import { createMcpAdapter } from '../../src/protocols/mcp';
+import { createCapturingIo } from '../unit/cli/fixtures';
+import { createFakeStore } from '../unit/gateway/helpers';
 
 process.env['NODE_ENV'] = 'test';
 
 const SPEC = fileURLToPath(new URL('./fixtures/merchant-api.openapi.yaml', import.meta.url));
 
-/** Exactly what the merchant backend saw. */
+// Exactly what the merchant backend saw
 interface InboundRequest {
   method: string;
   path: string;
@@ -90,7 +90,7 @@ function safeJson(raw: string): unknown {
   }
 }
 
-/** Runs the real CLI command and returns the parsed `resources:` fragment. */
+// Runs the real CLI command and returns the parsed `resources:` fragment
 async function importResources(
   extra: Partial<Parameters<typeof runImportOpenApi>[0]> = {},
 ): Promise<Record<string, Record<string, unknown>>> {
@@ -164,7 +164,7 @@ function createFakeX402Provider(): PaymentProvider & { verified: number; settled
   return provider;
 }
 
-/** Mirrors the x402 block the other integration suites use; the provider itself is a fake. */
+// Mirrors the x402 block the other integration suites use; the provider itself is a fake
 const X402_CONFIG = {
   enabled: true,
   network: 'eip155:84532',
@@ -217,7 +217,7 @@ async function startGateway(
     store: createFakeStore(),
     paymentProviders,
     protocolAdapters: [createMcpAdapter(), createA2aAdapter()],
-    // No `backend` override: the real HttpBackendExecutor builds the request.
+    // No `backend` override: the real HttpBackendExecutor builds the request
   });
   return gateway;
 }
@@ -274,10 +274,10 @@ describe('imported resources over the real gateway', () => {
     ]);
     // Neither a required multipart body nor a required header parameter
     // produces a runnable resource - approximating either would take payment
-    // for a request the merchant cannot serve.
+    // for a request the merchant cannot serve
     expect(resources).not.toHaveProperty('upload');
     expect(resources).not.toHaveProperty('tenantReport');
-    // The optional array query parameter was dropped, the required one kept.
+    // The optional array query parameter was dropped, the required one kept
     const search = resources['search']?.['input'] as {
       properties: { query: { properties: object } };
     };
@@ -295,8 +295,8 @@ describe('imported resources over the real gateway', () => {
     expect(request?.method).toBe('POST');
     expect(request?.path).toBe('/users/u-1/orders');
     expect(request?.query).toEqual({ notify: 'true' });
-    // The regression this whole binding feature exists to prevent: `notify`
-    // must not have ended up inside the JSON body.
+    // What input bindings exist to prevent: `notify` must not end up inside
+    // the JSON body
     expect(request?.body).toEqual({ productId: 'sku-9', quantity: 2 });
     expect(request?.headers['content-type']).toBe('application/json');
   });
@@ -356,7 +356,7 @@ describe('imported resources over the real gateway', () => {
         .sort(),
     ).toEqual(Object.keys(resources).sort());
 
-    // The skipped operation is not reachable by guessing its id either.
+    // The skipped operation is not reachable by guessing its id either
     const missing = await invoke(gw, 'upload', {});
     expect(missing.statusCode).toBe(404);
   });
@@ -410,7 +410,7 @@ describe('imported resources over the real gateway', () => {
 
     expect(res.statusCode).toBe(400);
     expect(res.json().code).toBe('INPUT_INVALID');
-    // The money invariant: nothing was verified, nothing settled, nothing sent.
+    // The money invariant: nothing was verified, nothing settled, nothing sent
     expect(provider.verified).toBe(0);
     expect(provider.settled).toBe(0);
     expect(inbound).toHaveLength(0);
@@ -420,7 +420,7 @@ describe('imported resources over the real gateway', () => {
     const provider = createFakeX402Provider();
     const listOrders = resources['listOrders'] as Record<string, unknown>;
     const backend = { ...(listOrders['backend'] as Record<string, unknown>) };
-    // The operator pins a query parameter the imported schema also carries.
+    // The operator pins a query parameter the imported schema also carries
     backend['url'] = `${String(backend['url'])}?status=archived`;
     const collided = {
       ...resources,
@@ -453,7 +453,7 @@ describe('imported resources over the real gateway', () => {
 
     expect(res.statusCode).toBe(200);
     expect(inbound).toHaveLength(1);
-    // Encoded into one path segment of the configured host, not a new origin.
+    // Encoded into one path segment of the configured host, not a new origin
     expect(inbound[0]?.path).toBe('/users/http%3A%2F%2Fevil.example%2Fx/orders');
   });
 

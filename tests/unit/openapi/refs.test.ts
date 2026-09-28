@@ -1,8 +1,8 @@
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { isCommerceError } from '../../../src/core/errors/index.js';
-import { dereference, isRefNode, loadOpenApiDocument } from '../../../src/openapi/index.js';
+import { isCommerceError } from '../../../src/core/errors';
+import { dereference, isRefNode, loadOpenApiDocument } from '../../../src/openapi';
 
 const fixture = (name: string): string =>
   join(fileURLToPath(new URL('./fixtures/', import.meta.url)), name);
@@ -45,7 +45,7 @@ describe('dereference', () => {
     const first = dereference(document, items);
     expect(isRefNode(first.value)).toBe(false);
     // Walking into Tree.properties.children.items reaches Tree again; the
-    // stack the caller carries is what turns that into a diagnostic.
+    // stack the caller carries is what turns that into a diagnostic
     expectInvalid(() => dereference(document, items, first.stack));
   });
 
@@ -63,6 +63,19 @@ describe('dereference', () => {
       dereference(document, { $ref: 'https://example.com/x.yaml#/Thing' }),
     );
     expect(message).toContain('external reference');
+  });
+
+  it('rejects a malformed percent-escape as CONFIG_INVALID, not a URIError', () => {
+    const message = expectInvalid(() =>
+      dereference({ components: {} }, { $ref: '#/components/%zz' }),
+    );
+    expect(message).toContain('malformed percent-escape');
+  });
+
+  it('reads `#` as the document and `#/` as its "" key (RFC 6901)', () => {
+    const document = { '': 'empty key', other: 1 };
+    expect(dereference(document, { $ref: '#' }).value).toBe(document);
+    expect(dereference(document, { $ref: '#/' }).value).toBe('empty key');
   });
 
   it('unescapes ~1 and ~0 in pointer segments', async () => {

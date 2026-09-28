@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { defaultDemoSteps, runDemo } from '../../../src/cli/commands/demo.js';
-import { createCapturingIo } from '../../../src/cli/lib/io.js';
+import { defaultDemoSteps, runDemo } from '../../../src/cli/commands/demo';
+import { createCapturingIo } from './fixtures';
 
 describe('runDemo', () => {
   it('runs every step and reports success when all steps succeed', async () => {
@@ -45,46 +45,16 @@ describe('runDemo', () => {
     expect(io.err.join('\n')).toContain('cmd1 a'); // exact retry command shown
   });
 
-  it('fails the step when its health check does not pass, even if the command exited 0', async () => {
-    const io = createCapturingIo();
-
-    const code = await runDemo(io, {
-      steps: [
-        {
-          name: 'Step with health check',
-          command: 'cmd',
-          args: [],
-          healthCheck: async () => false,
-        },
-      ],
-      run: async () => ({ code: 0 }),
-    });
-
-    expect(code).toBe(1);
-    expect(io.err.join('\n')).toContain('health check did not pass');
-  });
-
-  it('succeeds when the health check passes', async () => {
-    const io = createCapturingIo();
-
-    const code = await runDemo(io, {
-      steps: [
-        { name: 'Step with health check', command: 'cmd', args: [], healthCheck: async () => true },
-      ],
-      run: async () => ({ code: 0 }),
-    });
-
-    expect(code).toBe(0);
-  });
-
   it('exposes the documented default steps (docker compose + demo:agent)', () => {
     const steps = defaultDemoSteps();
     expect(steps.map((s) => s.command)).toEqual(['docker', 'npm']);
+    // --wait is what holds the agent back until the services are healthy
+    expect(steps[0]?.args).toContain('--wait');
     expect(steps[1]?.args).toEqual(['run', 'demo:agent']);
   });
 });
 
-describe('runDemo — real process execution (default execCommand, no `run` injected)', () => {
+describe('runDemo - real process execution (default execCommand, no `run` injected)', () => {
   it('reports success for a real command that exits 0', async () => {
     const io = createCapturingIo();
     const code = await runDemo(io, {

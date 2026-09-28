@@ -9,33 +9,34 @@
  * explicit CLI policy the generated file is deliberately incomplete: it will
  * not load until a human fills those fields in.
  */
+import { win32 } from 'node:path';
 import { Document, type Node, type Pair, type YAMLMap } from 'yaml';
-import type { JsonSchema } from '../core/domain/common.js';
-import { discoverOperations } from './discover.js';
-import { dereference } from './refs.js';
-import { mapRequest, pickJsonMediaType } from './request.js';
-import { convertSchema } from './schema.js';
+import type { JsonSchema } from '../core/domain/common';
+import { isRecord } from '../core/is-record';
+import { discoverOperations } from './discover';
+import { dereference } from './refs';
+import { mapRequest, pickJsonMediaType } from './request';
+import { convertSchema } from './schema';
 import type {
   ImportDiagnostic,
   LoadedOpenApiDocument,
   OpenApiOperationCandidate,
   OpenApiVersion,
-} from './types.js';
+} from './types';
 
-/** Commerce policy the operator supplied explicitly. Never inferred. */
+/** Commerce policy the operator supplied explicitly. Never inferred */
 export interface ImportPolicy {
   readonly pricing?: Record<string, unknown>;
   readonly expose?: readonly string[];
-  readonly payments?: readonly string[];
 }
 
 export interface ImportOptions {
   readonly baseUrl?: string;
   readonly policy?: ImportPolicy;
-  /** `--operation` / `--tag`. Applied before mapping, so unselected operations produce no noise. */
+  /** `--operation` / `--tag`. Applied before mapping, so unselected operations produce no noise */
   readonly include?: {
     readonly operationIds?: readonly string[];
-    /** Multiple tags are OR-ed. */
+    /** Multiple tags are OR-ed */
     readonly tags?: readonly string[];
   };
 }
@@ -44,11 +45,11 @@ export interface ResourceDraft {
   readonly id: string;
   readonly operationId?: string;
   readonly tags: readonly string[];
-  /** `METHOD /path`, for the console summary. */
+  /** `METHOD /path`, for the console summary */
   readonly source: string;
-  /** YAML-ready, in the field order it will be written in. */
+  /** YAML-ready, in the field order it will be written in */
   readonly resource: Record<string, unknown>;
-  /** Comment lines written above this resource. */
+  /** Comment lines written above this resource */
   readonly review: readonly string[];
 }
 
@@ -57,7 +58,7 @@ export interface ImportResult {
   readonly sourcePath: string;
   readonly drafts: readonly ResourceDraft[];
   readonly diagnostics: readonly ImportDiagnostic[];
-  /** `--operation` values that matched nothing. The CLI exits non-zero on these. */
+  /** `--operation` values that matched nothing. The CLI exits non-zero on these */
   readonly unmatchedOperationIds: readonly string[];
 }
 
@@ -144,14 +145,9 @@ export function buildResourceDrafts(
             ? { inputBindings: mapping.inputBindings }
             : {}),
         },
-        // Policy is written only when the operator asked for it. An absent
-        // `pricing`/`expose` is what makes the draft fail config validation
-        // until a human has decided.
+        // Written only when the operator supplied it (see the file header)
         ...(options.policy?.pricing !== undefined ? { pricing: options.policy.pricing } : {}),
         ...(options.policy?.expose !== undefined ? { expose: [...options.policy.expose] } : {}),
-        ...(options.policy?.payments !== undefined
-          ? { payments: [...options.policy.payments] }
-          : {}),
       },
       review,
     });
@@ -169,7 +165,6 @@ export function buildResourceDrafts(
   };
 }
 
-/** `--operation` accepts the OpenAPI operationId or the generated resource id. */
 // With a selection, a discovery finding counts only for a selected operation
 // or one named by `--operation`, so an unrelated one cannot fail `--strict`
 function selectDiscoveryDiagnostics(
@@ -186,6 +181,7 @@ function selectDiscoveryDiagnostics(
   );
 }
 
+// `--operation` accepts the OpenAPI operationId or the generated resource id
 function selects(ids: readonly string[], candidate: OpenApiOperationCandidate): boolean {
   return (
     ids.includes(candidate.resourceId) ||
@@ -193,7 +189,7 @@ function selects(ids: readonly string[], candidate: OpenApiOperationCandidate): 
   );
 }
 
-/** `security: []` means "explicitly none"; `[{}]` means optional. Neither needs a credential. */
+// `security: []` means "explicitly none" and `[{}]` means optional. Neither needs a credential
 function declaresSecurity(candidate: OpenApiOperationCandidate): boolean {
   return candidate.security.some(
     (requirement) =>
@@ -251,7 +247,7 @@ function selectOutputSchema(
   const converted = convertSchema(document, schemaNode);
   if (!converted.supported) {
     // Output schema is descriptive: omitting it costs discovery detail, not
-    // request safety, so it never skips the operation.
+    // request safety, so it never skips the operation
     diagnostics.push({
       severity: 'warning',
       code: 'unsupported-output-schema',
@@ -280,7 +276,7 @@ function rank(status: string): number {
 
 /**
  * Renders the drafts as a config fragment: the same `resources:` shape
- * `config.yaml` uses, so a reviewed block can be moved across whole.
+ * `config.yaml` uses, so a reviewed block can be moved across whole
  */
 export function renderResourcesYaml(result: ImportResult): string {
   const resources: Record<string, unknown> = {};
@@ -289,7 +285,8 @@ export function renderResourcesYaml(result: ImportResult): string {
   const doc = new Document({ resources });
   doc.commentBefore = [
     ' Generated by agent-commerce import openapi. Review before use.',
-    ` Source: ${basename(result.sourcePath)} (OpenAPI ${result.version})`,
+    // win32.basename splits on both / and \
+    ` Source: ${win32.basename(result.sourcePath)} (OpenAPI ${result.version})`,
     ' Merge the resources below into config.yaml once pricing, exposure and',
     ' any backend authentication have been decided.',
   ].join('\n');
@@ -306,14 +303,6 @@ export function renderResourcesYaml(result: ImportResult): string {
 
   // lineWidth 0 disables folding: a wrapped description would otherwise
   // re-flow whenever an unrelated word changed, and the generated file is
-  // meant to be reviewed in a diff.
+  // meant to be reviewed in a diff
   return doc.toString({ lineWidth: 0 });
-}
-
-function basename(path: string): string {
-  return path.split(/[\\/]/).pop() ?? path;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

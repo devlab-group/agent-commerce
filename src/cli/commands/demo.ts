@@ -1,19 +1,16 @@
 /**
- * `agent-commerce demo` — a thin, honest wrapper around the documented
- * `docker compose up` + `npm run demo:agent` steps (README/ commands).
- *
- * No orchestration magic: each step's exit code is checked, and a failing
- * step is reported with exactly what failed and what to run to retry it, not
- * swallowed into a generic "demo failed" message.
+ * `agent-commerce demo`: runs `docker compose up` and then `npm run demo:agent`,
+ * the README quickstart without its `doctor` check. `--wait` holds the first
+ * step until every compose service with a healthcheck reports healthy. Each
+ * step's exit code is checked, and a failing step is reported with the command
+ * to retry it.
  */
-import type { Io } from '../lib/io.js';
+import type { Io } from '../lib/io';
 
 export interface DemoStep {
   readonly name: string;
   readonly command: string;
   readonly args: readonly string[];
-  /** Optional health check run after the step; returns true when healthy. */
-  readonly healthCheck?: () => Promise<boolean>;
 }
 
 export interface RunResult {
@@ -31,20 +28,20 @@ export interface DemoDeps {
 export function defaultDemoSteps(): readonly DemoStep[] {
   return [
     {
-      name: 'Start local chain + gateway + merchant (docker compose)',
+      name: 'Start the local stack: chain, merchant, gateway and dashboard (docker compose)',
       command: 'docker',
-      args: ['compose', 'up', '--build', '-d'],
+      args: ['compose', 'up', '--build', '--detach', '--wait'],
     },
     { name: 'Run the deterministic buyer agent', command: 'npm', args: ['run', 'demo:agent'] },
   ];
 }
 
-/** `agent-commerce demo`. Returns process exit code. */
+/** `agent-commerce demo`. Returns the process exit code */
 export async function runDemo(io: Io, deps: DemoDeps = {}): Promise<number> {
   const steps = deps.steps ?? defaultDemoSteps();
   const run = deps.run ?? execCommand;
 
-  io.stdout('agent-commerce demo — running the documented quickstart steps:');
+  io.stdout('agent-commerce demo: starting the local stack, then running the buyer agent');
   for (const step of steps) {
     io.stdout('');
     io.stdout(`==> ${step.name}`);
@@ -59,13 +56,6 @@ export async function runDemo(io: Io, deps: DemoDeps = {}): Promise<number> {
       io.stderr('Nothing further was run. To retry manually:');
       io.stderr(`  ${step.command} ${step.args.join(' ')}`);
       return 1;
-    }
-    if (step.healthCheck !== undefined) {
-      const healthy = await step.healthCheck();
-      if (!healthy) {
-        io.stderr(`FAIL  "${step.name}" completed but its health check did not pass.`);
-        return 1;
-      }
     }
     io.stdout(`OK    ${step.name}`);
   }

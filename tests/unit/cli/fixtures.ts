@@ -1,6 +1,7 @@
-import type { GatewayConfig } from '../../../src/cli/lib/config-client.js';
-import type { FetchLike } from '../../../src/cli/lib/http.js';
-import type { CommerceResource, PaymentAttempt, ReceiptStore } from '../../../src/core/index.js';
+import type { GatewayConfig } from '../../../src/cli/lib/config-client';
+import type { FetchLike } from '../../../src/cli/lib/http';
+import type { Io } from '../../../src/cli/lib/io';
+import type { CommerceResource, PaymentAttempt, ReceiptStore } from '../../../src/core';
 
 export function makeResource(overrides: Partial<CommerceResource> = {}): CommerceResource {
   return {
@@ -42,7 +43,7 @@ export function makeGatewayConfig(overrides: Partial<GatewayConfig> = {}): Gatew
   };
 }
 
-/** Builds a fake `fetch` from an exact-URL -> Response map. Unmatched URLs reject (simulating "unreachable"). */
+/** A fake `fetch` from an exact-URL -> Response map. Unmatched URLs reject, as if unreachable */
 export function createFakeFetch(
   handlers: Record<string, () => Response | Promise<Response>>,
 ): FetchLike {
@@ -107,5 +108,17 @@ export function makeFakeReceiptStore(overrides: Partial<ReceiptStore> = {}): Rec
     health:
       overrides.health ?? (async () => ({ status: 'pass', checkedAt: '2026-01-01T00:00:00.000Z' })),
     close: overrides.close ?? (async () => {}),
+  };
+}
+
+/** Collects lines instead of writing them */
+export function createCapturingIo(): Io & { out: string[]; err: string[] } {
+  const out: string[] = [];
+  const err: string[] = [];
+  return {
+    out,
+    err,
+    stdout: (line) => out.push(line),
+    stderr: (line) => err.push(line),
   };
 }

@@ -17,7 +17,7 @@ vi.mock('@clack/prompts', () => ({
   isCancel: (value: unknown) => value === CANCEL,
   text: vi.fn(
     async (opts: { message: string; validate?: (v: string | undefined) => string | undefined }) => {
-      // Exercise the real inline `validate` callback's both branches (empty vs non-empty).
+      // Exercise the real inline `validate` callback's both branches (empty vs non-empty)
       opts.validate?.(undefined);
       opts.validate?.('non-empty');
       return opts.message.startsWith('Backend') ? state.backendBaseUrl : state.merchantPayTo;
@@ -29,8 +29,8 @@ vi.mock('@clack/prompts', () => ({
   confirm: vi.fn(async () => state.x402Enabled),
 }));
 
-// Imported after the mock so `collectAnswersInteractive` picks it up.
-const { collectAnswersInteractive } = await import('../../../src/cli/commands/init.js');
+// Imported after the mock so `collectAnswersInteractive` picks it up
+const { collectAnswersInteractive } = await import('../../../src/cli/commands/init');
 
 describe('collectAnswersInteractive (real prompt flow, @clack/prompts mocked)', () => {
   it('collects a full set of answers on the happy path', async () => {
@@ -42,6 +42,11 @@ describe('collectAnswersInteractive (real prompt flow, @clack/prompts mocked)', 
 
     const answers = await collectAnswersInteractive();
 
+    // An empty protocol selection is refused at the prompt, not after it
+    const clack = await import('@clack/prompts');
+    expect(clack.multiselect).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining('protocols'), required: true }),
+    );
     expect(answers).toEqual({
       backendBaseUrl: 'http://localhost:3000',
       resources: ['weather', 'report'],
@@ -58,34 +63,34 @@ describe('collectAnswersInteractive (real prompt flow, @clack/prompts mocked)', 
     expect(answers?.merchantPayTo).toBeTruthy(); // falls back to the default
   });
 
-  it('returns undefined when the backend URL prompt is cancelled', async () => {
+  it('returns undefined when the backend URL prompt is canceled', async () => {
     state.backendBaseUrl = CANCEL;
     const answers = await collectAnswersInteractive();
     expect(answers).toBeUndefined();
   });
 
-  it('returns undefined when the resources prompt is cancelled', async () => {
+  it('returns undefined when the resources prompt is canceled', async () => {
     state.backendBaseUrl = 'http://localhost:3000';
     state.resources = CANCEL;
     const answers = await collectAnswersInteractive();
     expect(answers).toBeUndefined();
   });
 
-  it('returns undefined when the protocols prompt is cancelled', async () => {
+  it('returns undefined when the protocols prompt is canceled', async () => {
     state.resources = ['weather'];
     state.protocols = CANCEL;
     const answers = await collectAnswersInteractive();
     expect(answers).toBeUndefined();
   });
 
-  it('returns undefined when the x402 confirm is cancelled', async () => {
+  it('returns undefined when the x402 confirm is canceled', async () => {
     state.protocols = ['http'];
     state.x402Enabled = CANCEL;
     const answers = await collectAnswersInteractive();
     expect(answers).toBeUndefined();
   });
 
-  it('returns undefined when the merchant-address prompt is cancelled', async () => {
+  it('returns undefined when the merchant-address prompt is canceled', async () => {
     state.x402Enabled = true;
     state.merchantPayTo = CANCEL;
     const answers = await collectAnswersInteractive();

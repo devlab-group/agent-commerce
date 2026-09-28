@@ -3,14 +3,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CommanderError } from 'commander';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createCapturingIo } from '../../../src/cli/lib/io.js';
-import { buildProgram } from '../../../src/cli/program.js';
+import { buildProgram } from '../../../src/cli/program';
+import { createCapturingIo } from './fixtures';
 
 /**
  * Runs the program the same way index.ts does (exitOverride + a catch that
  * turns CommanderError into process.exitCode), but saves/restores
  * process.exitCode around the call so a test never leaks it into vitest's own
- * process exit status.
+ * process exit status
  */
 async function run(argv: readonly string[], io = createCapturingIo()) {
   const program = buildProgram(io);
@@ -143,6 +143,6 @@ describe('agent-commerce init', () => {
 
 afterEach(() => {
   // Defensive: never let a failed assertion above leave process.exitCode set
-  // for the rest of the suite.
+  // for the rest of the suite
   process.exitCode = undefined;
 });

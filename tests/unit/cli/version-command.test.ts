@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { runVersion } from '../../../src/cli/commands/version.js';
-import { createCapturingIo } from '../../../src/cli/lib/io.js';
+import { runVersion } from '../../../src/cli/commands/version';
+import { createCapturingIo } from './fixtures';
 
 describe('runVersion', () => {
   it('prints only the version line when there are no pinned versions to report', () => {
@@ -24,10 +24,27 @@ describe('runVersion', () => {
     runVersion(io);
     const joined = io.out.join('\n');
     expect(joined).toContain('Pinned protocol / SDK versions:');
-    // These come from sibling package.json files, not literals in the source.
+    // These come from package.json, not from literals in the source
     expect(joined).toMatch(/@modelcontextprotocol\/sdk\s+1\.30\.0/);
     expect(joined).toMatch(/@x402\/core\s+2\.23\.0/);
     expect(joined).toMatch(/@x402\/evm\s+2\.23\.0/);
     expect(joined).toMatch(/better-sqlite3\s+13\.0\.3/);
+  });
+
+  it('also reports the MPP, AP2, ACP and OpenAPI import pins', () => {
+    const io = createCapturingIo();
+    runVersion(io);
+    const joined = io.out.join('\n');
+    for (const name of [
+      'mppx',
+      'jose',
+      '@sd-jwt/core',
+      'canonicalize',
+      'ajv',
+      'ajv-formats',
+      '@scalar/openapi-parser',
+    ]) {
+      expect(joined).toMatch(new RegExp(`^  ${name.replace('/', '\\/')}\\s`, 'm'));
+    }
   });
 });

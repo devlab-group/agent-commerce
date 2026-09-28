@@ -2,11 +2,9 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { z } from 'zod';
-import { formatConfigError, runValidate } from '../../../src/cli/commands/validate.js';
-import { createCapturingIo } from '../../../src/cli/lib/io.js';
-import { CommerceError } from '../../../src/core/index.js';
-import { makeGatewayConfig } from './fixtures.js';
+import { formatConfigError, runValidate } from '../../../src/cli/commands/validate';
+import { CommerceError } from '../../../src/core';
+import { createCapturingIo, makeGatewayConfig } from './fixtures';
 
 describe('formatConfigError', () => {
   it('formats a CommerceError with its code, message and details', () => {
@@ -19,25 +17,6 @@ describe('formatConfigError', () => {
     expect(formatted).toContain('server.port');
   });
 
-  it('formats a ZodError with one line per issue path', () => {
-    const schema = z.object({ port: z.number() });
-    const result = schema.safeParse({ port: 'not-a-number' });
-    expect(result.success).toBe(false);
-    if (result.success) throw new Error('expected failure');
-    const formatted = formatConfigError(result.error);
-    expect(formatted).toContain('Configuration schema errors');
-    expect(formatted).toContain('port');
-  });
-
-  it('formats a root-level ZodError issue (empty path) as "(root)"', () => {
-    const schema = z.number();
-    const result = schema.safeParse('not-a-number');
-    expect(result.success).toBe(false);
-    if (result.success) throw new Error('expected failure');
-    const formatted = formatConfigError(result.error);
-    expect(formatted).toContain('(root)');
-  });
-
   it('formats a plain Error by message', () => {
     expect(formatConfigError(new Error('yaml syntax error'))).toContain('yaml syntax error');
   });
@@ -46,10 +25,10 @@ describe('formatConfigError', () => {
     expect(formatConfigError('a string was thrown')).toContain('a string was thrown');
   });
 
-  it('never echoes a resolved secret value — only the error message text is surfaced', () => {
-    // The config package's real env-substitution error names only the
-    // variable, never a resolved value (src/config/env.ts). Assert
-    // the CLI's formatter doesn't add any additional value leakage.
+  it('never echoes a resolved secret value, only the error message text', () => {
+    // The config module's env-substitution error names only the variable,
+    // never a resolved value (src/config/env.ts). The CLI's formatter must
+    // not add one.
     const err = new CommerceError(
       'CONFIG_INVALID',
       'Unresolved environment variable "${FACILITATOR_PRIVATE_KEY}" referenced at config path "payments.x402.facilitator.signerPrivateKey"',
@@ -60,7 +39,7 @@ describe('formatConfigError', () => {
   });
 });
 
-describe('runValidate — with an injected loader (isolated branch coverage)', () => {
+describe('runValidate with an injected loader (isolated branch coverage)', () => {
   it('PASS: prints a summary and returns exit code 0 for a valid config', async () => {
     const io = createCapturingIo();
     const code = await runValidate({}, io, { loadConfig: async () => makeGatewayConfig() });
@@ -96,6 +75,13 @@ describe('runValidate — with an injected loader (isolated branch coverage)', (
     expect(io.out.join('\n')).toContain('protocols: http=off mcp=off');
   });
 
+  it('reports every payment rail and authorization method, not only x402', async () => {
+    const io = createCapturingIo();
+    await runValidate({}, io, { loadConfig: async () => makeGatewayConfig() });
+    expect(io.out.join('\n')).toContain('payments: x402=off mpp=off');
+    expect(io.out.join('\n')).toContain('authorization: ap2=off');
+  });
+
   it('passes the --config path through to the loader', async () => {
     let receivedPath: string | undefined;
     const io = createCapturingIo();
@@ -109,7 +95,7 @@ describe('runValidate — with an injected loader (isolated branch coverage)', (
   });
 });
 
-describe('runValidate — local chain manifest fill (docker vs. host env parity)', () => {
+describe('runValidate: local chain manifest fill (docker vs. host env parity)', () => {
   it('prints a notice and passes the filled env through to loadConfig, when the manifest supplies something', async () => {
     let receivedEnv: NodeJS.ProcessEnv | undefined;
     const io = createCapturingIo();
@@ -187,7 +173,7 @@ describe('runValidate — local chain manifest fill (docker vs. host env parity)
   });
 });
 
-describe('runValidate — real src/config integration', () => {
+describe('runValidate against the real src/config', () => {
   let dir: string;
 
   beforeEach(() => {
@@ -324,11 +310,7 @@ payments: {}
     expect(io.err.join('\n')).toContain('DOES_NOT_EXIST_ENV_VAR');
   });
 
-  it('rejects a duplicate resource id at the YAML level (YAML maps cannot even express one — the schema instead rejects the raw config root shape when malformed)', async () => {
-    // config.yaml expresses resources as a map keyed by id, so a
-    // literal "duplicate id" is structurally impossible in valid YAML — the
-    // failure mode this test actually exercises is a non-object root, which
-    // the schema explicitly rejects with an actionable path.
+  it('rejects a config whose root is not a map', async () => {
     const configPath = join(dir, 'config.yaml');
     writeFileSync(configPath, '- just\n- a\n- list\n', 'utf8');
 

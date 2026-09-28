@@ -2,18 +2,17 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { runInit } from '../../../src/cli/commands/init.js';
-import { defaultInitAnswers } from '../../../src/cli/lib/init-config.js';
-import { createCapturingIo } from '../../../src/cli/lib/io.js';
-import { CommerceError } from '../../../src/core/index.js';
-import { makeGatewayConfig } from './fixtures.js';
+import { runInit } from '../../../src/cli/commands/init';
+import { defaultInitAnswers } from '../../../src/cli/lib/init-config';
+import { CommerceError } from '../../../src/core';
+import { createCapturingIo, makeGatewayConfig } from './fixtures';
 
 function tmpConfigPath(): string {
   const dir = mkdtempSync(join(tmpdir(), 'agent-commerce-init-'));
   return join(dir, 'config.yaml');
 }
 
-describe('runInit — --yes (non-interactive, required for scripting/tests)', () => {
+describe('runInit --yes (non-interactive, required for scripting/tests)', () => {
   it('writes a file that the real config loader accepts (end-to-end)', async () => {
     const outputPath = tmpConfigPath();
     const io = createCapturingIo();
@@ -36,7 +35,7 @@ describe('runInit — --yes (non-interactive, required for scripting/tests)', ()
 
     expect(code).toBe(1);
     expect(io.err.join('\n')).toContain('already exists');
-    // File must be untouched.
+    // File must be untouched
     expect(readFileSync(outputPath, 'utf8')).toBe('version: 1\n');
   });
 
@@ -78,7 +77,7 @@ describe('runInit — --yes (non-interactive, required for scripting/tests)', ()
   });
 });
 
-describe('runInit — validation failure is surfaced honestly', () => {
+describe('runInit: a validation failure is reported', () => {
   it('exits non-zero and prints the formatted error when the generated config fails validation', async () => {
     const outputPath = tmpConfigPath();
     const io = createCapturingIo();
@@ -92,16 +91,13 @@ describe('runInit — validation failure is surfaced honestly', () => {
     expect(code).toBe(1);
     expect(io.err.join('\n')).toContain('simulated validation failure');
     // The answers validated in memory, so a failure reading the file back can
-    // only be a renderer bug — and unlike the old blanket "report this as a
-    // bug", that is now true when it is printed.
+    // only be a renderer bug
     expect(io.err.join('\n')).toContain('bug in the config renderer');
   });
 
   it('writes nothing when the answers themselves are invalid, and reports the real error', async () => {
-    // Writing the file first, printing "PASS Wrote …", then loading it back
-    // would tell the user to report their own input as a bug. Answers can
-    // legitimately fail validation: an empty protocol multiselect, a typo'd
-    // settlement address, a scheme-less backend URL.
+    // Invalid answers are the user's input to fix, not a bug to report, and
+    // nothing may be written for them
     const outputPath = tmpConfigPath();
     const io = createCapturingIo();
 
@@ -110,7 +106,7 @@ describe('runInit — validation failure is surfaced honestly', () => {
         throw new CommerceError('CONFIG_INVALID', 'resources.report.expose: too small');
       },
       loadConfig: async () => {
-        throw new Error('must never be reached — nothing should have been written');
+        throw new Error('must never be reached: nothing should have been written');
       },
     });
 
@@ -134,7 +130,7 @@ describe('runInit — validation failure is surfaced honestly', () => {
   });
 });
 
-describe('runInit — interactive path (collectAnswers injected)', () => {
+describe('runInit: interactive path (collectAnswers injected)', () => {
   it('uses the collected answers to render the config', async () => {
     const outputPath = tmpConfigPath();
     const io = createCapturingIo();

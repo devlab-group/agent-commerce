@@ -3,8 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { isCommerceError } from '../../../src/core/errors/index.js';
-import { loadOpenApiDocument, MAX_SOURCE_BYTES } from '../../../src/openapi/index.js';
+import { isCommerceError } from '../../../src/core/errors';
+import { loadOpenApiDocument, MAX_SOURCE_BYTES } from '../../../src/openapi';
 
 const FIXTURES = fileURLToPath(new URL('./fixtures/', import.meta.url));
 const fixture = (name: string): string => join(FIXTURES, name);
@@ -30,7 +30,7 @@ describe('loadOpenApiDocument', () => {
     const loaded = await loadOpenApiDocument(fixture('petstore-3.0.yaml'));
     expect(loaded.version).toBe('3.0');
     expect(loaded.sourcePath).toContain('petstore-3.0.yaml');
-    // The document is kept verbatim - references are NOT expanded up front.
+    // The document is kept verbatim: references are not expanded up front
     const paths = loaded.document['paths'] as Record<
       string,
       Record<string, { requestBody: { content: Record<string, { schema: unknown }> } }>
@@ -142,6 +142,36 @@ describe('loadOpenApiDocument', () => {
       loadOpenApiDocument(fixture('external-file-ref.yaml')),
     );
     expect(message).toContain('./common.yaml#/Thing');
+  });
+
+  it('rejects a $ref with a malformed percent-escape as CONFIG_INVALID', async () => {
+    // The validator itself throws a bare URIError on this
+    const dir = await mkdtemp(join(tmpdir(), 'oac-openapi-'));
+    const path = join(dir, 'spec.json');
+    await writeFile(
+      path,
+      JSON.stringify({
+        openapi: '3.1.0',
+        info: { title: 't', version: '1' },
+        paths: {
+          '/a': {
+            get: {
+              responses: {
+                '200': {
+                  description: 'ok',
+                  content: {
+                    'application/json': { schema: { $ref: '#/components/schemas/%zz' } },
+                  },
+                },
+              },
+            },
+          },
+        },
+        components: { schemas: { A: { type: 'object' } } },
+      }),
+    );
+    const message = await expectConfigInvalid(loadOpenApiDocument(path));
+    expect(message).toContain('malformed percent-escape');
   });
 
   it('accepts a document whose internal references are cyclic - resolution is lazy', async () => {

@@ -1,6 +1,6 @@
 /**
- * Small fetch-with-timeout helper for `doctor`. Injectable so tests never hit
- * a real network — they point it at a local stub HTTP server instead.
+ * Fetch with a timeout, for `doctor`. `fetchImpl` is injected so tests can
+ * pass a fake `fetch` and never touch the network.
  */
 export type FetchLike = typeof fetch;
 
@@ -16,10 +16,9 @@ export async function fetchJson<T = unknown>(
   url: string,
   timeoutMs = 1500,
 ): Promise<FetchJsonResult<T>> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetchImpl(url, { signal: controller.signal });
+    // The signal also bounds the body read below
+    const res = await fetchImpl(url, { signal: AbortSignal.timeout(timeoutMs) });
     let body: T | undefined;
     try {
       body = (await res.json()) as T;
@@ -33,7 +32,5 @@ export async function fetchJson<T = unknown>(
       status: 0,
       error: err instanceof Error ? err.message : 'unknown fetch error',
     };
-  } finally {
-    clearTimeout(timer);
   }
 }

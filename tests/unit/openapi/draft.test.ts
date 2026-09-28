@@ -1,15 +1,15 @@
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { parseConfig } from '../../../src/config/schema.js';
+import { parseConfig } from '../../../src/config/schema';
 import {
   buildResourceDrafts,
   type ImportResult,
   type LoadedOpenApiDocument,
   loadOpenApiDocument,
   renderResourcesYaml,
-} from '../../../src/openapi/index.js';
-import { validRawConfig } from '../config/fixtures.js';
+} from '../../../src/openapi';
+import { validRawConfig } from '../config/fixtures';
 
 const fixture = (name: string): string =>
   join(fileURLToPath(new URL('./fixtures/', import.meta.url)), name);
@@ -110,7 +110,7 @@ describe('buildResourceDrafts', () => {
       (d) => d.code === 'backend-authentication-required',
     );
     expect(warning?.message).toContain('credentials were not imported');
-    // The API key scheme names an X-Api-Key header; it must not become input.
+    // The API key scheme names an X-Api-Key header; it must not become input
     expect(JSON.stringify(resource('getOrder'))).not.toContain('X-Api-Key');
     expect(JSON.stringify(resource('getOrder'))).not.toContain('apiKey');
   });
@@ -119,7 +119,7 @@ describe('buildResourceDrafts', () => {
     expect(diagnostics('createOrder').map((d) => d.code)).not.toContain(
       'backend-authentication-required',
     );
-    // `security: [{}]` means optional, not required.
+    // `security: [{}]` means optional, not required
     expect(diagnostics('ping').map((d) => d.code)).not.toContain('backend-authentication-required');
   });
 
@@ -172,6 +172,11 @@ describe('renderResourcesYaml', () => {
   it('is byte-identical across runs of the same document', async () => {
     const again = buildResourceDrafts(await loadOpenApiDocument(fixture('responses-3.1.yaml')));
     expect(renderResourcesYaml(again)).toBe(renderResourcesYaml(result));
+  });
+
+  it('names only the source file, whichever separator its path uses', () => {
+    const yaml = renderResourcesYaml({ ...result, sourcePath: 'C:\\specs\\shop.yaml' });
+    expect(yaml).toContain('# Source: shop.yaml (OpenAPI');
   });
 
   it('writes a reviewable fragment with the review comments above each resource', () => {

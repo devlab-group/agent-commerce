@@ -1,22 +1,21 @@
 import { Command } from 'commander';
-import { DEFAULT_CONFIG_FILENAME } from '../config/filename.js';
-import { PROTOCOL_NAMES } from '../core/index.js';
-import { runDemo } from './commands/demo.js';
-import { printDoctorReport, runDoctor } from './commands/doctor.js';
-import { runImportOpenApi } from './commands/import-openapi.js';
-import { runInit } from './commands/init.js';
-import { runValidate } from './commands/validate.js';
-import { runVersion } from './commands/version.js';
-import { type Io, processIo } from './lib/io.js';
-import { readVersionReport } from './lib/versions.js';
+import { DEFAULT_CONFIG_FILENAME } from '../config/filename';
+import { PROTOCOL_NAMES } from '../core';
+import { runDemo } from './commands/demo';
+import { printDoctorReport, runDoctor } from './commands/doctor';
+import { runImportOpenApi } from './commands/import-openapi';
+import { runInit } from './commands/init';
+import { runValidate } from './commands/validate';
+import { runVersion } from './commands/version';
+import { type Io, processIo } from './lib/io';
+import { readVersionReport } from './lib/versions';
 
 /**
  * Builds the `agent-commerce` Commander program.
  *
- * `io` is injectable so tests can capture output instead of writing to the
- * real process streams; `exitOverride()` + `configureOutput()` mean
- * `--help`/errors never call `process.exit()` directly, so a caller (index.ts
- * or a test) fully controls process lifecycle.
+ * `io` is injectable so tests can capture output. With `exitOverride()` and
+ * `configureOutput()`, `--help` and parse errors never call `process.exit()`,
+ * so the caller (index.ts or a test) controls the process lifecycle.
  */
 export function buildProgram(io: Io = processIo): Command {
   const program = new Command();
@@ -24,10 +23,9 @@ export function buildProgram(io: Io = processIo): Command {
   program
     .name('agent-commerce')
     .description('CLI for the Agent Commerce Gateway: init, import, validate, doctor, demo.')
-    // `--version` is required of the published binary. The `version`
-    // subcommand stays: it additionally prints the pinned protocol/SDK
-    // versions, which is what `doctor` and the support matrix are checked
-    // against. Both read the same source, so they cannot disagree.
+    // `--version` prints the CLI version only; the `version` subcommand also
+    // lists the pinned protocol/SDK versions. Both read `readVersionReport()`,
+    // so they cannot disagree.
     .version(readVersionReport().cliVersion, '-v, --version', 'Print the CLI version.')
     .exitOverride()
     .configureOutput({
@@ -83,8 +81,8 @@ export function buildProgram(io: Io = processIo): Command {
       process.exitCode = code;
     });
 
-  // `import` is a group so a future `import postman`/`import graphql` is a
-  // sibling rather than a rename of an established command.
+  // A command group, so another importer can be added beside `openapi`
+  // without renaming it
   const importCommand = program
     .command('import')
     .description('Generate Agent Commerce resource drafts from an API description.');
@@ -146,7 +144,7 @@ export function buildProgram(io: Io = processIo): Command {
   program
     .command('demo')
     .description(
-      'Run the documented docker compose + demo agent quickstart, verifying health between steps.',
+      'Start the local stack with docker compose (waiting for healthy services), then run the demo agent. Run it from a repo clone.',
     )
     .action(async () => {
       process.exitCode = await runDemo(io);
@@ -155,7 +153,7 @@ export function buildProgram(io: Io = processIo): Command {
   return program;
 }
 
-/** Commander's repeatable-option collector. */
+// Commander's repeatable-option collector
 function collect(value: string, previous: string[] | undefined): string[] {
   return [...(previous ?? []), value];
 }
