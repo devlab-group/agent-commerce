@@ -6,7 +6,7 @@ import {
   formatStatusLabel,
   formatTimestamp,
   shortenRequestId,
-} from '../src/lib/format.js';
+} from '../src/lib/format';
 
 describe('formatPrice', () => {
   it('renders a free resource', () => {
@@ -40,10 +40,10 @@ describe('formatStatusLabel / formatHealth', () => {
   it('includes the detail when present', () => {
     expect(
       formatHealth({ status: 'warn', detail: 'slow', checkedAt: '2026-01-01T00:00:00.000Z' }),
-    ).toBe('WARN — slow');
+    ).toBe('WARN: slow');
   });
 
-  it('omits the dash when there is no detail', () => {
+  it('omits the separator when there is no detail', () => {
     expect(formatHealth({ status: 'pass', checkedAt: '2026-01-01T00:00:00.000Z' })).toBe('PASS');
   });
 });

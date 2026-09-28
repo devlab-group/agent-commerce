@@ -1,19 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { ReceiptStore } from '../../../src/core/index.js';
-import { createSqliteReceiptStore } from '../../../src/storage/receipts/index.js';
-import { containsSecretKey, redact } from '../../../src/storage/receipts/redact.js';
-import { createFakeClock, createFakeIds, makeEvent, makeReceipt } from './helpers.js';
+import type { ReceiptStore } from '../../../src/core';
+import { createSqliteReceiptStore } from '../../../src/storage/receipts';
+import { isSecretKey, redact } from '../../../src/storage/receipts/redact';
+import { createFakeClock, createFakeIds, makeEvent, makeReceipt } from './helpers';
 
 /**
- * Store NO secrets (docs/contracts.md): a private key, an Authorization
- * header or a raw payment proof must never be persisted, even if a caller
- * accidentally puts one in `metadata` / `data`.
- *
- * Chosen strategy: STRIP (redact), not reject. `appendEvent` must never throw
- * into the caller's flow, so rejecting would violate that contract for
- * events; stripping keeps behaviour identical (and non-throwing) for both
- * receipts and events. Redaction is recursive and key-pattern based — see
- * src/redact.ts.
+ * Store no secrets (docs/contracts.md): a private key, an Authorization header
+ * or a raw payment proof is never persisted, even when a caller puts one in
+ * `metadata` or `data`. The store redacts rather than rejects, because
+ * `appendEvent` must not throw into the caller's flow. See
+ * src/storage/receipts/redact.ts.
  */
 describe('no-secrets guarantee', () => {
   let store: ReceiptStore;
@@ -44,10 +40,10 @@ describe('no-secrets guarantee', () => {
     expect(clean.note).toBe('fine');
   });
 
-  it('containsSecretKey detects secret-shaped keys', () => {
-    expect(containsSecretKey({ privateKey: 'x' })).toBe(true);
-    expect(containsSecretKey({ nested: { apiKey: 'x' } })).toBe(true);
-    expect(containsSecretKey({ safe: 'value' })).toBe(false);
+  it('isSecretKey detects secret-shaped keys', () => {
+    expect(isSecretKey('privateKey')).toBe(true);
+    expect(isSecretKey('apiKey')).toBe(true);
+    expect(isSecretKey('safe')).toBe(false);
   });
 
   it('redact() strips a signature-shaped field (e.g. an EIP-712/EIP-3009 signature)', () => {
@@ -62,9 +58,9 @@ describe('no-secrets guarantee', () => {
     expect((clean.nested as Record<string, unknown>).ok).toBe('value');
   });
 
-  it('containsSecretKey detects a signature/signedMessage key', () => {
-    expect(containsSecretKey({ signature: 'x' })).toBe(true);
-    expect(containsSecretKey({ nested: { signedMessage: 'x' } })).toBe(true);
+  it('isSecretKey detects a signature/signedMessage key', () => {
+    expect(isSecretKey('signature')).toBe(true);
+    expect(isSecretKey('signedMessage')).toBe(true);
   });
 
   it('strips a privateKey-ish field from receipt metadata before it reaches the database', async () => {
@@ -167,9 +163,8 @@ describe('no-secrets guarantee', () => {
 });
 
 describe('bearer-token-shaped keys', () => {
-  // Nothing writes these today, which is precisely the situation a second
-  // line of defence exists for — and the ledger they would land in is a file
-  // on disk, kept owner-only because its contents are worth protecting.
+  // A second line of defense: nothing writes these keys, but the redactor
+  // must still catch one
   it.each([
     'token',
     'bearerToken',
@@ -185,10 +180,10 @@ describe('bearer-token-shaped keys', () => {
       Record<string, unknown>
     >;
     expect(redacted['outer']?.[key]).not.toBe('value-that-must-not-persist');
-    expect(containsSecretKey({ [key]: 'x' })).toBe(true);
+    expect(isSecretKey(key)).toBe(true);
   });
 
-  it('control: ordinary ledger fields are not redacted — the pattern must not eat real data', () => {
+  it('control: ordinary ledger fields are not redacted; the pattern must not eat real data', () => {
     const clean = {
       amount: '0.01',
       payer: '0xabc',
@@ -202,6 +197,5 @@ describe('bearer-token-shaped keys', () => {
       durationMs: 12,
     };
     expect(redact(clean)).toEqual(clean);
-    expect(containsSecretKey(clean)).toBe(false);
   });
 });

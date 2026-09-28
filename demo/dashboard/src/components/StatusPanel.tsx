@@ -1,7 +1,7 @@
-import { formatHealth, formatStatusLabel } from '../lib/format.js';
-import type { AdapterDescriptor, AdapterWithHealth, WellKnownDocument } from '../lib/types.js';
+import { formatHealth, formatStatusLabel } from '../lib/format';
+import type { AdapterDescriptor, AdapterWithHealth, WellKnownDocument } from '../lib/types';
 
-export interface StatusPanelProps {
+interface StatusPanelProps {
   readonly wellKnown?: WellKnownDocument;
   readonly error?: string;
 }
@@ -19,11 +19,11 @@ function AdapterRow({ adapter }: { readonly adapter: AdapterWithHealth }) {
       <td className={statusClass(adapter.status)}>{formatStatusLabel(adapter.status)}</td>
       <td className={statusClass(adapter.health.status)}>{formatHealth(adapter.health)}</td>
       <td>{adapter.supportedSpec}</td>
-      <td>{adapter.capabilities.length > 0 ? adapter.capabilities.join(', ') : '—'}</td>
+      <td>{adapter.capabilities.length > 0 ? adapter.capabilities.join(', ') : '-'}</td>
       <td className="unsupported">
         {adapter.unsupported !== undefined && adapter.unsupported.length > 0
           ? adapter.unsupported.join(', ')
-          : '—'}
+          : '-'}
       </td>
     </tr>
   );
@@ -34,22 +34,21 @@ function DescriptorRow({ descriptor }: { readonly descriptor: AdapterDescriptor 
     <tr>
       <td>{descriptor.name}</td>
       <td className={statusClass(descriptor.status)}>{formatStatusLabel(descriptor.status)}</td>
-      <td>—</td>
+      <td>-</td>
       <td>{descriptor.supportedSpec}</td>
-      <td>{descriptor.capabilities.length > 0 ? descriptor.capabilities.join(', ') : '—'}</td>
+      <td>{descriptor.capabilities.length > 0 ? descriptor.capabilities.join(', ') : '-'}</td>
       <td className="unsupported">
         {descriptor.unsupported !== undefined && descriptor.unsupported.length > 0
           ? descriptor.unsupported.join(', ')
-          : '—'}
+          : '-'}
       </td>
     </tr>
   );
 }
 
 /**
- * `GET /.well-known/agent-commerce` — every adapter/provider/store's own
- * self-description. Never renders a green check for something an adapter
- * says it does not implement; `unsupported` is shown honestly alongside it.
+ * Shows gateway components and their reported capabilities and limits from
+ * `GET /.well-known/agent-commerce`
  */
 export function StatusPanel({ wellKnown, error }: StatusPanelProps) {
   if (error !== undefined) {
@@ -76,7 +75,7 @@ export function StatusPanel({ wellKnown, error }: StatusPanelProps) {
     <section className="panel">
       <h2>Protocol &amp; payment status</h2>
       <p>
-        {wellKnown.merchant.name} — gateway {wellKnown.gateway.implementationVersion} (
+        {wellKnown.merchant.name}, gateway {wellKnown.gateway.implementationVersion} (
         {wellKnown.gateway.supportedSpec})
       </p>
       <table>
@@ -97,15 +96,16 @@ export function StatusPanel({ wellKnown, error }: StatusPanelProps) {
           {wellKnown.paymentProviders.map((provider) => (
             <DescriptorRow key={provider.name} descriptor={provider} />
           ))}
+          {wellKnown.authorizationProviders.map((provider) => (
+            <DescriptorRow key={provider.name} descriptor={provider} />
+          ))}
           <DescriptorRow descriptor={wellKnown.store} />
         </tbody>
       </table>
 
       <h3>x402 settlement</h3>
       {x402 === undefined || !x402.enabled ? (
-        <p className="empty">
-          x402 is not enabled — resources requiring payment cannot be delivered.
-        </p>
+        <p className="empty">x402 is not enabled.</p>
       ) : (
         <table>
           <tbody>
@@ -122,12 +122,16 @@ export function StatusPanel({ wellKnown, error }: StatusPanelProps) {
             <tr>
               <th>Pays to</th>
               <td>
-                <strong>{x402.payTo}</strong> — merchant-controlled, never the gateway
+                <strong>{x402.payTo}</strong>
               </td>
             </tr>
             <tr>
               <th>Facilitator</th>
-              <td>{x402.facilitator.mode === 'local' ? 'local (dev chain only)' : 'remote'}</td>
+              <td>{x402.facilitator.mode === 'local' ? 'local (in-process)' : 'remote'}</td>
+            </tr>
+            <tr>
+              <th>Deployment</th>
+              <td>{x402.mode}</td>
             </tr>
           </tbody>
         </table>

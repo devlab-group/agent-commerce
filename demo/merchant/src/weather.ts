@@ -1,13 +1,10 @@
 /**
- * Deterministic fake weather.
- *
- * The demo merchant API knows nothing about agents or payments — it is an
- * ordinary backend the gateway fronts. Weather is derived from a stable hash
- * of the city name so integration tests can assert exact values: no
- * randomness, and the only clock dependency (`observedAt`) is injectable.
+ * Deterministic fake weather, derived from a hash of the city name so tests
+ * can assert exact values. The only clock input is the injected `now`, which
+ * sets `observedAt`.
  */
 
-/** FNV-1a, 32-bit. Deterministic, dependency-free string hash. */
+/** FNV-1a, 32-bit. Deterministic, dependency-free string hash */
 export function hashString(input: string): number {
   let hash = 0x811c9dc5;
   for (let i = 0; i < input.length; i += 1) {
@@ -17,15 +14,7 @@ export function hashString(input: string): number {
   return hash >>> 0;
 }
 
-export const WEATHER_CONDITIONS = [
-  'clear',
-  'cloudy',
-  'rain',
-  'snow',
-  'windy',
-  'fog',
-  'storm',
-] as const;
+const WEATHER_CONDITIONS = ['clear', 'cloudy', 'rain', 'snow', 'windy', 'fog', 'storm'] as const;
 
 export type WeatherCondition = (typeof WEATHER_CONDITIONS)[number];
 
@@ -38,7 +27,7 @@ export interface WeatherReading {
   readonly observedAt: string;
 }
 
-/** Deterministic weather for `city`, as of `now`. Free resource. */
+/** Deterministic weather for `city`, as of `now`. Free resource */
 export function getWeather(city: string, now: Date): WeatherReading {
   const normalized = city.trim().toLowerCase();
   const hash = hashString(normalized);

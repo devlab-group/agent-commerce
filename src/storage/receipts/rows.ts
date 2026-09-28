@@ -1,8 +1,6 @@
 /**
- * SQLite row shapes and mapping to/from the canonical domain model.
- *
- * `exactOptionalPropertyTypes` is on: optional fields are only assigned when
- * present (see docs/contracts.md, invariant 8).
+ * SQLite row shapes and their mapping to and from the canonical model. Under
+ * `exactOptionalPropertyTypes`, an optional field is set only when present.
  */
 import type {
   AuthorizationRecord,
@@ -11,8 +9,8 @@ import type {
   CommerceReceipt,
   PaymentAttempt,
   PaymentResult,
-} from '../../core/index.js';
-import { redact } from './redact.js';
+} from '../../core';
+import { redact } from './redact';
 
 export interface ReceiptRow {
   readonly id: string;
@@ -76,8 +74,8 @@ export function receiptToRow(receipt: CommerceReceipt): {
     payment_json: receipt.payment !== undefined ? JSON.stringify(redact(receipt.payment)) : null,
     delivered_at: receipt.deliveredAt,
     backend_status: receipt.backendStatus,
-    duration_ms: receipt.durationMs !== undefined ? receipt.durationMs : null,
-    protocol: receipt.protocol !== undefined ? receipt.protocol : null,
+    duration_ms: receipt.durationMs ?? null,
+    protocol: receipt.protocol ?? null,
     metadata_json: receipt.metadata !== undefined ? JSON.stringify(redact(receipt.metadata)) : null,
     authorization_json:
       receipt.authorization !== undefined ? JSON.stringify(redact(receipt.authorization)) : null,
@@ -91,8 +89,8 @@ export function rowToReceipt(row: ReceiptRow): CommerceReceipt {
     row.metadata_json !== null
       ? (JSON.parse(row.metadata_json) as Record<string, unknown>)
       : undefined;
-  // Null for every receipt written before this column existed, and for every
-  // resource that requires no authorization
+  // Null for a receipt written before this column existed and for a resource
+  // that requires no authorization
   const authorization =
     row.authorization_json !== null
       ? (JSON.parse(row.authorization_json) as AuthorizationRecord)
@@ -127,12 +125,12 @@ export function eventToRow(event: CommerceEvent): {
     id: event.id,
     type: event.type,
     request_id: event.requestId,
-    resource_id: event.resourceId !== undefined ? event.resourceId : null,
+    resource_id: event.resourceId ?? null,
     at: event.at,
-    adapter: event.adapter !== undefined ? event.adapter : null,
-    payment_provider: event.paymentProvider !== undefined ? event.paymentProvider : null,
-    duration_ms: event.durationMs !== undefined ? event.durationMs : null,
-    status: event.status !== undefined ? event.status : null,
+    adapter: event.adapter ?? null,
+    payment_provider: event.paymentProvider ?? null,
+    duration_ms: event.durationMs ?? null,
+    status: event.status ?? null,
     data_json: event.data !== undefined ? JSON.stringify(redact(event.data)) : null,
   };
 }

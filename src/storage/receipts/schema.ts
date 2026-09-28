@@ -1,10 +1,6 @@
 /**
- * Explicit migration scheme for the receipt-store SQLite schema.
- *
- * Uses SQLite's built-in `PRAGMA user_version` as the migration marker so a
- * restart against an existing database file re-opens without re-creating or
- * losing data (required negative test: "gateway restart with receipt storage
- * preserved").
+ * Receipt-store schema migrations. `PRAGMA user_version` records the applied
+ * version, so a restart against an existing file keeps its data.
  */
 import type Database from 'better-sqlite3';
 
@@ -74,19 +70,19 @@ const MIGRATIONS: readonly Migration[] = [
   {
     version: 2,
     up(db) {
-      // Not folded into v1: an existing database must keep its rows, and a
-      // receipt written before authorization truthfully has none
+      // Not folded into v1: an existing database keeps its rows, and a receipt
+      // written before this column has no authorization to record
       db.exec(`ALTER TABLE receipts ADD COLUMN authorization_json TEXT;`);
     },
   },
 ];
 
-/** Current target schema version — the version of the last migration. */
-export const SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1]?.version ?? 0;
+/** Target schema version: the version of the last migration */
+export const SCHEMA_VERSION = MIGRATIONS.at(-1)?.version ?? 0;
 
 /**
- * Bring `db` up to {@link SCHEMA_VERSION}. Idempotent: re-opening an existing,
- * already-migrated file is a fast no-op check against `PRAGMA user_version`.
+ * Brings `db` up to {@link SCHEMA_VERSION}, one transaction per migration.
+ * On an already-migrated file it only reads `PRAGMA user_version`.
  */
 export function migrate(db: Database.Database): void {
   const current = db.pragma('user_version', { simple: true }) as number;

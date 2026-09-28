@@ -1,17 +1,17 @@
 import { useCallback, useEffect, useState } from 'react';
-import { EventFeed } from './components/EventFeed.js';
-import { ReceiptList } from './components/ReceiptList.js';
-import { ResourceList } from './components/ResourceList.js';
-import { StatusPanel } from './components/StatusPanel.js';
-import { fetchReceipts, fetchResources, fetchWellKnown } from './lib/api.js';
-import { getGatewayUrl } from './lib/config.js';
-import { connectEventStream, type StreamStatus } from './lib/event-stream.js';
+import { EventFeed } from './components/EventFeed';
+import { ReceiptList } from './components/ReceiptList';
+import { ResourceList } from './components/ResourceList';
+import { StatusPanel } from './components/StatusPanel';
+import { fetchReceipts, fetchResources, fetchWellKnown } from './lib/api';
+import { getGatewayUrl } from './lib/config';
+import { pollEvents } from './lib/event-poll';
 import type {
   CommerceEvent,
   CommerceReceipt,
   PublicResource,
   WellKnownDocument,
-} from './lib/types.js';
+} from './lib/types';
 
 const WELL_KNOWN_REFRESH_MS = 10_000;
 const MAX_EVENTS_IN_STATE = 200;
@@ -33,7 +33,6 @@ export function App() {
   const [receiptsError, setReceiptsError] = useState<string>();
 
   const [events, setEvents] = useState<readonly CommerceEvent[]>([]);
-  const [streamStatus, setStreamStatus] = useState<StreamStatus>('connecting');
   const [eventsAuthError, setEventsAuthError] = useState<string>();
 
   const [highlightRequestId, setHighlightRequestId] = useState<string>();
@@ -61,23 +60,23 @@ export function App() {
   }, [gatewayUrl]);
 
   useEffect(() => {
-    let cancelled = false;
+    let canceled = false;
     const refresh = (): void => {
       fetchWellKnown(gatewayUrl)
         .then((doc) => {
-          if (!cancelled) {
+          if (!canceled) {
             setWellKnown(doc);
             setWellKnownError(undefined);
           }
         })
         .catch((err: unknown) => {
-          if (!cancelled) setWellKnownError(errorMessage(err));
+          if (!canceled) setWellKnownError(errorMessage(err));
         });
     };
     refresh();
     const interval = setInterval(refresh, WELL_KNOWN_REFRESH_MS);
     return () => {
-      cancelled = true;
+      canceled = true;
       clearInterval(interval);
     };
   }, [gatewayUrl]);
@@ -86,23 +85,26 @@ export function App() {
     refreshReceipts();
   }, [refreshReceipts]);
 
-  useEffect(() => {
-    const controller = connectEventStream(
-      gatewayUrl,
-      (event) => {
-        setEvents((current) => [event, ...current].slice(0, MAX_EVENTS_IN_STATE));
-        if (event.type === 'resource.delivered') refreshReceipts();
-      },
-      setStreamStatus,
-      { onAuthError: setEventsAuthError },
-    );
-    return () => controller.stop();
-  }, [gatewayUrl, refreshReceipts]);
+  useEffect(
+    () =>
+      pollEvents(
+        gatewayUrl,
+        (event) => {
+          setEvents((current) => [event, ...current].slice(0, MAX_EVENTS_IN_STATE));
+          if (event.type === 'resource.delivered') refreshReceipts();
+        },
+        {
+          onAuthError: setEventsAuthError,
+          onPollSucceeded: () => setEventsAuthError(undefined),
+        },
+      ),
+    [gatewayUrl, refreshReceipts],
+  );
 
   return (
     <div className="app">
       <header className="app-header">
-        <h1>Agent Commerce — Demo Dashboard</h1>
+        <h1>Agent Commerce demo dashboard</h1>
         <p>
           Read-only view of <code>{gatewayUrl}</code>. Run <code>npm run demo:agent</code> and watch
           the same request land here.
@@ -123,7 +125,6 @@ export function App() {
 
       <EventFeed
         events={events}
-        status={streamStatus}
         {...(highlightRequestId !== undefined ? { highlightRequestId } : {})}
         {...(eventsAuthError !== undefined ? { authError: eventsAuthError } : {})}
         onSelectRequestId={toggleHighlight}

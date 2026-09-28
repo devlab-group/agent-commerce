@@ -1,10 +1,7 @@
-/**
- * Plain, prefixed output — style. No spinners, no progress theatre:
- * each line is one fact, printed once, as it happens.
- */
+// Plain prefixed output, no spinners: one fact per line, printed as it happens
 import pc from 'picocolors';
 
-export type LogFn = (message: string) => void;
+type LogFn = (message: string) => void;
 
 export interface DemoLogger {
   readonly agent: LogFn;
