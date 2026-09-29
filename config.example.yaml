@@ -2,13 +2,13 @@
 # Agent Commerce Gateway - example configuration
 #
 # Copy to `config.yaml` and edit, or generate one with:
-# npm run agent-commerce -- init
+#   npm run agent-commerce -- init
 #
 # Validate it with:
-# npm run agent-commerce -- validate
+#   npm run agent-commerce -- validate
 #
-# `${VAR}` placeholders are resolved from the environment at load time.
-# Unresolved placeholders fail startup and are never printed.
+# `${VAR}` placeholders are resolved from the environment at load time. An
+# unresolved one fails startup, and config errors never print a resolved value.
 # ---------------------------------------------------------------------------
 
 version: 1
@@ -22,10 +22,9 @@ server:
   port: ${GATEWAY_PORT}
   host: 0.0.0.0
 
-  # Required to serve the operator routes (/api/receipts, /api/events,
-  # /api/events/stream). If unset they return 404 rather than serving the
-  # merchant's commerce ledger openly. Use a real secret in any deployment
-  # reachable by anyone else.
+  # Required to serve the operator routes (/api/receipts, /api/events). If
+  # unset they return 404 rather than serving the merchant's commerce ledger
+  # openly. Use a real secret in any deployment reachable by anyone else.
   adminToken: ${ADMIN_TOKEN}
 
   # Browser origins permitted to read the gateway. Empty (the default) means
@@ -55,10 +54,10 @@ protocols:
   # ACP (Agentic Commerce Protocol), stable snapshot 2026-04-17 - experimental,
   # off by default. Enabling it serves the five checkout routes under mountPath
   # and the specification-fixed discovery document at /.well-known/acp.json.
-  # Clients must send `Authorization: Bearer …`, `API-Version: 2026-04-17`, and
-  # an `Idempotency-Key` on every POST. Only the `checkout` service is served:
-  # carts, feed, orders, delegated payment and authentication, webhooks and the
-  # ACP MCP binding are not implemented.
+  # Every checkout call needs `Authorization: Bearer <token>` and
+  # `API-Version: 2026-04-17`; a POST also needs an `Idempotency-Key`. Only the
+  # `checkout` service is served: carts, feed, orders, delegated payment and authentication, webhooks
+  # and the ACP MCP binding are not implemented.
   #
   # Enabling it needs the five mapped resources too - a complete, validating
   # config is in examples/acp-checkout/. See docs/protocols.md#acp.
@@ -67,7 +66,7 @@ protocols:
     mountPath: /acp
 
 resources:
-  # --- free resource: proves the gateway fronts an existing API -------------
+  # --- free resource: exposes a merchant API endpoint -----------------------
   weather_basic:
     name: Basic Weather
     description: Current basic weather for a city. Free.
@@ -88,7 +87,7 @@ resources:
       type: free
     expose: [http, mcp]
 
-  # --- paid resource: proves x402 enforcement -------------------------------
+  # --- paid resource: requires x402 settlement ------------------------------
   market_report:
     name: Premium Market Report
     description: Latest premium market analysis. Paid resource.
@@ -120,18 +119,19 @@ payments:
     # Merchant-controlled settlement destination.
     # This is NEVER a gateway-owned wallet - see docs/security.md.
     payTo: ${MERCHANT_WALLET}
-    # Seconds a payment challenge stays valid.
+    # Seconds a payment challenge stays valid
     maxTimeoutSeconds: 120
-    # Who verifies the authorisation and broadcasts the transfer.
+    # Who verifies the authorization and broadcasts the transfer.
     #
     # mode: local   the facilitator runs in this process and signs with
-    #               signerPrivateKey. Deterministic dev chain only - the key
-    #               must be an Anvil well-known one, and startup refuses it
-    #               against anything that is not a local/private RPC.
+    #               signerPrivateKey. Meant for the local dev chain. Refused
+    #               on mainnet, and a well-known Anvil key is refused against
+    #               any RPC that is not local or private.
     #
     # mode: remote  an HTTP facilitator does the signing; this gateway holds no
-    #               key at all. Requires https on any public host, and a
-    #               credential on a mainnet.
+    #               signing key. Requires https, except on a local or private
+    #               host off mainnet, and on mainnet a credential unless
+    #               allowUnauthenticatedFacilitator is set.
     facilitator:
       mode: local
       signerPrivateKey: ${X402_FACILITATOR_PRIVATE_KEY}
@@ -145,10 +145,13 @@ payments:
     #   auth:
     #     type: none
     #
-    # Base mainnet. Every line below is required; none of them are defaults:
+    # Base mainnet. None of these are defaults. `auth` is required unless the
+    # facilitator takes no credential and allowUnauthenticatedFacilitator: true
+    # is set instead:
     #
     # network: eip155:8453
     # asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"  # USDC on Base
+    # assetName: "USD Coin"  # the EIP-712 domain name, not "USDC"
     # allowMainnet: true
     # facilitator:
     #   mode: remote
@@ -180,7 +183,7 @@ payments:
 # Makes a paid resource require proof that the human behind the agent approved
 # THIS purchase: a signed AP2 v0.2.0 Direct Checkout Mandate, verified before
 # the payment is allowed to settle. A mandate never unlocks a resource on its
-# own and never moves money; the resource still takes a real x402 payment.
+# own and never moves money; the resource still takes a real payment.
 #
 # Public keys only, written here by you. Nothing is fetched at runtime: no
 # JWKS, no `jku`, no `x5u`, no issuer discovery. Rotate by listing the new key
@@ -205,7 +208,7 @@ payments:
 #       # or credential provider.
 #       mandateIssuers:
 #         - issuer: https://surface.example
-#           audience: ${MERCHANT_ID}      # required: who the mandate is for
+#           audience: merchant.example    # required: who the mandate is for
 #           keys:
 #             - kid: mandate-2026-01
 #               jwk: { kty: EC, crv: P-256, x: "...", y: "..." }

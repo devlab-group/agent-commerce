@@ -1,14 +1,14 @@
 # ---------------------------------------------------------------------------
-# Agent Commerce Gateway — deterministic local demo stack.
+# Agent Commerce Gateway - deterministic local demo stack.
 #
-# docker compose up
-# npm run agent-commerce -- doctor
-# npm run demo:agent
+#   docker compose up
+#   npm run agent-commerce -- doctor --config config-demo.yaml
+#   npm run demo:agent
 #
 # Everything here is local and disposable: a private Anvil chain, a mock ERC-20,
-# a demo merchant API and the gateway. No public RPC, no real money, no API
-# keys. The chain accounts are Anvil's well-known development keys —
-# LOCAL DEVELOPMENT ONLY - DO NOT FUND.
+# a demo merchant API, the gateway and the dashboard. No public RPC, no real
+# money, no API keys. The chain accounts are Anvil's well-known development
+# keys: LOCAL DEVELOPMENT ONLY - DO NOT FUND.
 # ---------------------------------------------------------------------------
 
 name: agent-commerce
@@ -21,10 +21,8 @@ x-node-service: &node-service
     NODE_ENV: development
     LOG_LEVEL: ${LOG_LEVEL:-info}
   volumes:
-    # Bind mount, not a named volume: the host-side `agent-commerce doctor` and
-    # `npm run demo:agent` in the documented quickstart read this exact file. A
-    # named volume kept it inside Docker, so those commands saw no manifest at
-    # all on a fresh checkout while the stack was perfectly healthy.
+    # A bind mount, not a named volume: the host-side `agent-commerce doctor`
+    # and `npm run demo:agent` in the quickstart read this manifest
     - ./.deploy:/workspace/.deploy
 
 services:
@@ -37,10 +35,10 @@ services:
     ports:
       # Loopback only. This is an Anvil node with unlocked accounts and the
       # full anvil_* admin namespace (anvil_setBalance, anvil_impersonateAccount).
-      # On a conference or cafe network, 0.0.0.0 would hand that to the LAN.
+      # Binding 0.0.0.0 would expose those methods to the host network.
       - "127.0.0.1:8545:8545"
     healthcheck:
-      # cast is present in the foundry image; this proves the RPC answers.
+      # cast is present in the foundry image; this proves the RPC answers
       test: ["CMD", "cast", "block-number", "--rpc-url", "http://127.0.0.1:8545"]
       interval: 2s
       timeout: 5s
@@ -57,16 +55,15 @@ services:
     environment:
       <<: *node-env
       X402_RPC_URL: http://anvil:8545
-      # The same chain as X402_RPC_URL, addressed the way the HOST reaches it.
-      # Containers resolve `anvil`; the host does not. Recording both lets the
-      # host-side CLI and demo agent use the manifest without rewriting it.
+      # Host address for the same chain as X402_RPC_URL. Containers resolve
+      # `anvil`; host-side tools use this URL from the manifest.
       HOST_RPC_URL: ${HOST_RPC_URL:-http://127.0.0.1:8545}
       LOCAL_CHAIN_MANIFEST: /workspace/.deploy/local.json
     command: ["npx", "tsx", "scripts/chain/deploy.ts"]
     user: "${DOCKER_UID:-1000}:${DOCKER_GID:-1000}"
     restart: "no"
 
-  # --- the merchant's pre-existing API -------------------------------------
+  # --- demo merchant API ----------------------------------------------------
   merchant-api:
     <<: *node-service
     container_name: ac-merchant-api
@@ -75,7 +72,7 @@ services:
       MERCHANT_API_PORT: "3000"
     command: ["npm", "run", "demo:merchant"]
     ports:
-      # Loopback only — override deliberately if you need LAN access.
+      # Loopback only; change it deliberately if you need LAN access
       - "127.0.0.1:3000:3000"
     healthcheck:
       test:
@@ -110,8 +107,8 @@ services:
       X402_RPC_URL: http://anvil:8545
       LOCAL_CHAIN_MANIFEST: /workspace/.deploy/local.json
       # Operator routes carry the merchant's commerce ledger. This demo value is
-      # deliberately not a secret — the stack is loopback-only. Set a real one
-      # (and read SECURITY.md) before exposing the gateway to anyone else.
+      # not a secret because the stack is loopback-only. Set a real one, and
+      # read SECURITY.md, before exposing the gateway to anyone else.
       ADMIN_TOKEN: ${ADMIN_TOKEN:-local-demo-admin-token}
       DASHBOARD_ORIGIN: ${DASHBOARD_ORIGIN:-http://localhost:5173}
     command:
@@ -149,7 +146,7 @@ services:
       <<: *node-env
       VITE_GATEWAY_URL: http://localhost:8080
       # Must match the gateway's server.adminToken, or the receipts and events
-      # panels will show an authentication message instead of data.
+      # panels will show an authentication message instead of data
       VITE_ADMIN_TOKEN: ${ADMIN_TOKEN:-local-demo-admin-token}
     command:
       - npm
@@ -161,16 +158,14 @@ services:
       - --port
       - "5173"
     ports:
-      # Loopback only.
+      # Loopback only
       - "127.0.0.1:5173:5173"
 
 volumes:
-  # Holds the SQLite commerce ledger. The services run as the unprivileged
-  # `node` user, and Docker seeds a *new* named volume from the image directory
-  # (node-owned) — but an **existing** volume keeps whatever ownership it was
-  # created with. Upgrading from an older image therefore leaves a root-owned
-  # volume the gateway cannot write: it starts, /ready returns 503, and paid
-  # calls fail with STORAGE_ERROR. The store refuses to start with a message
-  # naming the cause. Fix with `docker compose down -v` (destroys demo
-  # receipts) or by chowning the volume to uid 1000.
+  # Holds the SQLite commerce ledger. The gateway runs as the unprivileged
+  # `node` user. Docker seeds a new named volume from the node-owned image
+  # directory, but an existing volume keeps the ownership it was created with,
+  # so a volume left root-owned by an older image stops the gateway at
+  # startup. Fix it with `docker compose down -v` (destroys demo receipts) or
+  # by chowning the volume to uid 1000.
   receipts:

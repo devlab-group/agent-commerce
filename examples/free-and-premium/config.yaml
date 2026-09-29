@@ -1,13 +1,12 @@
 # ---------------------------------------------------------------------------
 # Example: free-and-premium
 #
-# The most common real shape: a free tier that proves the gateway genuinely
-# fronts your existing API, plus a paid resource behind x402. Both exposed
-# over HTTP and MCP. See README.md in this directory for exact commands.
+# A free weather resource and an x402-paid report use the same merchant API.
+# Both are exposed over HTTP and MCP. See README.md for commands.
 #
 # Every `${VAR:-default}` falls back to the local demo stack's own defaults,
 # so this file validates standalone with no environment at all:
-# npm run agent-commerce -- validate --config examples/free-and-premium/config.yaml
+#   npm run agent-commerce -- validate --config examples/free-and-premium/config.yaml
 # ---------------------------------------------------------------------------
 
 version: 1
@@ -37,7 +36,7 @@ resources:
   # --- free: an unpaid endpoint an agent can call with no proof at all -----
   basic_weather:
     name: Basic Weather
-    description: Current basic weather for a city. Free — no payment required.
+    description: Current basic weather for a city. Free, no payment required.
     input:
       type: object
       properties:
@@ -80,8 +79,8 @@ payments:
     enabled: true
     network: ${X402_NETWORK:-eip155:84532}
     rpcUrl: ${X402_RPC_URL:-http://127.0.0.1:8545}
-    # Placeholder — replace with the deployed MockUSDC address from
-    # `.deploy/local.json` after `npm run chain:deploy` (see README.md).
+    # Placeholder: replace with the deployed MockUSDC address from
+    # `.deploy/local.json` after `npm run chain:deploy` (see README.md)
     asset: ${X402_ASSET:-0x000000000000000000000000000000000000dEaD}
     assetName: ${X402_ASSET_NAME:-MockUSDC}
     assetVersion: ${X402_ASSET_VERSION:-2}
@@ -92,5 +91,5 @@ payments:
     maxTimeoutSeconds: 120
     facilitator:
       mode: local
-      # LOCAL DEVELOPMENT ONLY - DO NOT FUND (Anvil's well-known account #0).
-      signerPrivateKey: ${X402_FACILITATOR_PRIVATE_KEY:-0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d}
+      # LOCAL DEVELOPMENT ONLY - DO NOT FUND (Anvil's well-known account #0)
+      signerPrivateKey: ${X402_FACILITATOR_PRIVATE_KEY:-0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80}

@@ -5,15 +5,14 @@ on:
     branches: [master]
   pull_request:
   workflow_dispatch:
-  # Callable, so `release.yml` can gate publishing on the *same* job
-  # definitions rather than a second copy that drifts. `needs:` cannot reach
-  # across workflows; a reusable workflow is how one workflow waits on another.
+  # Callable, so release.yml gates publishing on these same jobs rather than a
+  # copy. `needs:` cannot reach across workflows; a reusable workflow can.
   workflow_call:
 
 # Least privilege. Without this the workflow token takes the repository
-# default (often write-all), and `actions/checkout` writes it into
-# `.git/config`, where every subsequent step — including third-party install
-# scripts run by `npm ci` — can read it. Nothing here needs write access.
+# default (often write-all), and a checkout that persists credentials writes
+# it into `.git/config`, where every later step can read it, including
+# third-party install scripts run by `npm ci`. Nothing here needs write access.
 permissions:
   contents: read
 
@@ -23,9 +22,10 @@ concurrency:
 
 env:
   NODE_VERSION: '22'
-  # pinned rather than tracking `nightly`. This is the same
-  # release as the digest pinned in docker/chain.Dockerfile, so CI and the demo
-  # stack compile the contracts with one toolchain.
+  # Pinned rather than tracking `nightly`, a mutable input to a suite this
+  # project calls deterministic. It matches the digest in
+  # docker/chain.Dockerfile, so CI and the demo stack run the same Foundry
+  # release.
   FOUNDRY_VERSION: 'v1.7.1'
 
 jobs:
@@ -58,13 +58,10 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
-      # tests/unit/payments-x402/local-chain.test.ts spawns a real ephemeral
-      # Anvil — it is a unit test of the deploy engine, not of a mock. Without
-      # Foundry here the whole file errors with ENOENT.
+      # tests/unit/payments-x402/local-chain.test.ts spawns a real Anvil to test
+      # the deploy engine. Without Foundry it skips locally but fails under CI.
       - uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09 # v1.9.1
         with:
-          # Pinned: the default is `nightly`, a mutable input to a suite this
-          # project calls deterministic.
           version: ${{ env.FOUNDRY_VERSION }}
       - run: npm ci
       - run: npm run test:coverage
@@ -84,8 +81,6 @@ jobs:
           persist-credentials: false
       - uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09 # v1.9.1
         with:
-          # Pinned: the default is `nightly`, a mutable input to a suite this
-          # project calls deterministic.
           version: ${{ env.FOUNDRY_VERSION }}
       - run: forge build
         working-directory: contracts
@@ -105,8 +100,6 @@ jobs:
           cache: npm
       - uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09 # v1.9.1
         with:
-          # Pinned: the default is `nightly`, a mutable input to a suite this
-          # project calls deterministic.
           version: ${{ env.FOUNDRY_VERSION }}
       - run: npm ci
       # No public RPC, no public chain state, no hosted LLM, no hosted
@@ -125,41 +118,35 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
       - run: npm ci
-      # The published artifact is the project's only public surface. A
-      # placeholder org in the provenance fields means npm's repository link
-      # and "report a vulnerability" path resolve to a namespace anyone can
-      # register — a cheap way to intercept disclosure for a payments project.
-      # Assert the provenance fields point at the real repository. Stated
-      # positively rather than as a placeholder blocklist: a blocklist only
-      # catches the placeholder spelling someone thought of, and this check is
-      # what stops npm's "report a vulnerability" link resolving to a
-      # namespace an attacker can register.
+      # Asserts the provenance fields point at the real repository, so npm's
+      # "report a vulnerability" link cannot resolve to a namespace an attacker
+      # can register (see the script's header)
       - name: Verify package provenance metadata
         run: node scripts/check-package-metadata.mjs
 
       - run: npm run build
       # The published artifact is built by a different path than everything
-      # else, so it can break while the rest of the suite stays green.
+      # else, so it can break while the rest of the suite stays green
       - run: npm run test:cli:dist
       - run: npx vitest run tests/unit/cli/packaging.test.ts
       # Prove the tarball installs and runs with no repository present.
       #
-      # Two shapes, because the default one is the one that regresses silently:
-      # 1. bare — no optional peers. The binary and `createGateway` must
-      # work. A stray `import 'viem'` in either (esbuild emits one
-      # for an external whose bindings tree-shook away) makes the
-      # published CLI refuse to start, and no in-repo test sees it
-      # because the peers are always installed here.
-      # 2. peers — the subpaths resolve and compose with the main entry.
-      - name: Clean consumer install — bare, no optional peers
+      # Two shapes, because the default one regresses silently:
+      # 1. bare, no optional peers: the binary and `createGateway` must work.
+      #    A stray `import 'viem'` in either (esbuild emits one for an external
+      #    whose bindings tree-shook away) stops the published CLI from starting,
+      #    and no in-repo test sees it because the peers are installed here.
+      # 2. peers: the subpaths resolve and compose with the main entry.
+      - name: Clean consumer install - bare, no optional peers
         run: |
           TARBALL="$(npm pack --silent | tail -1)"
           mkdir -p "$RUNNER_TEMP/bare" && cd "$RUNNER_TEMP/bare"
           npm init -y >/dev/null
           npm install "$GITHUB_WORKSPACE/$TARBALL"
-          for peer in @x402/core @x402/evm viem @modelcontextprotocol/sdk; do
+          # Every declared peer, read from the manifest so a new one is covered
+          for peer in $(node -p "Object.keys(require('$GITHUB_WORKSPACE/package.json').peerDependencies).join(' ')"); do
             if [ -d "node_modules/$peer" ]; then
-              echo "optional peer $peer was installed by default — the split is not working"
+              echo "optional peer $peer was installed by default, so the split is not working"
               exit 1
             fi
           done
@@ -168,7 +155,7 @@ jobs:
           npx agent-commerce version | grep -q '@modelcontextprotocol/sdk'
           npx agent-commerce init --yes
           npx agent-commerce validate
-          # The main entry must compose and serve with zero peers present.
+          # The main entry must compose and serve with zero peers present
           node --input-type=module -e "
             import { createGateway, loadConfig, receipts } from '@devlab.group/agent-commerce';
             const loaded = await loadConfig({ path: 'config.yaml' });
@@ -183,10 +170,10 @@ jobs:
             const health = await fetch(url + '/health');
             if (!health.ok) throw new Error('GET /health -> ' + health.status);
             await gateway.close();
-            console.log('bare install ok — gateway composed, served and closed');
+            console.log('bare install ok: gateway composed, served and closed');
           "
 
-      - name: Clean consumer install — with optional peers
+      - name: Clean consumer install - with optional peers
         run: |
           cd "$RUNNER_TEMP/bare"
           npm install @modelcontextprotocol/sdk@1.30.0 @x402/core@2.23.0 @x402/evm@2.23.0 viem@2.55.18
@@ -214,7 +201,7 @@ jobs:
             let caught;
             try { x402({ asset: 'nope', payTo: '0x0', network: 'eip155:84532' }); } catch (e) { caught = e; }
             if (!(caught instanceof CommerceError)) throw new Error('CommerceError identity broken across subpaths');
-            console.log('subpath install ok — mcp + x402 compose with the main entry');
+            console.log('subpath install ok: mcp + x402 compose with the main entry');
           "
 
   build:
