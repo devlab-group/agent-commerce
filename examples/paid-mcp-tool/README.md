@@ -1,13 +1,13 @@
 # Example: paid-mcp-tool
 
-A paid resource exposed **only** as an MCP tool — `protocols.http.enabled` is
-`false`, so there is no `POST /api/resources/:id/invoke` route at all for this
-gateway. This is the shape for "only an MCP-speaking agent should be able to
-call this, not arbitrary HTTP clients".
+This paid resource is exposed as an MCP tool. With
+`protocols.http.enabled: false`, the gateway has no
+`POST /api/resources/:id/invoke` route. Clients can still call the open MCP
+endpoint; this setting controls exposure, not authentication.
 
-`config.yaml` in this directory validates as-is, with no environment
-variables set, against the real config loader (`src/config`).
-The commands below run it for real against this repo's local demo stack.
+`config.yaml` validates without environment variables, but its default
+`X402_ASSET` is a placeholder. Step 3 supplies the deployed MockUSDC address
+from `.deploy/local.json`. The commands use the local demo stack.
 
 ## Run it
 
@@ -18,10 +18,10 @@ From the repository root:
 npm run chain:start
 npm run chain:deploy
 
-# 2. The "existing backend" this example fronts
+# 2. Start the demo merchant API
 npm run dev:merchant
 
-# 3. The gateway, pointed at THIS example's config instead of the root one
+# 3. Start the gateway with this example's config
 AGENT_COMMERCE_CONFIG=examples/paid-mcp-tool/config.yaml \
   X402_ASSET=$(node -p "require('./.deploy/local.json').asset") \
   npm run dev:gateway
@@ -40,26 +40,17 @@ curl -s http://localhost:8080/mcp \
 `tools/call` on `market_report_tool` goes through the same
 `ExecutionPipeline` as every HTTP resource, so it returns the same 402
 challenge shape when unpaid. A real buyer completes it with
-`createPaymentProof` (`src/payments/x402/client.ts`) — see
+`createPaymentProof` (`src/payments/x402/client.ts`); see
 `npm run demo:agent` (demo/agent) for a full worked example, and
 `tests/conformance/mcp` for the protocol's own test suite.
 
 ## What this demonstrates
 
-- `protocols.http.enabled: false` while `protocols.mcp.enabled: true` — HTTP
+- `protocols.http.enabled: false` while `protocols.mcp.enabled: true`: HTTP
   resource routes are off entirely, not merely unused.
-- `expose: [mcp]` on the resource — attempting `expose: [http]` here would
-  fail `agent-commerce validate` with `CONFIG_INVALID` ("exposed via 'http'
-  but protocols.http.enabled is false").
+- `expose: [mcp]` on the resource. Setting `expose: [http]` here would fail
+  `agent-commerce validate` with `CONFIG_INVALID` (`exposed via "http" but
+  protocols.http.enabled is false`).
 - The resource id (`market_report_tool`) doubles as the MCP tool name, so it
-  is restricted to the MCP SDK's legal tool-name characters
-  (`A-Z a-z 0-9. _ -`).
-
-## Config validates standalone
-
-```bash
-npm run agent-commerce -- validate --config examples/paid-mcp-tool/config.yaml
-```
-
-passes with **no environment variables set at all** — every `${VAR:-default}`
-falls back to a value that works against the local demo stack.
+  is restricted to legal MCP tool names: `A-Z`, `a-z`, `0-9`, `_`, `-` and
+  `.`, 1-128 characters.

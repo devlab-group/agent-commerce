@@ -26,7 +26,8 @@ generate draft resource definitions from OpenAPI. Resources can be exposed over
 HTTP, MCP or experimental A2A; dedicated resources can implement experimental
 ACP checkout operations. Paid resources use x402 or experimental MPP and can
 also require an AP2 mandate proving that the buyer approved the purchase. Funds
-go directly to the merchant wallet; the gateway never holds them or your keys.
+go directly to the merchant wallet, and the gateway needs neither the buyer's
+nor the merchant's private key.
 
 ```text
 Your existing API → Agent Commerce Gateway → AI Agent
@@ -36,28 +37,29 @@ Your existing API → Agent Commerce Gateway → AI Agent
 ## Demo
 
 ```text
-[agent] Discovering resources over MCP...
-[agent] Found: market_report - Premium Market Report (0.01 USDC)
-[agent] Requesting resource...
-
-[gateway] Payment required: 0.01 USDC → 0x7099…79C8
-[buyer] Signing x402 authorisation...
-[gateway] Payment verified
-[gateway] Payment settled tx 0x4f2c…9ab1
-[gateway] Calling merchant backend...
-[gateway] Resource delivered
-
-[receipt] payment: settled
-[receipt] amount: 0.01 USDC
-[receipt] merchant: 0x7099…79C8
-[receipt] buyer balance 100.00 → 99.99 mUSDC
-[receipt] merchant balance 0.00 → 0.01 mUSDC
+[agent] Agent Commerce Gateway: deterministic buyer demo
+[buyer] balance before  100 MockUSDC
+[agent] merchant balance before 0 MockUSDC
+[gateway] connected to http://localhost:8080/mcp
+[agent] discovered 2 tool(s): weather_basic, market_report
+[agent] paid tool: "market_report", free tool: "weather_basic"
+[gateway] 402 payment required: 0.01 USDC to 0x7099…79C8
+[buyer] challenge checked before signing: pays 10000 units of 0x5fbd…0aa3 to 0x7099…79C8
+[buyer] signed x402 payment proof (LOCAL DEVELOPMENT ONLY - DO NOT FUND)
+[gateway] delivered "market_report"
+[receipt] id=receipt_484b…1eba requestId=mcp_4292…c930 status=settled settlementTx=0x0b19…1c7f
+[buyer] balance after   99.99 MockUSDC  (Δ -0.01)
+[agent] merchant balance after  0.01 MockUSDC  (Δ 0.01)
+[agent] on-chain balance changes match the expected payment amount
+[gateway] delivered free tool "weather_basic": {"city":"Paris","temperatureC":-4,…}
+[agent] demo complete: free and paid delivery both verified
 ```
 
-The dashboard at <http://localhost:5173> shows the same request as it happens.
-It polls the authenticated events route rather than streaming, because a browser
-cannot send the admin token over `EventSource`; see
-[why the stream is polled](SECURITY.md#the-live-event-stream-is-polled-not-streamed).
+This excerpt of `npm run demo:agent` omits the address lines and shortens long
+values. Balances, IDs and hashes differ from run to run.
+
+The dashboard at <http://localhost:5173> polls the gateway's events route and
+shows the same request within a few seconds.
 
 ## Install
 
@@ -68,7 +70,8 @@ agent-commerce doctor
 ```
 
 Requires **Node >= 22**. The package includes the `agent-commerce` CLI
-(`init`, `validate`, `doctor`, `demo`) and a library for embedding the gateway.
+(`init`, `validate`, `doctor`, `demo`, `import openapi`, `version`) and a library
+for embedding the gateway.
 The default install excludes optional protocol, payment and authorization
 peers. The OpenAPI parser is a regular dependency because import is part of the
 CLI.
@@ -97,7 +100,7 @@ free HTTP resources does not install MCP, EVM, JOSE or SD-JWT packages.
 
 | You want                                | Install                            | Import                                     |
 | --------------------------------------- | ---------------------------------- | ------------------------------------------ |
-| gateway, config, receipts, CLI          | `@devlab.group/agent-commerce`     | `from '@devlab.group/agent-commerce'`      |
+| gateway, config, receipts, A2A/ACP, CLI | `@devlab.group/agent-commerce`     | `from '@devlab.group/agent-commerce'`      |
 | expose resources as MCP tools           | `+ @modelcontextprotocol/sdk`      | `from '@devlab.group/agent-commerce/mcp'`  |
 | accept x402 payments                    | `+ @x402/core @x402/evm viem`      | `from '@devlab.group/agent-commerce/x402'` |
 | accept MPP payments                     | `+ mppx viem @x402/core @x402/evm` | `from '@devlab.group/agent-commerce/mpp'`  |
@@ -183,9 +186,7 @@ To stop and wipe state: `docker compose down -v`.
 ```
 
 Every protocol adapter uses one execution pipeline, so payment enforcement does
-not depend on the adapter. The buyer pays the merchant directly on-chain; the
-gateway holds neither the funds nor a buyer or merchant key. See
-[Architecture](docs/architecture.md).
+not depend on the adapter. See [Architecture](docs/architecture.md).
 
 ## Configure a resource
 
@@ -206,7 +207,7 @@ resources:
     payments: [x402]
 ```
 
-That is the integration. No SDK in your backend, no rewrite.
+The gateway calls your existing backend, which needs no SDK or changes.
 
 ```bash
 npm run agent-commerce -- init # generate a config interactively
@@ -221,8 +222,9 @@ agent-commerce import openapi ./openapi.yaml
 ```
 
 It writes a reviewable `resources:` fragment with path, query and JSON body
-bindings and supported schemas. It omits `pricing`, `expose` and credentials;
-the source document cannot decide price or exposure. See
+bindings and supported schemas. The source document never decides price or
+exposure: `pricing` appears only with `--free` and `expose` only with
+`--expose`, and credentials are never imported. See
 [OpenAPI import](docs/openapi-import.md) for the supported subset.
 
 See [docs/configuration.md](docs/configuration.md).
@@ -253,16 +255,17 @@ converted into a gateway payment proof.
 
 `GET /.well-known/agent-commerce` reports `supportedSpec`, `capabilities` and
 `unsupported` for registered adapters and providers. `agent-commerce doctor`
-prints the `unsupported` lists for A2A, ACP and AP2.
+prints the `unsupported` lists for A2A, ACP and AP2 when they are enabled.
 
 ## Payment model
 
-- **Non-custodial.** The gateway never holds funds, and never asks for a
-  merchant or buyer private key. `payTo` is your address.
+- **Non-custodial.** Buyer payments go directly to the merchant address in
+  `payTo` (`recipient` for MPP). The gateway does not require buyer or merchant
+  private keys. Local facilitator mode does hold a separate gas-paying signer.
 - **Fail closed.** Missing, malformed, expired, replayed, wrong-amount,
   wrong-recipient, wrong-network and wrong-asset payments are rejected.
 - **Replay-safe twice over.** EIP-3009 stops a double spend on-chain; the
-  gateway additionally reserves a `replayKey` derived from the authorisation
+  gateway additionally reserves a `replayKey` derived from the authorization
   before it settles anything.
 - **On-chain settlement in CI.** The end-to-end test asserts the buyer's balance
   falls and the merchant's rises by exactly the price, with a real transaction
@@ -277,8 +280,8 @@ prints the `unsupported` lists for A2A, ACP and AP2.
 
 ## Public networks
 
-Same gateway, same pipeline - a different `network` and a facilitator that is
-not this process. No code changes, and no "live mode" to switch on.
+Public networks use the same execution pipeline with a remote facilitator.
+Choose the network in config; Base mainnet also requires `allowMainnet: true`.
 
 ### It has actually settled
 
@@ -292,33 +295,33 @@ remote facilitator:
 | MPP  | Base Sepolia | [`0x5d9fcd111b…`](https://sepolia.basescan.org/tx/0x5d9fcd111b615bb8fc9e56d55096f119fc81c3c72c334f813cfaecee402d0ac3) |
 | MPP  | Base         | [`0xf4255bd7ec…`](https://basescan.org/tx/0xf4255bd7ec46ed06505dedfb5f9537924bd2633816e7952ec6f2b468395b1087)         |
 
-The buyer signed each EIP-3009 authorisation without ETH; the remote facilitator
+The buyer signed each EIP-3009 authorization without ETH; the remote facilitator
 paid gas and broadcast it. The gateway path received no buyer or merchant key.
 The public-network smoke suites verify balance changes and fetch the transaction
 receipt from the chain instead of trusting the gateway's response.
 
-Reproduce with `npm run test:testnet` / `npm run test:mainnet` - both spend
-real funds, skip themselves without credentials, and never run in CI.
+Reproduce with `npm run test:testnet`, which spends test USDC, or
+`npm run test:mainnet`, which spends real USDC. Both run only by hand; see
+[Base mainnet](#base-mainnet).
 
 ### The facilitator model
 
-A **facilitator** verifies the buyer's authorisation and broadcasts the
-transfer. It is the only component that needs gas, and it is never this
-gateway on a public network.
+A **facilitator** verifies the buyer's authorization and broadcasts the
+transfer. It is the only component that needs gas.
 
-| `facilitator.mode` | Who signs                           | Where it is allowed      |
-| ------------------ | ----------------------------------- | ------------------------ |
-| `local`            | this process, with an Anvil dev key | the local dev chain only |
-| `remote`           | an HTTP facilitator you point at    | anywhere                 |
+| `facilitator.mode` | Who signs                              | Where it is allowed                                                |
+| ------------------ | -------------------------------------- | ------------------------------------------------------------------ |
+| `local`            | this process, with a key you configure | a local Anvil chain; refused on mainnet, fails readiness elsewhere |
+| `remote`           | an HTTP facilitator you point at       | anywhere                                                           |
 
 With `remote`, the gateway holds no facilitator signing key. The buyer signs an
-EIP-3009 authorisation without ETH, and the facilitator pays gas. Because the
-authorisation fixes the recipient, amount and chain, the facilitator cannot
-redirect the transfer. It can see authorisations and refuse service.
+EIP-3009 authorization without ETH, and the facilitator pays gas. Because the
+authorization fixes the recipient, amount and chain, the facilitator cannot
+redirect the transfer. It can see authorizations and refuse service.
 
-Remote facilitator auth supports `none`, `bearer` and `cdp`. CDP signs a fresh
-JWT per request and conditionally loads `@coinbase/x402`; bearer auth needs no
-extra peer. Other types are rejected at config load.
+Remote facilitator auth supports `none`, `bearer` and `cdp`. `cdp` loads the
+optional peer `@coinbase/x402`, which signs a fresh JWT per request; bearer auth
+needs no extra peer. Other types are rejected at config load.
 
 ### Base Sepolia
 
@@ -354,13 +357,13 @@ together, and reported by `doctor`, `health()` and `/.well-known`.
 
 Mainnet moves real funds. Config validation requires:
 
-| Required                                        |                                                                                                                |
-| ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `allowMainnet: true`                            | mainnet is never a default                                                                                     |
-| `facilitator.mode: remote`                      | `local` needs a funded gas key inside this process                                                             |
-| an HTTPS `facilitator.url`                      |                                                                                                                |
-| `allowUnauthenticatedFacilitator: true`         | only if that facilitator takes no credential                                                                   |
-| a non-development destination (`payTo` or `recipient`) |                                                                                                         |
+| Required                                                       |                                                                |
+| -------------------------------------------------------------- | -------------------------------------------------------------- |
+| `allowMainnet: true`                                           | mainnet is never a default                                     |
+| `facilitator.mode: remote`                                     | `local` needs a funded gas key inside this process             |
+| an HTTPS `facilitator.url`                                     |                                                                |
+| `allowUnauthenticatedFacilitator: true`                        | required when `facilitator.auth.type` is `none`                |
+| a non-development destination (`payTo` or `recipient`)         |                                                                |
 | Base USDC with `assetName: "USD Coin"` and `assetVersion: "2"` | the buyer signs this EIP-712 domain; `"USDC"` is wrong on Base |
 
 Full config in [`examples/base-mainnet/`](examples/base-mainnet/), and
@@ -371,26 +374,25 @@ spend real USDC when their opt-ins and credentials are present.
 `agent-commerce validate` reports any of the above before anything starts, and
 `doctor` prints `LIVE MAINNET MODE - REAL FUNDS`.
 
-> Neither public-network suite runs in CI - there is no workflow and there must
-> not be one. A workflow means a funded key in repository secrets, spendable by
-> anyone with write access. Both suites run from the machine that holds the
-> wallet, and skip themselves without credentials.
+> The public-network suites never run in CI, because a workflow would need a
+> funded buyer key in repository secrets. Run them from the machine that holds
+> the wallet. A test whose required settings are missing skips itself.
 
 ## Diagnostics
 
 ```console
 $ npm run agent-commerce -- doctor --config config-demo.yaml
 
-PASS  Config               valid - 2 resource(s), merchant "Demo Data Store" (using local chain manifest .deploy/local.json for X402_ASSET, X402_ASSET_NAME, X402_ASSET_VERSION, X402_ASSET_DECIMALS, MERCHANT_WALLET, X402_FACILITATOR_PRIVATE_KEY)
+PASS  Config               valid: 2 resource(s), merchant "Demo Data Store" (using local chain manifest .deploy/local.json for X402_ASSET, X402_ASSET_NAME, X402_ASSET_VERSION, X402_ASSET_DECIMALS, MERCHANT_WALLET, X402_FACILITATOR_PRIVATE_KEY)
 PASS  Gateway              healthy and ready at http://127.0.0.1:8080
 PASS  Backend              2/2 backend host(s) reachable
 PASS  Protocols            http=on mcp=on (/mcp) a2a=off acp=off
 INFO  A2A                  disabled
 INFO  ACP                  disabled
 INFO  AP2                  disabled
-PASS  Payments             x402 v2 (scheme=exact) enabled - LOCAL dev chain (eip155:84532, chain id shared with Base Sepolia), destination=0x7099…79C8, facilitator=local
+PASS  Payments             x402 v2 (scheme=exact) enabled - LOCAL dev chain (eip155:84532, chain id shared with Base Sepolia), destination=0x7099…79C8, facilitator=local (in-process)
 INFO  Payments (MPP)       MPP not configured
-PASS  Storage              sqlite schema v1 writable; receipts=2
+PASS  Storage              sqlite schema v2 writable; receipts=2
 PASS  Protocol versions    reported by gateway /.well-known/agent-commerce
 
 Score: 7/7 checks passed
@@ -409,8 +411,8 @@ reachable by anyone else, know the split:
 - **Agent routes** (`/api/resources/:id/invoke`, `/mcp`, the A2A mount) are
   unauthenticated by design - paid resources are protected by payment, not by a
   password. ACP is the exception: its checkout routes require a bearer token.
-- **Operator routes** (`/api/receipts`, `/api/events`, `/api/events/stream`) are
-  the merchant's commerce ledger: payer addresses, amounts, settlement hashes.
+- **Operator routes** (`/api/receipts`, `/api/events`) are the merchant's
+  commerce ledger: payer addresses, amounts, settlement hashes.
   They require `server.adminToken`, and return **404** if none is configured.
 - **Browsers** are governed by `server.allowedOrigins`, an explicit allowlist
   that defaults to empty.
@@ -442,8 +444,8 @@ autonomous-mode AP2 (open mandates, agent key binding, constraint evaluation) ·
 more of ACP (carts, feed, delegated payment) · Shopify and WooCommerce examples ·
 PostgreSQL · richer observability · multi-file and remote OpenAPI sources.
 
-New protocols land only after the adapter model survives real use. Scope
-discipline is a release requirement, not a mood.
+New protocols need evidence that the adapter model works in real use before
+they are added to a release.
 
 ## Documentation
 
@@ -456,9 +458,9 @@ discipline is a release requirement, not a mood.
 | [Configuration](docs/configuration.md)         | `config.yaml` reference                     |
 | [OpenAPI import](docs/openapi-import.md)       | generate resources from an existing API     |
 | [Security model](docs/security.md)             | trust boundaries, and what we do not defend |
-| [Contracts](docs/contracts.md)                 | the frozen cross-package contract           |
+| [Contracts](docs/contracts.md)                 | the frozen cross-area contract              |
 | [Adapter guide](docs/contributing-adapters.md) | add a protocol or a payment rail            |
 
-## Licence
+## License
 
 [Apache-2.0](LICENSE).

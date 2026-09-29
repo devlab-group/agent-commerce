@@ -91,7 +91,7 @@ verify them. The verifier does not inspect `cnf`.
 | `aud` | yes | issuer's configured audience |
 | `iat` | yes | no further in the future than allowed clock skew |
 | `exp` | yes | required and checked |
-| `jti` | yes | opaque id stored for replay defence and receipt reconciliation |
+| `jti` | yes | opaque id stored for replay defense and receipt reconciliation |
 | `agent_commerce` | yes | profile object below |
 
 ### Profile fields
@@ -160,7 +160,7 @@ const jwt = await createCheckoutJwt({
 `createCheckoutJwt` computes the RFC 8785 input digest and rejects missing
 required strings, numeric amounts, public or non-P-256 JWKs, and non-PKCS#8 PEM
 strings. It cannot compare its inputs with the gateway's eventual payment
-requirement. Take price data from the merchant catalogue and settlement
+requirement. Take price data from the merchant catalog and settlement
 coordinates from the payment challenge.
 
 The buyer's agent or credential provider creates the mandate around this JWT.

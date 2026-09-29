@@ -7,14 +7,13 @@ How the gateway verifies, settles and records a paid invocation.
 | Role        | Key material                              | Where it runs                                         |
 | ----------- | ----------------------------------------- | ----------------------------------------------------- |
 | Buyer agent | its own payment key                       | the agent's machine (`demo/agent` in the demo)        |
-| Gateway     | no buyer or merchant key                  | merchant infrastructure                               |
+| Gateway     | no buyer or merchant key required         | merchant infrastructure                               |
 | Facilitator | a gas-paying signer key                   | gateway process in local mode; remote service         |
-| Merchant    | no key given to the gateway; address only | `payTo` for x402; `recipient` for MPP                 |
+| Merchant    | address configured; no key required       | `payTo` for x402; `recipient` for MPP                 |
 
 The gateway coordinates the protocol without taking custody. Local mode keeps
-the facilitator signer in the gateway process. Mainnet requires remote mode.
-Config accepts local mode on Base Sepolia with a non-Anvil key, but its health
-check requires Anvil, so use remote mode for public Base Sepolia.
+the facilitator signer in the gateway process;
+[security.md](security.md#mainnet) says where that mode is allowed.
 
 ## The x402 round trip
 
@@ -30,7 +29,7 @@ check requires Anvil, so use remote mode for public Base Sepolia.
    │ 2. isError + envelope          │ (x402 PaymentRequirements)        │
    │    payment.accepts[0]          │                                   │
    │                                │                                   │
-   │ 3. sign EIP-3009 authorisation │                                   │
+   │ 3. sign EIP-3009 authorization │                                   │
    │    (to = merchant payTo)       │                                   │
    │                                │                                   │
    │ 4. tools/call + _payment       │                                   │
@@ -84,8 +83,8 @@ merchant destination. The signature covers `from`, `to`, `value`,
 id through the EIP-712 domain. A broadcaster can execute that transfer or
 nothing; it cannot change the destination or amount.
 
-That is what makes a non-custodial gateway possible: it can prove a payment
-happened without ever being able to take it.
+So the gateway can confirm a payment without holding the funds or being able
+to redirect them.
 
 ## Fail-closed matrix
 
@@ -98,9 +97,9 @@ happened without ever being able to take it.
 | wrong recipient (`to != payTo`) | `PAYMENT_INVALID` | no |
 | wrong network | `PAYMENT_INVALID` | no |
 | wrong asset | `PAYMENT_INVALID` | no |
-| authorisation expired / not yet valid | `PAYMENT_INVALID` | no |
+| authorization expired / not yet valid | `PAYMENT_INVALID` | no |
 | insufficient balance | `PAYMENT_INVALID` | no |
-| authorisation already spent on chain | `PAYMENT_INVALID` | no |
+| authorization already spent on chain | `PAYMENT_INVALID` | no |
 | copy reaches gateway reservation before the original settles | `PAYMENT_REPLAYED` | no |
 | provider/RPC unavailable during verification | `PAYMENT_PROVIDER_UNAVAILABLE` | no |
 | settlement transaction fails | `PAYMENT_SETTLEMENT_FAILED` | no |
@@ -111,18 +110,18 @@ not a rollback. It is recorded as a
 `payment_attempt` with status `settled` and a `backend.failed` event sharing the
 same `requestId`.
 
-## Replay: two independent defences
+## Replay: two independent defenses
 
 1. **On-chain.** EIP-3009 marks `authorizationState[from][nonce]` used; a second
    `transferWithAuthorization` with the same nonce reverts. This prevents a
    double *spend*.
-2. **In the gateway.** A replayed authorisation could still be presented twice
+2. **In the gateway.** A replayed authorization could still be presented twice
    in quick succession and unlock a second delivery before the first settles.
-   So the pipeline reserves `replayKey` — derived only from
-   `(chainId, asset, payer, nonce)` — under a `UNIQUE` constraint **before**
+   So the pipeline reserves `replayKey`, derived only from
+   `(chainId, asset, payer, nonce)`, under a `UNIQUE` constraint **before**
    calling `settle`. The second request is `PAYMENT_REPLAYED`.
 
-Because the key comes from the authorisation rather than the request, replaying
+Because the key comes from the authorization rather than the request, replaying
 it against another request still collides.
 
 A resource that also requires an AP2 mandate gets a third, independent
@@ -143,10 +142,10 @@ The demo and CI settle for real, on a chain they own:
 
 - Anvil, `--chain-id 84532`, advertised as the CAIP-2 network `eip155:84532`.
   That id is shared with the public Base Sepolia testnet, so nothing infers
-  "public network" from it — `health()` probes for `anvil_nodeInfo` instead.
+  "public network" from it; `health()` probes for `anvil_nodeInfo` instead.
 - `MockUSDC`: 6 decimals, EIP-3009, EIP-712 domain `("MockUSDC", "2")`.
-- Anvil's well-known accounts as deployer/facilitator, merchant and buyer —
-  `LOCAL DEVELOPMENT ONLY - DO NOT FUND`.
+- Anvil's well-known accounts as deployer/facilitator, merchant and buyer,
+  labeled `LOCAL DEVELOPMENT ONLY - DO NOT FUND`.
 - The E2E asserts the buyer's balance falls and the merchant's rises by exactly
   the price, and that the receipt carries a real transaction hash.
 
@@ -164,7 +163,7 @@ Public-network configuration follows these rules:
   infers "public network" from the id alone.
 - **Mainnet is refused unless every guardrail is satisfied** - an explicit
   `allowMainnet`, a remote facilitator over HTTPS, a second explicit
-  acknowledgement if that facilitator takes no credential, a non-development
+  acknowledgment if no facilitator credential is configured, a non-development
   settlement destination, and canonical USDC with the EIP-712 domain the token
   reports. Config validation checks these before startup, so
   `agent-commerce validate` catches them and the gateway will not start
@@ -177,7 +176,7 @@ Public-network configuration follows these rules:
   `anvil_nodeInfo`, so a local facilitator pointed at a real node reports
   unhealthy and `/ready` refuses to serve. In remote mode it asks the
   facilitator what it supports and fails if our scheme and network are not on
-  its list — a facilitator that is up but cannot settle this pair would
+  its list: a facilitator that is up but cannot settle this pair would
   otherwise fail every payment after the buyer signed.
 
 `allowMainnet` acknowledges real-money operation; it does not enable a separate

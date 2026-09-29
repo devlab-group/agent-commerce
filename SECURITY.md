@@ -15,7 +15,7 @@ Please report security issues **privately** - do not open a public issue.
    maintainer email address.
 2. Include the affected version or commit, a description, reproduction steps,
    and the impact you believe it has.
-3. You will get an acknowledgement within **5 working days**, and a status
+3. You will get an acknowledgment within **5 working days**, and a status
    update at least every **10 working days** until it is resolved.
 4. Please give us **90 days** before public disclosure, or less by agreement if
    a fix ships sooner.
@@ -25,8 +25,6 @@ We credit reporters in the release notes unless you would rather we did not.
 ### Out of scope for reports
 
 - The deliberately public Anvil development keys and the local demo chain.
-- The demo merchant API's failure-injection routes (`/api/slow`, `/api/fail`),
-  which exist only to test the gateway.
 - Anything in [what the gateway does not protect against](#what-the-gateway-does-not-protect-against),
   which is documented rather than overlooked.
 
@@ -35,14 +33,15 @@ We credit reporters in the release notes unless you would rather we did not.
 Agent Commerce Gateway is **not** a payment processor, wallet, exchange or
 custodian.
 
-- The gateway **never** accepts, stores, derives or requires a merchant or buyer
-  production private key or seed phrase.
+- The payment flow does not require a merchant or buyer private key or seed
+  phrase. Local facilitator mode does accept a configured gas-paying signer key;
+  do not reuse a merchant or buyer key for it.
 - The merchant settlement destination is plain configuration
   (`payments.x402.payTo: ${MERCHANT_WALLET}`), an address the merchant
   controls. It is never a gateway-owned wallet.
 - Funds move **buyer → merchant destination** through the payment protocol
   itself. With x402 `exact`/EVM this is an EIP-3009 `transferWithAuthorization`:
-  the buyer signs an authorisation that names the merchant as recipient, so a
+  the buyer signs an authorization that names the merchant as recipient, so a
   facilitator that broadcasts it cannot redirect the money.
 - The money path end to end: [`docs/payment-flow.md`](docs/payment-flow.md).
 
@@ -51,7 +50,7 @@ custodian.
 - **No real private key is ever committed to this repository.**
 - The only keys present are Anvil's well-known deterministic development
   accounts, used exclusively on the local demo chain. Every occurrence is
-  labelled `LOCAL DEVELOPMENT ONLY - DO NOT FUND`. Anyone can spend from them;
+  labeled `LOCAL DEVELOPMENT ONLY - DO NOT FUND`. Anyone can spend from them;
   they are public knowledge. Never send real assets to those addresses.
 - The buyer key used by the demo is **Anvil well-known account #2**, defined in
   `src/payments/x402/local-chain/accounts.ts` (`LOCAL_BUYER_ACCOUNT`) and
@@ -59,8 +58,10 @@ custodian.
   reads it from that manifest. The gateway never reads it and never signs with
   it. Key locations in this document are stated literally: if one moves, this
   bullet is wrong until someone updates it.
-- The local facilitator signer pays gas on the dev chain only. Production
-  deployments point at an external facilitator instead.
+- Provider construction refuses a well-known Anvil signer when the RPC
+  hostname does not look local or private. In local mode the health check also
+  requires the RPC to answer `anvil_nodeInfo`, so `/ready` fails against any
+  other node. Mainnet requires a remote facilitator.
 
 ## What the gateway protects
 
@@ -69,21 +70,21 @@ custodian.
   `settle`. Missing, malformed, expired, replayed, wrong-amount,
   wrong-recipient, wrong-network and wrong-asset payments all fail closed, and
   each has a test.
-- **Replay defence at the gateway, not only on-chain.** EIP-3009's
-  `authorizationState` prevents a double *spend*, but a replayed authorisation
+- **Replay defense at the gateway, not only on-chain.** EIP-3009's
+  `authorizationState` prevents a double *spend*, but a replayed authorization
   could otherwise unlock a second delivery before the first settles. The payment
-  provider derives a `replayKey` from the authorisation (payer, nonce, asset,
-  network) and the pipeline reserves it under a `UNIQUE` constraint *before*
+  provider derives a `replayKey` from the authorization (chain id, asset, payer,
+  nonce) and the pipeline reserves it under a `UNIQUE` constraint *before*
   settling. A duplicate is `PAYMENT_REPLAYED`.
-- **Purchase authorisation, where a resource requires it.** With AP2 enabled, a
+- **Purchase authorization, where a resource requires it.** With AP2 enabled, a
   paid resource can demand a signed Checkout Mandate proving the human behind
   the agent approved that exact purchase. It is verified and reserved before
   settlement, spendable once, and never a substitute for payment. Trust is
   static public keys in configuration, with no key discovery of any kind. See
   [`docs/ap2.md`](docs/ap2.md).
-- **Bounded backend calls.** Every merchant backend call has an explicit
-  timeout *and* a 1 MB cap on the response body: a timeout bounds a call by
-  time, not by bytes. There is no unbounded outbound HTTP request.
+- **Bounded built-in HTTP calls.** The included HTTP backend executor applies
+  a timeout and a 1 MiB response-body cap. Custom backend executors must
+  enforce their own limits.
 - **Host-header (DNS-rebinding) validation.** Every request, browser or not, is
   checked against the configured host allow-list before routing. A rebinding
   attacker's page reaches the gateway with its *own* hostname in `Host`, never
@@ -91,42 +92,39 @@ custodian.
   routes from inside the victim's network. See `src/gateway/access-control.ts`.
 - **Configuration validated before startup.** Invalid configuration fails the
   process rather than starting a half-configured gateway.
-- **Secrets kept out of logs and storage.** The request serializer emits only
-  method, sanitised URL, host and remote address, so request headers never
-  reach a log line in the first place. Behind that, the logger redacts every
-  header that carries a credential or a proof - `Authorization`,
-  `PAYMENT-SIGNATURE` and `Agent-Authorization` - and the
-  `privateKey`, `signerPrivateKey`, `signature`, `seed`, `mnemonic`, `secret`,
-  `apiKey`, `adminToken` and `token` fields **at the top level and one level
-  deep**. Pino's wildcards are single-level, so a secret nested two deep is not
-  covered by the logger and must not be handed to it; every call site funnels
-  caught errors through `describeError`, which extracts only `{message, name}`.
-  Receipts and events persist no secrets, no raw payment proofs and no mandates.
+- **Secret handling.** The default request log carries no request headers.
+  The logger redacts credential and proof headers, and known secret fields
+  **at the top level and one level deep** but not deeper. The receipt store
+  redacts secret-shaped keys at any depth. The field list and what callers
+  must keep out of logs and receipts are in
+  [docs/security.md](docs/security.md#secret-handling).
 - **Input validation** on resource inputs, path parameters, body size, content
   type, payment metadata and configuration.
 
 ## Which routes are authenticated
 
-**None of the agent-facing routes, by design.** An agent that can pay is a
-customer, not an intruder, so `POST /api/resources/:id/invoke`,
+**Agent-facing routes are open by design.** `POST /api/resources/:id/invoke`,
 `GET /api/resources`, `GET /health`, `GET /ready`,
-`GET /.well-known/agent-commerce` and the `/mcp` and A2A mounts are open. Paid
-resources are protected by payment, not by authentication.
+`GET /.well-known/agent-commerce` and the `/mcp` and A2A mounts do not require
+authentication. Paid resources require payment.
 
 **ACP is the exception among agent routes.** When `protocols.acp` is enabled,
 every checkout route under its mount requires
 `Authorization: Bearer <protocols.acp.auth.token>`, compared in constant time;
 ACP's own discovery document at `/.well-known/acp.json` stays public and
-contains no configuration at all. Request `Signature` verification is not
+omits the bearer token, backend URLs and other private configuration. Request
+`Signature` verification is not
 implemented and a `Signature` header never substitutes for the bearer token, so
 ACP must be deployed behind TLS. See [docs/security.md](docs/security.md#acp).
 
-**The operator routes are different.** `GET /api/receipts`, `GET /api/events`
-and `GET /api/events/stream` expose the merchant's commerce ledger: payer and
-payee addresses, amounts, settlement transaction hashes, resource ids and
-timings. That is revenue history and customer on-chain identity, not public
-data. They require `server.adminToken`, and **if no token is configured they
-return 404 rather than serving openly**.
+**The operator routes are different.** `GET /api/receipts` and
+`GET /api/events` expose the merchant's commerce ledger: payer and payee
+addresses, amounts, settlement transaction hashes, resource ids and timings.
+That is revenue history and customer on-chain identity, not public data. They
+require `server.adminToken`, and **if no token is configured they return 404
+rather than serving openly**. The token is accepted only in the
+`Authorization` header, never as a query parameter, which `Referer`, browser
+history and intermediary logs could expose.
 
 The dashboard needs that same token to read those routes, via
 `VITE_ADMIN_TOKEN`. Because Vite inlines every `VITE_`-prefixed variable into
@@ -136,36 +134,15 @@ page, not merely by anyone who can reach the gateway. The demo stack accepts
 this because the dashboard is loopback-only and ships a non-secret placeholder.
 A real deployment must not point a real `server.adminToken` at this variable.
 The dashboard's port is a different trust boundary from the gateway's, and
-there is no server-side proxy yet that would keep the token off the client
-(post-alpha).
+there is no server-side proxy that would keep the token off the client.
 
 Browser access is governed by `server.allowedOrigins`, an explicit allowlist
 that defaults to empty. Agent traffic is not browser traffic and receives no
 CORS headers at all.
 
-### The live event stream is polled, not streamed
-
-A browser `EventSource` cannot send custom headers, so the dashboard's SSE
-connection to `/api/events/stream` cannot carry the admin token. It receives a
-401 when a token is configured, and a 404 when one is not, because the operator
-routes are closed by default. **There is no posture in which a browser can read
-the stream.** A header-capable client still can; the dashboard polls
-`GET /api/events` instead, which is its intended path rather than a degraded
-mode.
-
-Accepting the token as a `?adminToken=` query parameter on that one route would
-make the stream work in a browser. **It is deliberately not supported.** The
-cost - credentials leaking through `Referer`, browser history and intermediary
-logs - buys a convenience nothing needs, because the dashboard polls. Do not
-add it without a client that genuinely requires it and a reason that outweighs
-putting a credential in a URL.
-
 ## What the gateway does **not** protect against
 
-Be clear-eyed about this. Running this gateway does not make your agent, your
-backend or your business secure.
-
-- **It does not secure your merchant backend.** Authentication, authorisation,
+- **It does not secure your merchant backend.** Authentication, authorization,
   rate limiting and data protection in your API remain entirely yours.
 - **It does not vet the buyer.** Any party able to produce a valid payment gets
   the resource. There is no KYC, sanctions screening, fraud scoring or dispute
@@ -186,31 +163,32 @@ backend or your business secure.
 - **It does not guarantee delivery after settlement.** A backend failure after a
   successful payment is possible; it is recorded as an event and a payment
   attempt, and reconciliation is the merchant's responsibility.
-- **It cannot always tell you whether a payment settled.** If the settlement
-  transaction is broadcast but its receipt cannot be confirmed, through an RPC
-  timeout or a dropped connection, the outcome is genuinely unknown. The
-  gateway records the attempt as `settlement-uncertain` with the broadcast
-  transaction hash, and does **not** deliver the resource. Resolving it is the
-  merchant's job: check the recorded hash with `getTransactionReceipt`. The
-  gateway will not report this as a failure, because it does not know that it
-  was one.
-- **It prioritises delivery over bookkeeping.** If a resource is delivered but
+- **It cannot always tell you whether a payment settled.** A timeout or
+  dropped connection during settlement can leave no verdict, even if a
+  transaction was broadcast. The gateway records the attempt as
+  `settlement-uncertain` and does **not** deliver the resource. When it has a
+  transaction hash, the merchant can check it with `getTransactionReceipt`;
+  without one, investigation starts from the request ID. The caller receives
+  `PAYMENT_SETTLEMENT_FAILED`, which does not mean the funds stayed with the
+  buyer.
+- **It prioritizes delivery over bookkeeping.** If a resource is delivered but
   persisting the receipt fails, the delivery still happens and the failure is
   logged. A missing receipt therefore does not prove a resource was not
   delivered.
-- **A reserved payment authorisation is never released.** If settlement fails,
-  that authorisation cannot be reused at this gateway even when nothing moved
+- **A reserved payment authorization is never released.** If settlement fails,
+  that authorization cannot be reused at this gateway even when nothing moved
   on-chain. This is deliberate, since releasing it would reopen a replay
-  window, but a buyer hit by a transient error must sign a fresh authorisation.
+  window, but a buyer hit by a transient error must sign a fresh authorization.
   An AP2 mandate is handed back in the narrower case where settlement provably
   moved no money, and kept otherwise.
-- **A rejected request can still have been charged for.** A few request-shape
-  errors are only detectable when the backend call is assembled, which happens
-  after settlement. The gateway hoists the checks it can - empty, `.` and `..`
-  path parameters, and input keys colliding with an operator-configured query
-  parameter are all rejected **before** any payment is taken. But settlement is
-  final and there are no refunds, so if you configure a resource whose inputs
-  can fail late, your buyers can pay for a request that is never delivered. The
+- **A rejected request can still have been charged for.** Most request-shape
+  checks run **before** any payment is taken: missing, empty, `.` and `..` path
+  parameters, a bound input group that is not an object, input keys that
+  collide with an operator-configured query parameter, and illegal configured
+  headers. Two checks run only when the backend call is made, after settlement:
+  a URL that cannot be parsed, and path parameters that resolve outside the
+  template's literal path prefix. Settlement is final and there are no
+  refunds, so a buyer can pay for a request that is never delivered. The
   attempt is recorded as `settled` with a `backend.failed` event sharing the
   same `requestId`, so reconciliation is possible.
 - **It does not rate limit anything.** Free resources are an unauthenticated

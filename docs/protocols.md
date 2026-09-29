@@ -36,10 +36,10 @@ Resources with `expose: [mcp]` become MCP tools:
 
 - tool name: resource id;
 - description: resource description, plus price and proof instructions when
-  paid;
-- input schema: canonical resource schema plus optional `_payment` for a paid
-  resource. `_authorization` is accepted at invocation time but is not
-  advertised in the tool schema.
+  paid, and authorization instructions when the resource requires it;
+- input schema: canonical resource schema plus an optional `_payment` string
+  for a paid resource and an optional `_authorization` object
+  (`{ method, payload }`) for a resource that requires authorization.
 
 ### Payment over MCP
 
@@ -275,15 +275,17 @@ authentication failure, missing or invalid idempotency and API-version headers,
 an unreadable or oversized body, invalid JSON or schema, or an unsupported
 content type. A guard failure does not echo `Request-Id`.
 
-A normal in-flight row becomes completed, released or unresolved when the
-request finishes. A crash or a SQLite error while completing, releasing or
-marking the row unresolved can leave it in-flight for an operator to reconcile.
+An in-flight row becomes completed, released or unresolved when the request
+finishes. A crash or a SQLite error while finalizing can leave it in-flight;
+the next gateway start marks every remaining in-flight row unresolved and logs
+a warning with the count. This assumes one gateway process per idempotency
+database file.
 
-Only completed records expire, after at least 24 hours. Unresolved records and
-in-flight rows left by a crash or finalization error remain for operator
-reconciliation. This avoids rerunning an unknown remote side effect but is not
-an exactly-once transaction across HTTP and SQLite. Expired completed rows are
-purged lazily when a later request claims a key; there is no background sweep.
+Only completed records expire, after at least 24 hours. Unresolved records
+remain for operator reconciliation. This avoids rerunning an unknown remote
+side effect but is not an exactly-once transaction across HTTP and SQLite.
+Expired completed rows are purged lazily when a later request claims a key;
+there is no background sweep.
 
 The schema-v1-to-v2 migration rebuilds the idempotency table empty because its
 bearer-token-scoped keys cannot be translated. If it drops non-completed rows,
@@ -409,7 +411,6 @@ sessions and discovery extension.
 | `GET /api/resources` | canonical resource list |
 | `POST /api/resources/:id/invoke` | invoke; returns 402 when proof is absent |
 | `GET /api/receipts`, `GET /api/events` | operator audit |
-| `GET /api/events/stream` | operator SSE event stream |
 | `/mcp` | MCP Streamable HTTP when enabled |
 | `/.well-known/agent-card.json`, `/a2a` | A2A discovery and JSON-RPC when enabled |
 | `/.well-known/acp.json`, `/acp/checkout_sessions…` | ACP discovery and checkout when enabled |

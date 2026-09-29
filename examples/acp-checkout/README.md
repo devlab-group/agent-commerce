@@ -1,8 +1,8 @@
 # Example: acp-checkout
 
-The **Agentic Commerce Protocol** checkout service, pinned to the stable
-`2026-04-17` snapshot and **experimental**. Five ACP operations, each mapped to
-one canonical resource that fronts the merchant's existing checkout API:
+This experimental ACP checkout adapter uses the `2026-04-17` snapshot. Each
+of its five operations maps to a resource backed by the merchant's checkout
+API:
 
 | ACP operation | Route | Resource |
 | --- | --- | --- |
@@ -12,12 +12,11 @@ one canonical resource that fronts the merchant's existing checkout API:
 | `completeCheckoutSession` | `POST /acp/checkout_sessions/{id}/complete` | `acp_checkout_complete` |
 | `cancelCheckoutSession` | `POST /acp/checkout_sessions/{id}/cancel` | `acp_checkout_cancel` |
 
-`config.yaml` in this directory validates as-is, with no environment variables
-set, against the real config loader (`src/config`).
+`config.yaml` validates without environment variables.
 
-The merchant API this fronts is **not** part of the demo stack: this example
-assumes a backend that already implements the ACP checkout shapes at
-`${MERCHANT_API_BASE_URL}/checkout_sessions...`. Point it at yours.
+The demo stack does not include this merchant checkout API. Supply a backend
+that implements the ACP checkout responses at
+`${MERCHANT_API_BASE_URL}/checkout_sessions...`.
 
 ## Why every resource is free
 
@@ -32,7 +31,7 @@ load.
 From the repository root:
 
 ```bash
-# The gateway, pointed at THIS example's config
+# Start the gateway with this example's config
 AGENT_COMMERCE_CONFIG=examples/acp-checkout/config.yaml npm run dev:gateway
 
 # In another terminal
@@ -48,7 +47,8 @@ Discovery is public:
 curl -s http://localhost:8080/.well-known/acp.json
 ```
 
-Every checkout call needs three headers, and POSTs need a fourth:
+Every checkout call needs `Authorization` and `API-Version`. A POST also needs
+`Idempotency-Key`, plus `Content-Type: application/json` when it carries a body:
 
 ```bash
 curl -s http://localhost:8080/acp/checkout_sessions \
@@ -59,9 +59,10 @@ curl -s http://localhost:8080/acp/checkout_sessions \
   -d '{"line_items":[{"id":"item_123"}],"currency":"usd","capabilities":{}}'
 ```
 
-Retrying that exact request with the same `Idempotency-Key` replays the stored
-answer with `Idempotent-Replayed: true` and never reaches the merchant twice.
-Reusing the key with a different body is a `422`.
+While its completed idempotency record is retained, repeating the same
+request and `Idempotency-Key` returns the stored answer with
+`Idempotent-Replayed: true` without another merchant call. Reusing the key
+with a different body returns `422`.
 
 ## What is not here
 

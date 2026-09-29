@@ -1,14 +1,13 @@
 # Public contract
 
-`src/core/public-types.ts` is the frozen cross-module API, established at
+`src/core/public-types.ts` is the frozen cross-area API, established at
 v0.1.0-alpha. Change it only through this sequence:
 
 1. Record the use case, proposed change, alternatives, and compatibility impact.
 2. Approve the change.
-3. Update the decision record in `docs/adr/`.
-4. Update the canonical type, this record, and affected consumers.
-5. Re-baseline with `node scripts/contract-surface.mjs --write`.
-6. Run `npm run verify`.
+3. Update the canonical type, this record, and affected consumers.
+4. Re-baseline with `node scripts/contract-surface.mjs --write`.
+5. Run `npm run verify`.
 
 Do not resolve disagreements by creating duplicate types.
 
@@ -46,10 +45,11 @@ This table is for navigation, not enumeration.
 
 ## Required invariants
 
-1. Each ingress path assigns `CanonicalRequest.requestId`. HTTP accepts a client
-   `x-request-id` only when it matches `[A-Za-z0-9._:-]{1,64}`; otherwise it
-   generates one. Records created for the request, including events, payment
-   attempts, and receipts, reuse that ID.
+1. Each ingress path generates `CanonicalRequest.requestId`; a client never
+   chooses it. Over HTTP, a client `x-request-id` matching
+   `[A-Za-z0-9._:-]{1,64}` is logged as `clientRequestId` and nothing more.
+   Records created for the request, including events, payment attempts, and
+   receipts, reuse the generated ID.
 2. `PaymentRequirement.challenge.accepts` is provider-native and opaque. Pass it
    through unchanged.
 3. A payment provider derives `PaymentResult.replayKey` only from the
@@ -68,7 +68,7 @@ This table is for navigation, not enumeration.
 8. `exactOptionalPropertyTypes` is enabled. Add optional properties
    conditionally instead of assigning `undefined`.
 9. Preserve `AuthorizationSubmission.payload` byte-for-byte as opaque provider
-   input; transport layers must not decode, normalise, or reserialise it. AP2
+   input; transport layers must not decode, normalize, or reserialize it. AP2
    hashes the issuer-signed token inside its presentation, not the full payload.
 10. Authorization providers must not use `PAYMENT_*` codes. The pipeline passes
     a provider's `CommerceError` through unchanged, so it cannot enforce this
@@ -76,7 +76,7 @@ This table is for navigation, not enumeration.
     missing or rejected mandate.
 
 `CommerceResource.paymentMethods` is ordered. The pipeline charges through the
-first method with a configured provider and does not retry another method after
+first method with an enabled provider and does not retry another method after
 a rejection. `createGateway` lists each resource's provider-backed methods
 first, keeping declared order, so every ingress path labels a proof with the
 method the pipeline selects; `GET /api/resources` shows that order.
@@ -85,9 +85,9 @@ method the pipeline selects; `GET /api/resources` shows that order.
 
 Never place private keys, raw payment proofs, authorization headers, tokens, or
 credentials in receipt metadata, event data, or payment metadata. The SQLite
-store recursively redacts secret-shaped keys as defence in depth. It strips the
-value instead of rejecting the write because event persistence must not fail the
-commerce flow.
+store recursively redacts secret-shaped keys as defense in depth. It replaces
+the value with `[REDACTED]` instead of rejecting the write because event
+persistence must not fail the commerce flow.
 
 ## Recorded changes
 
@@ -96,9 +96,9 @@ commerce flow.
 - The initial surface was frozen at v0.1.0-alpha. UCP was later removed; current
   protocol names are defined by `ProtocolName` and `PROTOCOL_NAMES`.
 - `toCommerceError` no longer exposes an arbitrary `Error.message`. It keeps the
-  original error as the non-serialised `cause`.
-- `PaymentAttempt.status` gained `settlement-uncertain` for a broadcast
-  settlement whose result cannot be confirmed.
+  original error as the non-serialized `cause`.
+- `PaymentAttempt.status` gained `settlement-uncertain`, recorded whenever
+  `settle()` throws, with or without a transaction hash.
 - `GATEWAY_BUSY` is a retryable 503 used for transient load shedding.
 - `ReceiptStore` gained `countReceipts` and `countUndeliveredReceipts`; list
   results are capped and cannot provide reliable totals.
@@ -106,6 +106,10 @@ commerce flow.
   a buyer's settlement result. The key is `agent-commerce/delivery`.
 - x402 v2 changed the HTTP headers to `payment-signature`, `payment-required`,
   and `payment-response`. The v1 `x-payment*` headers are not accepted.
+- An unexpected throw from the x402 SDK during `verify()` maps to
+  `PAYMENT_PROVIDER_UNAVAILABLE`, replacing the rejection reason
+  `unexpected_verify_error`. A throw carries no verdict, so it is not recorded
+  against the payer.
 - `PaymentChallenge.envelope` and `PaymentRequiredEnvelope.payment.envelope`
   carry the provider's challenge document unchanged.
 - `BackendHandler.inputBindings` optionally maps top-level input fields to path,
@@ -123,9 +127,10 @@ commerce flow.
 ### Protocols and gateway
 
 - `ProtocolName` gained `a2a` and `acp`; `PROTOCOL_NAMES` is the runtime list
-  used by validation. It is typed against the union but must still be updated
-  explicitly when the union changes. The type remains hand-written so generated
-  contract output uses its name instead of expanding a literal union everywhere.
+  used by validation. It is derived from a record keyed by the union, so a
+  missing or extra name fails to compile. The type remains hand-written so
+  generated contract output uses its name instead of expanding a literal union
+  everywhere.
 - `AdapterHttpRoute` and `HttpProtocolAdapter.additionalHttpRoutes` let an
   adapter register fixed routes outside its mount. Startup rejects conflicting
   cross-adapter route claims, and fixed routes inherit the mount's body limit,
@@ -136,8 +141,20 @@ commerce flow.
 - ACP added its config block, checkout adapter, discovery constants, and five
   checkout-operation mappings. Enabled ACP config is discriminated so an
   incomplete checkout lifecycle fails during config load.
+- A cancel resource whose input schema sets `additionalProperties: false` must
+  declare `body`, which a cancel carries when the caller sends one. Config load
+  rejects one that does not; before, it loaded and refused every cancel
+  carrying `intent_trace` with `INPUT_INVALID`.
 - `WellKnownDocument.authorizationProviders` lists authorization descriptors
   separately from payment providers.
+- The operator SSE route `GET /api/events/stream` was removed. `GET /api/events`
+  is the only event feed, and the demo dashboard polls it.
+- The main entry exports the A2A adapter: `createA2aAdapter` and its options
+  type, plus `A2A_SPEC_VERSION`, `A2A_PROTOCOL_VERSION` and
+  `A2A_AGENT_CARD_PATH`. It needs no optional peer.
+- `CreatePaymentProofOptions` dropped the deprecated `rpcUrl`, which the helper
+  ignored. TypeScript rejects it on a fresh object literal; callers passing a
+  variable with extra properties should remove it as well.
 
 ### Authorization and AP2
 
@@ -160,6 +177,9 @@ commerce flow.
   helper runs in the merchant process; the gateway only verifies its result. It
   uses the same RFC 8785 input hash and rejects invalid keys or amounts before
   they become opaque verification failures.
+- `AP2_REJECTION_REASONS` dropped `unsupported_algorithm`. A digest algorithm
+  other than sha-256 is `malformed_presentation`, and a signing algorithm other
+  than the pinned one is `invalid_signature`.
 
 ### MPP
 
@@ -176,13 +196,13 @@ commerce flow.
 
 ## Published entry points
 
-| Entry                               | Surface                                                    | Imported optional peers                                                         |
-| ----------------------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| `@devlab.group/agent-commerce`      | Core contract, config, gateway, receipt store, ACP adapter | None                                                                            |
-| `@devlab.group/agent-commerce/ap2`  | AP2 verification and checkout signing                      | `jose`, `@sd-jwt/core`, `canonicalize`                                          |
-| `@devlab.group/agent-commerce/mcp`  | MCP adapter                                                | `@modelcontextprotocol/sdk`                                                     |
-| `@devlab.group/agent-commerce/mpp`  | MPP provider and profile metadata                          | `@coinbase/x402` (only for `auth.type: cdp`), `@x402/core`, `@x402/evm`, `mppx`, `viem` |
-| `@devlab.group/agent-commerce/x402` | x402 provider and client proof helper                      | `@coinbase/x402` (only for `auth.type: cdp`), `@x402/core`, `@x402/evm`, `viem` |
+| Entry                               | Surface                                                             | Imported optional peers                                                                 |
+| ----------------------------------- | ------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `@devlab.group/agent-commerce`      | Core contract, config, gateway, receipt store, A2A and ACP adapters | None                                                                                    |
+| `@devlab.group/agent-commerce/ap2`  | AP2 verification and checkout signing                               | `jose`, `@sd-jwt/core`, `canonicalize`                                                  |
+| `@devlab.group/agent-commerce/mcp`  | MCP adapter                                                         | `@modelcontextprotocol/sdk`                                                             |
+| `@devlab.group/agent-commerce/mpp`  | MPP provider and profile metadata                                   | `@coinbase/x402` (only for `auth.type: cdp`), `@x402/core`, `@x402/evm`, `mppx`, `viem` |
+| `@devlab.group/agent-commerce/x402` | x402 provider and client proof helper                               | `@coinbase/x402` (only for `auth.type: cdp`), `@x402/core`, `@x402/evm`, `viem`         |
 
 The main entry and CLI must not import optional peers. `package.json` is the
 authoritative export and dependency map.
@@ -251,6 +271,20 @@ export function createX402PaymentProvider(
 
 export type DeploymentMode = 'local' | 'testnet' | 'mainnet';
 export const SUPPORTED_NETWORK_IDS: readonly string[];
+
+export interface NetworkProfile {
+  readonly id: string; // CAIP-2
+  readonly chainId: number;
+  readonly displayName: string;
+  readonly kind: 'testnet' | 'mainnet';
+  /** Canonical USDC and its EIP-712 domain, enforced on mainnet only */
+  readonly canonicalAsset?: {
+    readonly symbol: string;
+    readonly address: string;
+    readonly name: string;
+    readonly version: string;
+  };
+}
 ```
 
 Local facilitator keys are for the development chain only and must never hold
@@ -311,7 +345,7 @@ the pipeline records `settlement-uncertain` and returns
 `PAYMENT_SETTLEMENT_FAILED`. Returned results name `mpp`; `health` returns the
 internal x402 provider's health unchanged.
 
-`PaymentSubmission.payload` is the serialised credential: the value of an
+`PaymentSubmission.payload` is the serialized credential: the value of an
 `Authorization: Payment ...` header, scheme included. `PaymentChallenge.envelope`
 is `{ wwwAuthenticate }`, the challenge as a `WWW-Authenticate` value, and a
 settled result's `metadata.receipt` is the `Payment-Receipt` value.
@@ -547,13 +581,13 @@ export interface GatewayConfig {
 }
 ```
 
-`GatewayConfig` is validated, environment-substituted, and normalised. An
+`GatewayConfig` is validated, environment-substituted, and normalized. An
 unset `adminToken` makes operator routes return 404; an empty
 `allowedOrigins` permits no cross-origin browser access.
 
 ## Gateway HTTP surface
 
-| Route                             | Behaviour                                                                                                                                                             |
+| Route                             | Behavior                                                                                                                                                              |
 | --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `GET /health`                     | Returns 200 after the Host check and, when present, the Origin check pass; a rejected Host or Origin returns 403.                                                       |
 | `GET /ready`                      | Returns 503 if the store, an adapter, or either provider kind reports `fail`; `warn` remains ready. Results are briefly cached and concurrent probes share one check. |
@@ -562,10 +596,9 @@ unset `adminToken` makes operator routes return 404; an empty
 | `POST /api/resources/:id/invoke`  | Invokes the HTTP surface. Payment and authorization use their defined headers; an unpaid request returns 402.                                                         |
 | `GET /api/receipts?limit=`        | Lists recent receipts through the operator-token gate.                                                                                                                |
 | `GET /api/events?limit=`          | Lists recent events through the operator-token gate.                                                                                                                  |
-| `GET /api/events/stream`          | Streams events through the operator-token gate.                                                                                                                       |
 | Adapter mounts and fixed routes   | Delegated to enabled protocol adapters, with collision checks and per-mount limits.                                                                                   |
 
-Without `server.adminToken`, the three operator routes return 404. With a token,
+Without `server.adminToken`, both operator routes return 404. With a token,
 they require `Authorization: Bearer <token>`; query-string tokens are not
 accepted.
 
@@ -602,28 +635,30 @@ accepted.
 
 `src/payments/x402/local-chain/manifest.ts` owns `LocalChainManifest`,
 `LOCAL_CHAIN_MANIFEST_PATH`, and `readLocalChainManifest(cwd?)`. The deployment
-script and internal testing surface re-export that implementation.
+script imports that module directly, and the internal testing surface
+re-exports it.
 
 `hostRpcUrl` is the host-reachable address of the same chain. Host-side tools
 use `hostRpcUrl ?? rpcUrl`, which supports older manifests without the optional
 field. `readLocalChainManifest` throws when the file is absent or malformed.
 
 The internal `src/payments/x402/testing.ts` surface is for repository tests and
-deployment tooling; it is not a published package entry.
+the demo buyer; it is not a published package entry.
 
 ## Client-side payment helper
 
-`createPaymentProof` is an x402 client helper used by the demo buyer and tests.
-The gateway does not call it or hold the buyer key.
+`createPaymentProof` is the x402 client helper exported from the `./x402` entry.
+The demo buyer and the tests use it. Signing is offline: the chain id comes from
+the requirement's CAIP-2 network. The gateway does not call it or hold the buyer
+key.
 
 ```ts
 export interface CreatePaymentProofOptions {
-  /** Development key only. Never fund it. */
+  /** The buyer's private key. It signs locally and is never sent anywhere */
   readonly buyerPrivateKey: `0x${string}`;
-  readonly rpcUrl: string;
-  /** One entry from PaymentRequiredEnvelope.payment.accepts, unchanged. */
+  /** One entry from PaymentRequiredEnvelope.payment.accepts, verbatim */
   readonly accepts: Readonly<Record<string, unknown>>;
-  /** Negative-test overrides. */
+  /** For negative tests only: a wrong amount, recipient, nonce or validity window */
   readonly overrides?: {
     readonly value?: string;
     readonly payTo?: string;

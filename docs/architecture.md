@@ -40,11 +40,10 @@ Three properties define the design:
 
 - **Self-hosted.** The gateway runs in the merchant's infrastructure. There is
   no central service operated by this project, and none is planned.
-- **Non-custodial.** The gateway never holds merchant or buyer funds or keys.
-  Local facilitator mode keeps a gas-paying signer in the gateway process.
-  Mainnet requires a remote facilitator. Config accepts local mode on Base
-  Sepolia with a non-Anvil key, but its health check requires Anvil, so use
-  remote mode for public Base Sepolia. See [Security model](security.md).
+- **Non-custodial.** Payment goes from buyer to merchant without passing
+  through the gateway, which needs no buyer or merchant signing key. Local
+  facilitator mode holds a separate gas-paying signer in process; the
+  [Security model](security.md#mainnet) says where it is allowed.
 - **Configuration, not rewriting.** A merchant describes an existing endpoint
   in `config.yaml`. `agent-commerce import openapi` can generate draft resource
   definitions:
@@ -102,17 +101,18 @@ CanonicalRequest
        ├─ replayKey missing ──────────► PAYMENT_INVALID      │
        ├─ authorize + reserve ────────► AUTHORIZATION_*      │
        ├─ reserve replayKey ──────────► PAYMENT_REPLAYED     │
+       │                          or STORAGE_ERROR           │
        ├─ settle ───────────► PAYMENT_SETTLEMENT_FAILED      │
        └─ consume, release or mark authorization             │
                                                              │
   ┌──────────────────────────────────────────────────────────┘
   ├─ call merchant backend ────────────────► BACKEND_TIMEOUT / BACKEND_ERROR
-  ├─ store receipt + events ───────────────► STORAGE_ERROR
+  ├─ store receipt + events ───────────────► logged on failure, never thrown
   └─ ExecutionOutcome (delivered)
 ```
 
 `verify` never moves money; only `settle` does. The replay reservation sits
-deliberately **between** them: a duplicate authorisation is rejected before any
+deliberately **between** them: a duplicate authorization is rejected before any
 funds move.
 
 Authorization is optional per resource. When required, its reservation sits
@@ -160,17 +160,20 @@ public RPC or real funds.
 
 ## Where to look in the code
 
-| Concern                                              | Path                           |
-| ---------------------------------------------------- | ------------------------------ |
-| canonical model, errors, pipeline                    | `src/core`                     |
-| config schema, loader, env substitution              | `src/config`                   |
-| Fastify server, routes, adapter mounting             | `src/gateway`                  |
-| MCP adapter                                          | `src/protocols/mcp`            |
-| x402 provider + local/remote facilitator             | `src/payments/x402`            |
-| MPP provider, settling through an x402 provider      | `src/payments/mpp`             |
-| AP2 mandate verification                             | `src/authorization/ap2`        |
-| SQLite receipts/events/attempts                      | `src/storage/receipts`         |
-| OpenAPI import (config ingress only)                 | `src/openapi`                  |
-| CLI (`init`, `import`, `validate`, `doctor`, `demo`) | `src/cli`                      |
-| demo merchant API / buyer / dashboard                | `demo/*`                       |
-| MockUSDC + local chain scripts                       | `contracts/`, `scripts/chain/` |
+| Concern                                                                 | Path                           |
+| ----------------------------------------------------------------------- | ------------------------------ |
+| canonical model, errors, pipeline                                       | `src/core`                     |
+| config schema, loader, env substitution                                 | `src/config`                   |
+| Fastify server, routes, adapter mounting                                | `src/gateway`                  |
+| MCP adapter                                                             | `src/protocols/mcp`            |
+| A2A adapter (experimental)                                              | `src/protocols/a2a`            |
+| ACP checkout adapter (experimental)                                     | `src/protocols/acp`            |
+| shared bearer check, body reader, URL join                              | `src/protocols/http.ts`        |
+| x402 provider + local/remote facilitator                                | `src/payments/x402`            |
+| MPP provider, settling through an x402 provider                         | `src/payments/mpp`             |
+| AP2 mandate verification                                                | `src/authorization/ap2`        |
+| SQLite receipts/events/attempts                                         | `src/storage/receipts`         |
+| OpenAPI import (config ingress only)                                    | `src/openapi`                  |
+| CLI (`init`, `import openapi`, `validate`, `doctor`, `demo`, `version`) | `src/cli`                      |
+| demo merchant API / buyer / dashboard                                   | `demo/*`                       |
+| MockUSDC + local chain scripts                                          | `contracts/`, `scripts/chain/` |
