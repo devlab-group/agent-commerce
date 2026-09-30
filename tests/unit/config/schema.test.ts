@@ -250,6 +250,33 @@ describe('parseConfig', () => {
     ])('still accepts a parameter in %s', (_label, url) => {
       expect(() => parseConfig(withBackendUrl(url), {})).not.toThrow();
     });
+
+    // A key substituted into the URL must not reach validate, doctor or
+    // startup output, so a refused URL is never quoted
+    it.each([
+      [
+        'a parameter in the host',
+        'http://{host}.api.internal/v1?key=${BACKEND_KEY}',
+        'before the end of the host',
+      ],
+      ['no scheme', 'backend.internal/v1?key=${BACKEND_KEY}', 'invalid backend.url'],
+    ])('never quotes a refused backend.url with %s', (_label, url, message) => {
+      const error = expectConfigInvalid(
+        () => parseConfig(withBackendUrl(url), { BACKEND_KEY: 'BACKEND-KEY-IN-URL' }),
+        'resources.templated.backend.url',
+        message,
+      );
+      expect(JSON.stringify(error.toInfo())).not.toContain('BACKEND-KEY-IN-URL');
+    });
+
+    it('control: the key is substituted into a backend.url that loads', () => {
+      const config = parseConfig(withBackendUrl('http://backend.local/{host}?key=${BACKEND_KEY}'), {
+        BACKEND_KEY: 'BACKEND-KEY-IN-URL',
+      });
+      expect(config.resources.find((r) => r.id === 'templated')?.handler).toMatchObject({
+        url: 'http://backend.local/{host}?key=BACKEND-KEY-IN-URL',
+      });
+    });
   });
 
   describe('closed-schema stamping', () => {

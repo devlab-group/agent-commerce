@@ -1860,9 +1860,10 @@ function validatePathParametersDeclared(
       // Not a URL: the parameter starts before the authority is complete
     }
     if (origin === undefined || !prefix.startsWith(`${origin}/`)) {
+      // The URL is not quoted: it may carry a key substituted from the environment
       throw new CommerceError(
         'CONFIG_INVALID',
-        `Resource "${id}" has a backend.url parameter before the end of the host ("${url}"). A caller-supplied value would choose which host the gateway calls, which is request forgery with the gateway's own network position. Parameters are supported inside the path and query only`,
+        `Resource "${id}" has a backend.url parameter before the end of the host. A caller-supplied value would choose which host the gateway calls, which is request forgery with the gateway's own network position. Parameters are supported inside the path and query only`,
         { details: { path: `resources.${id}.backend.url`, resourceId: id } },
       );
     }
@@ -1903,9 +1904,10 @@ function validateBackendUrl(id: string, url: string): void {
   try {
     parsed = new URL(url);
   } catch {
+    // The URL is not quoted: it may carry a key substituted from the environment
     throw new CommerceError(
       'CONFIG_INVALID',
-      `Resource "${id}" has an invalid backend.url "${url}": must be an absolute http:// or https:// URL`,
+      `Resource "${id}" has an invalid backend.url: must be an absolute http:// or https:// URL`,
       { details: { path: `resources.${id}.backend.url`, resourceId: id } },
     );
   }
