@@ -1,11 +1,6 @@
-import type {
-  Clock,
-  CommerceEvent,
-  CommerceReceipt,
-  IdGenerator,
-} from '../../../src/core/index.js';
+import type { Clock, CommerceEvent, CommerceReceipt, IdGenerator } from '../../../src/core';
 
-/** Deterministic clock for tests: starts at a fixed instant and ticks 1ms per read. */
+/** Deterministic clock for tests: starts at a fixed instant and ticks 1ms per read */
 export function createFakeClock(startMs = Date.parse('2026-01-01T00:00:00.000Z')): Clock {
   let current = startMs;
   let monotonic = 0;

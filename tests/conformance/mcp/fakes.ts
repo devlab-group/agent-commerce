@@ -1,8 +1,5 @@
-/**
- * Fake ExecutionPipeline / ResourceRegistry / runtime primitives used to
- * drive the MCP adapter in isolation. No dependency on gateway, config or
- * payment-x402 — only the frozen `src/core` contract.
- */
+// Fake ExecutionPipeline, ResourceRegistry and runtime primitives that drive
+// the MCP adapter in isolation, against the `src/core` contract only
 import {
   type CanonicalRequest,
   type Clock,
@@ -16,7 +13,7 @@ import {
   type ProtocolAdapterContext,
   type ProtocolName,
   type ResourceRegistry,
-} from '../../../src/core/index.js';
+} from '../../../src/core';
 
 /**
  * Records every `CanonicalRequest` it receives and delegates the outcome (or

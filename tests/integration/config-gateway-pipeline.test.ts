@@ -1,19 +1,18 @@
 /**
- * Cross-package integration: config.yaml -> src/config
- * -> src/gateway (which wires src/core's
- * execution pipeline internally). No dependency on protocol-mcp, payment-x402
- * or receipt-store — those are fakes here, so a failure points at the
- * config/gateway/pipeline seam and not at an adapter.
+ * Integration across config.yaml, src/config and src/gateway, which wires
+ * src/core's pipeline. The payment provider and receipt store are fakes and no
+ * protocol adapter is mounted, so a failure points at the
+ * config/gateway/pipeline seam.
  */
 import { promises as fs } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
-// Keep test output quiet and avoid spawning a pino-pretty worker thread.
+// Keep test output quiet and avoid spawning a pino-pretty worker thread
 process.env['NODE_ENV'] = 'test';
 
-import { loadConfig, parseConfig } from '../../src/config/index.js';
+import { loadConfig, parseConfig } from '../../src/config';
 import {
   type AdapterDescriptor,
   type Clock,
@@ -32,8 +31,8 @@ import {
   type PaymentSettlementContext,
   type PaymentVerificationContext,
   type ReceiptStore,
-} from '../../src/core/index.js';
-import { createGateway, type GatewayInstance } from '../../src/gateway/index.js';
+} from '../../src/core';
+import { createGateway, type GatewayInstance } from '../../src/gateway';
 
 const descriptor: AdapterDescriptor = {
   name: 'fake',

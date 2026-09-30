@@ -8,9 +8,9 @@
  * mandate.
  */
 import { describe, expect, it } from 'vitest';
-import { parseConfig } from '../../../src/config/schema.js';
-import { isCommerceError } from '../../../src/core/index.js';
-import { validRawConfig } from './fixtures.js';
+import { parseConfig } from '../../../src/config/schema';
+import { isCommerceError } from '../../../src/core';
+import { validRawConfig } from './fixtures';
 
 /**
  * The P-256 public key from RFC 7515 appendix A.3.1. A published example, so
@@ -88,7 +88,7 @@ describe('configs without AP2', () => {
 });
 
 describe('authorization.ap2 trust policy', () => {
-  it('normalises an enabled block, defaulting the version, mode and skew', () => {
+  it('normalizes an enabled block, defaulting the version, mode and skew', () => {
     const config = parseConfig(withAp2(), {});
     const ap2 = config.authorization?.ap2;
     expect(ap2).toMatchObject({
@@ -306,7 +306,7 @@ describe('resource authorization policy', () => {
     const config = parseConfig(withAp2({}, { required: ['ap2'] }), {});
     const resource = config.resources.find((r) => r.id === 'market_report');
     expect(resource?.authorization).toEqual({ required: ['ap2'] });
-    // And leaves every other resource untouched.
+    // And leaves every other resource untouched
     expect(config.resources.find((r) => r.id === 'weather_basic')?.authorization).toBeUndefined();
   });
 

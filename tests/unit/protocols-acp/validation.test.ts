@@ -12,7 +12,7 @@ import {
   ACP_DEFINITIONS,
   type AcpDefinition,
   validateAcpDocument,
-} from '../../../src/protocols/acp/validation.js';
+} from '../../../src/protocols/acp/validation';
 
 const examples = JSON.parse(
   readFileSync('tests/fixtures/acp/2026-04-17/examples.agentic_checkout.json', 'utf8'),
@@ -24,7 +24,7 @@ function example(name: string): unknown {
   return value;
 }
 
-/** Structurally cloned so a mutation in one case cannot leak into another. */
+// Structurally cloned so a mutation in one case cannot leak into another
 function mutated(name: string, mutate: (draft: Record<string, unknown>) => void): unknown {
   const draft = structuredClone(example(name)) as Record<string, unknown>;
   mutate(draft);
@@ -54,7 +54,7 @@ describe('validateAcpDocument - official examples', () => {
   });
 
   // A `$defs` name that does not exist in the pinned snapshot throws at
-  // compile time, so reaching a verdict at all proves every name resolved.
+  // compile time, so reaching a verdict at all proves every name resolved
   it('resolves every definition it names against the pinned snapshot', () => {
     for (const definition of Object.keys(ACP_DEFINITIONS) as AcpDefinition[]) {
       expect(validateAcpDocument(definition, null)).toBeDefined();
@@ -151,7 +151,7 @@ describe('validateAcpDocument - rejections', () => {
 
   // The snapshot marks this one enum extensible and asks validators to be
   // lenient with it - an agent must not be refused a cancel over an analytics
-  // reason code this snapshot has not heard of.
+  // reason code this snapshot has not heard of
   it('accepts an unrecognized value in an enum the snapshot marks extensible', () => {
     expect(
       validateAcpDocument('cancelRequest', {
@@ -160,7 +160,7 @@ describe('validateAcpDocument - rejections', () => {
     ).toBeUndefined();
   });
 
-  // Enums ACP calls closed per API version stay closed.
+  // Enums ACP calls closed per API version stay closed
   it('still rejects a value outside a closed enum', () => {
     const failure = validateAcpDocument('discoveryResponse', {
       protocol: { name: 'acp', version: '2026-04-17', supported_versions: ['2026-04-17'] },
@@ -173,7 +173,7 @@ describe('validateAcpDocument - rejections', () => {
   });
 
   // Ajv messages describe our compiled schema; only the failing keyword and a
-  // pointer into the caller's own document may cross the adapter boundary.
+  // pointer into the caller's own document may cross the adapter boundary
   it('reports nothing beyond a keyword and a path', () => {
     const failure = validateAcpDocument('createRequest', {});
     expect(Object.keys(failure ?? {}).sort()).toEqual(['code', 'path']);

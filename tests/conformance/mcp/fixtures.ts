@@ -1,10 +1,8 @@
-/**
- * Canonical `CommerceResource` fixtures used by the MCP conformance suite.
- * These are plain data — no gateway, no config loader, no payment provider.
- */
-import type { CommerceResource } from '../../../src/core/index.js';
+// Canonical `CommerceResource` fixtures for the MCP conformance suite, as
+// plain data: no gateway, config loader or payment provider
+import type { CommerceResource } from '../../../src/core';
 
-/** Free resource, exposed via both mcp and http. */
+/** Free resource, exposed via both mcp and http */
 export const FREE_ECHO_RESOURCE: CommerceResource = {
   id: 'echo',
   name: 'Echo',
@@ -22,7 +20,7 @@ export const FREE_ECHO_RESOURCE: CommerceResource = {
   paymentMethods: [],
 };
 
-/** Paid (fixed-price) resource, exposed via mcp. */
+/** Paid (fixed-price) resource, exposed via mcp */
 export const PAID_WEATHER_RESOURCE: CommerceResource = {
   id: 'get-weather',
   name: 'Get Weather',
@@ -40,7 +38,7 @@ export const PAID_WEATHER_RESOURCE: CommerceResource = {
   paymentMethods: ['x402'],
 };
 
-/** Not exposed via mcp — must be absent from tools/list. */
+/** Not exposed via mcp, so absent from tools/list */
 export const HTTP_ONLY_RESOURCE: CommerceResource = {
   id: 'internal-report',
   name: 'Internal Report',
@@ -51,7 +49,7 @@ export const HTTP_ONLY_RESOURCE: CommerceResource = {
   paymentMethods: [],
 };
 
-/** Id is not a legal MCP tool name (space and `!`) — must be skipped, not mangled. */
+/** Id is not a legal MCP tool name (space and `!`), so skipped, not mangled */
 export const INVALID_ID_RESOURCE: CommerceResource = {
   id: 'bad tool id!',
   name: 'Bad Tool Id',
@@ -62,7 +60,7 @@ export const INVALID_ID_RESOURCE: CommerceResource = {
   paymentMethods: [],
 };
 
-/** No inputSchema at all — buildInputSchema must still produce a valid object schema. */
+/** No inputSchema at all; buildInputSchema must still produce a valid object schema */
 export const NO_SCHEMA_RESOURCE: CommerceResource = {
   id: 'ping',
   name: 'Ping',
@@ -73,9 +71,8 @@ export const NO_SCHEMA_RESOURCE: CommerceResource = {
 };
 
 /**
- * Dynamic pricing exists in the type system for forward compatibility (config
- * validation rejects it) — the adapter must still describe it as paid
- * without inventing an amount/currency it does not have.
+ * Dynamic pricing exists in the type system although config validation rejects
+ * it; the adapter must still describe it as paid without inventing an amount
  */
 export const DYNAMIC_PRICED_RESOURCE: CommerceResource = {
   id: 'custom-quote',
@@ -88,9 +85,8 @@ export const DYNAMIC_PRICED_RESOURCE: CommerceResource = {
 };
 
 /**
- * Priced but declares no payment method at all — the adapter must not invent
- * one. A `_payment` proof supplied for this resource must be dropped, never
- * forwarded under a guessed rail.
+ * Priced but declaring no payment method, so the adapter must not invent one:
+ * a `_payment` proof for it is dropped, never forwarded under a guessed rail
  */
 export const PAID_NO_METHOD_RESOURCE: CommerceResource = {
   id: 'no-method-paid',

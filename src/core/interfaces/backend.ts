@@ -1,25 +1,24 @@
 /**
- * Merchant backend execution boundary.
- *
- * The only place in the system allowed to make an outbound HTTP call to a
- * merchant backend. Every call is bounded by a timeout; redirects are not
- * followed (see docs/security.md).
+ * The gateway's only boundary for calling a merchant backend. An
+ * implementation must bound every call with a timeout and must not follow
+ * redirects; the built-in HTTP executor does both (docs/security.md).
  */
-import type { BackendHandler } from '../domain/resource.js';
+import type { BackendHandler } from '../domain/resource';
 
 export interface BackendRequest {
   readonly requestId: string;
   readonly resourceId: string;
-  /** Validated resource input. */
+  /** Validated resource input */
   readonly input: unknown;
   /**
-   * Names the *operation*, so the merchant can recognise a repeat of it.
+   * Names the operation, so the merchant can recognize a repeat of it. Not
+   * `requestId`, which is fresh per call and would make every retry look like
+   * new work.
    *
-   * Not `requestId`, which is fresh per call and would make every retry look
-   * like new work. An adapter sets this only when it can derive a value that
-   * survives a client retry, a reconnect and a gateway restart; the HTTP
-   * executor forwards it as the `Idempotency-Key` request header. Absent
-   * means the protocol has no such notion, and the merchant sees no header.
+   * An adapter sets it only when the value survives a client retry, a
+   * reconnect and a gateway restart. The HTTP executor sends it as the
+   * `Idempotency-Key` header, replacing one set in `BackendHandler.headers`;
+   * when absent, the executor adds none.
    */
   readonly idempotencyKey?: string;
 }

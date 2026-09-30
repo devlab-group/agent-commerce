@@ -1,41 +1,37 @@
 /**
- * MPP settling on a real local chain, through the whole gateway.
+ * MPP settling on a real local chain through the whole gateway.
  *
- * The buyer is the mppx client. Gateways are built from parsed config through
- * the provider builder `main.ts` uses, so MPP settles through its internal x402
- * provider and local facilitator. Every outcome is read back off the chain:
- * balance deltas and transaction receipts, never a log line.
+ * The buyer is the mppx client. Gateways are built from parsed config with
+ * `createConfiguredPaymentProviders`, the builder `main.ts` uses, so MPP
+ * settles through its internal x402 provider and a local facilitator. Outcomes
+ * are read back off the chain as balance deltas and transaction receipts.
  *
- * The chain is an ephemeral Anvil this file spawns; the merchant backend is
- * stubbed, because what is under test is everything in front of it.
+ * The chain is an ephemeral Anvil this file spawns. The merchant backend is
+ * stubbed, because everything in front of it is under test.
  */
 import { Challenge, Credential, Receipt } from 'mppx';
 import { charge as clientCharge } from 'mppx/evm/client';
 import { createTestClient, http, type LocalAccount } from 'viem';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { parseConfig } from '../../../src/config/index.js';
+import { parseConfig } from '../../../src/config';
 import {
   type BackendExecutor,
   NOOP_LOGGER,
   PAYMENT_HEADER,
   type ReceiptStore,
-} from '../../../src/core/index.js';
-import { createGateway, type GatewayInstance } from '../../../src/gateway/index.js';
-import { createConfiguredPaymentProviders } from '../../../src/gateway/payment-providers.js';
-import { createPaymentProof } from '../../../src/payments/x402/index.js';
-import {
-  type AnvilHandle,
-  deployLocalChain,
-  startAnvil,
-} from '../../../src/payments/x402/testing.js';
-import { createSqliteReceiptStore } from '../../../src/storage/receipts/index.js';
-import { startLossyRpc } from '../../fixtures/x402/lossy-rpc.js';
+} from '../../../src/core';
+import { createGateway, type GatewayInstance } from '../../../src/gateway';
+import { createConfiguredPaymentProviders } from '../../../src/gateway/payment-providers';
+import { createPaymentProof } from '../../../src/payments/x402';
+import { type AnvilHandle, deployLocalChain, startAnvil } from '../../../src/payments/x402/testing';
+import { createSqliteReceiptStore } from '../../../src/storage/receipts';
+import { startLossyRpc } from '../../fixtures/x402/lossy-rpc';
 import {
   assertBalanceDelta,
   expectRealSettlement,
   readBalances,
-} from '../../fixtures/x402/settlement.js';
+} from '../../fixtures/x402/settlement';
 
 const PORT = 18792;
 const RESOURCE_ID = 'market_report';
@@ -179,7 +175,7 @@ interface MutableCredential {
   payload: Record<string, unknown>;
 }
 
-// Re-serialises a genuine credential with one change and nothing re-signed
+// Re-serializes a genuine credential with one part changed and nothing re-signed
 function altered(credential: string, change: (copy: MutableCredential) => void): string {
   const copy = structuredClone(Credential.deserialize(credential)) as unknown as MutableCredential;
   change(copy);
@@ -278,7 +274,6 @@ describe('MPP settlement - real local chain', () => {
 
     const proof = await createPaymentProof({
       buyerPrivateKey: deployment.buyer.privateKey,
-      rpcUrl: anvil.rpcUrl,
       accepts: payment.accepts[0] as Record<string, unknown>,
     });
     const before = await balances();

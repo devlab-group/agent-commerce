@@ -1,13 +1,13 @@
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { isCommerceError } from '../../../src/core/errors/index.js';
+import { isCommerceError } from '../../../src/core/errors';
 import {
   type DiscoverOptions,
   type DiscoveryResult,
   discoverOperations,
   loadOpenApiDocument,
-} from '../../../src/openapi/index.js';
+} from '../../../src/openapi';
 
 const fixture = (name: string): string =>
   join(fileURLToPath(new URL('./fixtures/', import.meta.url)), name);
@@ -20,14 +20,14 @@ const codes = (result: DiscoveryResult): string[] => result.diagnostics.map((d) 
 const ids = (result: DiscoveryResult): string[] => result.operations.map((o) => o.resourceId);
 
 describe('discoverOperations', () => {
-  it('uses operationId, falls back to method_path, and normalises both', async () => {
+  it('uses operationId, falls back to method_path, and normalizes both', async () => {
     const result = await discover('petstore-3.0.yaml');
     expect(ids(result)).toEqual(['listPets', 'post_pets', 'getPet']);
   });
 
-  it('normalises an operationId that is not a legal resource id', async () => {
+  it('normalizes an operationId that is not a legal resource id', async () => {
     const result = await discover('minimal-3.1.json');
-    // "list things!" - the space and "!" are not in the id character set.
+    // "list things!" - the space and "!" are not in the id character set
     expect(ids(result)).toEqual(['list_things']);
   });
 
@@ -124,7 +124,7 @@ describe('discoverOperations', () => {
 
   it('rejects a --base-url carrying a query string or fragment', async () => {
     // Concatenation puts the operation path AFTER the query, so the resulting
-    // URL parses and calls the wrong endpoint.
+    // URL parses and calls the wrong endpoint
     await expect(
       discover('petstore-3.0.yaml', { baseUrl: 'https://api.example.com/v1?apikey=SECRET' }),
     ).rejects.toThrowError();

@@ -1,13 +1,13 @@
 /**
  * The definition of done for SDK conformance: the official client discovers
- * the gateway from its card and invokes a free resource end to end —
- * ClientFactory → card → JSONRPC transport → SendMessage → gateway → adapter →
- * pipeline → merchant fixture → terminal Task with an Artifact.
+ * the gateway from its card and invokes a free resource end to end, from
+ * ClientFactory through card, JSONRPC transport, SendMessage, gateway, adapter,
+ * pipeline and merchant fixture to a terminal Task with an Artifact
  */
 import { Role, type SendMessageRequest, TaskState } from '@a2a-js/sdk';
 import { ClientFactory } from '@a2a-js/sdk/client';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { MERCHANT_BODY, type RunningGateway, startConformanceGateway } from './support/gateway.js';
+import { MERCHANT_BODY, type RunningGateway, startConformanceGateway } from './support/gateway';
 
 let running: RunningGateway;
 
@@ -19,14 +19,14 @@ afterAll(async () => {
   await running?.close();
 });
 
-/** The SDK's own factory: card discovery and transport selection are its job, not ours. */
+// The SDK's own factory: card discovery and transport selection are its job, not ours
 async function client() {
   return new ClientFactory().createFromUrl(running.url);
 }
 
 /**
- * A `SendMessageRequest` in the SDK's own internal representation — the client
- * serialises it, so the wire bytes are the SDK's, not this test's.
+ * A `SendMessageRequest` in the SDK's own representation; the client serializes
+ * it, so the wire bytes are the SDK's, not this test's
  */
 function invocation(resource: string, input: Record<string, unknown>): SendMessageRequest {
   return {
@@ -59,7 +59,7 @@ describe('free resource, invoked by the official SDK client', () => {
       invocation('weather_basic', { city: 'Berlin' }),
     );
 
-    // SendMessageResult is Task | Message; a resource execution is a Task.
+    // SendMessageResult is Task | Message; a resource execution is a Task
     expect('status' in result).toBe(true);
     if (!('status' in result)) return;
 

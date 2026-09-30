@@ -1,16 +1,13 @@
-/**
- * Exercises an MPP-only config through the same provider builder used by
- * `main.ts`, from parsing to a running gateway
- */
+// An MPP-only config through `createConfiguredPaymentProviders`, from parsing to a running gateway
 import { Challenge } from 'mppx';
 import { afterEach, describe, expect, it } from 'vitest';
-import { parseConfig } from '../../src/config/schema.js';
-import type { BackendExecutor } from '../../src/core/index.js';
-import { createGateway, type GatewayInstance } from '../../src/gateway/index.js';
-import { createConfiguredPaymentProviders } from '../../src/gateway/payment-providers.js';
-import { validRawConfig } from '../unit/config/fixtures.js';
-import { NOOP_TEST_LOGGER } from '../unit/core/execution/helpers.js';
-import { createFakeStore } from '../unit/gateway/helpers.js';
+import { parseConfig } from '../../src/config/schema';
+import type { BackendExecutor } from '../../src/core';
+import { createGateway, type GatewayInstance } from '../../src/gateway';
+import { createConfiguredPaymentProviders } from '../../src/gateway/payment-providers';
+import { validRawConfig } from '../unit/config/fixtures';
+import { NOOP_TEST_LOGGER } from '../unit/core/execution/helpers';
+import { createFakeStore } from '../unit/gateway/helpers';
 
 process.env['NODE_ENV'] = 'test';
 

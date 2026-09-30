@@ -4,12 +4,13 @@
  * The route table is closed: anything else under the mount is a 404, so a
  * client cannot discover an unimplemented ACP service by probing paths.
  */
-import type { AcpCheckoutOperation } from './constants.js';
+import type { AcpCheckoutOperation } from './constants';
 
-/** Longest accepted `checkout_session_id`. Merchant ids are short; this bounds what a caller can send. */
+// Longest raw path segment accepted before decoding, which also bounds
+// `checkout_session_id`
 const MAX_SESSION_ID_LENGTH = 128;
 
-/** ACP session ids are opaque, but they are path segments and go into canonical input. */
+// ACP session ids are opaque, but they are path segments and go into canonical input
 const SESSION_ID_PATTERN = /^[A-Za-z0-9._~-]{1,128}$/;
 
 const COLLECTION = 'checkout_sessions';
@@ -20,12 +21,12 @@ export interface AcpRouteMatch {
    * The concrete endpoint path, rebuilt from the matched segments rather than
    * taken from the raw URL: it scopes idempotency keys, so it must be one
    * canonical string per endpoint and never carry a query string or an
-   * alternative encoding of the same path.
+   * alternative encoding of the same path
    */
   readonly path: string;
-  /** Absent only for `createCheckoutSession`. */
+  /** Absent only for `createCheckoutSession` */
   readonly sessionId?: string;
-  /** POST routes carry an ACP request document; the GET route carries none. */
+  /** POST routes carry an ACP request document; the GET route carries none */
   readonly acceptsBody: boolean;
 }
 
@@ -136,7 +137,7 @@ function routeSegments(url: string | undefined, mountPath: string): readonly str
     try {
       segments.push(decodeURIComponent(raw));
     } catch {
-      // A malformed escape is not a route this adapter serves.
+      // A malformed escape is not a route this adapter serves
       return undefined;
     }
   }

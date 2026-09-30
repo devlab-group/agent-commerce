@@ -1,34 +1,29 @@
 /**
  * MPP on Base Sepolia: an mppx buyer paying through the gateway, settled by a
- * hosted x402 facilitator on the public chain.
+ * hosted x402 facilitator.
  *
- * Like `base-sepolia.smoke.test.ts`, it spends real testnet USDC, is never part
- * of `npm test` or `npm run test:e2e`, and runs only through
- * `npm run test:testnet` on the machine that holds the wallet. It reuses that
- * suite's `X402_TESTNET_*` variables, because MPP settles through the same
- * facilitator, and skips itself, naming what is missing, without them.
- *
- * The proof is on-chain balances and a transaction receipt read back from the
- * network, never the gateway's own report of success.
+ * It runs under the same rules as `base-sepolia.smoke.test.ts` and reuses its
+ * `X402_TESTNET_*` variables, because MPP settles through the same
+ * facilitator. Without them it skips and names what is missing.
  */
 import { randomBytes } from 'node:crypto';
 import { Challenge, Credential, Receipt } from 'mppx';
 import { charge as clientCharge } from 'mppx/evm/client';
 import { privateKeyToAccount } from 'viem/accounts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { parseConfig } from '../../src/config/index.js';
-import { NOOP_LOGGER, type ReceiptStore } from '../../src/core/index.js';
-import { createGateway, type GatewayInstance } from '../../src/gateway/index.js';
-import { createConfiguredPaymentProviders } from '../../src/gateway/payment-providers.js';
-import { parseCanonicalAmount } from '../../src/payments/x402/amount.js';
-import { createSqliteReceiptStore } from '../../src/storage/receipts/index.js';
+import { parseConfig } from '../../src/config';
+import { NOOP_LOGGER, type ReceiptStore } from '../../src/core';
+import { createGateway, type GatewayInstance } from '../../src/gateway';
+import { createConfiguredPaymentProviders } from '../../src/gateway/payment-providers';
+import { parseCanonicalAmount } from '../../src/payments/x402/amount';
+import { createSqliteReceiptStore } from '../../src/storage/receipts';
 import {
   assertBalanceDelta,
   assertTransactionSucceeded,
   type BalanceSnapshot,
   readBalances,
   waitForBalances,
-} from '../fixtures/x402/settlement.js';
+} from '../fixtures/x402/settlement';
 
 const BUYER_KEY = process.env['X402_TESTNET_BUYER_PRIVATE_KEY'];
 const MERCHANT = process.env['X402_TESTNET_MERCHANT_ADDRESS'];
@@ -51,7 +46,7 @@ const missing = [
 ].filter((name): name is string => name !== undefined);
 
 // The config an operator would write, parsed by the real loader. The challenge
-// secret is random per run and never leaves this process
+// secret is random per run and never leaves this process.
 function testnetConfig(): Record<string, unknown> {
   return {
     version: 1,
@@ -101,7 +96,6 @@ function balances(): Promise<BalanceSnapshot> {
 const describeOrSkip = missing.length === 0 ? describe : describe.skip;
 
 if (missing.length > 0) {
-  // eslint-disable-next-line no-console
   console.log(
     `[testnet] MPP smoke skipped - set ${missing.join(' and ')} to run it. ` +
       'It spends real testnet USDC from a dedicated wallet.',
@@ -200,7 +194,6 @@ describeOrSkip('MPP on Base Sepolia - real settlement through a remote facilitat
     assertBalanceDelta(before, after, amountBaseUnits);
     await assertTransactionSucceeded(RPC_URL, receipt.reference);
 
-    // eslint-disable-next-line no-console
     console.log(
       `[testnet] MPP settled ${amountBaseUnits} base units to ${MERCHANT} - ` +
         `https://sepolia.basescan.org/tx/${receipt.reference}`,

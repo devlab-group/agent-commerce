@@ -1,9 +1,9 @@
 /**
- * Deterministic premium market report — the PAID resource in the demo. The
- * gateway is what enforces payment before an agent ever reaches this route;
- * this backend just serves the payload deterministically once called.
+ * Deterministic premium market report, the paid resource in the demo. The
+ * gateway enforces payment before a request reaches this route; the backend
+ * only serves the payload.
  */
-import { hashString } from './weather.js';
+import { hashString } from './weather';
 
 export interface MarketReportMetric {
   readonly label: string;
@@ -24,7 +24,7 @@ const REPORT_METRIC_LABELS = [
   'MCP Resource Adoption Rate',
 ] as const;
 
-/** Deterministic market report, as of `now`. Paid resource. */
+/** Deterministic market report, as of `now`. Paid resource */
 export function getMarketReport(now: Date): MarketReport {
   const metrics = REPORT_METRIC_LABELS.map((label, index) => {
     const hash = hashString(`${label}#${index}`);

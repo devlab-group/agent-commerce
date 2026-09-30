@@ -3,12 +3,11 @@
  *
  * Requests are the snapshot's own example documents, sent over a socket to a
  * real gateway; answers are the snapshot's own example responses, sent by a
- * real merchant server. What is asserted in between is the request that
- * actually reached the merchant - method, path and body - because the canonical
- * envelope reaching the backend correctly is the part no unit test can see.
+ * real merchant server. The assertions are on the request that reached the
+ * merchant (method, path and body), the part no unit test can see.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { validateAcpDocument } from '../../../src/protocols/acp/validation.js';
+import { validateAcpDocument } from '../../../src/protocols/acp/validation';
 import {
   ACP_EXAMPLES,
   ACP_OPERATIONS,
@@ -19,7 +18,7 @@ import {
   CREATE_REQUEST,
   startAcpStack,
   UPDATE_REQUEST,
-} from './support/gateway.js';
+} from './support/gateway';
 
 let stack: AcpStack;
 
@@ -97,7 +96,7 @@ describe('completeCheckoutSession', () => {
     expect((result.body['order'] as { id?: string }).id).toBeDefined();
   });
 
-  // The merchant's own purchase payment, on its way through as business input.
+  // The merchant's own purchase payment, passed through as business input
   it('delivers payment_data to the merchant unchanged', async () => {
     await acpFetch(stack, '/acp/checkout_sessions/cs_abc123/complete', { body: COMPLETE_REQUEST });
 

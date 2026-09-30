@@ -1,48 +1,46 @@
 /**
- * `@devlab.group/agent-commerce` — public API.
+ * `@devlab.group/agent-commerce` main entry: the library API. The other entry
+ * points are the `agent-commerce` CLI (`src/cli/index.ts`) and one subpath per
+ * optional peer set.
  *
- * The package ships one product with two entry points: this library surface and
- * the `agent-commerce` CLI (`src/cli/index.ts`). Everything else under `src/` is
- * an internal module, and the boundaries between those modules are enforced by
- * interfaces in `src/core`, not by package manifests.
+ * Each export is deliberate: exporting `*` from internal modules would make
+ * every refactor a breaking change. The only wildcard is the frozen contract,
+ * `src/core/public-types.ts`, guarded by `npm run check:contract`.
  *
- * This file is deliberately narrow. Exporting `*` from the internal modules
- * would make every refactor a breaking change for consumers, so each symbol
- * here is a decision. The canonical cross-module contract lives in
- * `src/core/public-types.ts` and is guarded by `npm run check:contract`.
- *
- * **The MCP adapter and the payment provider are not here.** They live at
- * `@devlab.group/agent-commerce/mcp` and `@devlab.group/agent-commerce/x402`, because each needs
- * an optional peer dependency the rest of the package does not. Keeping them
- * here would make `createGateway` drag the whole EVM signing and RPC stack into
- * every install, including one serving a single free HTTP resource. See
- * `src/mcp.ts` and `src/x402.ts`. Everything reachable from *this* entry point
- * needs only the package's own `dependencies`.
- *
- * The ACP adapter *is* here, for exactly that reason: it needs no peer, only
- * `ajv` and its own vendored schema, so a subpath for it would be a category
- * rather than a peer-dependency boundary. A subpath is the latter.
+ * Code needing an optional peer lives at a subpath instead: `./mcp` (MCP SDK),
+ * `./x402` (the EVM payment stack), `./mpp` (mppx plus that stack) and `./ap2`
+ * (JOSE and SD-JWT). Everything reachable from this entry needs only the
+ * package's own `dependencies`, so a gateway serving free HTTP resources
+ * installs no peer. The A2A and ACP adapters are here because they need no
+ * peer.
  */
 
-export type { GatewayConfig } from './config/index.js';
+export type { GatewayConfig } from './config';
 // --- configuration ---------------------------------------------------------
-export { loadConfig, parseConfig } from './config/index.js';
+export { loadConfig, parseConfig } from './config';
 // --- the canonical domain contract ----------------------------------------
-// Consumers implementing their own adapter or payment rail need these; they are
-// the same frozen surface every internal module codes against.
-export * from './core/public-types.js';
-export type { GatewayInstance, GatewayOptions } from './gateway/index.js';
+// For consumers implementing their own adapter or payment rail
+export * from './core/public-types';
+export type { GatewayInstance, GatewayOptions } from './gateway';
 // --- run a gateway ---------------------------------------------------------
-export { createGateway } from './gateway/index.js';
+export { createGateway } from './gateway';
+// --- the A2A adapter (experimental; no peer dependency) --------------------
+export type { A2aAdapterOptions } from './protocols/a2a';
+export {
+  A2A_AGENT_CARD_PATH,
+  A2A_PROTOCOL_VERSION,
+  A2A_SPEC_VERSION,
+  createA2aAdapter,
+} from './protocols/a2a';
 // --- the ACP checkout adapter (experimental; no peer dependency) ------------
-export type { AcpAdapterOptions } from './protocols/acp/index.js';
+export type { AcpAdapterOptions } from './protocols/acp';
 export {
   ACP_API_VERSION,
   ACP_SPEC_VERSION,
   ACP_WELL_KNOWN_PATH,
   createAcpAdapter,
-} from './protocols/acp/index.js';
+} from './protocols/acp';
 export {
   createSqliteReceiptStore as receipts,
   createSqliteReceiptStore,
-} from './storage/receipts/index.js';
+} from './storage/receipts';

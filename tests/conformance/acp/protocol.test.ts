@@ -6,8 +6,8 @@
  * the request through anyway is not a guard.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { ACP_SPEC_VERSION } from '../../../src/protocols/acp/constants.js';
-import { validateAcpDocument } from '../../../src/protocols/acp/validation.js';
+import { ACP_SPEC_VERSION } from '../../../src/protocols/acp/constants';
+import { validateAcpDocument } from '../../../src/protocols/acp/validation';
 import {
   ACP_TOKEN,
   type AcpStack,
@@ -15,7 +15,7 @@ import {
   acpHeaders,
   CREATE_REQUEST,
   startAcpStack,
-} from './support/gateway.js';
+} from './support/gateway';
 
 let stack: AcpStack;
 
@@ -159,7 +159,7 @@ describe('response headers', () => {
 
   it('drops a Request-Id that is not printable ASCII', async () => {
     // `fetch` refuses a literal CRLF outright (that case is covered by the
-    // unit tests); this is a value it will send and the adapter must not echo.
+    // unit tests); this is a value it will send and the adapter must not echo
     const result = await acpFetch(stack, '/acp/checkout_sessions', {
       headers: acpHeaders({ 'request-id': 'req-\u00e9' }),
       body: CREATE_REQUEST,

@@ -1,10 +1,8 @@
 /**
  * Idempotency on `completeCheckoutSession`, measured at the merchant.
  *
- * This is the case that matters: completion is the destructive one, and the
- * only assertion that proves anything is the merchant's call count. A gateway
- * that answers a retry correctly while placing a second order has failed, and
- * nothing but counting calls on the far side can tell.
+ * Completion places the order, so these tests count merchant calls: a gateway
+ * can answer a retry correctly and still place a second order.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
@@ -15,7 +13,7 @@ import {
   COMPLETE_REQUEST,
   CREATE_REQUEST,
   startAcpStack,
-} from './support/gateway.js';
+} from './support/gateway';
 
 let stack: AcpStack;
 
@@ -46,7 +44,7 @@ describe('completion replay', () => {
     expect(second.headers.get('idempotency-key')).toBe('idem-complete-1');
     expect(second.body).toEqual(first.body);
 
-    // The order was placed once.
+    // The order was placed once
     expect(stack.calls).toHaveLength(1);
   });
 
@@ -62,8 +60,8 @@ describe('completion replay', () => {
     expect(stack.calls).toHaveLength(1);
   });
 
-  // Same request, differently serialised: a retry through another JSON encoder
-  // is a retry, not a conflict.
+  // Same request, serialized differently: a retry through another JSON encoder
+  // is a retry, not a conflict
   it('treats a reordered body as the same request', async () => {
     const reordered = Object.fromEntries(Object.entries(COMPLETE_REQUEST).reverse());
     await complete('idem-complete-3');
@@ -75,8 +73,8 @@ describe('completion replay', () => {
   });
 
   it('answers 409 while the first request is still in flight', async () => {
-    // The merchant holds the first completion open; the duplicate arrives
-    // while the claim is live.
+    // The merchant holds the first completion open, so the duplicate arrives
+    // while the claim is live
     stack.nextReply({ status: 200, body: {}, delayMs: 300 });
     const inFlight = complete('idem-complete-4');
     await new Promise((resolve) => setTimeout(resolve, 50));
@@ -104,9 +102,8 @@ describe('completion replay', () => {
   });
 
   it('places one order when the merchant acts and the answer arrives too late', async () => {
-    // The reported case: the merchant records the order, then takes longer
-    // than our timeout to say so. "No answer" is not "no order", and the
-    // retry that follows must not place a second one.
+    // The merchant records the order, then answers after our timeout. A timeout
+    // does not mean no order was placed, so the retry must not place a second one.
     const slow = await startAcpStack({ backendTimeoutMs: 150 });
     try {
       slow.nextReply({
@@ -130,15 +127,15 @@ describe('completion replay', () => {
   it('gives the merchant one stable key for an operation, across retries', async () => {
     const headers = acpHeaders({ 'idempotency-key': 'idem-stable' });
     await acpFetch(stack, COMPLETE_PATH, { headers, body: COMPLETE_REQUEST });
-    // A second endpoint, same client key: a merchant keying state on the
-    // forwarded value must not see two operations as one.
+    // A second endpoint with the same client key: a merchant keying state on the
+    // forwarded value must not see two operations as one
     await acpFetch(stack, '/acp/checkout_sessions', { headers, body: CREATE_REQUEST });
 
     const [completed, created] = stack.calls;
     const forwarded = completed?.headers['idempotency-key'];
     expect(forwarded).toBeDefined();
-    // Never the caller's own key: it is client-supplied, and it is scoped by a
-    // digest of the bearer token that must not leave the process.
+    // Never the caller's own key, which names no operation on its own: the
+    // forwarded key is derived from the deployment, endpoint and client key
     expect(forwarded).not.toBe('idem-stable');
     expect(created?.headers['idempotency-key']).not.toBe(forwarded);
   });

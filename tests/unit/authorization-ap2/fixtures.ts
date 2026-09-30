@@ -15,8 +15,8 @@ import { exportJWK, generateKeyPair, SignJWT } from 'jose';
 import {
   AP2_CHECKOUT_MANDATE_VCT,
   AP2_CHECKOUT_PROFILE,
-} from '../../../src/authorization/ap2/constants.js';
-import type { Ap2TrustedIssuer } from '../../../src/authorization/ap2/types.js';
+} from '../../../src/authorization/ap2/constants';
+import type { Ap2TrustedIssuer } from '../../../src/authorization/ap2/types';
 
 export const MANDATE_ISSUER = 'https://trusted-surface.example';
 export const MANDATE_AUDIENCE = 'merchant.example';
@@ -80,7 +80,7 @@ export function disclosure(salt: string, name: string, value: unknown): string {
   return Buffer.from(JSON.stringify([salt, name, value]), 'utf8').toString('base64url');
 }
 
-/** The Agent Commerce checkout profile payload, as the plan specifies it */
+/** A merchant checkout JWT payload, with the Agent Commerce profile under `agent_commerce` */
 export function checkoutPayload(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     iss: CHECKOUT_ISSUER,

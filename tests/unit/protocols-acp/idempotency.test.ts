@@ -1,6 +1,6 @@
 /**
- * ACP checkout idempotency: the claim, the replay, and the two ways a key can
- * be refused.
+ * ACP checkout idempotency: the claim, the replay, and the ways a key can be
+ * refused.
  *
  * The store is exercised directly because that is where the semantics live -
  * atomic reservation, semantic fingerprints, retention - and once over the
@@ -10,18 +10,19 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
-import { describe, expect, it } from 'vitest';
-import { createAcpAdapter } from '../../../src/protocols/acp/adapter.js';
-import { ACP_SPEC_VERSION } from '../../../src/protocols/acp/constants.js';
+import { describe, expect, it, vi } from 'vitest';
+import { NOOP_LOGGER } from '../../../src/core/public-types';
+import { createAcpAdapter } from '../../../src/protocols/acp/adapter';
+import { ACP_SPEC_VERSION } from '../../../src/protocols/acp/constants';
 import {
   operationKey,
   requestFingerprint,
-} from '../../../src/protocols/acp/idempotency/fingerprint.js';
+} from '../../../src/protocols/acp/idempotency/fingerprint';
 import {
   type AcpIdempotencyScope,
   createAcpIdempotencyStore,
-} from '../../../src/protocols/acp/idempotency/store.js';
-import { adapterOptions, deliveredFor, setup } from './fixtures.js';
+} from '../../../src/protocols/acp/idempotency/store';
+import { adapterOptions, deliveredFor, setup } from './fixtures';
 
 const DEPLOYMENT = 'https://merchant.example.com';
 const SCOPE: AcpIdempotencyScope = {
@@ -66,9 +67,8 @@ describe('ACP idempotency store', () => {
     store.close();
   });
 
-  // A key reused for a different request is a conflict whether or not the
-  // first one has finished: reporting "in flight" would invite a retry that
-  // can only ever conflict.
+  // A key reused for a different body conflicts whether or not the first
+  // request has finished
   it.each([
     ['while the first is in flight', false],
     ['after the first has completed', true],
@@ -134,8 +134,8 @@ describe('ACP idempotency store', () => {
     store.claim(SCOPE, FINGERPRINT);
     store.markUnresolved(SCOPE);
 
-    // Sweeping this row would hand the next retry a clean key, which is the
-    // duplicate the state exists to prevent. Only a completed row expires.
+    // Only a completed row expires; sweeping this one would hand the next retry
+    // a clean key
     clock += 30 * 24 * 60 * 60 * 1000;
     expect(store.claim(SCOPE, FINGERPRINT)).toEqual({ kind: 'unresolved' });
     store.close();
@@ -157,12 +157,32 @@ describe('ACP idempotency store', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  it('marks a claim left in flight by an earlier process as unresolved on reopen', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'oac-acp-idem-'));
+    const path = join(dir, 'acp-idempotency.sqlite');
+    const warn = vi.fn();
+
+    const first = createAcpIdempotencyStore({ path, retentionHours: 24 });
+    expect(first.claim(SCOPE, FINGERPRINT)).toEqual({ kind: 'reserved' });
+    first.close();
+
+    const second = createAcpIdempotencyStore({
+      path,
+      retentionHours: 24,
+      logger: { ...NOOP_LOGGER, warn },
+    });
+    expect(second.claim(SCOPE, FINGERPRINT)).toEqual({ kind: 'unresolved' });
+    expect(warn).toHaveBeenCalledWith({ unresolved: 1 }, expect.stringContaining('in flight'));
+    second.close();
+
+    rmSync(dir, { recursive: true, force: true });
+  });
+
   it('discards a v1 database rather than carrying keys it cannot translate', () => {
     const dir = mkdtempSync(join(tmpdir(), 'oac-acp-v1-'));
     const path = join(dir, 'acp-idempotency.sqlite');
 
-    // A v1 file, keyed by the old bearer-token digest, with one claim that was
-    // deliberately being held.
+    // A v1 file, keyed by the bearer-token digest, holding one open claim
     const legacy = new Database(path);
     legacy.exec(`
       CREATE TABLE acp_idempotency (
@@ -185,8 +205,8 @@ describe('ACP idempotency store', () => {
     legacy.close();
 
     const store = createAcpIdempotencyStore({ path, retentionHours: 24 });
-    // The old key was a one-way digest of a credential, so nothing can be
-    // carried forward; the row is gone and the scope is the new one.
+    // A one-way digest of a credential cannot be carried forward: the row is
+    // gone and the scope is the new one
     expect(store.claim(SCOPE, FINGERPRINT)).toEqual({ kind: 'reserved' });
     store.close();
 
@@ -215,8 +235,8 @@ describe('ACP idempotency store', () => {
     expect(second.claim(SCOPE, FINGERPRINT)).toMatchObject({ kind: 'replay', status: 201 });
     second.close();
 
-    // The bearer token is not part of the scope at all any more, so nothing
-    // derived from it can reach the file either.
+    // The bearer token is not part of the scope, so nothing derived from it
+    // reaches the file
     const bytes = readFileSync(path).toString('binary');
     expect(bytes).not.toContain('acp-secret-token');
     expect(bytes).toContain(DEPLOYMENT);
@@ -227,8 +247,8 @@ describe('ACP idempotency store', () => {
 
 describe('ACP operation keys', () => {
   it('is the same value every time the same operation is presented', () => {
-    // What makes a retry recognisable to the merchant: the client key is the
-    // same, so the derived one is too, however many attempts it takes.
+    // The same client key derives the same operation key on every attempt, which
+    // is what lets the merchant recognize a retry
     expect(operationKey(SCOPE)).toBe(operationKey({ ...SCOPE }));
   });
 
@@ -243,8 +263,8 @@ describe('ACP operation keys', () => {
   it('discloses neither the caller key nor the deployment it is scoped by', () => {
     const derived = operationKey(SCOPE);
 
-    // It goes to the merchant, so it carries nothing back: the caller's key is
-    // client-supplied, and nothing about the gateway needs to travel with it.
+    // It goes to the merchant, so it is a digest that reveals neither the
+    // caller's key nor anything about the gateway
     expect(derived).not.toContain(SCOPE.key);
     expect(derived).not.toContain(DEPLOYMENT);
     expect(derived).toMatch(/^[0-9a-f]{64}$/);
@@ -338,7 +358,7 @@ describe('ACP idempotency over the adapter', () => {
     expect(first.headers['idempotent-replayed']).toBeUndefined();
     expect(second.status).toBe(201);
     expect(second.headers['idempotent-replayed']).toBe('true');
-    // The whole point: the merchant backend was called once, not twice.
+    // The merchant backend must be called once
     expect(execute).toHaveBeenCalledTimes(1);
     await adapter.stop();
   });
@@ -356,15 +376,13 @@ describe('ACP idempotency over the adapter', () => {
     await adapter.stop();
   });
 
-  // A transient 5xx must not poison the key for the whole retention window:
-  // the second attempt must get to run, not be told the first is in flight.
   it('keeps a claim across a bearer-token rotation', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'oac-acp-rotate-'));
     const path = join(dir, 'idem.sqlite');
     const idempotency = { path, retentionHours: 24 };
 
     // Two adapters over one database, same deployment, different credentials:
-    // the operator rotated the token between the ambiguous attempt and the retry.
+    // the operator rotated the token between the ambiguous attempt and the retry
     const before = createAcpAdapter(adapterOptions({ token: 'old-token', idempotency }));
     await before.start(setup(new Error('backend exploded')).context);
     const ambiguous = await post(before, 'idem-rotate', CREATE, 'old-token');
@@ -376,8 +394,8 @@ describe('ACP idempotency over the adapter', () => {
     await after.stop();
 
     expect(ambiguous.status).toBe(500);
-    // A credential must not be able to free a claim. Scoped by a digest of the
-    // token, the new one found no row, reserved afresh and re-ran the operation.
+    // A credential must not be able to free a claim: the rotated token still
+    // finds the unresolved row
     expect(retry.status).toBe(409);
     expect((retry.body as { code?: string }).code).toBe('idempotency_unresolved');
 
@@ -391,7 +409,7 @@ describe('ACP idempotency over the adapter', () => {
     await adapter.start(setup(new Error('backend exploded')).context);
 
     // A bare Error out of the pipeline says nothing about whether the merchant
-    // ran, so it is ambiguous and the second attempt must not re-run it.
+    // ran, so it is ambiguous and the second attempt must not re-run it
     const first = await post(adapter, 'idem-5xx', CREATE);
     const second = await post(adapter, 'idem-5xx', CREATE);
 
@@ -401,7 +419,7 @@ describe('ACP idempotency over the adapter', () => {
     expect(second.headers['idempotent-replayed']).toBeUndefined();
 
     // The claim survives as a row an operator can find, rather than vanishing
-    // and handing the next retry a clean key.
+    // and handing the next retry a clean key
     await adapter.stop();
     const db = new Database(path, { readonly: true });
     const rows = db.prepare('SELECT state FROM acp_idempotency').all() as { state: string }[];

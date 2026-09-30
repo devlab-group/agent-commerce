@@ -1,39 +1,38 @@
 /**
- * Composition root.
+ * Composition root: the one place concrete implementations meet. Everything
+ * else is dependency-injected and testable without this file (see
+ * `createGateway`).
  *
- * The one place where concrete implementations meet. Everything else in this
- * package is pure dependency injection and is fully testable without this file
- * (see `createGateway`).
- *
- * Startup order is deliberate:
- * 1. load and validate configuration — an invalid config must stop the
- * process before anything binds a port or opens a socket;
- * 2. open the receipt store — the replay guard is a security control, so a
+ * Startup order:
+ * 1. load and validate configuration, so an invalid config stops the process
+ * before anything binds a port or opens a socket;
+ * 2. open the receipt store: the replay guard is a security control, so a
  * store that will not open is fatal, not degraded;
- * 3. build payment providers — a paid resource with no working provider must
- * fail closed at request time, not be quietly downgraded to free;
- * 3b. build authorization providers — same reasoning, and the replay database
- * opens here, so a mandate store that will not open stops startup;
- * 4. build protocol adapters — these are isolated: one failing to start is
- * reported unhealthy and does not stop the others;
- * 5. listen, then print the effective settlement destination so an operator
- * or presenter can see where money actually goes.
+ * 3. build payment providers: a paid resource with no enabled provider stops
+ * startup, and a provider that fails at request time fails the request closed
+ * instead of serving it free;
+ * 3b. build authorization providers: the AP2 replay database opens here, so a
+ * mandate store that will not open stops startup;
+ * 4. build protocol adapters, isolated so one that fails to start is reported
+ * unhealthy and does not stop the others;
+ * 5. listen, then print the settlement destination so an operator can see
+ * where the money goes.
  */
-import type { Ap2AuthorizationProvider } from '../authorization/ap2/index.js';
-import { createAp2AuthorizationProvider } from '../authorization/ap2/index.js';
-import { loadConfig } from '../config/index.js';
-import type { ProtocolAdapter, ReceiptStore } from '../core/index.js';
-import { CommerceError, isCommerceError } from '../core/index.js';
-import { createA2aAdapter } from '../protocols/a2a/index.js';
-import { createAcpAdapter } from '../protocols/acp/index.js';
-import { createMcpAdapter } from '../protocols/mcp/index.js';
-import { createSqliteReceiptStore } from '../storage/receipts/index.js';
+import type { Ap2AuthorizationProvider } from '../authorization/ap2';
+import { createAp2AuthorizationProvider } from '../authorization/ap2';
+import { loadConfig } from '../config';
+import type { ProtocolAdapter, ReceiptStore } from '../core';
+import { CommerceError, isCommerceError } from '../core';
+import { createA2aAdapter } from '../protocols/a2a';
+import { createAcpAdapter } from '../protocols/acp';
+import { createMcpAdapter } from '../protocols/mcp';
+import { createSqliteReceiptStore } from '../storage/receipts';
 
-import { createGatewayLogger } from './logger.js';
-import { createConfiguredPaymentProviders } from './payment-providers.js';
-import { createGateway } from './server.js';
+import { createGatewayLogger } from './logger';
+import { createConfiguredPaymentProviders } from './payment-providers';
+import { createGateway } from './server';
 
-/** The host a presenter needs, without the credential a provider puts in the path. */
+// The host a presenter needs, without the credential a provider puts in the path
 function rpcOrigin(rpcUrl: string): string {
   try {
     return new URL(rpcUrl).origin;
@@ -55,17 +54,16 @@ async function main(): Promise<void> {
 
   const paymentProviders = createConfiguredPaymentProviders(config.payments, logger);
 
-  // Built only when enabled: the replay database is opened by the constructor,
-  // so a disabled AP2 block creates no file and holds no handle.
+  // Built only when enabled: the constructor opens the replay database, so a
+  // disabled AP2 block creates no file and holds no handle
   const authorizationProviders: Ap2AuthorizationProvider[] = [];
   const ap2 = config.authorization?.ap2;
   if (ap2?.enabled) {
     authorizationProviders.push(createAp2AuthorizationProvider({ config: ap2, logger }));
   }
 
-  // A paid resource with no provider is a configuration error we can catch now
-  // rather than discovering it on the first purchase attempt. Config validation
-  // already rejects this, so reaching here means the two drifted apart.
+  // Config validation already rejects a paid resource with no enabled rail;
+  // this catches the two drifting apart before the first purchase attempt
   const paidWithoutProvider = config.resources.filter(
     (resource) =>
       resource.pricing.type !== 'free' &&
@@ -91,7 +89,7 @@ async function main(): Promise<void> {
       createA2aAdapter({
         mountPath: config.protocols.a2a.mountPath,
         // The Agent Card names the merchant, not the software: a client
-        // picking between agents is choosing whose resources to buy.
+        // picking between agents is choosing whose resources to buy
         agentName: config.merchant.name,
       }),
     );
@@ -133,19 +131,14 @@ async function main(): Promise<void> {
     'gateway listening',
   );
 
-  // Printed, not just logged: a presenter must be able to see the settlement
-  // destination without reading JSON logs. Public values only — never the
-  // facilitator signer.
+  // Printed, not only logged, so a presenter sees the settlement destination
+  // without reading JSON logs. Public values only, never the facilitator signer.
   const { x402, mpp } = config.payments;
   if (x402?.enabled) {
     console.log('');
     console.log('  x402 settlement');
-    // Origin only, never the full URL. well-known.ts withholds rpcUrl entirely
-    // because Alchemy, Infura and QuickNode all put the API key in the path —
-    // and container stdout is routinely shipped to a log aggregator, where this
-    // line has no redaction (REDACT_PATHS covers pino's structured fields, not
-    // console.log). A presenter needs to see which network and which host, not
-    // the credential.
+    // Origin only: Alchemy, Infura and QuickNode put the API key in the URL,
+    // and REDACT_PATHS covers pino's structured fields, not console.log
     console.log(`    network      ${x402.network}  via ${rpcOrigin(x402.rpcUrl)}`);
     console.log(`    asset        ${x402.asset} (${x402.assetName} v${x402.assetVersion})`);
     console.log(`    pays to      ${x402.payTo}   <- merchant-controlled, not the gateway`);

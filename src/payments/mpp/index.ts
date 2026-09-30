@@ -1,5 +1,5 @@
-// Metadata only, with no peer imports, so the main entry and the CLI can read
-// it without `mppx`. The provider is exported from src/mpp.ts.
+// The rail's metadata, with no peer imports, so the main entry and the CLI
+// can load it without `mppx`. src/mpp.ts adds the provider.
 
 export {
   MPP_PROFILE,
@@ -8,5 +8,5 @@ export {
   MPP_SPEC_REPOSITORY,
   MPP_SUPPORTED_SPEC,
   MPPX_VERSION,
-} from './constants.js';
-export { MPP_DESCRIPTOR } from './descriptor.js';
+} from './constants';
+export { MPP_DESCRIPTOR } from './descriptor';

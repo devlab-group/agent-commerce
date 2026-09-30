@@ -1,13 +1,12 @@
 /**
- * Discovers which MCP tools are free vs paid, and synthesises call arguments
- * from a tool's JSON-Schema `inputSchema` — generic enough for any resource,
- * with one named-parameter special case ("city") matching this repo's own
- * demo config (config.example.yaml's `weather_basic` resource).
+ * Tells free MCP tools from paid ones and synthesizes call arguments from a
+ * tool's JSON Schema `inputSchema`. One parameter name gets a special value:
+ * "city", for the `weather_basic` resource in config-demo.yaml.
  */
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
-import { PAYMENT_INPUT_FIELD } from '../../../src/core/index.js';
+import { PAYMENT_INPUT_FIELD } from '../../../src/core';
 
-/** A tool is "paid" iff the gateway added the reserved `_payment` input property (tool-mapping.ts). */
+/** A tool is paid when the gateway added the reserved `_payment` input property */
 export function isPaidTool(tool: Tool): boolean {
   const properties = tool.inputSchema.properties as Record<string, unknown> | undefined;
   return properties !== undefined && Object.hasOwn(properties, PAYMENT_INPUT_FIELD);

@@ -1,10 +1,7 @@
-/**
- * Shared fakes for gateway tests. No dependency on any other area's
- * package (protocol-mcp, payment-x402, receipt-store) — everything here
- * implements the frozen core interfaces directly, as instructed.
- */
+// Shared fakes for gateway tests, implementing the core interfaces directly
+// rather than importing another area's implementation
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import type { GatewayConfig } from '../../../src/config/index.js';
+import type { GatewayConfig } from '../../../src/config';
 import type {
   AdapterDescriptor,
   AdapterHealth,
@@ -22,8 +19,8 @@ import type {
   ProtocolAdapter,
   ProtocolAdapterContext,
   ReceiptStore,
-} from '../../../src/core/index.js';
-import { CommerceError } from '../../../src/core/index.js';
+} from '../../../src/core';
+import { CommerceError } from '../../../src/core';
 
 const descriptor: AdapterDescriptor = {
   name: 'fake',
@@ -173,7 +170,7 @@ export function createFakePaymentProvider(
   };
 }
 
-/** A minimal, non-HTTP protocol adapter fake — started/stopped, never mounted. */
+/** A minimal non-HTTP protocol adapter fake: started and stopped, never mounted */
 export function createFakeProtocolAdapter(
   overrides: Partial<ProtocolAdapter> = {},
 ): ProtocolAdapter {
@@ -187,7 +184,7 @@ export function createFakeProtocolAdapter(
   };
 }
 
-/** An HTTP-mountable protocol adapter fake that echoes a fixed response. */
+/** An HTTP-mountable protocol adapter fake that echoes a fixed response */
 export function createFakeHttpAdapter(
   overrides: Partial<HttpProtocolAdapter> = {},
 ): HttpProtocolAdapter {

@@ -1,22 +1,21 @@
 /**
  * Wire validation against the vendored ACP checkout schema.
  *
- * ACP request and response bodies are far larger than the JSON-Schema subset
+ * ACP documents need far more of JSON Schema than the subset
  * `src/core/execution` validates canonical input with, so the pinned official
- * schema is compiled with Ajv rather than restated by hand: a hand-written
- * copy is a second definition of the protocol, and it drifts.
+ * schema is compiled with Ajv rather than restated by hand.
  *
- * The schema is *imported*, not read from disk. `dist/` collapses `src/**`
- * into two bundled files, so a relative `readFileSync` resolves from the wrong
- * depth once built - a failure this repository has shipped twice.
+ * The schema is imported, not read from disk: bundling collapses `src/**` into
+ * a few files under `dist/`, where a relative `readFileSync` resolves from the
+ * wrong depth.
  */
 
 import type { ErrorObject, ValidateFunction } from 'ajv';
 import Ajv2020 from 'ajv/dist/2020.js';
 import addFormats from 'ajv-formats';
-import { CommerceError } from '../../core/index.js';
+import { CommerceError } from '../../core';
 // The snapshot directory is part of the path on purpose: a new ACP version is
-// a new import beside this one, never an edit to the vendored file.
+// a new import beside this one, never an edit to the vendored file
 import schemaDocument from './spec/2026-04-17/schema.agentic_checkout.json' with { type: 'json' };
 
 /**
@@ -25,16 +24,17 @@ import schemaDocument from './spec/2026-04-17/schema.agentic_checkout.json' with
  * never reach a client; the adapter turns this into an ACP `Error`.
  */
 export interface AcpValidationFailure {
-  /** The JSON Schema keyword that failed - spec vocabulary, not an Ajv internal. */
+  /** The JSON Schema keyword that failed: spec vocabulary, not an Ajv internal */
   readonly code: string;
-  /** `$.buyer.email`-style pointer to the offending value. Omitted at the document root. */
+  /** `$.buyer.email`-style pointer to the offending value. Omitted at the document root */
   readonly path?: string;
 }
 
 /**
- * The released `$defs` this adapter validates against, by the role it uses
- * them in. Keys are ours; values are the exact names in the released snapshot,
- * and a typo in one is caught at first use rather than at first request.
+ * The released `$defs` this adapter validates against, keyed by the role it
+ * uses them in. Values are the exact snapshot names; all are compiled on first
+ * use, which the adapter's start-up discovery check triggers, so a typo fails
+ * the adapter at start rather than on a checkout request.
  */
 export const ACP_DEFINITIONS = {
   createRequest: 'CheckoutSessionCreateRequest',
@@ -51,21 +51,17 @@ export type AcpDefinition = keyof typeof ACP_DEFINITIONS;
 
 let validators: ReadonlyMap<AcpDefinition, ValidateFunction> | undefined;
 
-/**
- * Compiled once for the process, on first use rather than at import: a gateway
- * with ACP disabled never pays for it, and the cost is the same either way for
- * one that has it on.
- */
+// Compiled once per process, on first use rather than at import, so a gateway
+// with ACP disabled never pays for it
 function acpValidators(): ReadonlyMap<AcpDefinition, ValidateFunction> {
   if (validators !== undefined) return validators;
 
   const ajv = new Ajv2020({
-    // The vendored document is the released spec: annotations we do not know
-    // are the spec's business, not a reason to refuse to start.
+    // The vendored document is the released spec; unknown annotations in it
+    // are no reason to refuse to start
     strict: false,
-    // One failure is all that leaves the adapter, and collecting every error
-    // in a deeply nested cart is work an unauthenticated caller could ask for
-    // repeatedly.
+    // Only one failure leaves the adapter, and collecting every error in a
+    // deeply nested cart is work a caller could request repeatedly
     allErrors: false,
   });
   addFormats(ajv);
@@ -92,14 +88,11 @@ function acpValidators(): ReadonlyMap<AcpDefinition, ValidateFunction> {
 }
 
 /**
- * Drops the `enum` constraint from the few fields the snapshot itself marks as
- * extensible ("servers SHOULD accept unrecognized values and treat them as
- * 'other'", and "validators SHOULD be configured for lenient enum handling").
- *
- * Only fields carrying that wording are relaxed. The enums ACP calls closed
- * per API version stay closed - the point is not to be permissive, it is to
- * avoid refusing, say, a cancel because of an analytics reason code the buyer's
- * agent knows about and this snapshot does not.
+ * Drops the `enum` constraint from the fields whose description says the enum
+ * is extensible ("servers SHOULD accept unrecognized values and treat them as
+ * 'other'"). Enums ACP calls closed per API version stay closed; this only
+ * avoids refusing, say, a cancel over a reason code the buyer's agent knows
+ * and this snapshot does not.
  */
 function relaxExtensibleEnums(node: unknown): unknown {
   if (Array.isArray(node)) {
@@ -122,19 +115,16 @@ function relaxExtensibleEnums(node: unknown): unknown {
 }
 
 /**
- * Validates one ACP document against a released definition.
- *
- * Returns `undefined` when the value conforms, otherwise the first failure.
- * Inbound, that failure becomes a 400 and no pipeline call happens; outbound,
- * it means the merchant backend returned something that is not ACP, and the
- * body must not be forwarded.
+ * Validates one ACP document against a released definition: `undefined` when
+ * it conforms, otherwise the first failure. Inbound, a failure is a 400 and no
+ * pipeline call; outbound, the merchant's body is not ACP and is not forwarded.
  */
 export function validateAcpDocument(
   definition: AcpDefinition,
   value: unknown,
 ): AcpValidationFailure | undefined {
   const validate = acpValidators().get(definition);
-  /* c8 ignore next -- unreachable: every AcpDefinition is compiled above. */
+  /* c8 ignore next -- unreachable: every AcpDefinition is compiled above */
   if (validate === undefined) return { code: 'unknown_definition' };
 
   if (validate(value)) return undefined;
@@ -146,10 +136,9 @@ export function validateAcpDocument(
 }
 
 /**
- * Ajv's JSON Pointer, rendered as the `$.a.b[0]` form ACP errors use in
- * `param`. `required` and `additionalProperties` failures report the parent
- * object, so the offending key is appended - the difference between telling a
- * client `$` and telling it `$.buyer.email`.
+ * Ajv's JSON Pointer, rewritten in the `$.a.b[0]` form ACP errors use in `param`.
+ * `required` and `additionalProperties` failures point at the parent object,
+ * so the offending key is appended: `$.buyer.email` rather than `$.buyer`.
  */
 function failurePath(error: ErrorObject): string | undefined {
   const segments = error.instancePath

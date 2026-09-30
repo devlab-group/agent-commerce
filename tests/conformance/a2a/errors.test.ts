@@ -3,11 +3,11 @@
  * cannot be made to send most of these, and using an SDK server helper to
  * generate the expected answers would test the SDK against itself.
  *
- * The rule under test is the split — a malformed or unsupported A2A request is
- * a JSON-RPC error; a commerce outcome never is.
+ * The rule under test: a malformed or unsupported A2A request is a JSON-RPC
+ * error, and a commerce outcome never is.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { type RunningGateway, startConformanceGateway } from './support/gateway.js';
+import { type RunningGateway, startConformanceGateway } from './support/gateway';
 
 let running: RunningGateway;
 
@@ -116,7 +116,7 @@ describe('invocation envelope refusals', () => {
     expect(body.error?.code).toBe(-32004);
   });
 
-  it('refuses task continuation, which it cannot honour', async () => {
+  it('refuses task continuation, which it cannot honor', async () => {
     const { body } = await post(
       sendMessage(message([{ data: { resource: 'weather_basic' } }], { taskId: 'task-1' })),
     );

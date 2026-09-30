@@ -4,22 +4,22 @@ import { charge as clientCharge } from 'mppx/evm/client';
 import type { LocalAccount } from 'viem';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createExecutionPipeline } from '../../../src/core/execution/pipeline.js';
-import { createResourceRegistry } from '../../../src/core/execution/registry.js';
 import {
   type Clock,
   type CommerceResource,
   isCommerceError,
   type PaymentProvider,
   type PaymentRequirement,
-} from '../../../src/core/index.js';
+} from '../../../src/core';
+import { createExecutionPipeline } from '../../../src/core/execution/pipeline';
+import { createResourceRegistry } from '../../../src/core/execution/registry';
 import {
   createMppPaymentProvider,
   createMppProviderWithSettlement,
   type MppProviderOptions,
-} from '../../../src/payments/mpp/provider.js';
-import { createX402PaymentProvider } from '../../../src/payments/x402/provider.js';
-import { computeReplayKey } from '../../../src/payments/x402/replay-key.js';
+} from '../../../src/payments/mpp/provider';
+import { createX402PaymentProvider } from '../../../src/payments/x402/provider';
+import { computeReplayKey } from '../../../src/payments/x402/replay-key';
 import {
   createCapturingLogger,
   createFakeBackendExecutor,
@@ -27,7 +27,7 @@ import {
   createFakeIdGenerator,
   createFakeStore,
   makeResource,
-} from '../core/execution/helpers.js';
+} from '../core/execution/helpers';
 
 // Keep the x402 provider real and replace only its HTTP facilitator client
 const facilitator = vi.hoisted(() => ({ verify: vi.fn(), settle: vi.fn() }));
@@ -198,7 +198,7 @@ async function signedCredential(
   );
 }
 
-// Re-serialises a genuine credential with one part changed and nothing re-signed
+// Re-serializes a genuine credential with one part changed and nothing re-signed
 function altered(
   serialized: string,
   change: (credential: {

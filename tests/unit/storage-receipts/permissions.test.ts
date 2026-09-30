@@ -1,17 +1,14 @@
 /**
- * The steady-state mode (0600 on the database and both sidecars) is asserted
- * in persistence.test.ts. It cannot prove *ordering*, though: a chmod after
- * `new Database` produces the same end state as pre-creating the file, while
- * leaving a window in which a local co-tenant can open the ledger read-only
- * and keep that descriptor across the chmod. Only a reading taken at the
- * moment SQLite first opens the file distinguishes the two, so this file wraps
- * the driver's constructor to take one.
+ * persistence.test.ts asserts the final 0600 mode, which cannot show ordering:
+ * a chmod after `new Database` ends in the same state as pre-creating the file
+ * but leaves a window for another local user to open it. This file wraps the
+ * driver's constructor to read the mode at the moment SQLite first opens it.
  */
 import { existsSync, mkdtempSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { createSqliteReceiptStore } from '../../../src/storage/receipts/index.js';
+import { createSqliteReceiptStore } from '../../../src/storage/receipts';
 
 const observed = vi.hoisted(() => ({ modes: [] as (number | null)[] }));
 
@@ -33,7 +30,7 @@ vi.mock('better-sqlite3', async (importOriginal) => {
 });
 
 describe('the ledger is never world-readable, not even briefly', () => {
-  // Skipped on platforms without POSIX modes rather than asserting nonsense.
+  // Skipped on platforms without POSIX modes
   const posix = process.platform !== 'win32';
 
   beforeEach(() => {
@@ -47,8 +44,7 @@ describe('the ledger is never world-readable, not even briefly', () => {
     const store = createSqliteReceiptStore({ path: dbPath });
     store.close();
 
-    // null would mean the file did not exist yet — i.e. SQLite created it
-    // itself, at `0666 & ~umask`.
+    // null would mean SQLite created the file itself, at 0644 less the umask
     expect(observed.modes).toEqual([0o600]);
     expect(statSync(dbPath).mode & 0o777).toBe(0o600);
     rmSync(dir, { recursive: true, force: true });

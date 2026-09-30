@@ -2,21 +2,21 @@
  * `agent-commerce import openapi <source>`.
  *
  * Generates reviewable resource drafts from a local OpenAPI description. It
- * does not merge them into gateway config or invent commerce policy. A caller
- * may deliberately target config.yaml with `--output` and `--force`.
+ * never merges them into gateway config or invents commerce policy;
+ * `--output config.yaml --force` replaces that file rather than merging.
  */
 import { existsSync } from 'node:fs';
 import { rename, rm, writeFile } from 'node:fs/promises';
 import { basename, extname, resolve } from 'node:path';
-import { PROTOCOL_NAMES } from '../../core/index.js';
+import { PROTOCOL_NAMES } from '../../core';
 import {
   buildResourceDrafts,
   type ImportPolicy,
   type ImportResult,
   loadOpenApiDocument,
   renderResourcesYaml,
-} from '../../openapi/index.js';
-import type { Io } from '../lib/io.js';
+} from '../../openapi';
+import type { Io } from '../lib/io';
 
 export interface ImportOpenApiOptions {
   readonly source: string;
@@ -36,7 +36,7 @@ export interface ImportOpenApiDeps {
   readonly writeFile?: (path: string, content: string) => Promise<void>;
 }
 
-/** The source file name without its extension, plus `.agent-commerce.yaml`, in the working directory */
+/** `<source name without extension>.agent-commerce.yaml`, in the working directory */
 export function defaultOutputPath(source: string): string {
   const name = basename(source);
   const stem = name.slice(0, name.length - extname(name).length) || name;
@@ -51,16 +51,14 @@ export async function runImportOpenApi(
   const fileExists = deps.fileExists ?? existsSync;
   const outputPath = options.output ?? defaultOutputPath(options.source);
 
-  let policy: ImportPolicy;
-  try {
-    policy = buildPolicy(options);
-  } catch (error) {
-    io.stderr(`FAIL  ${error instanceof Error ? error.message : String(error)}`);
+  const policy = buildPolicy(options);
+  if (typeof policy === 'string') {
+    io.stderr(`FAIL  ${policy}`);
     return 1;
   }
 
-  // Before doing any work: an existing file the operator did not ask to
-  // replace is a stop, not something to discover after the import ran.
+  // Checked before the import runs: an existing file the operator did not ask
+  // to replace is a stop
   if (fileExists(outputPath) && options.force !== true) {
     io.stderr(`FAIL  ${outputPath} already exists. Re-run with --force to overwrite.`);
     return 1;
@@ -101,7 +99,7 @@ export async function runImportOpenApi(
   }
 
   // Nothing is written when the run failed: a half-useful file that the next
-  // command silently picks up is worse than no file.
+  // command silently picks up is worse than no file
   const wrote = failures.length === 0;
   if (wrote) {
     try {
@@ -144,7 +142,8 @@ export async function runImportOpenApi(
   return failures.length === 0 ? 0 : 1;
 }
 
-function buildPolicy(options: ImportOpenApiOptions): ImportPolicy {
+// A usage error comes back as the message to print
+function buildPolicy(options: ImportOpenApiOptions): ImportPolicy | string {
   const policy: { pricing?: Record<string, unknown>; expose?: readonly string[] } = {};
   if (options.free === true) policy.pricing = { type: 'free' };
   if (options.expose !== undefined) {
@@ -153,13 +152,11 @@ function buildPolicy(options: ImportOpenApiOptions): ImportPolicy {
       .map((name) => name.trim())
       .filter((name) => name !== '');
     if (requested.length === 0) {
-      throw new Error(`--expose needs at least one protocol (${PROTOCOL_NAMES.join(', ')})`);
+      return `--expose needs at least one protocol (${PROTOCOL_NAMES.join(', ')})`;
     }
     for (const name of requested) {
       if (!PROTOCOL_NAMES.includes(name as (typeof PROTOCOL_NAMES)[number])) {
-        throw new Error(
-          `--expose "${name}" is not a supported protocol. Supported: ${PROTOCOL_NAMES.join(', ')}`,
-        );
+        return `--expose "${name}" is not a supported protocol. Supported: ${PROTOCOL_NAMES.join(', ')}`;
       }
     }
     policy.expose = requested;
@@ -177,7 +174,7 @@ async function writeAtomically(
     return;
   }
   // Temp sibling then rename: a crash or a full disk must not leave a
-  // half-written file where a complete one used to be.
+  // half-written file where a complete one used to be
   const target = resolve(outputPath);
   const temporary = `${target}.${process.pid}.tmp`;
   try {

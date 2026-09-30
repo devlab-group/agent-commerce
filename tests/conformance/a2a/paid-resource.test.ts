@@ -1,10 +1,9 @@
 /**
  * The paid flow, driven by the official SDK: challenge, pay, retry, delivery.
  *
- * The assertion that matters throughout is the merchant backend call count.
- * "Payment succeeded" in a response body proves nothing — a paywall works if
- * and only if the backend is not called before a valid proof and is called
- * exactly once after one.
+ * The assertion that matters throughout is the merchant backend call count:
+ * a paywall works only if the backend is not called before a valid proof and
+ * is called exactly once after one.
  *
  * Verification and settlement belong to the payment provider; every case below
  * is arranged so that the A2A adapter deciding anything about a proof would
@@ -13,13 +12,13 @@
 import { Role, type SendMessageRequest, TaskState } from '@a2a-js/sdk';
 import { type Client, ClientFactory } from '@a2a-js/sdk/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { PAYMENT_INPUT_FIELD } from '../../../src/core/index.js';
+import { PAYMENT_INPUT_FIELD } from '../../../src/core';
 import {
   MERCHANT_BODY,
   type RunningGateway,
   startConformanceGateway,
   VALID_PROOF,
-} from './support/gateway.js';
+} from './support/gateway';
 
 let running: RunningGateway;
 let client: Client;
@@ -58,7 +57,7 @@ function buy(input: Record<string, unknown>): SendMessageRequest {
   };
 }
 
-/** Narrows `Task | Message` and returns the single artifact payload. */
+// Narrows `Task | Message` and returns the single artifact payload
 async function send(input: Record<string, unknown>) {
   const result = await client.sendMessage(buy(input));
   if (!('status' in result)) throw new Error('expected a task, got a message');
@@ -74,7 +73,7 @@ describe('paid resource over A2A', () => {
     const { state, data } = await send({ symbol: 'ETH' });
 
     expect(state).toBe(TaskState.TASK_STATE_FAILED);
-    // The existing Agent Commerce envelope, not an A2A-specific schema.
+    // The existing Agent Commerce envelope, not an A2A-specific schema
     expect(data?.['status']).toBe('payment-required');
     expect(data?.['code']).toBe('PAYMENT_REQUIRED');
     expect(data?.['payment']).toMatchObject({
@@ -129,8 +128,8 @@ describe('paid resource over A2A', () => {
     await send({ symbol: 'ETH', [PAYMENT_INPUT_FIELD]: 'forged-proof' });
     expect(running.settleCalls()).toBe(0);
 
-    // …and a good proof afterwards still works: one bad attempt does not
-    // poison the resource.
+    // A good proof afterwards still works: one bad attempt does not poison the
+    // resource
     const delivery = await send({ symbol: 'ETH', [PAYMENT_INPUT_FIELD]: VALID_PROOF });
     expect(delivery.state).toBe(TaskState.TASK_STATE_COMPLETED);
     expect(running.backendCalls()).toBe(1);

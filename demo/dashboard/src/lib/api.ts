@@ -1,16 +1,14 @@
 /**
- * Thin, typed fetch wrappers over the gateway's read-only HTTP surface
- * (docs/contracts.md). This dashboard never writes anything.
+ * Typed fetch wrappers over the gateway's read-only HTTP routes
+ * (docs/contracts.md, "Gateway HTTP surface"). The dashboard never writes.
  */
-import { getAdminToken } from './config.js';
-import type { CommerceEvent, CommerceReceipt, PublicResource, WellKnownDocument } from './types.js';
+import { getAdminToken } from './config';
+import type { CommerceEvent, CommerceReceipt, PublicResource, WellKnownDocument } from './types';
 
 /**
- * Thrown for the operator ledger routes (receipts/events) when the gateway
- * rejects the request as unauthenticated. Kept
- * distinct from a generic HTTP error so the UI can show an actionable
- * message ("set VITE_ADMIN_TOKEN") instead of a bare status code, and so
- * the event-stream polling fallback can recognise it as non-transient.
+ * Thrown when the gateway answers 401. A distinct class lets the UI say "set
+ * VITE_ADMIN_TOKEN" instead of showing a bare status, and lets the event
+ * poller report it instead of ignoring it like a transient failure.
  */
 export class UnauthorizedError extends Error {
   constructor(url: string) {
@@ -22,7 +20,7 @@ export class UnauthorizedError extends Error {
   }
 }
 
-/** Operator/ledger routes gated behind the admin token (src/gateway/access-control.ts). */
+// Headers for the operator routes (src/gateway/access-control.ts)
 const ADMIN_AUTH_HEADERS: Record<string, string> = (() => {
   const token = getAdminToken();
   return token !== undefined ? { authorization: `Bearer ${token}` } : {};

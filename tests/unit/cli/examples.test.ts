@@ -1,15 +1,14 @@
 /**
- * `examples/**` are documentation the moment they stop validating — this
- * guards against silent drift (e.g. a config schema change in `core`) the
- * same way `init-config.test.ts` guards the CLI's own generated config.
- * Each example's own README documents the exact commands to run it for
- * real against the local demo stack; this only checks the shape.
+ * An example config that fails validation documents nothing. This catches
+ * examples left behind by a config schema change, as `init-config.test.ts`
+ * does for the CLI's generated config. Each example's README has the commands
+ * to run it; this checks only the shape.
  */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse as parseYaml } from 'yaml';
-import { parseConfig } from '../../../src/config/index.js';
+import { parseConfig } from '../../../src/config';
 
 const REPO_ROOT = join(import.meta.dirname, '../../..');
 const EXAMPLES_DIR = join(REPO_ROOT, 'examples');
@@ -17,11 +16,10 @@ const EXAMPLES_DIR = join(REPO_ROOT, 'examples');
 const EXAMPLES = ['simple-paid-api', 'free-and-premium', 'paid-mcp-tool', 'acp-checkout'] as const;
 
 /**
- * The public-network examples need an environment: on a real chain there is no
- * safe default for a merchant wallet — the only one available would be an Anvil
- * development address, which the guardrails refuse outside local mode. That
- * refusal is the feature, so these are validated with a wallet supplied rather
- * than dropped from the sweep.
+ * The public-network examples need an environment: on a real chain the only
+ * default merchant wallet would be an Anvil development address, which the
+ * guardrails refuse outside local mode. So these are validated with a wallet
+ * supplied rather than dropped from the sweep.
  */
 const PUBLIC_EXAMPLES = ['base-sepolia', 'base-mainnet', 'base-mainnet-payai'] as const;
 
@@ -29,7 +27,7 @@ const PUBLIC_ENV = {
   MERCHANT_WALLET: '0x1111111111111111111111111111111111111111',
   ALLOW_X402_MAINNET: 'true',
   GATEWAY_PUBLIC_BASE_URL: 'https://gateway.example.com',
-  GATEWAY_ADMIN_TOKEN: 'admin-token',
+  ADMIN_TOKEN: 'admin-token',
   MERCHANT_API_BASE_URL: 'http://localhost:3000',
   X402_FACILITATOR_URL: 'https://facilitator.example.com',
   CDP_API_KEY_ID: 'key-id',
@@ -49,11 +47,7 @@ describe('examples/**/config.yaml', () => {
     expect(config.payments.x402?.facilitator.mode).toBe('remote');
   });
 
-  /**
-   * The README's own YAML is documentation the moment it stops validating, and
-   * a setup snippet that fails on copy-paste is worse than none. It shipped
-   * once missing three required fields.
-   */
+  // A README setup snippet that fails on copy-paste is worse than none
   it("the README's public-network snippet parses as a real config", () => {
     const readme = readFileSync(join(REPO_ROOT, 'README.md'), 'utf8');
     const block = /```yaml\n(payments:\n[\s\S]*?)```/.exec(readme)?.[1];

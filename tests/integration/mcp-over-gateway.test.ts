@@ -1,15 +1,10 @@
 /**
- * Regression test for the CRITICAL content-type-parser bug: an MCP client
- * talks Streamable HTTP to a REAL `createGateway()` Fastify server with a
- * REAL `createMcpAdapter()` mounted — unlike tests/conformance/mcp, which
- * drives the adapter over a bare node:http server and never exercises
- * Fastify's body parsing at all. That gap is exactly why the bug shipped
- * with 400+ green tests elsewhere.
+ * An MCP client talking Streamable HTTP to a real `createGateway()` Fastify
+ * server with a real `createMcpAdapter()` mounted. tests/conformance/mcp
+ * drives the adapter over a bare node:http server and never reaches Fastify's
+ * body parsing, which must leave the request body for the adapter to read.
  *
- * Fakes: ReceiptStore and BackendExecutor only (per, core's tests
- * don't depend on other areas' internals) — the MCP adapter itself is the
- * real src/protocols/mcp package, and requests traverse the
- * real Fastify instance.
+ * Fakes: ReceiptStore and BackendExecutor only.
  */
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
@@ -23,9 +18,9 @@ import type {
   IdGenerator,
   PaymentAttempt,
   ReceiptStore,
-} from '../../src/core/index.js';
-import { createGateway, type GatewayInstance } from '../../src/gateway/index.js';
-import { createMcpAdapter } from '../../src/protocols/mcp/index.js';
+} from '../../src/core';
+import { createGateway, type GatewayInstance } from '../../src/gateway';
+import { createMcpAdapter } from '../../src/protocols/mcp';
 
 process.env['NODE_ENV'] = 'test';
 

@@ -8,9 +8,7 @@ export default defineConfig({
       'tests/unit/**/*.test.ts',
       'tests/integration/**/*.test.ts',
       'tests/conformance/**/*.test.ts',
-      // The demos keep their tests next to their code. The single-package
-      // refactor moved `apps/*/test/**` to `demo/*/test/**` and this line was
-      // missed for one commit, silently dropping ten files from the run.
+      // The demos keep their tests next to their code
       'demo/*/test/**/*.test.ts',
     ],
     exclude: ['**/node_modules/**', '**/dist/**', 'tests/e2e/**'],

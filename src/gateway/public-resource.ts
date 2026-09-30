@@ -1,11 +1,10 @@
 /**
- * Public (secret-free) projection of a `CommerceResource`.
- *
- * `handler.headers` may carry resolved backend secrets (e.g. an
- * `Authorization` value built from `${API_KEY}`) — never expose it on a
- * public discovery surface (`GET /api/resources`, `.well-known`).
+ * Secret-free projection of a `CommerceResource`, served by the public
+ * `GET /api/resources`. `handler.headers` may carry resolved backend secrets,
+ * such as an `Authorization` value built from `${API_KEY}`, so no handler
+ * field except the method is copied.
  */
-import type { CommerceResource } from '../core/index.js';
+import type { CommerceResource } from '../core';
 
 export interface PublicResource {
   readonly id: string;

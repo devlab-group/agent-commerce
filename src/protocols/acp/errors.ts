@@ -1,28 +1,26 @@
 /**
- * The ACP `Error` object, and the one writer every ACP response goes through.
- *
- * Centralised so no handler can invent its own error shape, and so the rule
- * that nothing internal reaches a client - no stack, no backend body, no Ajv
- * message, no token, no path - is enforced in one place instead of at a dozen
- * call sites.
+ * The ACP `Error` object and the one writer every ACP response goes through,
+ * so no handler invents its own error shape. Every error message is written by
+ * the gateway: no stack, backend body, Ajv message, token or internal path
+ * reaches a client.
  */
 import type { ServerResponse } from 'node:http';
-import { ACP_JSON_MEDIA_TYPE } from './constants.js';
+import { ACP_JSON_MEDIA_TYPE } from './constants';
 
-/** The three categories the pinned snapshot allows. */
+/** The three categories the pinned snapshot allows */
 export type AcpErrorType = 'invalid_request' | 'processing_error' | 'service_unavailable';
 
 export interface AcpError {
   readonly type: AcpErrorType;
   readonly code: string;
   readonly message: string;
-  /** RFC 9535 JSONPath into the *caller's* document, never into ours. */
+  /** RFC 9535 JSONPath into the caller's document, never into ours */
   readonly param?: string;
-  /** Only on version errors, per the snapshot. */
+  /** Only on version errors, per the snapshot */
   readonly supported_versions?: readonly string[];
 }
 
-/** An ACP error plus the status it is served with. */
+/** An ACP error plus the status it is served with */
 export interface AcpFailure {
   readonly status: number;
   readonly error: AcpError;
@@ -50,9 +48,9 @@ export function acpFailure(
 }
 
 /**
- * Response headers the adapter is allowed to set. Merchant backend headers are
- * never proxied - a `Set-Cookie` or a tracing header from a backend belongs to
- * the merchant's own domain, not to the ACP client.
+ * Response headers the adapter may set. Merchant backend headers are never
+ * proxied: a backend's `Set-Cookie` or tracing header belongs to the
+ * merchant's domain, not to the ACP client.
  */
 export type AcpResponseHeaders = Readonly<Record<string, string>>;
 

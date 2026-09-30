@@ -1,16 +1,11 @@
 /**
- * The CDP auth type, and what happens when its optional peer is absent.
- *
- * `@coinbase/x402` is imported dynamically so that the majority — who use a
- * facilitator needing no credential at all — never install the CDP SDK and its
- * Solana/axios/JOSE tree. That laziness has a failure mode worth pinning: a
- * missing peer must be a *configuration* failure visible before anyone pays,
- * never an exception inside verify() with a buyer's authorisation already
- * spent.
+ * The CDP auth type, and what happens when its optional peer is absent. A
+ * missing `@coinbase/x402` must not throw at construction. It must surface as
+ * a CONFIG_INVALID that the health check can report before anyone pays.
  *
  * `vi.doMock` + `vi.resetModules` rather than a hoisted `vi.mock`: the two
- * cases below need the same specifier to resolve differently, which a single
- * hoisted factory cannot express.
+ * cases need the same specifier to resolve differently, which one hoisted
+ * factory cannot express.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -22,7 +17,7 @@ interface CapturedConfig {
   createAuthHeaders?: () => Promise<Record<string, Record<string, string>>>;
 }
 
-/** Captures what the binding hands to the SDK's HTTP client. */
+// Captures what the binding hands to the SDK's HTTP client
 function mockHttpClient(captured: CapturedConfig[]): void {
   vi.doMock('@x402/core/http', () => ({
     FacilitatorResponseError: class extends Error {},
@@ -50,9 +45,7 @@ async function buildBinding(auth: {
 }): Promise<CapturedConfig> {
   const captured: CapturedConfig[] = [];
   mockHttpClient(captured);
-  const { createRemoteFacilitatorBinding } = await import(
-    '../../../src/payments/x402/facilitator.js'
-  );
+  const { createRemoteFacilitatorBinding } = await import('../../../src/payments/x402/facilitator');
   createRemoteFacilitatorBinding({ url: FACILITATOR_URL, auth });
   const config = captured[0];
   if (!config) throw new Error('the binding built no HTTP client');
@@ -91,8 +84,8 @@ describe('facilitator auth: cdp', () => {
     expect(config.createAuthHeaders).toBeDefined();
 
     const headers = await config.createAuthHeaders?.();
-    // Per path, not flat: CDP signs over method + host + path, so one header
-    // for every route would be wrong even if the SDK accepted it.
+    // Per path, not flat: the JWT is signed over method, host and path, so one
+    // header for every route would be wrong even if the SDK accepted it
     expect(headers).toEqual({
       verify: { Authorization: 'Bearer jwt-verify' },
       settle: { Authorization: 'Bearer jwt-settle' },
@@ -112,13 +105,13 @@ describe('facilitator auth: cdp', () => {
       apiKeySecret: 'key-secret',
     });
 
-    // Construction itself must not throw — the provider is built
-    // synchronously, and the diagnosis belongs where it can be reported.
+    // Construction must not throw: the provider is built synchronously, and
+    // the diagnosis belongs where it can be reported
     expect(config.createAuthHeaders).toBeDefined();
-    // Imported here, not at the top of the file: `vi.resetModules()` gives the
-    // module under test a fresh graph, and a `CommerceError` from the outer
-    // graph is a different class — `instanceof` across the two is false.
-    const { isCommerceError } = await import('../../../src/core/index.js');
+    // Imported here, not at the top: `vi.resetModules()` gives the module under
+    // test a fresh graph, and `instanceof` against the outer graph's
+    // `CommerceError` would be false
+    const { isCommerceError } = await import('../../../src/core');
     await expect(config.createAuthHeaders?.()).rejects.toSatisfy(
       (err: unknown) =>
         isCommerceError(err) &&
@@ -133,13 +126,13 @@ describe('facilitator auth: cdp', () => {
     }));
     mockHttpClient([]);
     const { createRemoteFacilitatorBinding } = await import(
-      '../../../src/payments/x402/facilitator.js'
+      '../../../src/payments/x402/facilitator'
     );
     const binding = createRemoteFacilitatorBinding({
       url: FACILITATOR_URL,
       auth: { type: 'cdp', apiKeyId: 'key-id', apiKeySecret: 'super-secret' },
     });
-    // `describe` reaches logs, health details and doctor output.
+    // `describe` reaches logs, health details and doctor output
     expect(binding.describe).not.toContain('super-secret');
     expect(binding.describe).not.toContain('key-id');
     expect(binding.describe).toContain('auth=cdp');

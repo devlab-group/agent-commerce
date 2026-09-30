@@ -1,14 +1,14 @@
 /**
  * The ACP adapter against a spied `ExecutionPipeline`: one accepted checkout
  * request must produce exactly one canonical execution, carrying the mapped
- * resource and the deterministic envelope - and nothing the adapter invented.
+ * resource and the deterministic envelope - and nothing the adapter invented
  */
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { PAYMENT_INPUT_FIELD } from '../../../src/core/index.js';
-import { createAcpAdapter } from '../../../src/protocols/acp/adapter.js';
-import { ACP_SPEC_VERSION } from '../../../src/protocols/acp/constants.js';
+import { PAYMENT_INPUT_FIELD } from '../../../src/core';
+import { createAcpAdapter } from '../../../src/protocols/acp/adapter';
+import { ACP_SPEC_VERSION } from '../../../src/protocols/acp/constants';
 import {
   ACP_OPERATIONS,
   adapterOptions,
@@ -18,7 +18,7 @@ import {
   paymentRequired,
   setup,
   TOKEN,
-} from './fixtures.js';
+} from './fixtures';
 
 interface Sent {
   status: number;
@@ -151,7 +151,7 @@ describe('ACP checkout mapping', () => {
   });
 
   // Config refuses a paid checkout resource, so this can only be a broken
-  // deployment - and ACP has no way to express a gateway payment challenge.
+  // deployment - and ACP has no way to express a gateway payment challenge
   it('fails safely when the pipeline answers payment-required', async () => {
     const { context } = setup(paymentRequired);
     const result = await send(context, { url: `${MOUNT}/checkout_sessions`, body: CREATE_BODY });
@@ -182,7 +182,7 @@ describe('ACP adapter isolation', () => {
     for (const file of files) {
       const source = readFileSync(join(dir, file), 'utf8');
       // `import type { IncomingMessage }` is fine; a value import of a client
-      // is not.
+      // is not
       expect(source, `${file} must not import an HTTP client`).not.toMatch(
         /^import\s+(?!type)[^;]*from\s+'node:(http|https|net|tls)'/m,
       );

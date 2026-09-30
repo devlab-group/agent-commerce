@@ -1,12 +1,12 @@
 /**
  * Durable record of which mandates have been spent.
  *
- * Its own table in its own file: an x402 payment replay key expires with its
- * on-chain authorisation, while a consumed mandate must stay consumed for as
- * long as the merchant can be asked what they delivered. Hence no retention
- * sweep here, unlike the ACP idempotency store next door - deleting a
- * `consumed` row makes that mandate spendable again. If the table ever needs
- * bounding, archive `released` rows and leave the rest.
+ * Its own table in its own file: a payment replay key is needed only until its
+ * authorization's `validBefore`, after which it cannot settle, while a consumed
+ * mandate must stay consumed for as long as the merchant can be asked what they
+ * delivered. Hence no retention sweep, unlike the ACP idempotency store:
+ * deleting a `consumed` row makes that mandate spendable again. If the table
+ * ever needs bounding, archive `released` rows and leave the rest.
  *
  * Settlement and a local commit are not one transaction. If the process dies
  * between them the row stays `reserved` and that mandate is refused from then
@@ -14,8 +14,8 @@
  * payment.
  */
 import type { Database } from 'better-sqlite3';
-import { type Logger, NOOP_LOGGER } from '../../core/index.js';
-import { openSqliteDatabase } from '../../storage/sqlite.js';
+import { type Logger, NOOP_LOGGER } from '../../core';
+import { openSqliteDatabase } from '../../storage/sqlite';
 
 /**
  * `released` is "nothing happened" and the only state a mandate can be
@@ -25,7 +25,7 @@ import { openSqliteDatabase } from '../../storage/sqlite.js';
 export type Ap2AuthorizationState = 'reserved' | 'consumed' | 'released' | 'uncertain';
 
 /**
- * A digest and a few identifiers: everything replay defence needs, and nothing
+ * A digest and a few identifiers: everything replay defense needs, and nothing
  * a leaked database would hand an attacker
  */
 export interface Ap2ReservationRequest {

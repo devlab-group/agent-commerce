@@ -1,7 +1,6 @@
 /**
- * src/core
- *
- * Canonical commerce domain model, typed errors and the execution pipeline.
- * Contains no protocol- or payment-rail-specific code.
+ * Canonical commerce domain model, typed errors and injection interfaces. No
+ * x402, EVM, MCP or JSON-RPC type belongs in src/core; adapters map protocol
+ * shapes at their boundaries.
  */
-export * from './public-types.js';
+export * from './public-types';

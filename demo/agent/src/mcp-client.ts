@@ -7,7 +7,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import type { CallToolResult, Tool } from '@modelcontextprotocol/sdk/types.js';
 
-import { PACKAGE_VERSION } from '../../../src/version.js';
+import { PACKAGE_VERSION } from '../../../src/version';
 
 const CLIENT_NAME = 'agent-commerce-demo-agent';
 const CLIENT_VERSION = PACKAGE_VERSION;
@@ -18,17 +18,15 @@ export interface McpSession {
   close(): Promise<void>;
 }
 
-/** Connects an MCP client to `<gatewayUrl>/mcp` over Streamable HTTP. */
+/** Connects an MCP client to `<gatewayUrl>/mcp` over Streamable HTTP */
 export async function connectMcpSession(gatewayUrl: string): Promise<McpSession> {
   const client = new Client({ name: CLIENT_NAME, version: CLIENT_VERSION }, { capabilities: {} });
   const transport = new StreamableHTTPClientTransport(
     new URL(`${gatewayUrl.replace(/\/$/, '')}/mcp`),
   );
-  // StreamableHTTPClientTransport implements Transport per the SDK's own
-  // declaration; the cast works around its onclose/onerror accessors being
-  // typed `T | undefined` where Transport declares a bare optional T, which
-  // only conflicts under this project's exactOptionalPropertyTypes (mirrors
-  // the equivalent cast on the server side in protocol-mcp/src/adapter.ts).
+  // Bridges `onclose`/`onerror`, typed `T | undefined`, to Transport's bare
+  // optional `T` under exactOptionalPropertyTypes, as src/protocols/mcp/adapter.ts
+  // does server side
   await client.connect(transport as Transport);
 
   return {

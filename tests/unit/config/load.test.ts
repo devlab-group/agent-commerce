@@ -2,8 +2,8 @@ import { promises as fs } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { loadConfig } from '../../../src/config/load.js';
-import { isCommerceError } from '../../../src/core/index.js';
+import { loadConfig } from '../../../src/config/load';
+import { isCommerceError } from '../../../src/core';
 
 const VALID_YAML = `
 version: 1
@@ -197,13 +197,8 @@ describe('loadConfig', () => {
       '0xdeadbeefsecretkeymaterial',
     ],
   ])('%s does not reproduce the source line into the error', async (_label, yaml, secret) => {
-    // The `yaml` package builds its `message` with a code-frame excerpt of
-    // the offending source line. Interpolating it put inline secrets into
-    // `validate`/`doctor` output — `doctor --json` above all, which is what
-    // gets pasted into bug reports. The error is now built from `code` and
-    // `linePos`, which locate the fault just as precisely and cannot carry
-    // file content. Assert the position survives, so this cannot be
-    // "fixed" by degrading the diagnostic into uselessness.
+    // The `yaml` package's `message` quotes the offending line. The error must
+    // come from `code` and `linePos` instead, and still carry a position.
     const dir = await makeTmpDir();
     const file = path.join(dir, 'bad.yaml');
     await fs.writeFile(file, yaml, 'utf8');
@@ -217,7 +212,7 @@ describe('loadConfig', () => {
       expect(error.code).toBe('CONFIG_INVALID');
       expect(error.message).not.toContain(secret);
       expect(JSON.stringify(error.details)).not.toContain(secret);
-      // Still actionable: a code and a position.
+      // Still actionable: a code and a position
       expect(error.details?.['yamlErrorCode']).toBeDefined();
       expect(error.details?.['line']).toBeDefined();
     }

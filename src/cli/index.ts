@@ -1,15 +1,13 @@
 #!/usr/bin/env node
 import { CommanderError } from 'commander';
-import { buildProgram } from './program.js';
+import { buildProgram } from './program';
 
 /**
- * `agent-commerce version | grep -q x402` is an ordinary thing to type, and
- * `grep -q` exits on its first match — closing the pipe while the CLI is still
- * writing. Node's default for that is an unhandled `EPIPE` error event on the
- * socket, which aborts the process with a stack trace: a command that did
- * exactly what was asked, reported as a crash, and a red CI step.
- *
- * Exit quietly instead. Every other stream error still throws.
+ * `agent-commerce version | grep -q x402` closes the pipe on grep's first
+ * match while the CLI is still writing. Node reports that as an unhandled
+ * `EPIPE` error and aborts with a stack trace, so a command that did what was
+ * asked would read as a crash. Exit quietly on `EPIPE`; any other stream error
+ * still throws.
  */
 for (const stream of [process.stdout, process.stderr]) {
   stream.on('error', (err: NodeJS.ErrnoException) => {

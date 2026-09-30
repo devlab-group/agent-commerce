@@ -3,9 +3,9 @@ import {
   isCommerceError,
   type PaymentAttemptReservation,
   type ReceiptStore,
-} from '../../../src/core/index.js';
-import { createSqliteReceiptStore } from '../../../src/storage/receipts/index.js';
-import { createFakeClock, createFakeIds } from './helpers.js';
+} from '../../../src/core';
+import { createSqliteReceiptStore } from '../../../src/storage/receipts';
+import { createFakeClock, createFakeIds } from './helpers';
 
 function makeReservation(
   overrides: Partial<PaymentAttemptReservation> = {},
@@ -56,9 +56,9 @@ describe('reservePaymentAttempt', () => {
   });
 
   it('rejects a duplicate replayKey even when the second reservation targets a different request', async () => {
-    // PaymentResult.replayKey is derived only from the authorisation, never the
-    // request id, so the same authorisation replayed against a *different*
-    // request must still collide (docs/contracts.md assumption 3).
+    // The replay key comes from the authorization, never the request id, so
+    // the same authorization must collide across requests (docs/contracts.md,
+    // required invariant 3)
     await store.reservePaymentAttempt(
       makeReservation({ replayKey: 'cross-request', requestId: 'req_a' }),
     );
@@ -83,7 +83,7 @@ describe('reservePaymentAttempt', () => {
     const rejection = rejected[0] as PromiseRejectedResult;
     expect(isCommerceError(rejection.reason) && rejection.reason.code).toBe('PAYMENT_REPLAYED');
 
-    // Only one row should have actually been persisted.
+    // Only one row persisted
     const attempts = await store.listPaymentAttempts({ requestId: reservation.requestId });
     expect(attempts.filter((a) => a.replayKey === 'race')).toHaveLength(1);
   });
@@ -149,10 +149,9 @@ describe('updatePaymentAttempt', () => {
   });
 
   it('persists and returns the "settlement-uncertain" status with its transaction hash', async () => {
-    // A settle() that broadcasts but cannot confirm (RPC timeout) is a
-    // distinct terminal state from "failed". The store must
-    // round-trip it like any other status, with the broadcast tx hash
-    // carried as externalReference so an operator can resolve it later.
+    // Broadcast but unconfirmed (an RPC timeout, say) is its own unresolved
+    // state, not "failed". It round-trips with the broadcast tx hash in
+    // externalReference so an operator can resolve it later.
     const reservation = makeReservation({ replayKey: 'uncertain-flow' });
     await store.reservePaymentAttempt(reservation);
 
@@ -167,10 +166,8 @@ describe('updatePaymentAttempt', () => {
     expect(attempt?.externalReference).toBe('0xbroadcast_but_unconfirmed');
   });
 
-  // A naive UPDATE writes NULL for every omitted field, so a status-only
-  // update (no externalReference re-supplied) would erase a reference set by
-  // a prior update — exactly the field a settlement-uncertain attempt's tx
-  // hash lives in.
+  // A plain UPDATE would write NULL for every omitted field, erasing the tx
+  // hash of a settlement-uncertain attempt on the next status-only update
   it('preserves externalReference across a later update that omits it', async () => {
     const reservation = makeReservation({ replayKey: 'preserve-ref' });
     await store.reservePaymentAttempt(reservation);
@@ -183,8 +180,7 @@ describe('updatePaymentAttempt', () => {
     let [attempt] = await store.listPaymentAttempts({ requestId: reservation.requestId });
     expect(attempt?.externalReference).toBe('0xkeepme');
 
-    // A later update that only changes status, without re-supplying the
-    // reference, must not erase it.
+    // A status-only update keeps the reference
     await store.updatePaymentAttempt({ replayKey: 'preserve-ref', status: 'settled' });
     [attempt] = await store.listPaymentAttempts({ requestId: reservation.requestId });
     expect(attempt?.externalReference).toBe('0xkeepme');

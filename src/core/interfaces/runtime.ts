@@ -1,19 +1,15 @@
-/**
- * Injected runtime primitives.
- *
- * Everything non-deterministic (time, ids) is injected so tests can be exact.
- */
-import type { IsoTimestamp } from '../domain/common.js';
+// Time and ids are injected so tests can be deterministic
+import type { IsoTimestamp } from '../domain/common';
 
 export interface Clock {
   now(): Date;
   nowIso(): IsoTimestamp;
-  /** Milliseconds since an arbitrary origin; use for durations only. */
+  /** Milliseconds since an arbitrary origin; use for durations only */
   monotonicMs(): number;
 }
 
 export interface IdGenerator {
-  /** Opaque, collision-resistant identifier. */
+  /** Opaque, collision-resistant identifier */
   next(prefix?: string): string;
 }
 

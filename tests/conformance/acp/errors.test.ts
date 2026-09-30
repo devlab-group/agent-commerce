@@ -7,7 +7,7 @@
  * merchant's answer travels with it.
  */
 import { afterEach, describe, expect, it } from 'vitest';
-import { validateAcpDocument } from '../../../src/protocols/acp/validation.js';
+import { validateAcpDocument } from '../../../src/protocols/acp/validation';
 import {
   ACP_TOKEN,
   type AcpStack,
@@ -16,7 +16,7 @@ import {
   COMPLETE_REQUEST,
   CREATE_REQUEST,
   startAcpStack,
-} from './support/gateway.js';
+} from './support/gateway';
 
 let stack: AcpStack | undefined;
 
@@ -25,7 +25,7 @@ afterEach(async () => {
   stack = undefined;
 });
 
-/** Everything a merchant might put in a failure body that must never travel. */
+// Everything a merchant might put in a failure body that must never travel
 const LEAKY_BODY = {
   error: 'ECONNREFUSED postgres://checkout:hunter2@10.0.0.7:5432/orders',
   stack: 'at OrderService.create (/srv/merchant/src/orders.ts:88:11)',
@@ -41,7 +41,7 @@ function assertNothingLeaked(body: Record<string, unknown>): void {
   expect(serialized).not.toContain('cluster.local');
   expect(serialized).not.toContain(ACP_TOKEN);
   expect(serialized).not.toContain('acp_checkout_');
-  // The ACP Error object carries these three fields and nothing else.
+  // The ACP Error object carries these three fields and nothing else
   expect(Object.keys(body).sort()).toEqual(['code', 'message', 'type']);
 }
 
@@ -66,7 +66,7 @@ describe('merchant failures', () => {
     ['a 422', 422, 422, 'invalid_request_body'],
     ['a 500', 500, 502, 'processing_error'],
     ['a 503', 503, 502, 'processing_error'],
-    // Relaying this would tell the agent its own bearer token failed.
+    // Relaying this would tell the agent its own bearer token failed
     ['a 401', 401, 502, 'processing_error'],
   ])('maps %s to an ACP error that carries nothing of it', async (_label, from, to, code) => {
     const result = await createWith({ status: from, body: LEAKY_BODY });
@@ -96,8 +96,8 @@ describe('merchant failures', () => {
     assertNothingLeaked(result.body);
   });
 
-  // Renumbering it would publish a backend that has not implemented the
-  // operation as if it had.
+  // Relabeling the merchant's status as the one ACP expects would present a
+  // backend that has not implemented the operation as if it had
   it('refuses a merchant that succeeds on the wrong status', async () => {
     stack = await startAcpStack();
     stack.nextReply({ status: 200, body: {} });
@@ -145,9 +145,8 @@ describe('merchant failures', () => {
     });
 
     expect(failed.status).toBe(502);
-    // A merchant 500 is not proof the merchant did nothing: it may have
-    // recorded the order and failed afterwards. Re-running the completion
-    // would be the second one.
+    // A merchant 500 does not prove the merchant did nothing: it may have
+    // recorded the order and failed afterwards, so a re-run could order twice
     expect(retry.status).toBe(409);
     expect(retry.body['code']).toBe('idempotency_unresolved');
     // No Retry-After: waiting does not resolve this, the merchant's records do

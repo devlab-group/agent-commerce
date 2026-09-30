@@ -1,13 +1,12 @@
 /**
- * Regenerates `contracts/artifacts/MockUSDC.json` — the committed, slim
- * (ABI + bytecode only) artifact `loadMockUsdcArtifact()` falls back to when
- * `forge` isn't on PATH (e.g. the Docker `chain-deploy` step, which runs in
- * `node:22-bookworm-slim` with no Foundry). Requires Foundry on this host.
+ * Regenerates `contracts/artifacts/MockUSDC.json`, the committed ABI + bytecode
+ * that `loadMockUsdcArtifact()` falls back to without a fresh forge build, as
+ * in Docker's `chain-deploy` step. Requires Foundry.
  *
  * Run whenever `contracts/src/MockUSDC.sol` changes:
- * npx tsx scripts/chain/build-artifact.ts
+ *   npx tsx scripts/chain/build-artifact.ts
  */
-import { regenerateCommittedArtifact } from '../../src/payments/x402/local-chain/artifact.js';
+import { regenerateCommittedArtifact } from '../../src/payments/x402/local-chain/artifact';
 
 const artifact = regenerateCommittedArtifact();
 console.log(

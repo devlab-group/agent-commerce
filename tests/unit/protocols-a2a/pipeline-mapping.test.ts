@@ -1,10 +1,9 @@
 /**
  * The A2A adapter against a spied `ExecutionPipeline`: one accepted invocation
  * must produce exactly one canonical execution, carrying the resource id and
- * input the caller sent and nothing the adapter invented.
+ * input the caller sent and nothing the adapter invented
  */
 import { describe, expect, it, vi } from 'vitest';
-import { createResourceRegistry } from '../../../src/core/execution/index.js';
 import type {
   CanonicalRequest,
   Clock,
@@ -18,14 +17,11 @@ import type {
   Logger,
   ProtocolAdapterContext,
   ResourceRegistry,
-} from '../../../src/core/index.js';
-import {
-  CommerceError,
-  DELIVERY_SUMMARY_META_KEY,
-  PAYMENT_INPUT_FIELD,
-} from '../../../src/core/index.js';
-import { createA2aAdapter } from '../../../src/protocols/a2a/index.js';
-import type { A2aTask } from '../../../src/protocols/a2a/types.js';
+} from '../../../src/core';
+import { CommerceError, DELIVERY_SUMMARY_META_KEY, PAYMENT_INPUT_FIELD } from '../../../src/core';
+import { createResourceRegistry } from '../../../src/core/execution';
+import { createA2aAdapter } from '../../../src/protocols/a2a';
+import type { A2aTask } from '../../../src/protocols/a2a/types';
 
 const NOOP_LOGGER: Logger = {
   debug: () => {},
@@ -122,7 +118,7 @@ function setup(outcome: ExecutionOutcome | CommerceError = delivered) {
   return { execute, context };
 }
 
-/** The one canonical request the pipeline was handed. */
+// The one canonical request the pipeline was handed
 function firstRequest(execute: { mock: { calls: unknown[][] } }): CanonicalRequest {
   const request = execute.mock.calls[0]?.[0];
   if (request === undefined) throw new Error('pipeline was never called');
@@ -136,7 +132,7 @@ interface JsonRpcResponse {
   error?: { code: number; message: string };
 }
 
-/** The terminal task a commerce outcome comes back as. */
+// The terminal task a commerce outcome comes back as
 function task(response: JsonRpcResponse): A2aTask {
   const value = response.result?.task;
   if (value === undefined) {
@@ -145,7 +141,7 @@ function task(response: JsonRpcResponse): A2aTask {
   return value;
 }
 
-/** The single data payload inside the task's single artifact. */
+// The single data payload inside the task's single artifact
 function artifactData(response: JsonRpcResponse): Record<string, unknown> {
   const part = task(response).artifacts[0]?.parts[0];
   if (part === undefined) throw new Error('task carried no artifact part');
@@ -153,7 +149,7 @@ function artifactData(response: JsonRpcResponse): Record<string, unknown> {
   return part.data;
 }
 
-/** Drives the mount handler with a minimal fake req/res pair. */
+// Drives the mount handler with a minimal fake req/res pair
 async function send(
   adapter: ReturnType<typeof createA2aAdapter>,
   data: unknown,
@@ -231,7 +227,7 @@ describe('A2A SendMessage onto the execution pipeline', () => {
 
     const request = firstRequest(execute);
     expect(request.payment).toEqual({ method: 'x402', payload: 'base64-proof' });
-    // The proof never reaches the merchant backend as resource input.
+    // The proof never reaches the merchant backend as resource input
     expect(request.input).toEqual({ symbol: 'ETH' });
   });
 
@@ -336,7 +332,7 @@ describe('A2A adapter is not a client of anything', () => {
       const source = await readFile(new URL(file, dir), 'utf8');
       expect(source, `${file} must not call fetch`).not.toMatch(/\bfetch\s*\(/);
       // `import type { IncomingMessage }` is fine; a value import of a client
-      // is not.
+      // is not
       expect(source, `${file} must not import an HTTP client`).not.toMatch(
         /^import\s+(?!type)[^;]*from\s+'node:(http|https|net|tls)'/m,
       );
@@ -395,19 +391,19 @@ describe('A2A terminal task representation', () => {
     expect(artifactData(response)).toEqual(expected);
   });
 
-  it('sanitises an unexpected exception: nothing internal reaches the artifact', async () => {
+  it('sanitizes an unexpected exception: nothing internal reaches the artifact', async () => {
     const boom = new Error('connect ECONNREFUSED 10.0.0.5:5432 while reading /etc/secret.key');
     const { context } = setup(boom as unknown as CommerceError);
     const adapter = createA2aAdapter();
     await adapter.start(context);
 
     const response = await send(adapter, { resource: 'market_report', input: { symbol: 'ETH' } });
-    const serialised = JSON.stringify(response);
+    const serialized = JSON.stringify(response);
 
     expect(task(response).status.state).toBe('TASK_STATE_FAILED');
-    expect(serialised).not.toContain('ECONNREFUSED');
-    expect(serialised).not.toContain('10.0.0.5');
-    expect(serialised).not.toContain('/etc/secret.key');
+    expect(serialized).not.toContain('ECONNREFUSED');
+    expect(serialized).not.toContain('10.0.0.5');
+    expect(serialized).not.toContain('/etc/secret.key');
     expect(artifactData(response)['code']).toBe('INTERNAL_ERROR');
   });
 

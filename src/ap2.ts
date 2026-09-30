@@ -1,16 +1,13 @@
 /**
- * `@devlab.group/agent-commerce/ap2` - AP2 Direct Checkout Mandate verification.
+ * `@devlab.group/agent-commerce/ap2`: AP2 Direct Checkout Mandate verification.
+ * A separate entry point because it needs a JOSE stack and an SD-JWT parser,
+ * which a gateway with no authorization-gated resource should not install.
  *
- * A separate entry point because mandate verification brings a JOSE stack and
- * an SD-JWT parser, and a gateway serving no authorization-gated resource
- * should not install either.
+ *   npm install @devlab.group/agent-commerce jose @sd-jwt/core canonicalize
+ *   import { ap2 } from '@devlab.group/agent-commerce/ap2';
  *
- * npm install @devlab.group/agent-commerce jose @sd-jwt/core canonicalize
- * import { ap2 } from '@devlab.group/agent-commerce/ap2';
- *
- * Authorization is not a transport and not a payment rail. It gates settlement
- * on a resource that also takes a real payment proof, and never unlocks one on
- * its own.
+ * Authorization gates settlement on a resource that also takes a payment
+ * proof; on its own it never unlocks the resource.
  */
 
 export {
@@ -33,9 +30,9 @@ export {
   type Ap2TrustedKey,
   type CreateCheckoutJwtOptions,
   createAp2AuthorizationProvider,
-  // `ap2` reads well at a call site; the full name reads better in a trace.
+  // `ap2` reads well at a call site; the full name reads better in a stack trace
   createAp2AuthorizationProvider as ap2,
-  // Merchant-side, and the only export here that signs rather than verifies.
+  // Merchant-side, and the only export here that signs rather than verifies
   createCheckoutJwt,
   type EnabledAp2Config,
-} from './authorization/ap2/index.js';
+} from './authorization/ap2';
