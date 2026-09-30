@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { isCommerceError } from '../../../src/core/errors';
 import { loadOpenApiDocument, MAX_SOURCE_BYTES } from '../../../src/openapi';
+import { blockOutboundConnections } from './network';
 
 const FIXTURES = fileURLToPath(new URL('./fixtures/', import.meta.url));
 const fixture = (name: string): string => join(FIXTURES, name);
@@ -23,7 +24,7 @@ async function expectConfigInvalid(load: Promise<unknown>): Promise<string> {
 
 describe('loadOpenApiDocument', () => {
   afterEach(() => {
-    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
   it('loads a 3.0 YAML document', async () => {
@@ -124,24 +125,27 @@ describe('loadOpenApiDocument', () => {
     expect(message).toContain('not supported');
   });
 
-  it('rejects an external HTTP $ref without making a single outbound request', async () => {
-    const fetchSpy = vi.fn(async () => {
-      throw new Error('the importer must not perform network requests');
-    });
-    vi.stubGlobal('fetch', fetchSpy);
+  it('rejects an external HTTP $ref without attempting a single connection', async () => {
+    const connect = await blockOutboundConnections();
 
     const message = await expectConfigInvalid(
       loadOpenApiDocument(fixture('external-http-ref.yaml')),
     );
-    expect(message).toContain('external reference');
-    expect(fetchSpy).not.toHaveBeenCalled();
+    // The importer's own refusal: without it the validator still fails the
+    // document, with "Can't resolve external reference"
+    expect(message).toContain(
+      'external reference "https://example.com/common.yaml#/components/parameters/Limit"',
+    );
+    expect(message).toContain('performs no network or filesystem lookups');
+    expect(connect).not.toHaveBeenCalled();
   });
 
   it('rejects an external local-file $ref', async () => {
     const message = await expectConfigInvalid(
       loadOpenApiDocument(fixture('external-file-ref.yaml')),
     );
-    expect(message).toContain('./common.yaml#/Thing');
+    expect(message).toContain('external reference "./common.yaml#/Thing"');
+    expect(message).toContain('performs no network or filesystem lookups');
   });
 
   it('rejects a $ref with a malformed percent-escape as CONFIG_INVALID', async () => {

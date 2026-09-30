@@ -217,6 +217,11 @@ function convertParameter(
   location: 'path' | 'query',
 ): SchemaConversion {
   const unsupported = (reason: string): SchemaConversion => ({ supported: false, reason });
+  // Assigned as a key, it replaces the group object's prototype instead of
+  // adding the parameter
+  if (parameter['name'] === '__proto__') {
+    return unsupported('has a name that cannot be an input key');
+  }
   if (parameter['content'] !== undefined) {
     return unsupported(
       'uses the `content` form, whose media-type serialization the gateway does not perform',

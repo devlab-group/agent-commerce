@@ -122,6 +122,13 @@ function convertNode(
   if (isRecord(properties)) {
     const converted: Record<string, unknown> = {};
     for (const [name, sub] of Object.entries(properties)) {
+      // Assigned as a key, it replaces `converted`'s prototype instead of adding
+      // the property, which `required` may still name
+      if (name === '__proto__') {
+        throw new UnsupportedSchema(
+          'schema declares a "__proto__" property, which cannot be imported',
+        );
+      }
       converted[name] = convertNode(document, sub, resolved.stack, dropped);
     }
     result['properties'] = converted;

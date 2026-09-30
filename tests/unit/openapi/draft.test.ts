@@ -1,9 +1,11 @@
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { beforeAll, describe, expect, it } from 'vitest';
+import { parse as parseYaml } from 'yaml';
 import { parseConfig } from '../../../src/config/schema';
 import {
   buildResourceDrafts,
+  type ImportPolicy,
   type ImportResult,
   type LoadedOpenApiDocument,
   loadOpenApiDocument,
@@ -140,6 +142,23 @@ describe('buildResourceDrafts', () => {
     expect(order?.resource['pricing']).toEqual({ type: 'free' });
     expect(order?.resource['expose']).toEqual(['http', 'mcp']);
     expect(order?.review.join(' ')).not.toContain('REVIEW');
+
+    // --free alone still leaves exposure to decide
+    const pricingOnly = buildResourceDrafts(loaded, { policy: { pricing: { type: 'free' } } });
+    expect(pricingOnly.drafts[0]?.review.join(' ')).toContain('REVIEW');
+  });
+
+  it('sends a vendor +json body with its own Content-Type', async () => {
+    const shapes = buildResourceDrafts(
+      await loadOpenApiDocument(fixture('request-shapes-3.1.yaml')),
+      {
+        include: { operationIds: ['createReport'] },
+      },
+    );
+    expect(shapes.drafts[0]?.resource['backend']).toMatchObject({
+      headers: { 'Content-Type': 'application/vnd.acme.report+json' },
+      inputBindings: { body: 'body' },
+    });
   });
 
   it('ignores vendor extensions instead of letting them alter the resource', () => {
@@ -194,16 +213,20 @@ describe('renderResourcesYaml', () => {
   });
 
   it('produces a fragment that loads once pricing and exposure are chosen', () => {
-    const withPolicy = buildResourceDrafts(loaded, {
-      policy: { pricing: { type: 'free' }, expose: ['http'] },
-    });
-    const raw = validRawConfig();
-    const resources: Record<string, unknown> = {};
-    for (const entry of withPolicy.drafts) resources[entry.id] = entry.resource;
-    raw['resources'] = resources;
+    const load = (policy?: ImportPolicy) => {
+      const raw = validRawConfig();
+      const fragment = parseYaml(
+        renderResourcesYaml(buildResourceDrafts(loaded, policy ? { policy } : {})),
+      ) as { resources: Record<string, unknown> };
+      raw['resources'] = fragment.resources;
+      return parseConfig(raw, {});
+    };
 
-    const config = parseConfig(raw, {});
-    expect(config.resources.map((r) => r.id)).toEqual(withPolicy.drafts.map((d) => d.id));
+    // Deliberately incomplete: nothing loads until a human chooses the policy
+    expect(() => load()).toThrow(expect.objectContaining({ code: 'CONFIG_INVALID' }));
+
+    const config = load({ pricing: { type: 'free' }, expose: ['http'] });
+    expect(config.resources.map((r) => r.id)).toEqual(result.drafts.map((d) => d.id));
     const order = config.resources.find((r) => r.id === 'getOrder');
     expect(order?.handler.url).toBe('https://api.example.com/orders/{orderId}');
     expect(order?.handler.inputBindings).toEqual({ path: 'path' });

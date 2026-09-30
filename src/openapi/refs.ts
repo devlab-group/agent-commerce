@@ -98,7 +98,11 @@ function resolvePointer(document: Record<string, unknown>, ref: string): unknown
       const index = Number(segment);
       current = Number.isInteger(index) ? current[index] : undefined;
     } else if (typeof current === 'object' && current !== null) {
-      current = (current as Record<string, unknown>)[segment];
+      // Own members only: "__proto__" would otherwise resolve to Object.prototype,
+      // which converts to a schema that accepts anything
+      current = Object.hasOwn(current, segment)
+        ? (current as Record<string, unknown>)[segment]
+        : undefined;
     } else {
       current = undefined;
     }

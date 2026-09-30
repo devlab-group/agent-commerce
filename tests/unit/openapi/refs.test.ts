@@ -82,5 +82,53 @@ describe('dereference', () => {
     const { document } = await loadOpenApiDocument(fixture('petstore-3.0.yaml'));
     const { value } = dereference(document, { $ref: '#/paths/~1pets/get/operationId' });
     expect(value).toBe('listPets');
+
+    const escaped = { 'a/b': 'slash', 'a~b': 'tilde', 'a~1b': 'literal' };
+    expect(dereference(escaped, { $ref: '#/a~0b' }).value).toBe('tilde');
+    // ~1 is replaced first, so ~01 is a literal "~1", never "/"
+    expect(dereference(escaped, { $ref: '#/a~01b' }).value).toBe('literal');
+  });
+
+  it('percent-decodes a segment before looking it up', () => {
+    const document = { paths: { '/users/{id}': 'user' } };
+    expect(dereference(document, { $ref: '#/paths/~1users~1%7Bid%7D' }).value).toBe('user');
+  });
+
+  it('indexes into an array', () => {
+    const document = { servers: [{ url: 'a' }, { url: 'b' }] };
+    expect(dereference(document, { $ref: '#/servers/1' }).value).toEqual({ url: 'b' });
+  });
+
+  it('never resolves a pointer through an inherited member', () => {
+    // "#/__proto__" would otherwise become Object.prototype, an empty schema
+    // that accepts any input
+    const document = { components: { schemas: { A: { type: 'string' } } }, list: ['x'] };
+    for (const ref of [
+      '#/__proto__',
+      '#/components/schemas/constructor',
+      '#/components/toString',
+      '#/list/length',
+    ]) {
+      expect(expectInvalid(() => dereference(document, { $ref: ref }))).toContain(
+        'does not resolve',
+      );
+    }
+  });
+
+  it('refuses a plain-name fragment, which is not a JSON Pointer', () => {
+    const message = expectInvalid(() => dereference({ Pet: {} }, { $ref: '#Pet' }));
+    expect(message).toContain('not a JSON Pointer');
+  });
+
+  it('follows a chain of up to 100 references and refuses a longer one', () => {
+    // hop-0 -> hop-1 -> ... -> the schema: `hops` references in all
+    const chain = (hops: number) => {
+      const refs: Record<string, unknown> = { [`hop-${hops - 1}`]: { type: 'string' } };
+      for (let i = 0; i < hops - 1; i++) refs[`hop-${i}`] = { $ref: `#/refs/hop-${i + 1}` };
+      return { refs };
+    };
+    const start = { $ref: '#/refs/hop-0' };
+    expect(dereference(chain(100), start).value).toEqual({ type: 'string' });
+    expect(expectInvalid(() => dereference(chain(101), start))).toContain('exceeds 100 hops');
   });
 });

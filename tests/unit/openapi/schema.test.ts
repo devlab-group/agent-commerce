@@ -150,6 +150,27 @@ describe('convertSchema', () => {
     expect(result.supported).toBe(true);
   });
 
+  it('refuses an allOf it can only merge by widening what is accepted', () => {
+    const object = { type: 'object', properties: { id: { type: 'string' } } };
+    for (const [branch, reason] of [
+      [{ enum: [{ id: 'a' }] }, '"enum"'],
+      [{ type: 'object', items: { type: 'string' } }, '"items"'],
+      [{ type: 'string' }, 'mixes object and non-object'],
+    ] as const) {
+      const result = convertSchema(document, { allOf: [object, branch] });
+      expect(!result.supported && result.reason).toContain(reason);
+    }
+  });
+
+  it('refuses a "__proto__" property instead of losing it while it stays required', () => {
+    // JSON.parse makes "__proto__" an own key, as the YAML and JSON loaders do
+    const node: unknown = JSON.parse(
+      '{"type":"object","properties":{"__proto__":{"type":"string"}},"required":["__proto__"]}',
+    );
+    const result = convertSchema(document, node);
+    expect(!result.supported && result.reason).toContain('"__proto__" property');
+  });
+
   it('refuses oneOf/anyOf/not rather than widening what is accepted', () => {
     const result = convert('OneOf');
     expect(result.supported).toBe(false);

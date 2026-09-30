@@ -8,6 +8,7 @@ import {
   type LoadedOpenApiDocument,
   loadOpenApiDocument,
   mapRequest,
+  type OpenApiOperationCandidate,
   type RequestMapping,
 } from '../../../src/openapi';
 import { validRawConfig } from '../config/fixtures';
@@ -39,6 +40,20 @@ function properties(id: string): Record<string, Record<string, unknown>> {
 }
 
 const codes = (id: string): string[] => mapping(id).diagnostics.map((d) => d.code);
+
+// A GET candidate built directly, for shapes no fixture operation has
+function candidate(path: string, parameters: unknown[]): OpenApiOperationCandidate {
+  return {
+    resourceId: 'x',
+    method: 'GET',
+    path,
+    backendUrl: `https://api.example.com${path}`,
+    name: 'x',
+    tags: [],
+    parameters,
+    security: [],
+  };
+}
 
 describe('mapRequest', () => {
   it('maps path + query + body into namespaced groups with bindings', () => {
@@ -204,6 +219,44 @@ describe('mapRequest', () => {
     });
     expect(result.supported).toBe(false);
     expect(result.diagnostics.map((d) => d.code)).toContain('undeclared-path-parameter');
+  });
+
+  it('keeps a path and a query parameter of the same name apart', () => {
+    const result = mapRequest(
+      loaded,
+      candidate('/items/{id}', [
+        { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+        { name: 'id', in: 'query', required: true, schema: { type: 'integer' } },
+      ]),
+    );
+    expect(result.supported && result.inputSchema['properties']).toMatchObject({
+      path: { properties: { id: { type: 'string' } }, required: ['id'] },
+      query: { properties: { id: { type: 'integer' } }, required: ['id'] },
+    });
+  });
+
+  it.each([
+    ['an unknown location', { name: 'raw', in: 'querystring', schema: { type: 'string' } }],
+    ['no type, so any JSON value could arrive', { name: 'mode', in: 'query', schema: {} }],
+    // Assigned as a key it would replace the group's prototype and vanish
+    ['the name __proto__', { name: '__proto__', in: 'query', schema: { type: 'string' } }],
+  ])('skips an operation whose required parameter has %s', (_label, parameter) => {
+    const result = mapRequest(loaded, candidate('/x', [{ ...parameter, required: true }]));
+    expect(result.supported).toBe(false);
+    expect(result.diagnostics.map((d) => d.code)).toEqual(['unsupported-required-parameter']);
+  });
+
+  it('skips a required body whose media type only looks like JSON', () => {
+    const result = mapRequest(loaded, {
+      ...candidate('/x', []),
+      method: 'POST',
+      requestBody: {
+        required: true,
+        content: { 'application/x-ndjson': { schema: {} }, 'application/json-seq': { schema: {} } },
+      },
+    });
+    expect(result.supported).toBe(false);
+    expect(result.diagnostics.map((d) => d.code)).toEqual(['unsupported-request-body']);
   });
 
   it('skips a path parameter using a style the executor cannot produce', () => {

@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { parse as parseYaml } from 'yaml';
 import { runImportOpenApi } from '../../src/cli/commands/import-openapi';
 import { parseConfig } from '../../src/config';
@@ -36,6 +36,7 @@ import { createA2aAdapter } from '../../src/protocols/a2a';
 import { createMcpAdapter } from '../../src/protocols/mcp';
 import { createCapturingIo } from '../unit/cli/fixtures';
 import { createFakeStore } from '../unit/gateway/helpers';
+import { blockOutboundConnections } from '../unit/openapi/network';
 
 process.env['NODE_ENV'] = 'test';
 
@@ -442,6 +443,8 @@ describe('imported resources over the real gateway', () => {
 
     expect(res.statusCode).toBe(400);
     expect(res.json().code).toBe('INPUT_INVALID');
+    expect(res.json().message).toContain('collides with a query parameter already set');
+    expect(provider.verified).toBe(0);
     expect(provider.settled).toBe(0);
     expect(inbound).toHaveLength(0);
   });
@@ -472,11 +475,8 @@ describe('imported resources over the real gateway', () => {
     expect(written).not.toContain('apiKey');
   });
 
-  it('refuses an external $ref without a single outbound request', async () => {
-    const fetchSpy = vi.fn(async () => {
-      throw new Error('the importer must not perform network requests');
-    });
-    vi.stubGlobal('fetch', fetchSpy);
+  it('refuses an external $ref without attempting a single connection', async () => {
+    const connect = await blockOutboundConnections();
     try {
       const io = createCapturingIo();
       const source = fileURLToPath(
@@ -487,10 +487,10 @@ describe('imported resources over the real gateway', () => {
         io,
       );
       expect(code).toBe(1);
-      expect(io.err.join('\n')).toContain('external reference');
-      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(io.err.join('\n')).toContain('performs no network or filesystem lookups');
+      expect(connect).not.toHaveBeenCalled();
     } finally {
-      vi.unstubAllGlobals();
+      connect.mockRestore();
     }
   });
 
