@@ -6,7 +6,8 @@
  * - two identical requests in flight at once
  * - the same authorization replayed after a process restart
  * - a malformed PAYMENT-SIGNATURE, refused before the backend is called
- * - a facilitator that answers 401, 500, or a 200 that is not a verify response
+ * - a facilitator that answers 401, 500, or a 200 that is not a verify response,
+ *   at the binding and through the gateway
  * - a facilitator that refuses the payment with a 400 and a reason
  *
  * Offline: the facilitator is a loopback HTTP server started here, and no
@@ -30,9 +31,12 @@ import type {
   PaymentVerificationContext,
   ReceiptStore,
 } from '../../src/core';
-import { isCommerceError } from '../../src/core';
 import { createGateway, type GatewayInstance } from '../../src/gateway';
-import { LOCAL_FACILITATOR_ACCOUNT } from '../../src/payments/x402/local-chain/accounts';
+import { createPaymentProof } from '../../src/payments/x402/client';
+import {
+  LOCAL_BUYER_ACCOUNT,
+  LOCAL_FACILITATOR_ACCOUNT,
+} from '../../src/payments/x402/local-chain/accounts';
 import { createX402PaymentProvider } from '../../src/payments/x402/provider';
 import { createSqliteReceiptStore } from '../../src/storage/receipts';
 
@@ -246,9 +250,13 @@ describe('adversarial: a facilitator that does not answer properly', () => {
   let server: Server;
   let url: string;
   let respond: (res: ServerResponse) => void;
+  const facilitatorPaths: string[] = [];
 
   beforeAll(async () => {
-    server = createServer((_req, res) => respond(res));
+    server = createServer((req, res) => {
+      facilitatorPaths.push(req.url ?? '');
+      respond(res);
+    });
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   });
@@ -322,14 +330,101 @@ describe('adversarial: a facilitator that does not answer properly', () => {
   });
 
   it('refuses a 200 whose JSON is well-formed but not a verify response', async () => {
+    // Never `isValid: true` by omission, and never a verdict against the payer
     const outcome = (await verifyThrough((res) => {
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ totally: 'unrelated' }));
-    })) as { threw: boolean; transportFailed: boolean; err?: unknown };
+    })) as { threw: boolean; transportFailed: boolean };
     expect(outcome.threw).toBe(true);
-    // Never `isValid: true` by omission
-    if (outcome.err !== undefined) {
-      expect(isCommerceError(outcome.err) || outcome.err instanceof Error).toBe(true);
+    expect(outcome.transportFailed).toBe(true);
+  });
+
+  describe('seen through the gateway', () => {
+    let dir: string;
+
+    beforeAll(async () => {
+      dir = await mkdtemp(join(tmpdir(), 'oac-facilitator-'));
+    });
+
+    afterAll(async () => {
+      await rm(dir, { recursive: true, force: true });
+    });
+
+    // The real x402 provider in remote mode, paid with a proof signed offline
+    // for the gateway's own challenge, so only the facilitator's answer varies
+    async function payThrough(storeName: string, handler: (res: ServerResponse) => void) {
+      respond = handler;
+      let backendCalls = 0;
+      const provider = createX402PaymentProvider({
+        network: 'eip155:84532',
+        rpcUrl: 'http://127.0.0.1:8545',
+        asset: '0x5FbDB2315678afecb367f032d93F642f64180aa3',
+        assetName: 'MockUSDC',
+        assetVersion: '2',
+        assetDecimals: 6,
+        payTo: '0x1111111111111111111111111111111111111111',
+        facilitator: { mode: 'remote', url, auth: { type: 'none' } },
+      });
+      const { gateway, store } = await buildGateway(join(dir, storeName), provider, () => {
+        backendCalls += 1;
+      });
+      try {
+        const challenge = await gateway.server.inject({
+          method: 'POST',
+          url: `/api/resources/${RESOURCE_ID}/invoke`,
+          payload: {},
+        });
+        const proof = await createPaymentProof({
+          buyerPrivateKey: LOCAL_BUYER_ACCOUNT.privateKey,
+          accepts: challenge.json().payment.accepts[0],
+        });
+        facilitatorPaths.length = 0;
+        const response = await invoke(gateway, proof);
+        return {
+          status: response.statusCode,
+          body: response.json(),
+          facilitatorPaths: [...facilitatorPaths],
+          backendCalls,
+          attempts: await store.listPaymentAttempts(),
+        };
+      } finally {
+        await gateway.close();
+      }
     }
+
+    it.each([
+      { answer: '401', status: 401, body: JSON.stringify({ error: 'unauthorized' }) },
+      { answer: '500', status: 500, body: JSON.stringify({ error: 'boom' }) },
+      { answer: 'unparseable 200', status: 200, body: '<html>gateway timeout</html>' },
+      { answer: 'non-verify 200', status: 200, body: JSON.stringify({ totally: 'unrelated' }) },
+    ])(
+      'answers a facilitator $answer with a retryable 503 and records nothing against the payer',
+      async ({ status, body }) => {
+        const outcome = await payThrough(`unavailable-${status}-${body.length}.sqlite`, (res) => {
+          res.writeHead(status, { 'content-type': 'application/json' });
+          res.end(body);
+        });
+
+        expect(outcome.status).toBe(503);
+        expect(outcome.body.code).toBe('PAYMENT_PROVIDER_UNAVAILABLE');
+        expect(outcome.body.retryable).toBe(true);
+        expect(outcome.facilitatorPaths).toEqual(['/verify']);
+        expect(outcome.backendCalls).toBe(0);
+        expect(outcome.attempts).toEqual([]);
+      },
+    );
+
+    it("answers a 400 naming an invalidReason as PAYMENT_INVALID, the buyer's verdict (control)", async () => {
+      const outcome = await payThrough('verdict-400.sqlite', (res) => {
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ isValid: false, invalidReason: 'insufficient_funds' }));
+      });
+
+      expect(outcome.status).toBe(402);
+      expect(outcome.body.code).toBe('PAYMENT_INVALID');
+      expect(outcome.facilitatorPaths).toEqual(['/verify']);
+      expect(outcome.backendCalls).toBe(0);
+      expect(outcome.attempts).toEqual([]);
+    });
   });
 });

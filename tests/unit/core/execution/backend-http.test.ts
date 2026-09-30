@@ -18,6 +18,17 @@ function jsonResponse(
   });
 }
 
+const shapeContext = { requestId: 'r', resourceId: 'res' };
+
+function expectInputInvalid(run: () => void): void {
+  try {
+    run();
+    expect.unreachable();
+  } catch (error) {
+    expect(isCommerceError(error) && error.code === 'INPUT_INVALID').toBe(true);
+  }
+}
+
 describe('HttpBackendExecutor', () => {
   it('performs path templating and sends remaining input as query params for GET', async () => {
     let capturedUrl: URL | undefined;
@@ -108,6 +119,29 @@ describe('HttpBackendExecutor', () => {
     // A fixed key would make every order after the first look like a retry of
     // the first, so the per-operation value wins rather than deferring to config
     expect(capturedHeaders['idempotency-key']).toBe('op-key-1');
+  });
+
+  it('refuses an idempotency key that would inject a header line, without calling fetch', async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse(201, {}));
+    const executor = new HttpBackendExecutor({ fetchImpl: fetchImpl as unknown as typeof fetch });
+
+    await expect(
+      executor.call(
+        { type: 'http', method: 'POST', url: 'http://backend.local/api/orders' },
+        {
+          requestId: 'r',
+          resourceId: 'res',
+          input: {},
+          idempotencyKey: 'op-key-1\r\nx-injected: 1',
+        },
+      ),
+    ).rejects.toSatisfy(
+      (error: unknown) =>
+        isCommerceError(error) &&
+        error.code === 'BACKEND_ERROR' &&
+        JSON.stringify(error.details) === JSON.stringify({ reason: 'invalid-header' }),
+    );
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 
   it('sends remaining input as a JSON body for POST', async () => {
@@ -270,11 +304,55 @@ describe('HttpBackendExecutor', () => {
     await expect(
       executor.call(handler, { requestId: 'r', resourceId: 'res', input: {} }),
     ).rejects.toSatisfy(
-      (error: unknown) => isCommerceError(error) && error.code === 'BACKEND_ERROR',
+      (error: unknown) =>
+        isCommerceError(error) &&
+        error.code === 'BACKEND_ERROR' &&
+        JSON.stringify(error.details) ===
+          JSON.stringify({ status: 302, reason: 'redirect-not-followed' }),
     );
 
     const call = fetchImpl.mock.calls[0];
     expect(call?.[1]?.redirect).toBe('manual');
+  });
+
+  it('refuses a 4xx answer as BACKEND_ERROR, never as a delivery', async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse(404, { error: 'no such report' }));
+    const executor = new HttpBackendExecutor({ fetchImpl: fetchImpl as unknown as typeof fetch });
+
+    await expect(
+      executor.call(
+        { type: 'http', method: 'GET', url: 'http://backend.local/api' },
+        { requestId: 'r', resourceId: 'res', input: {} },
+      ),
+    ).rejects.toSatisfy(
+      (error: unknown) =>
+        isCommerceError(error) &&
+        error.code === 'BACKEND_ERROR' &&
+        JSON.stringify(error.details) === JSON.stringify({ status: 404 }),
+    );
+  });
+
+  it('aborts a backend that does not answer within handler.timeoutMs', async () => {
+    // Settles only when the executor's own signal fires
+    const fetchImpl = vi.fn(
+      (_input: string | URL | Request, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(init.signal?.reason));
+        }),
+    );
+    const executor = new HttpBackendExecutor({ fetchImpl: fetchImpl as unknown as typeof fetch });
+
+    await expect(
+      executor.call(
+        { type: 'http', method: 'GET', url: 'http://backend.local/api', timeoutMs: 20 },
+        { requestId: 'r', resourceId: 'res', input: {} },
+      ),
+    ).rejects.toSatisfy(
+      (error: unknown) =>
+        isCommerceError(error) &&
+        error.code === 'BACKEND_TIMEOUT' &&
+        error.details?.['timeoutMs'] === 20,
+    );
   });
 
   it('parses non-JSON content types as text', async () => {
@@ -540,6 +618,56 @@ describe('HttpBackendExecutor', () => {
     expect(capturedUrl?.pathname).toBe('/api/weather/st.%20louis');
   });
 
+  it('percent-encodes a path value so it stays one segment of the configured path', async () => {
+    let capturedUrl: URL | undefined;
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      capturedUrl = new URL(input as URL);
+      return jsonResponse(200, {});
+    });
+    const executor = new HttpBackendExecutor({ fetchImpl: fetchImpl as unknown as typeof fetch });
+
+    await executor.call(
+      { type: 'http', method: 'GET', url: 'http://backend.local/api/weather/{city}' },
+      { requestId: 'r', resourceId: 'res', input: { city: '../admin?token=1#x' } },
+    );
+
+    expect(capturedUrl?.pathname).toBe('/api/weather/..%2Fadmin%3Ftoken%3D1%23x');
+    expect(capturedUrl?.search).toBe('');
+    expect(capturedUrl?.hash).toBe('');
+  });
+
+  it('refuses a filled-in path that resolves outside the literal prefix of the template', async () => {
+    // Each value passes the per-parameter check, but this template ends in a
+    // partial escape: "e" completes "%2e%2e", which the URL parser resolves
+    // as ".."
+    const fetchImpl = vi.fn();
+    const executor = new HttpBackendExecutor({ fetchImpl: fetchImpl as unknown as typeof fetch });
+    const handler: BackendHandler = {
+      type: 'http',
+      method: 'GET',
+      url: 'http://backend.local/api/v1/%2e%2{suffix}',
+    };
+
+    await expect(
+      executor.call(handler, { requestId: 'r', resourceId: 'res', input: { suffix: 'e' } }),
+    ).rejects.toSatisfy(
+      (error: unknown) => isCommerceError(error) && error.code === 'INPUT_INVALID',
+    );
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('reads a path parameter named like an Object.prototype member only from the input itself', () => {
+    const handler: BackendHandler = {
+      type: 'http',
+      method: 'GET',
+      url: 'http://backend.local/api/{constructor}',
+    };
+    expectInputInvalid(() => validateBackendRequestShape(handler, {}, shapeContext));
+    expect(() =>
+      validateBackendRequestShape(handler, { constructor: 'x' }, shapeContext),
+    ).not.toThrow();
+  });
+
   it('rejects a backend response larger than the 1MB cap with BACKEND_ERROR', async () => {
     const bigBody = 'x'.repeat(2 * 1024 * 1024); // 2MB, well over the cap
     const fetchImpl = vi.fn(
@@ -559,11 +687,13 @@ describe('HttpBackendExecutor', () => {
     );
   });
 
-  it('surfaces the byte limit itself in the client-visible details', async () => {
-    const bigBody = 'x'.repeat(2 * 1024 * 1024);
+  it('refuses one byte over the cap and surfaces the limit in the client-visible details', async () => {
     const fetchImpl = vi.fn(
       async () =>
-        new Response(bigBody, { status: 200, headers: { 'content-type': 'application/json' } }),
+        new Response('x'.repeat(1024 * 1024 + 1), {
+          status: 200,
+          headers: { 'content-type': 'text/plain' },
+        }),
     );
     const executor = new HttpBackendExecutor({ fetchImpl: fetchImpl as unknown as typeof fetch });
     const handler: BackendHandler = {
@@ -571,19 +701,21 @@ describe('HttpBackendExecutor', () => {
       method: 'GET',
       url: 'http://backend.local/api',
     };
-    try {
-      await executor.call(handler, { requestId: 'r', resourceId: 'res', input: {} });
-      expect.unreachable();
-    } catch (error) {
-      if (isCommerceError(error)) {
-        expect(error.details).toEqual({ reason: 'response-too-large', maxBytes: 1024 * 1024 });
-      }
-    }
+    await expect(
+      executor.call(handler, { requestId: 'r', resourceId: 'res', input: {} }),
+    ).rejects.toSatisfy(
+      (error: unknown) =>
+        isCommerceError(error) &&
+        JSON.stringify(error.details) ===
+          JSON.stringify({ reason: 'response-too-large', maxBytes: 1024 * 1024 }),
+    );
   });
 
-  it('accepts a response right at/under the cap (control)', async () => {
-    const body = JSON.stringify({ data: 'x'.repeat(1000) });
-    const fetchImpl = vi.fn(async () => jsonResponse(200, { data: 'x'.repeat(1000) }));
+  it('accepts a response of exactly the cap (control)', async () => {
+    const body = 'x'.repeat(1024 * 1024);
+    const fetchImpl = vi.fn(
+      async () => new Response(body, { status: 200, headers: { 'content-type': 'text/plain' } }),
+    );
     const executor = new HttpBackendExecutor({ fetchImpl: fetchImpl as unknown as typeof fetch });
     const handler: BackendHandler = {
       type: 'http',
@@ -591,24 +723,16 @@ describe('HttpBackendExecutor', () => {
       url: 'http://backend.local/api',
     };
     const result = await executor.call(handler, { requestId: 'r', resourceId: 'res', input: {} });
-    expect((result.body as { data: string }).data).toBe(JSON.parse(body).data);
+    expect(result.body).toBe(body);
   });
 
-  it('validateBackendRequestShape rejects traversal path values without any I/O ', () => {
+  it('validateBackendRequestShape rejects traversal path values without any I/O', () => {
     const handler: BackendHandler = {
       type: 'http',
       method: 'GET',
       url: 'http://backend.local/api/{city}',
     };
-    expect(() =>
-      validateBackendRequestShape(handler, { city: '..' }, { requestId: 'r', resourceId: 'res' }),
-    ).toThrowError();
-    try {
-      validateBackendRequestShape(handler, { city: '..' }, { requestId: 'r', resourceId: 'res' });
-      expect.unreachable();
-    } catch (error) {
-      expect(isCommerceError(error) && error.code === 'INPUT_INVALID').toBe(true);
-    }
+    expectInputInvalid(() => validateBackendRequestShape(handler, { city: '..' }, shapeContext));
   });
 
   it('validateBackendRequestShape rejects a MISSING path parameter, not just an invalid one', () => {
@@ -625,7 +749,7 @@ describe('HttpBackendExecutor', () => {
     }
   });
 
-  it('validateBackendRequestShape rejects a query-param collision without any I/O ', () => {
+  it('validateBackendRequestShape rejects a query-param collision without any I/O', () => {
     const handler: BackendHandler = {
       type: 'http',
       method: 'GET',
@@ -768,17 +892,6 @@ describe('HttpBackendExecutor explicit inputBindings', () => {
     expect(seen.url?.searchParams.get('verbose')).toBe('1');
     expect(seen.body).toBeUndefined();
   });
-
-  const shapeContext = { requestId: 'r', resourceId: 'res' };
-
-  function expectInputInvalid(run: () => void): void {
-    try {
-      run();
-      expect.unreachable();
-    } catch (error) {
-      expect(isCommerceError(error) && error.code === 'INPUT_INVALID').toBe(true);
-    }
-  }
 
   it('rejects a mapped query collision with backend.url before payment', () => {
     expectInputInvalid(() =>

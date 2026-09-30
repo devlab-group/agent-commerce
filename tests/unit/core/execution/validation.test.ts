@@ -35,6 +35,15 @@ describe('compileJsonSchema', () => {
     }
   });
 
+  it('rejects an array where an object schema is declared, so it cannot bypass `required`', () => {
+    const validate = compileJsonSchema({
+      type: 'object',
+      properties: { city: { type: 'string' } },
+      required: ['city'],
+    });
+    expect(validate([]).valid).toBe(false);
+  });
+
   it('rejects additional properties when additionalProperties is false', () => {
     const validate = compileJsonSchema({
       type: 'object',

@@ -322,7 +322,10 @@ describe('config -> gateway -> core execution pipeline (integration)', () => {
       });
       expect(paid.statusCode).toBe(200);
       expect(paid.json()).toEqual({ report: 'premium data' });
-      expect(paid.headers[PAYMENT_RESPONSE_HEADER]).toBeDefined();
+      const settlement = JSON.parse(
+        Buffer.from(String(paid.headers[PAYMENT_RESPONSE_HEADER]), 'base64').toString('utf8'),
+      );
+      expect(settlement).toMatchObject({ success: true, transaction: '0xTXHASH' });
       expect(store.receipts).toHaveLength(1);
       expect(store.receipts[0]?.payment?.status).toBe('settled');
     })();
@@ -330,7 +333,9 @@ describe('config -> gateway -> core execution pipeline (integration)', () => {
 
   it('config validation errors surface before any gateway is created, and never print the facilitator key', () => {
     const raw = buildRawConfig();
-    (raw.payments as { x402: Record<string, unknown> }).x402['payTo'] = 'not-an-address';
+    // An operator swaps two variables: the refused value is the key itself
+    (raw.payments as { x402: Record<string, unknown> }).x402['payTo'] =
+      '${X402_FACILITATOR_PRIVATE_KEY}';
 
     let thrown: unknown;
     try {
@@ -341,6 +346,7 @@ describe('config -> gateway -> core execution pipeline (integration)', () => {
     expect(isCommerceError(thrown)).toBe(true);
     if (isCommerceError(thrown)) {
       expect(thrown.code).toBe('CONFIG_INVALID');
+      expect(thrown.details).toEqual({ path: 'payments.x402.payTo' });
       expect(JSON.stringify(thrown.details)).not.toContain(ENV.X402_FACILITATOR_PRIVATE_KEY);
       expect(thrown.message).not.toContain(ENV.X402_FACILITATOR_PRIVATE_KEY);
     }

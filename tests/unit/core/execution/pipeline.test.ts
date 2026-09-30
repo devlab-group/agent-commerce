@@ -33,6 +33,11 @@ function eventTypes(store: ReturnType<typeof createFakeStore>): CommerceEventTyp
   return store.events.map((e: CommerceEvent) => e.type);
 }
 
+// Every event of one flow carries that flow's requestId, and there is at least one
+function expectOneRequestId(store: ReturnType<typeof createFakeStore>, requestId = 'req-1'): void {
+  expect(new Set(store.events.map((e) => e.requestId))).toEqual(new Set([requestId]));
+}
+
 describe('createExecutionPipeline', () => {
   it('throws RESOURCE_NOT_FOUND for an unknown resource', async () => {
     const store = createFakeStore();
@@ -360,9 +365,47 @@ describe('createExecutionPipeline', () => {
       'backend.called',
       'resource.delivered',
     ]);
-    for (const event of store.events) {
-      expect(event.requestId).toBe('req-1');
-    }
+    expectOneRequestId(store);
+  });
+
+  it('never touches a payment provider for a free resource, even when the request carries a proof', async () => {
+    const resource = makeResource({
+      id: 'res-1',
+      pricing: { type: 'free' },
+      paymentMethods: ['x402'],
+    });
+    const store = createFakeStore();
+    const providerCalls: string[] = [];
+    const refuse = (method: string) => async (): Promise<never> => {
+      providerCalls.push(method);
+      throw new Error(`${method} must not run for a free resource`);
+    };
+    const pipeline = createExecutionPipeline({
+      resources: createResourceRegistry([resource]),
+      paymentProviders: [
+        createFakePaymentProvider({
+          createRequirement: refuse('createRequirement'),
+          verify: refuse('verify'),
+          settle: refuse('settle'),
+        }),
+      ],
+      store,
+      backend: createFakeBackendExecutor(),
+      events: store,
+      logger: createCapturingLogger(),
+      clock: createFakeClock(),
+      ids: createFakeIdGenerator(),
+    });
+
+    const outcome = await pipeline.execute(
+      makeRequest({ payment: { method: 'x402', payload: 'proof' } }),
+    );
+
+    expect(outcome.kind).toBe('delivered');
+    expect(providerCalls).toEqual([]);
+    expect((outcome as DeliveredOutcome).payment).toBeUndefined();
+    expect(store.receipts[0]?.payment).toBeUndefined();
+    expect(store.attempts.size).toBe(0);
   });
 
   it('leaves non-object input (array, primitive) untouched by the _payment stripping step', async () => {
@@ -414,7 +457,7 @@ describe('createExecutionPipeline', () => {
     expect(seenInput).toEqual({ city: 'Berlin' });
   });
 
-  it('strips a "__proto__" input key before it ever reaches validation or the backend ', async () => {
+  it('strips a "__proto__" input key before it ever reaches validation or the backend', async () => {
     const resource = makeResource({ id: 'res-1', pricing: { type: 'free' } });
     const store = createFakeStore();
     let seenInput: unknown;
@@ -552,16 +595,42 @@ describe('createExecutionPipeline', () => {
     expect((outcome as PaymentRequiredOutcome).requirement.provider).toBe('x402');
   });
 
-  it('PAYMENT_PROVIDER_UNAVAILABLE when no configured provider matches the resource payment methods', async () => {
+  it('challenges on the first rail the resource lists, whatever order the providers are registered in', async () => {
     const resource = makeResource({
       id: 'res-1',
       pricing: { type: 'fixed', amount: '0.01', currency: 'USDC' },
-      paymentMethods: ['x402'],
+      paymentMethods: ['mpp', 'x402'],
     });
     const store = createFakeStore();
     const pipeline = createExecutionPipeline({
       resources: createResourceRegistry([resource]),
-      paymentProviders: [],
+      paymentProviders: [
+        createFakePaymentProvider({ name: 'x402' }),
+        createFakePaymentProvider({ name: 'mpp' }),
+      ],
+      store,
+      backend: createFakeBackendExecutor(),
+      events: store,
+      logger: createCapturingLogger(),
+      clock: createFakeClock(),
+      ids: createFakeIdGenerator(),
+    });
+
+    const outcome = await pipeline.execute(makeRequest());
+    expect((outcome as PaymentRequiredOutcome).requirement.provider).toBe('mpp');
+  });
+
+  it('PAYMENT_PROVIDER_UNAVAILABLE when no configured provider matches the resource payment methods', async () => {
+    const resource = makeResource({
+      id: 'res-1',
+      pricing: { type: 'fixed', amount: '0.01', currency: 'USDC' },
+      paymentMethods: ['mpp'],
+    });
+    const store = createFakeStore();
+    const pipeline = createExecutionPipeline({
+      resources: createResourceRegistry([resource]),
+      // Registered, but for a rail the resource does not accept
+      paymentProviders: [createFakePaymentProvider({ name: 'x402' })],
       store,
       backend: createFakeBackendExecutor(),
       events: store,
@@ -575,7 +644,7 @@ describe('createExecutionPipeline', () => {
     );
   });
 
-  it('verify() returning rejected -> PAYMENT_INVALID, no backend call, no receipt', async () => {
+  it('verify() returning rejected -> PAYMENT_INVALID carrying the unused challenge, with nothing reserved, settled or delivered', async () => {
     const resource = makeResource({
       id: 'res-1',
       pricing: { type: 'fixed', amount: '0.01', currency: 'USDC' },
@@ -583,14 +652,24 @@ describe('createExecutionPipeline', () => {
     });
     const store = createFakeStore();
     let backendCalled = false;
+    let settleCalls = 0;
+    const envelope = { x402Version: 2, accepts: [{ scheme: 'exact' }] };
     const provider = createFakePaymentProvider({
+      challengeEnvelope: envelope,
+      // A provider may derive the replay key before it rejects, so the key
+      // alone must not carry a refused proof on to settlement
       verify: async () => ({
         status: 'rejected',
         provider: 'x402',
         amount: '0.01',
         currency: 'USDC',
         rejectionReason: 'bad-signature',
+        replayKey: 'replay-key-1',
       }),
+      settle: async () => {
+        settleCalls += 1;
+        return { status: 'settled', provider: 'x402', amount: '0.01', currency: 'USDC' };
+      },
     });
     const pipeline = createExecutionPipeline({
       resources: createResourceRegistry([resource]),
@@ -606,15 +685,24 @@ describe('createExecutionPipeline', () => {
       ids: createFakeIdGenerator(),
     });
 
-    await expect(
-      pipeline.execute(makeRequest({ payment: { method: 'x402', payload: 'proof' } })),
-    ).rejects.toSatisfy(
-      (error: unknown) => isCommerceError(error) && error.code === 'PAYMENT_INVALID',
-    );
+    const error = await pipeline
+      .execute(makeRequest({ payment: { method: 'x402', payload: 'proof' } }))
+      .then(
+        () => undefined,
+        (e: unknown) => e,
+      );
 
+    expect(isCommerceError(error) && error.code).toBe('PAYMENT_INVALID');
+    expect(isCommerceError(error) && error.message).toBe('bad-signature');
+    // A verdict, not a fresh 402: the unused challenge rides along for the retry
+    expect(isCommerceError(error) && error.details).toEqual({ challenge: envelope });
+    expect(store.attempts.size).toBe(0);
+    expect(settleCalls).toBe(0);
     expect(backendCalled).toBe(false);
     expect(store.receipts).toHaveLength(0);
     expect(eventTypes(store)).toEqual(['resource.requested', 'payment.rejected']);
+    expect(store.events[1]?.data).toEqual({ reason: 'bad-signature' });
+    expectOneRequestId(store);
   });
 
   it('replay: second request with the same replayKey -> PAYMENT_REPLAYED, no settle call', async () => {
@@ -674,12 +762,22 @@ describe('createExecutionPipeline', () => {
         throw new Error('ENOSPC: no space left on device');
       },
     });
-    const provider = createFakePaymentProvider();
+    let settleCalls = 0;
+    let backendCalled = false;
+    const provider = createFakePaymentProvider({
+      settle: async () => {
+        settleCalls += 1;
+        return { status: 'settled', provider: 'x402', amount: '0.01', currency: 'USDC' };
+      },
+    });
     const pipeline = createExecutionPipeline({
       resources: createResourceRegistry([resource]),
       paymentProviders: [provider],
       store,
-      backend: createFakeBackendExecutor(),
+      backend: createFakeBackendExecutor(async () => {
+        backendCalled = true;
+        return { status: 200, headers: {}, body: {}, durationMs: 1 };
+      }),
       events: store,
       logger: createCapturingLogger(),
       clock: createFakeClock(),
@@ -691,6 +789,11 @@ describe('createExecutionPipeline', () => {
     ).rejects.toSatisfy(
       (error: unknown) => isCommerceError(error) && error.code === 'STORAGE_ERROR',
     );
+    // Without a reservation there is no replay defense, so nothing may settle
+    expect(settleCalls).toBe(0);
+    expect(backendCalled).toBe(false);
+    expect(store.events.at(-1)?.data).toEqual({ reason: 'STORAGE_ERROR' });
+    expectOneRequestId(store);
   });
 
   it('settle() rejected -> PAYMENT_SETTLEMENT_FAILED, no backend call', async () => {
@@ -827,11 +930,15 @@ describe('createExecutionPipeline', () => {
       ids: createFakeIdGenerator(),
     });
 
+    // No verdict was reached, so nothing is held against the payer and the
+    // client may retry the same proof
     await expect(
       pipeline.execute(makeRequest({ payment: { method: 'x402', payload: 'proof' } })),
     ).rejects.toSatisfy(
-      (error: unknown) => isCommerceError(error) && error.code === 'PAYMENT_PROVIDER_UNAVAILABLE',
+      (error: unknown) =>
+        isCommerceError(error) && error.code === 'PAYMENT_PROVIDER_UNAVAILABLE' && error.retryable,
     );
+    expect(store.attempts.size).toBe(0);
   });
 
   it('a generic thrown error during verify is mapped to PAYMENT_INVALID', async () => {
@@ -841,7 +948,9 @@ describe('createExecutionPipeline', () => {
       paymentMethods: ['x402'],
     });
     const store = createFakeStore();
+    const envelope = { x402Version: 2, accepts: [{ scheme: 'exact' }] };
     const provider = createFakePaymentProvider({
+      challengeEnvelope: envelope,
       verify: async () => {
         throw new Error('network blip');
       },
@@ -860,8 +969,12 @@ describe('createExecutionPipeline', () => {
     await expect(
       pipeline.execute(makeRequest({ payment: { method: 'x402', payload: 'proof' } })),
     ).rejects.toSatisfy(
-      (error: unknown) => isCommerceError(error) && error.code === 'PAYMENT_INVALID',
+      (error: unknown) =>
+        isCommerceError(error) &&
+        error.code === 'PAYMENT_INVALID' &&
+        JSON.stringify(error.details) === JSON.stringify({ challenge: envelope }),
     );
+    expect(store.attempts.size).toBe(0);
   });
 
   it("an untyped verify() error's message never reaches the client, even when it carries a secret", async () => {
@@ -1121,6 +1234,45 @@ describe('createExecutionPipeline', () => {
     expect(receipt?.metadata).toEqual({ delivered: false, backendErrorCode: 'BACKEND_ERROR' });
   });
 
+  it('a backend timeout after settlement records the undelivered receipt with no backend status', async () => {
+    const resource = makeResource({
+      id: 'res-1',
+      pricing: { type: 'fixed', amount: '0.01', currency: 'USDC' },
+      paymentMethods: ['x402'],
+    });
+    const store = createFakeStore();
+    const { CommerceError } = await import('../../../../src/core/errors');
+    const pipeline = createExecutionPipeline({
+      resources: createResourceRegistry([resource]),
+      paymentProviders: [createFakePaymentProvider()],
+      store,
+      backend: createFakeBackendExecutor(async () => {
+        throw new CommerceError('BACKEND_TIMEOUT', 'timed out', {
+          details: { timeoutMs: 5, durationMs: 5 },
+        });
+      }),
+      events: store,
+      logger: createCapturingLogger(),
+      clock: createFakeClock(),
+      ids: createFakeIdGenerator(),
+    });
+
+    await expect(
+      pipeline.execute(makeRequest({ payment: { method: 'x402', payload: 'proof' } })),
+    ).rejects.toSatisfy(
+      (error: unknown) =>
+        isCommerceError(error) &&
+        error.code === 'BACKEND_ERROR' &&
+        (error.details?.['payment'] as { status?: string } | undefined)?.status === 'settled',
+    );
+    // The merchant never answered, so the receipt claims no status it did not see
+    expect(store.receipts[0]?.backendStatus).toBe(0);
+    expect(store.receipts[0]?.metadata).toEqual({
+      delivered: false,
+      backendErrorCode: 'BACKEND_TIMEOUT',
+    });
+  });
+
   it('full event sequence and shared requestId for a successful paid flow', async () => {
     const resource = makeResource({
       id: 'res-1',
@@ -1153,9 +1305,7 @@ describe('createExecutionPipeline', () => {
       'backend.called',
       'resource.delivered',
     ]);
-    for (const event of store.events) {
-      expect(event.requestId).toBe('req-1');
-    }
+    expectOneRequestId(store);
     expect(store.receipts).toHaveLength(1);
     expect(store.receipts[0]?.payment?.status).toBe('settled');
   });
@@ -1223,11 +1373,22 @@ describe('createExecutionPipeline', () => {
     const { toErrorEnvelope } = await import('../../../../src/core/domain/wire');
     const envelope = toErrorEnvelope(thrown);
     expect(envelope.details).toEqual({ settlementUncertain: true });
-    expect(envelope.requestId).toBeDefined();
+    expect(envelope.requestId).toBe('req-1');
+    // Not retryable: the first payment may have landed, so the client must not
+    // pay again
+    expect(envelope.retryable).toBe(false);
 
     const attempt = [...store.attempts.values()][0];
     expect(attempt?.status).toBe('settlement-uncertain');
     expect(attempt?.externalReference).toBeUndefined();
+    expect(store.receipts).toHaveLength(0);
+    expect(eventTypes(store)).toEqual([
+      'resource.requested',
+      'payment.verified',
+      'payment.rejected',
+    ]);
+    expect(store.events[2]?.data).toEqual({ reason: 'settlement-uncertain' });
+    expectOneRequestId(store);
   });
 
   it('settle() throwing PAYMENT_PROVIDER_UNAVAILABLE with a transactionHash records settlement-uncertain, not failed', async () => {
@@ -1348,40 +1509,53 @@ describe('createExecutionPipeline', () => {
         throw new Error('sink down');
       },
     };
+    const logger = createCapturingLogger();
     const pipeline = createExecutionPipeline({
       resources: createResourceRegistry([resource]),
       paymentProviders: [],
       store,
       backend: createFakeBackendExecutor(),
       events: failingSink,
-      logger: createCapturingLogger(),
+      logger,
       clock: createFakeClock(),
       ids: createFakeIdGenerator(),
     });
 
     const outcome = await pipeline.execute(makeRequest());
     expect(outcome.kind).toBe('delivered');
+    expect(logger.errors.map((e) => e.obj['eventType'])).toEqual([
+      'resource.requested',
+      'backend.called',
+      'resource.delivered',
+    ]);
   });
 
-  it('receipt persistence failure does not fail an otherwise successful flow', async () => {
+  it('receipt persistence failure does not fail an otherwise successful flow, and is logged', async () => {
     const resource = makeResource({ id: 'res-1', pricing: { type: 'free' } });
     const store = createFakeStore({
       saveReceipt: async () => {
         throw new Error('disk full');
       },
     });
+    const logger = createCapturingLogger();
     const pipeline = createExecutionPipeline({
       resources: createResourceRegistry([resource]),
       paymentProviders: [],
       store,
       backend: createFakeBackendExecutor(),
       events: store,
-      logger: createCapturingLogger(),
+      logger,
       clock: createFakeClock(),
       ids: createFakeIdGenerator(),
     });
 
     const outcome = await pipeline.execute(makeRequest());
     expect(outcome.kind).toBe('delivered');
+    expect(logger.errors).toEqual([
+      {
+        obj: { err: { message: 'disk full', name: 'Error' }, requestId: 'req-1' },
+        msg: 'Persistence failed: saveReceipt',
+      },
+    ]);
   });
 });

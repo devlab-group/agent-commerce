@@ -386,15 +386,18 @@ describe('execution pipeline authorization', () => {
               provider: 'x402',
               amount: '0.01',
               currency: 'USDC',
+              // Without a replay key the missing-key guard would refuse it too
+              replayKey: 'replay-rejected',
               rejectionReason: 'wrong amount',
             }),
           }),
         ],
       });
 
-      await expect(pipeline.execute(makeRequest())).rejects.toSatisfy(
-        (error: unknown) => codeOf(error) === 'PAYMENT_INVALID',
-      );
+      await expect(pipeline.execute(makeRequest())).rejects.toMatchObject({
+        code: 'PAYMENT_INVALID',
+        message: 'wrong amount',
+      });
       expect(auth.calls).toEqual([]);
     });
 
