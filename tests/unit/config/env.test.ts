@@ -11,6 +11,10 @@ describe('substituteEnv', () => {
     expect(substituteEnv('${FOO}', { FOO: 'bar' })).toBe('bar');
   });
 
+  it('substitutes a ${VAR} set to an empty string rather than treating it as unset', () => {
+    expect(substituteEnv('${EMPTY}', { EMPTY: '' })).toBe('');
+  });
+
   it('substitutes a ${VAR} embedded in a larger string', () => {
     expect(substituteEnv('http://${HOST}:${PORT}/x', { HOST: 'example.com', PORT: '8080' })).toBe(
       'http://example.com:8080/x',
@@ -64,14 +68,14 @@ describe('substituteEnv', () => {
     expect(substituteEnv(null, {})).toBe(null);
   });
 
-  it('includes the config path in the unresolved-variable error', () => {
+  it('includes the config path, array indexes too, in the unresolved-variable error', () => {
     try {
-      substituteEnv({ merchant: { publicBaseUrl: '${MISSING}' } }, {});
+      substituteEnv({ server: { allowedOrigins: ['http://a.test', '${MISSING}'] } }, {});
       expect.unreachable();
     } catch (error) {
-      if (isCommerceError(error)) {
-        expect(error.message).toContain('merchant.publicBaseUrl');
-      }
+      if (!isCommerceError(error)) throw error;
+      expect(error.message).toContain('"$.server.allowedOrigins[1]"');
+      expect(error.details).toEqual({ variable: 'MISSING', path: '$.server.allowedOrigins[1]' });
     }
   });
 });
@@ -89,12 +93,12 @@ describe('nested placeholders and the unresolved-placeholder promise', () => {
     expect(() => substituteEnv({ x: '${A:-${B}}' }, env)).toThrowError(/nests placeholders/);
   });
 
-  it('never quotes a resolved value back in an error', () => {
-    // Checks run on the template, so a resolved value that looks like a
-    // placeholder passes through untouched and never appears in an error
-    expect(substituteEnv({ x: '${SECRET}' }, { SECRET: 'prefix-${INNER}-suffix' })).toEqual({
-      x: 'prefix-${INNER}-suffix',
-    });
+  it('neither expands nor validates brace text inside a resolved value', () => {
+    // Checks run on the template, so a secret containing `${...}` passes
+    // through untouched: it is never substituted again, and never refused in
+    // an error that would quote it
+    const secret = 'prefix-${INNER}-${SHELL-form}-suffix';
+    expect(substituteEnv({ x: '${SECRET}' }, { SECRET: secret })).toEqual({ x: secret });
   });
 
   // Valid shell, unsupported here. Loaded literally, `adminToken` would make

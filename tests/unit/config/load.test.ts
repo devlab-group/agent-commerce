@@ -112,7 +112,19 @@ describe('loadConfig', () => {
     expect(config.merchant.id).toBe('demo-store');
   });
 
-  it('defaults to./config.yaml under cwd', async () => {
+  it('prefers an explicit path over AGENT_COMMERCE_CONFIG', async () => {
+    const dir = await makeTmpDir();
+    const file = path.join(dir, 'explicit.yaml');
+    await fs.writeFile(file, VALID_YAML, 'utf8');
+
+    const config = await loadConfig({
+      path: file,
+      env: { AGENT_COMMERCE_CONFIG: path.join(dir, 'does-not-exist.yaml') },
+    });
+    expect(config.merchant.id).toBe('demo-store');
+  });
+
+  it('defaults to ./config.yaml under cwd', async () => {
     const dir = await makeTmpDir();
     await fs.writeFile(path.join(dir, 'config.yaml'), VALID_YAML, 'utf8');
 
@@ -139,12 +151,15 @@ describe('loadConfig', () => {
     const file = path.join(dir, 'broken.yaml');
     await fs.writeFile(file, 'version: 1\n  bad indent: [\n', 'utf8');
 
+    // A document that parsed would still fail schema validation with the same
+    // code, so the message must say the YAML itself was refused
     try {
       await loadConfig({ path: file, env: {} });
       expect.unreachable();
     } catch (error) {
-      expect(isCommerceError(error)).toBe(true);
-      if (isCommerceError(error)) expect(error.code).toBe('CONFIG_INVALID');
+      if (!isCommerceError(error)) throw error;
+      expect(error.code).toBe('CONFIG_INVALID');
+      expect(error.message).toContain('is not valid YAML');
     }
   });
 
@@ -157,11 +172,10 @@ describe('loadConfig', () => {
       await loadConfig({ path: file, env: {} });
       expect.unreachable();
     } catch (error) {
-      expect(isCommerceError(error)).toBe(true);
-      if (isCommerceError(error)) {
-        expect(error.code).toBe('CONFIG_INVALID');
-        expect(error.message.toLowerCase()).toContain('unique');
-      }
+      if (!isCommerceError(error)) throw error;
+      expect(error.code).toBe('CONFIG_INVALID');
+      expect(error.details?.['yamlErrorCode']).toBe('DUPLICATE_KEY');
+      expect(error.message).toContain('map keys must be unique');
     }
   });
 
@@ -178,10 +192,9 @@ describe('loadConfig', () => {
       await loadConfig({ path: file, env: {} });
       expect.unreachable();
     } catch (error) {
-      if (isCommerceError(error)) {
-        expect(error.code).toBe('CONFIG_INVALID');
-        expect(error.message).toContain('GATEWAY_PUBLIC_BASE_URL');
-      }
+      if (!isCommerceError(error)) throw error;
+      expect(error.code).toBe('CONFIG_INVALID');
+      expect(error.message).toContain('GATEWAY_PUBLIC_BASE_URL');
     }
   });
 
@@ -207,14 +220,15 @@ describe('loadConfig', () => {
       await loadConfig({ path: file, env: {} });
       expect.unreachable();
     } catch (error) {
-      expect(isCommerceError(error)).toBe(true);
-      if (!isCommerceError(error)) return;
+      if (!isCommerceError(error)) throw error;
       expect(error.code).toBe('CONFIG_INVALID');
+      // Control: the parser's own message does quote the secret
+      expect((error.cause as Error).message).toContain(secret);
       expect(error.message).not.toContain(secret);
       expect(JSON.stringify(error.details)).not.toContain(secret);
       // Still actionable: a code and a position
-      expect(error.details?.['yamlErrorCode']).toBeDefined();
-      expect(error.details?.['line']).toBeDefined();
+      expect(error.details?.['yamlErrorCode']).toEqual(expect.any(String));
+      expect(error.details?.['line']).toEqual(expect.any(Number));
     }
   });
 });
