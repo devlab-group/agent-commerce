@@ -6,11 +6,12 @@
 # the command. Deployed addresses come from the manifest (docs/contracts.md).
 #
 # Invoked as: bash docker/gateway-entrypoint.sh <command...>
+# LOCAL_CHAIN_MANIFEST_WAIT_SECONDS (default 120) bounds the wait for the manifest.
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
 MANIFEST="${LOCAL_CHAIN_MANIFEST:-/workspace/.deploy/local.json}"
-DEADLINE=$(( $(date +%s) + 120 ))
+DEADLINE=$(( $(date +%s) + ${LOCAL_CHAIN_MANIFEST_WAIT_SECONDS:-120} ))
 
 echo "[gateway] waiting for local chain manifest at ${MANIFEST}"
 while [ ! -f "${MANIFEST}" ]; do
