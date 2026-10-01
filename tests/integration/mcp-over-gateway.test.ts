@@ -4,89 +4,23 @@
  * drives the adapter over a bare node:http server and never reaches Fastify's
  * body parsing, which must leave the request body for the adapter to read.
  *
- * Fakes: ReceiptStore and BackendExecutor only.
+ * Fakes: ReceiptStore, BackendExecutor and, for the paid tool, PaymentProvider.
  */
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { afterEach, describe, expect, it } from 'vitest';
-import type {
-  AdapterDescriptor,
-  Clock,
-  CommerceEvent,
-  CommerceReceipt,
-  IdGenerator,
-  PaymentAttempt,
-  ReceiptStore,
-} from '../../src/core';
+import type { Clock, IdGenerator } from '../../src/core';
+import { DELIVERY_SUMMARY_META_KEY, PAYMENT_INPUT_FIELD } from '../../src/core';
 import { createGateway, type GatewayInstance } from '../../src/gateway';
 import { createMcpAdapter } from '../../src/protocols/mcp';
+import {
+  createFakePaymentProvider,
+  createFakeStore,
+  makeGatewayConfig,
+} from '../unit/gateway/helpers';
 
 process.env['NODE_ENV'] = 'test';
-
-const descriptor: AdapterDescriptor = {
-  name: 'fake-store',
-  kind: 'storage',
-  implementationVersion: '0.0.0-test',
-  supportedSpec: 'n/a',
-  capabilities: [],
-  status: 'experimental',
-};
-
-function createFakeStore(): ReceiptStore {
-  const events: CommerceEvent[] = [];
-  const receipts: CommerceReceipt[] = [];
-  const attempts = new Map<string, PaymentAttempt>();
-  return {
-    async init() {},
-    async appendEvent(event) {
-      events.push(event);
-    },
-    async reservePaymentAttempt(reservation) {
-      const attempt: PaymentAttempt = {
-        id: `attempt-${attempts.size + 1}`,
-        requestId: reservation.requestId,
-        resourceId: reservation.resourceId,
-        provider: reservation.provider,
-        replayKey: reservation.replayKey,
-        status: 'reserved',
-        amount: reservation.amount,
-        currency: reservation.currency,
-        createdAt: '2026-01-01T00:00:00.000Z',
-        updatedAt: '2026-01-01T00:00:00.000Z',
-      };
-      attempts.set(reservation.replayKey, attempt);
-      return attempt;
-    },
-    async updatePaymentAttempt() {},
-    async saveReceipt(receipt) {
-      receipts.push(receipt);
-    },
-    async getReceipt(id) {
-      return receipts.find((r) => r.id === id);
-    },
-    async listReceipts() {
-      return receipts;
-    },
-    async countReceipts() {
-      return receipts.length;
-    },
-    async countUndeliveredReceipts() {
-      return receipts.filter((r) => r.backendStatus < 200 || r.backendStatus > 299).length;
-    },
-    async listEvents() {
-      return events;
-    },
-    async listPaymentAttempts() {
-      return [...attempts.values()];
-    },
-    descriptor,
-    async health() {
-      return { status: 'pass', checkedAt: '2026-01-01T00:00:00.000Z' };
-    },
-    async close() {},
-  };
-}
 
 const clock: Clock = {
   now: () => new Date('2026-01-01T00:00:00.000Z'),
@@ -199,16 +133,120 @@ describe('MCP over the real gateway (Fastify body-parsing regression)', () => {
 
     const { url } = await gateway.listen();
 
-    const res = await fetch(`${url}/mcp`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        accept: 'application/json, text/event-stream',
-        origin: 'https://evil.example',
+    const listTools = (headers: Record<string, string>) =>
+      fetch(`${url}/mcp`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          accept: 'application/json, text/event-stream',
+          ...headers,
+        },
+        body: JSON.stringify({ jsonrpc: '2.0', method: 'tools/list', params: {}, id: 1 }),
+      });
+
+    expect((await listTools({ origin: 'https://evil.example' })).status).toBe(403);
+    expect((await listTools({})).status).toBe(200);
+  });
+});
+
+describe('paid MCP tool over the real gateway', () => {
+  it('challenges, refuses a bad proof and delivers once only after settlement', async () => {
+    let backendCalls = 0;
+    let settleCalls = 0;
+    gateway = await createGateway({
+      config: makeGatewayConfig({
+        resources: [
+          {
+            id: 'market_report',
+            name: 'Premium Market Report',
+            inputSchema: {
+              type: 'object',
+              properties: { symbol: { type: 'string' } },
+              required: ['symbol'],
+              additionalProperties: false,
+            },
+            handler: { type: 'http', method: 'GET', url: 'http://backend.local/report' },
+            pricing: { type: 'fixed', amount: '0.01', currency: 'USDC' },
+            exposedVia: ['mcp'],
+            paymentMethods: ['x402'],
+          },
+        ],
+      }),
+      store: createFakeStore(),
+      paymentProviders: [
+        createFakePaymentProvider({
+          verify: async (ctx) =>
+            ctx.submission.payload === 'valid-proof'
+              ? {
+                  status: 'verified',
+                  provider: 'x402',
+                  amount: '0.01',
+                  currency: 'USDC',
+                  replayKey: 'replay-1',
+                }
+              : {
+                  status: 'rejected',
+                  provider: 'x402',
+                  amount: '0.01',
+                  currency: 'USDC',
+                  rejectionReason: 'invalid_signature',
+                },
+          settle: async () => {
+            settleCalls += 1;
+            return {
+              status: 'settled',
+              provider: 'x402',
+              amount: '0.01',
+              currency: 'USDC',
+              externalReference: '0xTXHASH',
+            };
+          },
+        }),
+      ],
+      protocolAdapters: [createMcpAdapter()],
+      clock,
+      ids,
+      backend: {
+        call: async () => {
+          backendCalls += 1;
+          return { status: 200, headers: {}, body: { symbol: 'ETH', price: 42 }, durationMs: 1 };
+        },
       },
-      body: JSON.stringify({ jsonrpc: '2.0', method: 'tools/list', params: {}, id: 1 }),
+    });
+    const { url } = await gateway.listen();
+    client = new Client({ name: 'integration-test-client', version: '0.0.0-test' });
+    await client.connect(new StreamableHTTPClientTransport(new URL(`${url}/mcp`)) as Transport);
+    const buy = async (args: Record<string, unknown>) =>
+      (await client?.callTool({
+        name: 'market_report',
+        arguments: { symbol: 'ETH', ...args },
+      })) as {
+        isError?: boolean;
+        structuredContent?: Record<string, unknown>;
+        _meta?: Record<string, unknown>;
+      };
+
+    const challenged = await buy({});
+    expect(challenged.isError).toBe(true);
+    expect(challenged.structuredContent).toMatchObject({
+      code: 'PAYMENT_REQUIRED',
+      payment: { provider: 'x402', amount: '0.01', currency: 'USDC', destination: '0xMERCHANT' },
     });
 
-    expect(res.status).toBe(403);
+    const refused = await buy({ [PAYMENT_INPUT_FIELD]: 'forged-proof' });
+    expect(refused.isError).toBe(true);
+    expect(refused.structuredContent).toMatchObject({ code: 'PAYMENT_INVALID' });
+    expect(settleCalls).toBe(0);
+    expect(backendCalls).toBe(0);
+
+    const paid = await buy({ [PAYMENT_INPUT_FIELD]: 'valid-proof' });
+    expect(paid.isError).not.toBe(true);
+    expect(paid.structuredContent).toEqual({ symbol: 'ETH', price: 42 });
+    expect(paid._meta?.[DELIVERY_SUMMARY_META_KEY]).toMatchObject({
+      resourceId: 'market_report',
+      payment: { status: 'settled', amount: '0.01', externalReference: '0xTXHASH' },
+    });
+    expect(settleCalls).toBe(1);
+    expect(backendCalls).toBe(1);
   });
 });

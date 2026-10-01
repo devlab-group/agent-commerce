@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 import type { CommerceResource } from '../../../src/core';
 import { createMcpAdapter } from '../../../src/protocols/mcp/adapter';
 import { buildInputSchema, buildToolDescription } from '../../../src/protocols/mcp/tool-mapping';
+import { createFakeContext } from '../../conformance/mcp/fakes';
+import { FREE_ECHO_RESOURCE } from '../../conformance/mcp/fixtures';
 
 // Closed, as config closes every resource input schema by default
 const GATED_RESOURCE: CommerceResource = {
@@ -94,5 +96,38 @@ describe('MCP tool-call permits', () => {
 
     await expect(abandoned).rejects.toMatchObject({ code: 'PROTOCOL_UNSUPPORTED' });
     await expect(next).resolves.toBeUndefined();
+  });
+});
+
+// Reached directly as well: once the client has disconnected, no response
+// carries the call's result back for a test to observe
+interface ToolCallInternals {
+  handleToolCall(
+    name: string,
+    args: Record<string, unknown>,
+    signal: AbortSignal,
+  ): Promise<unknown>;
+}
+
+describe('MCP tool call whose client has disconnected', () => {
+  it('starts no pipeline run and answers with a non-retryable code, not GATEWAY_BUSY', async () => {
+    const adapter = createMcpAdapter();
+    const { context, pipeline } = createFakeContext({ resources: [FREE_ECHO_RESOURCE] });
+    await adapter.start(context);
+    const calls = adapter as unknown as ToolCallInternals;
+    const gone = new AbortController();
+    gone.abort();
+
+    const result = await calls.handleToolCall('echo', { message: 'hi' }, gone.signal);
+
+    expect(pipeline.requests).toHaveLength(0);
+    expect(result).toMatchObject({
+      isError: true,
+      structuredContent: { code: 'PROTOCOL_UNSUPPORTED', retryable: false },
+    });
+
+    // The same call from a connected client does reach the pipeline
+    await calls.handleToolCall('echo', { message: 'hi' }, new AbortController().signal);
+    expect(pipeline.requests).toHaveLength(1);
   });
 });
