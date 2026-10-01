@@ -10,7 +10,6 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { validateAcpDocument } from '../../../src/protocols/acp/validation';
 import {
   ACP_EXAMPLES,
-  ACP_OPERATIONS,
   type AcpStack,
   acpFetch,
   acpHeaders,
@@ -133,11 +132,6 @@ describe('cancelCheckoutSession', () => {
 });
 
 describe('one request, one merchant call', () => {
-  it('never calls the merchant twice for a single accepted request', async () => {
-    await acpFetch(stack, '/acp/checkout_sessions', { body: CREATE_REQUEST });
-    expect(stack.calls).toHaveLength(1);
-  });
-
   it('routes each operation to its own configured resource', async () => {
     await acpFetch(stack, '/acp/checkout_sessions', { body: CREATE_REQUEST });
     await acpFetch(stack, '/acp/checkout_sessions/cs_1', { method: 'GET' });
@@ -148,6 +142,5 @@ describe('one request, one merchant call', () => {
       'GET /checkout_sessions/cs_1',
       'POST /checkout_sessions/cs_1/cancel',
     ]);
-    expect(Object.values(ACP_OPERATIONS)).toHaveLength(5);
   });
 });

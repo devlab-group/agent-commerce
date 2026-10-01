@@ -14,7 +14,6 @@ import type { BackendExecutor } from '../../src/core';
 import { createGateway, type GatewayInstance } from '../../src/gateway';
 import { createA2aAdapter } from '../../src/protocols/a2a';
 import { createAcpAdapter } from '../../src/protocols/acp';
-import { ACP_SPEC_VERSION, ACP_WELL_KNOWN_PATH } from '../../src/protocols/acp/constants';
 import { createMcpAdapter } from '../../src/protocols/mcp';
 import { createFakeStore } from '../unit/gateway/helpers';
 
@@ -148,7 +147,7 @@ async function startGateway(acpEnabled = true): Promise<GatewayInstance> {
 function acpHeaders(extra: Record<string, string> = {}): Record<string, string> {
   return {
     authorization: `Bearer ${TOKEN}`,
-    'api-version': ACP_SPEC_VERSION,
+    'api-version': '2026-04-17',
     'content-type': 'application/json',
     'idempotency-key': 'idem-integration-1',
     ...extra,
@@ -160,12 +159,12 @@ const CREATE_BODY = { line_items: [{ id: 'item_123' }], currency: 'usd', capabil
 describe('ACP over the gateway', () => {
   it('serves discovery at the specification-fixed path, unauthenticated', async () => {
     const gw = await startGateway();
-    const res = await gw.server.inject({ method: 'GET', url: ACP_WELL_KNOWN_PATH });
+    const res = await gw.server.inject({ method: 'GET', url: '/.well-known/acp.json' });
 
     expect(res.statusCode).toBe(200);
     expect(res.headers['cache-control']).toBe('public, max-age=3600');
     expect(res.json()).toMatchObject({
-      protocol: { name: 'acp', version: ACP_SPEC_VERSION },
+      protocol: { name: 'acp', version: '2026-04-17' },
       api_base_url: 'http://localhost:8080/acp',
       transports: ['rest'],
       capabilities: { services: ['checkout'] },
@@ -192,7 +191,7 @@ describe('ACP over the gateway', () => {
     await gw.server.inject({
       method: 'GET',
       url: '/acp/checkout_sessions/cs_1',
-      headers: { authorization: `Bearer ${TOKEN}`, 'api-version': ACP_SPEC_VERSION },
+      headers: { authorization: `Bearer ${TOKEN}`, 'api-version': '2026-04-17' },
     });
     await gw.server.inject({
       method: 'POST',
@@ -225,7 +224,7 @@ describe('ACP over the gateway', () => {
     const res = await gw.server.inject({
       method: 'POST',
       url: '/acp/checkout_sessions',
-      headers: { 'content-type': 'application/json', 'api-version': ACP_SPEC_VERSION },
+      headers: { 'content-type': 'application/json', 'api-version': '2026-04-17' },
       payload: JSON.stringify(CREATE_BODY),
     });
 
@@ -238,7 +237,7 @@ describe('ACP disabled', () => {
   it('serves no ACP route at all', async () => {
     const gw = await startGateway(false);
 
-    const discovery = await gw.server.inject({ method: 'GET', url: ACP_WELL_KNOWN_PATH });
+    const discovery = await gw.server.inject({ method: 'GET', url: '/.well-known/acp.json' });
     const checkout = await gw.server.inject({
       method: 'POST',
       url: '/acp/checkout_sessions',
@@ -276,7 +275,7 @@ describe('ACP in the gateway discovery document', () => {
 
     expect(body.protocols['acp']).toEqual({ enabled: true, mountPath: '/acp' });
     const acp = body.adapters.find((adapter) => adapter.name === 'acp');
-    expect(acp).toMatchObject({ status: 'experimental', supportedSpec: ACP_SPEC_VERSION });
+    expect(acp).toMatchObject({ status: 'experimental', supportedSpec: '2026-04-17' });
     expect(acp?.unsupported).toContain('delegate_payment');
 
     // The bearer token, the idempotency database and the operation-to-resource

@@ -173,9 +173,12 @@ describe('ACP error mapping', () => {
 
   it.each([
     ['a backend 404', 'BACKEND_ERROR', { status: 404 }, 404, 'checkout_session_not_found'],
+    ['a backend 400', 'BACKEND_ERROR', { status: 400 }, 422, 'invalid_request_body'],
     ['a backend 422', 'BACKEND_ERROR', { status: 422 }, 422, 'invalid_request_body'],
     ['a backend 409', 'BACKEND_ERROR', { status: 409 }, 409, 'checkout_session_conflict'],
+    ['a backend 405 outside cancel', 'BACKEND_ERROR', { status: 405 }, 405, 'method_not_allowed'],
     ['a backend 500', 'BACKEND_ERROR', { status: 500 }, 502, 'processing_error'],
+    ['a backend error with no status', 'BACKEND_ERROR', undefined, 502, 'processing_error'],
     // Relaying it would tell the agent its own bearer token failed
     ['a backend 401', 'BACKEND_ERROR', { status: 401 }, 502, 'processing_error'],
     ['a timeout', 'BACKEND_TIMEOUT', undefined, 504, 'service_unavailable'],

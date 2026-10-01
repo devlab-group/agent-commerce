@@ -4,7 +4,7 @@
  * Completion places the order, so these tests count merchant calls: a gateway
  * can answer a retry correctly and still place a second order.
  */
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   ACP_EXAMPLES,
   type AcpStack,
@@ -73,14 +73,24 @@ describe('completion replay', () => {
   });
 
   it('answers 409 while the first request is still in flight', async () => {
-    // The merchant holds the first completion open, so the duplicate arrives
-    // while the claim is live
-    stack.nextReply({ status: 200, body: {}, delayMs: 300 });
+    // The merchant holds the first completion open until the duplicate has
+    // been answered. The claim precedes the merchant call, so once the
+    // merchant has the call the claim is live.
+    let release = (): void => {};
+    stack.nextReply({
+      status: 200,
+      body: ACP_EXAMPLES['complete_checkout_session_response'],
+      until: new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+    });
     const inFlight = complete('idem-complete-4');
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await vi.waitFor(() => expect(stack.calls).toHaveLength(1));
     const duplicate = await complete('idem-complete-4');
-    await inFlight;
+    release();
+    const first = await inFlight;
 
+    expect(first.status).toBe(200);
     expect(duplicate.status).toBe(409);
     expect(duplicate.body['code']).toBe('idempotency_in_flight');
     expect(duplicate.headers.get('retry-after')).toBe('1');
@@ -124,20 +134,30 @@ describe('completion replay', () => {
     }
   });
 
-  it('gives the merchant one stable key for an operation, across retries', async () => {
+  it('gives the merchant one derived key per operation, stable across gateway instances', async () => {
     const headers = acpHeaders({ 'idempotency-key': 'idem-stable' });
     await acpFetch(stack, COMPLETE_PATH, { headers, body: COMPLETE_REQUEST });
     // A second endpoint with the same client key: a merchant keying state on the
     // forwarded value must not see two operations as one
     await acpFetch(stack, '/acp/checkout_sessions', { headers, body: CREATE_REQUEST });
+    // Another gateway for the same deployment, with its own idempotency store,
+    // runs the same operation: the merchant must be able to recognize it
+    const other = await startAcpStack();
+    try {
+      await acpFetch(other, COMPLETE_PATH, { headers, body: COMPLETE_REQUEST });
+    } finally {
+      await other.close();
+    }
 
+    expect(stack.calls).toHaveLength(2);
+    expect(other.calls).toHaveLength(1);
     const [completed, created] = stack.calls;
     const forwarded = completed?.headers['idempotency-key'];
-    expect(forwarded).toBeDefined();
-    // Never the caller's own key, which names no operation on its own: the
-    // forwarded key is derived from the deployment, endpoint and client key
-    expect(forwarded).not.toBe('idem-stable');
+    // A digest of deployment, endpoint and client key, never the caller's own
+    // key, which names no operation on its own
+    expect(forwarded).toMatch(/^[0-9a-f]{64}$/);
     expect(created?.headers['idempotency-key']).not.toBe(forwarded);
+    expect(other.calls[0]?.headers['idempotency-key']).toBe(forwarded);
   });
 
   it('scopes a key to its endpoint, so the same key may create and complete', async () => {

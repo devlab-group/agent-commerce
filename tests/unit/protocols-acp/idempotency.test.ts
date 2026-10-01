@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { describe, expect, it, vi } from 'vitest';
-import { NOOP_LOGGER } from '../../../src/core/public-types';
+import { CommerceError, NOOP_LOGGER } from '../../../src/core/public-types';
 import { createAcpAdapter } from '../../../src/protocols/acp/adapter';
 import { ACP_SPEC_VERSION } from '../../../src/protocols/acp/constants';
 import {
@@ -22,7 +22,7 @@ import {
   type AcpIdempotencyScope,
   createAcpIdempotencyStore,
 } from '../../../src/protocols/acp/idempotency/store';
-import { adapterOptions, deliveredFor, setup } from './fixtures';
+import { adapterOptions, delivered, deliveredFor, setup } from './fixtures';
 
 const DEPLOYMENT = 'https://merchant.example.com';
 const SCOPE: AcpIdempotencyScope = {
@@ -93,9 +93,10 @@ describe('ACP idempotency store', () => {
   });
 
   it.each([
+    ['a different key', { key: 'idem-2' }],
     ['a different endpoint', { endpoint: '/acp/checkout_sessions/cs_1/cancel' }],
     ['a different deployment', { deployment: 'https://other-gateway.example.com' }],
-  ])('scopes a key by %s', (_label, override) => {
+  ])('reserves afresh for %s', (_label, override) => {
     const store = memoryStore();
     store.claim(SCOPE, FINGERPRINT);
 
@@ -222,7 +223,7 @@ describe('ACP idempotency store', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('survives a reopen of the database file, and never writes the bearer token', () => {
+  it('replays a completed answer after a reopen of the database file', () => {
     const dir = mkdtempSync(join(tmpdir(), 'oac-acp-idem-'));
     const path = join(dir, 'acp-idempotency.sqlite');
 
@@ -232,14 +233,12 @@ describe('ACP idempotency store', () => {
     first.close();
 
     const second = createAcpIdempotencyStore({ path, retentionHours: 24 });
-    expect(second.claim(SCOPE, FINGERPRINT)).toMatchObject({ kind: 'replay', status: 201 });
+    expect(second.claim(SCOPE, FINGERPRINT)).toEqual({
+      kind: 'replay',
+      status: 201,
+      body: { id: 'cs_1' },
+    });
     second.close();
-
-    // The bearer token is not part of the scope, so nothing derived from it
-    // reaches the file
-    const bytes = readFileSync(path).toString('binary');
-    expect(bytes).not.toContain('acp-secret-token');
-    expect(bytes).toContain(DEPLOYMENT);
 
     rmSync(dir, { recursive: true, force: true });
   });
@@ -399,33 +398,123 @@ describe('ACP idempotency over the adapter', () => {
     expect(retry.status).toBe(409);
     expect((retry.body as { code?: string }).code).toBe('idempotency_unresolved');
 
+    // The claim is keyed by the deployment, and neither token reaches the file
+    const bytes = readFileSync(path).toString('binary');
+    expect(bytes).toContain('https://merchant.example.com');
+    expect(bytes).not.toContain('old-token');
+    expect(bytes).not.toContain('new-token');
+
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('keeps the key claimed when a 5xx leaves the merchant outcome unknown', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'oac-acp-adapter-'));
-    const path = join(dir, 'idem.sqlite');
-    const adapter = createAcpAdapter(adapterOptions({ idempotency: { path, retentionHours: 24 } }));
-    await adapter.start(setup(new Error('backend exploded')).context);
+  it('frees the key when the attempt failed before reaching the merchant', async () => {
+    const { context, execute } = setup(deliveredFor('createCheckoutSession'));
+    execute.mockRejectedValueOnce(new CommerceError('GATEWAY_BUSY', 'load shed'));
+    const adapter = createAcpAdapter(adapterOptions());
+    await adapter.start(context);
 
-    // A bare Error out of the pipeline says nothing about whether the merchant
-    // ran, so it is ambiguous and the second attempt must not re-run it
-    const first = await post(adapter, 'idem-5xx', CREATE);
-    const second = await post(adapter, 'idem-5xx', CREATE);
+    const shed = await post(adapter, 'idem-busy', CREATE);
+    const retry = await post(adapter, 'idem-busy', CREATE);
 
-    expect(first.status).toBe(500);
-    expect(second.status).toBe(409);
-    expect((second.body as { code?: string }).code).toBe('idempotency_unresolved');
-    expect(second.headers['idempotent-replayed']).toBeUndefined();
-
-    // The claim survives as a row an operator can find, rather than vanishing
-    // and handing the next retry a clean key
+    expect(shed.status).toBe(503);
+    expect(retry.status).toBe(201);
+    expect(retry.headers['idempotent-replayed']).toBeUndefined();
+    expect(execute).toHaveBeenCalledTimes(2);
     await adapter.stop();
-    const db = new Database(path, { readonly: true });
-    const rows = db.prepare('SELECT state FROM acp_idempotency').all() as { state: string }[];
-    db.close();
-    expect(rows.map((row) => row.state)).toEqual(['unresolved']);
-
-    rmSync(dir, { recursive: true, force: true });
   });
+
+  it('replays a merchant refusal instead of running the operation again', async () => {
+    const { context, execute } = setup(
+      new CommerceError('BACKEND_ERROR', 'merchant refused', { details: { status: 409 } }),
+    );
+    const adapter = createAcpAdapter(adapterOptions());
+    await adapter.start(context);
+
+    const refused = await post(adapter, 'idem-refused', CREATE);
+    const retry = await post(adapter, 'idem-refused', CREATE);
+
+    expect(refused.status).toBe(409);
+    expect(retry.status).toBe(409);
+    expect(retry.body).toEqual(refused.body);
+    expect(retry.headers['idempotent-replayed']).toBe('true');
+    expect(execute).toHaveBeenCalledTimes(1);
+    await adapter.stop();
+  });
+
+  // The merchant ran the operation and answered with something that is not
+  // ACP, so the order may exist even though the answer is refused
+  it('keeps the key claimed after a non-ACP merchant answer', async () => {
+    const { context, execute } = setup(delivered({ ok: true, order: 'ord_1' }, 201));
+    const adapter = createAcpAdapter(adapterOptions());
+    await adapter.start(context);
+
+    const refused = await post(adapter, 'idem-non-acp', CREATE);
+    const retry = await post(adapter, 'idem-non-acp', CREATE);
+
+    expect(refused.status).toBe(500);
+    expect(retry.status).toBe(409);
+    expect((retry.body as { code?: string }).code).toBe('idempotency_unresolved');
+    expect(execute).toHaveBeenCalledTimes(1);
+    await adapter.stop();
+  });
+
+  // A failing log sink stands in for any adapter fault that surfaces after the
+  // pipeline was called
+  it('keeps the key claimed when handling fails after the pipeline ran', async () => {
+    const { context, execute } = setup(new CommerceError('BACKEND_TIMEOUT', 'timed out'));
+    const warn = vi.fn(() => {
+      throw new Error('log sink down');
+    });
+    const adapter = createAcpAdapter(adapterOptions());
+    await adapter.start({ ...context, logger: { ...NOOP_LOGGER, warn } });
+
+    const failed = await post(adapter, 'idem-fault', CREATE);
+    const retry = await post(adapter, 'idem-fault', CREATE);
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(failed.status).toBe(500);
+    expect((failed.body as { code?: string }).code).toBe('internal_error');
+    expect(retry.status).toBe(409);
+    expect((retry.body as { code?: string }).code).toBe('idempotency_unresolved');
+    expect(execute).toHaveBeenCalledTimes(1);
+    await adapter.stop();
+  });
+
+  // A bare Error says nothing about whether the merchant ran. STORAGE_ERROR is
+  // raised only when reserving a payment attempt, which a free checkout never
+  // does, so here it is unexpected too
+  it.each([
+    ['a bare Error', new Error('backend exploded')],
+    ['STORAGE_ERROR', new CommerceError('STORAGE_ERROR', 'disk full')],
+  ])(
+    'keeps the key claimed when %s leaves the merchant outcome unknown',
+    async (_label, thrown) => {
+      const dir = mkdtempSync(join(tmpdir(), 'oac-acp-adapter-'));
+      const path = join(dir, 'idem.sqlite');
+      const { context, execute } = setup(thrown);
+      const adapter = createAcpAdapter(
+        adapterOptions({ idempotency: { path, retentionHours: 24 } }),
+      );
+      await adapter.start(context);
+
+      const first = await post(adapter, 'idem-5xx', CREATE);
+      const second = await post(adapter, 'idem-5xx', CREATE);
+
+      expect(first.status).toBe(500);
+      expect(second.status).toBe(409);
+      expect((second.body as { code?: string }).code).toBe('idempotency_unresolved');
+      expect(second.headers['idempotent-replayed']).toBeUndefined();
+      expect(execute).toHaveBeenCalledTimes(1);
+
+      // The claim survives as a row an operator can find, rather than vanishing
+      // and handing the next retry a clean key
+      await adapter.stop();
+      const db = new Database(path, { readonly: true });
+      const rows = db.prepare('SELECT state FROM acp_idempotency').all() as { state: string }[];
+      db.close();
+      expect(rows.map((row) => row.state)).toEqual(['unresolved']);
+
+      rmSync(dir, { recursive: true, force: true });
+    },
+  );
 });

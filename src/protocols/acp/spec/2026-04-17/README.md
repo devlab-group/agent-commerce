@@ -27,4 +27,5 @@ was tested against.
 
 The matching official examples are vendored under
 `tests/fixtures/acp/2026-04-17/` from the same commit, and the validators are
-tested against them.
+tested against them. `tests/conformance/acp/snapshot.test.ts` pins both files
+to their upstream git blob hashes, so a local edit to either fails the suite.

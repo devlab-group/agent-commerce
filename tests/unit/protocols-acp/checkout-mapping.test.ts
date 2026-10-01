@@ -5,16 +5,19 @@
  */
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { PAYMENT_INPUT_FIELD } from '../../../src/core';
+import { createResourceRegistry } from '../../../src/core/execution';
 import { createAcpAdapter } from '../../../src/protocols/acp/adapter';
 import { ACP_SPEC_VERSION } from '../../../src/protocols/acp/constants';
 import {
   ACP_OPERATIONS,
+  ACP_RESOURCES,
   adapterOptions,
   deliveredFor,
   firstRequest,
   MOUNT,
+  NOOP_LOGGER,
   paymentRequired,
   setup,
   TOKEN,
@@ -154,13 +157,47 @@ describe('ACP checkout mapping', () => {
   // deployment - and ACP has no way to express a gateway payment challenge
   it('fails safely when the pipeline answers payment-required', async () => {
     const { context } = setup(paymentRequired);
-    const result = await send(context, { url: `${MOUNT}/checkout_sessions`, body: CREATE_BODY });
+    const error = vi.fn();
+    const result = await send(
+      { ...context, logger: { ...NOOP_LOGGER, error } },
+      { url: `${MOUNT}/checkout_sessions`, body: CREATE_BODY },
+    );
 
     expect(result.status).toBe(500);
     expect(result.body['type']).toBe('processing_error');
     const serialized = JSON.stringify(result.body);
     expect(serialized).not.toContain('0x1111111111111111111111111111111111111111');
     expect(serialized).not.toContain('x402');
+    // The operator is told the deployment is broken, not that the merchant misbehaved
+    expect(error).toHaveBeenCalledWith(
+      {
+        resourceId: ACP_OPERATIONS.createCheckoutSession,
+        requestId: expect.stringMatching(/^acp-/),
+      },
+      expect.stringContaining('must be priced free'),
+    );
+  });
+
+  // Config refuses this mapping at load; the adapter checks again, so a
+  // resource exposed only to other protocols is never driven through ACP
+  it('refuses to start when an operation maps to a resource not exposed via acp', async () => {
+    const { context } = setup();
+    const resources = createResourceRegistry(
+      ACP_RESOURCES.map((resource) =>
+        resource.id === ACP_OPERATIONS.createCheckoutSession
+          ? { ...resource, exposedVia: ['http' as const] }
+          : resource,
+      ),
+    );
+    const adapter = createAcpAdapter(adapterOptions());
+
+    await expect(adapter.start({ ...context, resources })).rejects.toMatchObject({
+      code: 'CONFIG_INVALID',
+      details: {
+        operation: 'createCheckoutSession',
+        resourceId: ACP_OPERATIONS.createCheckoutSession,
+      },
+    });
   });
 
   it('discloses nothing when the pipeline throws', async () => {

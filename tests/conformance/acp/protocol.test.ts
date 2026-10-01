@@ -5,19 +5,36 @@
  * merchant never having been called. A guard that answers correctly but lets
  * the request through anyway is not a guard.
  */
+import { request } from 'node:http';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { ACP_SPEC_VERSION } from '../../../src/protocols/acp/constants';
 import { validateAcpDocument } from '../../../src/protocols/acp/validation';
 import {
   ACP_TOKEN,
   type AcpStack,
   acpFetch,
   acpHeaders,
+  COMPLETE_REQUEST,
   CREATE_REQUEST,
   startAcpStack,
 } from './support/gateway';
 
 let stack: AcpStack;
+
+// The request target is sent exactly as given, and the status is returned
+function rawRequest(method: string, path: string, body?: unknown): Promise<number> {
+  const target = new URL(stack.url);
+  return new Promise((resolve, reject) => {
+    const req = request(
+      { host: target.hostname, port: target.port, method, path, headers: acpHeaders() },
+      (res) => {
+        res.resume();
+        res.on('end', () => resolve(res.statusCode ?? 0));
+      },
+    );
+    req.on('error', reject);
+    req.end(body === undefined ? undefined : JSON.stringify(body));
+  });
+}
 
 beforeEach(async () => {
   stack = await startAcpStack();
@@ -45,8 +62,8 @@ describe('discovery', () => {
 
     expect(body['protocol']).toEqual({
       name: 'acp',
-      version: ACP_SPEC_VERSION,
-      supported_versions: [ACP_SPEC_VERSION],
+      version: '2026-04-17',
+      supported_versions: ['2026-04-17'],
     });
     expect(body['transports']).toEqual(['rest']);
     expect(body['capabilities']).toEqual({ services: ['checkout'] });
@@ -87,6 +104,18 @@ describe('request guards', () => {
       400,
       'unsupported_api_version',
     ],
+    [
+      'a newer API-Version',
+      () => acpHeaders({ 'api-version': '2026-12-01' }),
+      400,
+      'unsupported_api_version',
+    ],
+    [
+      'the unreleased upstream spec',
+      () => acpHeaders({ 'api-version': 'unreleased' }),
+      400,
+      'unsupported_api_version',
+    ],
     ['missing Idempotency-Key', () => without('idempotency-key'), 400, 'idempotency_key_required'],
     [
       'an Idempotency-Key over 255 characters',
@@ -109,9 +138,17 @@ describe('request guards', () => {
     expect(stack.calls).toEqual([]);
   });
 
+  // The positive control for every "without calling the merchant" case here
+  it('reaches the merchant exactly once when every guard holds', async () => {
+    const result = await post(acpHeaders());
+
+    expect(result.status).toBe(201);
+    expect(stack.calls).toHaveLength(1);
+  });
+
   it('names the supported version on a version rejection', async () => {
     const result = await post(acpHeaders({ 'api-version': 'latest' }));
-    expect(result.body['supported_versions']).toEqual([ACP_SPEC_VERSION]);
+    expect(result.body['supported_versions']).toEqual(['2026-04-17']);
   });
 
   it.each([
@@ -133,6 +170,25 @@ describe('request guards', () => {
     expect(body['code']).toBe(code);
     expect(stack.calls).toEqual([]);
   });
+
+  // The router accepts "." and ".." as opaque ids; the backend request builder
+  // refuses them as path values before the merchant is called. `fetch`
+  // resolves dot segments before sending, so these go over a raw socket. The
+  // real id is the positive control.
+  it.each([
+    ['POST', '/acp/checkout_sessions/../complete', 400, 0],
+    ['POST', '/acp/checkout_sessions/%2E%2E/complete', 400, 0],
+    ['GET', '/acp/checkout_sessions/.', 400, 0],
+    ['POST', '/acp/checkout_sessions/cs_1/complete', 200, 1],
+  ])(
+    'forwards %s %s to the merchant only if the session id is not a dot segment',
+    async (method, path, status, calls) => {
+      const sent = await rawRequest(method, path, method === 'POST' ? COMPLETE_REQUEST : undefined);
+
+      expect(sent).toBe(status);
+      expect(stack.calls).toHaveLength(calls);
+    },
+  );
 
   it('answers 404 for a path ACP does not define, and 405 for the wrong method', async () => {
     const unknown = await acpFetch(stack, '/acp/orders', { method: 'GET' });

@@ -53,6 +53,8 @@ export interface MerchantReply {
   readonly body: unknown;
   /** Held open this long before replying, to provoke a gateway timeout */
   readonly delayMs?: number;
+  /** Held open until this settles, for a test that must act while the merchant is mid-call */
+  readonly until?: Promise<unknown>;
 }
 
 export interface AcpStack {
@@ -111,7 +113,8 @@ async function startMerchant(state: MerchantState): Promise<{ server: Server; or
         res.writeHead(reply.status, { 'content-type': 'application/json' });
         res.end(JSON.stringify(reply.body));
       };
-      if (reply.delayMs === undefined) send();
+      if (reply.until !== undefined) void reply.until.then(send);
+      else if (reply.delayMs === undefined) send();
       else setTimeout(send, reply.delayMs);
     });
   });

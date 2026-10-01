@@ -9,6 +9,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { validateAcpDocument } from '../../../src/protocols/acp/validation';
 import {
+  ACP_EXAMPLES,
   ACP_TOKEN,
   type AcpStack,
   acpFetch,
@@ -100,7 +101,8 @@ describe('merchant failures', () => {
   // backend that has not implemented the operation as if it had
   it('refuses a merchant that succeeds on the wrong status', async () => {
     stack = await startAcpStack();
-    stack.nextReply({ status: 200, body: {} });
+    // A conformant session, so only the status can be the reason for refusing it
+    stack.nextReply({ status: 200, body: ACP_EXAMPLES['create_checkout_session_response'] });
     const result = await acpFetch(stack, '/acp/checkout_sessions', {
       headers: acpHeaders(),
       body: CREATE_REQUEST,
