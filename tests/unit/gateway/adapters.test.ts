@@ -110,10 +110,11 @@ describe('startAndMountAdapters / adapter isolation', () => {
     await server.close();
   });
 
-  it('a POST with a real application/json body reaches the adapter intact (regression: Fastify must not drain it first)', async () => {
-    // The raw stream Fastify hands the adapter must still hold the body. The
-    // MCP-over-gateway integration test checks this end to end; this one needs
-    // no MCP round trip.
+  it('a POST body of any content type reaches the adapter intact (regression: Fastify must not drain it first)', async () => {
+    // The raw stream Fastify hands the adapter must still hold the body.
+    // Fastify's built-in JSON and text parsers match before '*', so each needs
+    // its own no-op. The MCP-over-gateway integration test checks this end to
+    // end; this one needs no MCP round trip.
     const server = Fastify({ logger: false });
     const sentBody = JSON.stringify({ jsonrpc: '2.0', method: 'tools/list', id: 1 });
     let seenBody = '';
@@ -137,15 +138,18 @@ describe('startAndMountAdapters / adapter isolation', () => {
     });
     await server.ready();
 
-    const res = await server.inject({
-      method: 'POST',
-      url: '/mcp',
-      headers: { 'content-type': 'application/json' },
-      payload: sentBody,
-    });
+    for (const contentType of ['application/json', 'text/plain', 'application/octet-stream']) {
+      seenBody = '';
+      const res = await server.inject({
+        method: 'POST',
+        url: '/mcp',
+        headers: { 'content-type': contentType },
+        payload: sentBody,
+      });
 
-    expect(res.statusCode).toBe(200);
-    expect(seenBody).toBe(sentBody);
+      expect(res.statusCode, contentType).toBe(200);
+      expect(seenBody, contentType).toBe(sentBody);
+    }
 
     await server.close();
   });
@@ -353,6 +357,12 @@ describe('startAndMountAdapters / adapter isolation', () => {
     for (const release of releasers) release();
     const settled = await Promise.all(inFlightResponses);
     for (const res of settled) expect(res.statusCode).toBe(200);
+
+    // Every finished request freed its slot, so the mount serves again
+    const next = server.inject({ method: 'POST', url: '/mcp', payload: '{}' });
+    await vi.waitFor(() => expect(entered).toBe(MOUNT_MAX_CONCURRENT_REQUESTS + 1));
+    releasers.at(-1)?.();
+    expect((await next).statusCode).toBe(200);
 
     await server.close();
   });

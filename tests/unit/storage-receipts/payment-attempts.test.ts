@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   isCommerceError,
@@ -39,12 +42,28 @@ describe('reservePaymentAttempt', () => {
   });
 
   it('reserves a fresh replayKey and returns a "reserved" PaymentAttempt', async () => {
-    const attempt = await store.reservePaymentAttempt(makeReservation({ replayKey: 'r_fresh' }));
-    expect(attempt.status).toBe('reserved');
-    expect(attempt.replayKey).toBe('r_fresh');
-    expect(attempt.id).toBeTruthy();
-    expect(attempt.createdAt).toBeTruthy();
-    expect(attempt.updatedAt).toBeTruthy();
+    const reservation = makeReservation({
+      replayKey: 'r_fresh',
+      payer: '0xbuyer',
+      payee: '0xmerchant',
+    });
+    const attempt = await store.reservePaymentAttempt(reservation);
+    const expected = {
+      id: 'attempt_1',
+      requestId: 'req_1',
+      resourceId: 'resource.report',
+      provider: 'x402',
+      replayKey: 'r_fresh',
+      status: 'reserved',
+      amount: '0.01',
+      currency: 'USDC',
+      payer: '0xbuyer',
+      payee: '0xmerchant',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    };
+    expect(attempt).toEqual(expected);
+    expect(await store.listPaymentAttempts()).toEqual([expected]);
   });
 
   it('throws PAYMENT_REPLAYED on a duplicate replayKey', async () => {
@@ -86,6 +105,51 @@ describe('reservePaymentAttempt', () => {
     // Only one row persisted
     const attempts = await store.listPaymentAttempts({ requestId: reservation.requestId });
     expect(attempts.filter((a) => a.replayKey === 'race')).toHaveLength(1);
+  });
+
+  // A storage failure is not the buyer's replay: mislabeling it would refuse a
+  // valid authorization as already spent
+  it('reports a storage failure as STORAGE_ERROR, never PAYMENT_REPLAYED', async () => {
+    const collidingIds = createSqliteReceiptStore({
+      path: ':memory:',
+      clock: createFakeClock(),
+      ids: { next: () => 'attempt_same' },
+    });
+    await collidingIds.reservePaymentAttempt(makeReservation({ replayKey: 'first' }));
+    // A UNIQUE violation on the attempt id, not on replay_key
+    await expect(
+      collidingIds.reservePaymentAttempt(makeReservation({ replayKey: 'second' })),
+    ).rejects.toMatchObject({ code: 'STORAGE_ERROR' });
+    await collidingIds.close();
+
+    await store.close();
+    await expect(
+      store.reservePaymentAttempt(makeReservation({ replayKey: 'after-close' })),
+    ).rejects.toMatchObject({ code: 'STORAGE_ERROR' });
+  });
+
+  it('still refuses a reserved replayKey after the store is reopened from its file', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'oac-replay-restart-'));
+    const path = join(dir, 'receipts.sqlite');
+    try {
+      const first = createSqliteReceiptStore({ path });
+      await first.reservePaymentAttempt(makeReservation({ replayKey: 'survives' }));
+      await first.close();
+
+      const second = createSqliteReceiptStore({ path });
+      await expect(
+        second.reservePaymentAttempt(
+          makeReservation({ replayKey: 'survives', requestId: 'req_2' }),
+        ),
+      ).rejects.toMatchObject({ code: 'PAYMENT_REPLAYED' });
+      // Control: the reopened store still accepts a fresh key
+      await expect(
+        second.reservePaymentAttempt(makeReservation({ replayKey: 'fresh' })),
+      ).resolves.toMatchObject({ status: 'reserved' });
+      await second.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('lists payment attempts newest-first', async () => {

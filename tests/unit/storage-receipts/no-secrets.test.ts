@@ -1,3 +1,6 @@
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { ReceiptStore } from '../../../src/core';
 import { createSqliteReceiptStore } from '../../../src/storage/receipts';
@@ -150,15 +153,53 @@ describe('no-secrets guarantee', () => {
     expect(fetched?.data?.ok).toBe(true);
   });
 
-  it('never persists the literal secret value anywhere in the underlying row', async () => {
+  // Reads the database file, not the store's read path, so redacting only on
+  // the way out would fail here
+  it('never writes the literal secret value to the database file', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'oac-no-secrets-'));
+    const path = join(dir, 'receipts.sqlite');
     const secretValue = 'THIS_MUST_NEVER_BE_STORED_VERBATIM';
-    await store.saveReceipt(makeReceipt({ id: 'r_scan', metadata: { password: secretValue } }));
-    await store.appendEvent(makeEvent({ id: 'e_scan', data: { mnemonic: secretValue } }));
+    const visibleValue = 'VISIBLE_LEDGER_VALUE';
+    try {
+      const fileStore = createSqliteReceiptStore({ path });
+      await fileStore.saveReceipt(
+        makeReceipt({
+          id: 'r_scan',
+          metadata: { password: secretValue, label: visibleValue },
+          payment: {
+            status: 'settled',
+            provider: 'x402',
+            amount: '0.01',
+            currency: 'USDC',
+            metadata: { signature: secretValue },
+          },
+          authorization: {
+            method: 'ap2',
+            reference: 'sha256:abc',
+            metadata: { mandateToken: secretValue },
+          },
+        }),
+      );
+      await fileStore.appendEvent(
+        makeEvent({ id: 'e_scan', data: { mnemonic: secretValue, label: visibleValue } }),
+      );
+      await fileStore.close();
 
-    const receipts = await store.listReceipts();
-    const events = await store.listEvents();
-    expect(JSON.stringify(receipts)).not.toContain(secretValue);
-    expect(JSON.stringify(events)).not.toContain(secretValue);
+      const onDisk = [path, `${path}-wal`, `${path}-shm`]
+        .filter((file) => existsSync(file))
+        .map((file) => readFileSync(file).toString('latin1'))
+        .join('');
+      // Control: the rows reached the file
+      expect(onDisk).toContain(visibleValue);
+      expect(onDisk).not.toContain(secretValue);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('redact() strips secret-shaped fields inside arrays', () => {
+    const dirty = { attempts: [{ signature: '0xsig', nonce: '1' }, 'plain'] };
+    expect(redact(dirty)).toEqual({ attempts: [{ signature: '[REDACTED]', nonce: '1' }, 'plain'] });
   });
 });
 
@@ -179,7 +220,7 @@ describe('bearer-token-shaped keys', () => {
       string,
       Record<string, unknown>
     >;
-    expect(redacted['outer']?.[key]).not.toBe('value-that-must-not-persist');
+    expect(redacted['outer']?.[key]).toBe('[REDACTED]');
     expect(isSecretKey(key)).toBe(true);
   });
 

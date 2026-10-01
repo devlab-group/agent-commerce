@@ -120,6 +120,8 @@ describe('schema lifecycle', () => {
     expect(health.status).toBe('fail');
     // A fixed vocabulary token, never text built from a caught error
     expect(health.detail).toBe('store-schema-mismatch');
+    // Startup awaits init(), so the gateway refuses to run on this file
+    await expect(store.init()).rejects.toMatchObject({ code: 'STORAGE_ERROR' });
     await store.close();
   });
 
@@ -191,12 +193,15 @@ describe('an unwritable database fails at startup, not on the first payment', ()
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it.runIf(posix)('control: a writable database still opens', () => {
+  it.runIf(posix)('control: a writable database still opens', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'oac-rw-'));
     const dbPath = join(dir, 'receipts.sqlite');
+    createSqliteReceiptStore({ path: dbPath }).close();
+
     const store = createSqliteReceiptStore({ path: dbPath });
-    expect(() => store.saveReceipt(makeReceipt())).not.toThrow();
-    store.close();
+    await store.saveReceipt(makeReceipt({ id: 'r_writable' }));
+    expect((await store.getReceipt('r_writable'))?.id).toBe('r_writable');
+    await store.close();
     rmSync(dir, { recursive: true, force: true });
   });
 });
@@ -216,11 +221,36 @@ describe('file permissions', () => {
     expect(mode(join(dir, 'nested'))).toBe(0o700);
     const files = readdirSync(join(dir, 'nested'));
     // The -wal and -shm sidecars carry the same rows as the database
-    expect(files).toContain('receipts.sqlite');
+    expect(files.sort()).toEqual(['receipts.sqlite', 'receipts.sqlite-shm', 'receipts.sqlite-wal']);
     for (const file of files) {
       expect(mode(join(dir, 'nested', file))).toBe(0o600);
     }
     store.close();
     rmSync(dir, { recursive: true, force: true });
   });
+
+  it.runIf(posix)(
+    'narrows an existing world-readable database and its sidecars to owner-only',
+    () => {
+      // A ledger left by an older build, or copied in by hand, may be 0644. The
+      // pre-create step does not change the mode of a file that already exists.
+      const dir = mkdtempSync(join(tmpdir(), 'oac-narrow-'));
+      const dbPath = join(dir, 'receipts.sqlite');
+      const legacy = new Database(dbPath);
+      migrate(legacy);
+      legacy.close();
+      chmodSync(dbPath, 0o644);
+
+      const store = createSqliteReceiptStore({ path: dbPath });
+      store.saveReceipt(makeReceipt());
+
+      const files = readdirSync(dir).sort();
+      expect(files).toEqual(['receipts.sqlite', 'receipts.sqlite-shm', 'receipts.sqlite-wal']);
+      for (const file of files) {
+        expect(statSync(join(dir, file)).mode & 0o777, file).toBe(0o600);
+      }
+      store.close();
+      rmSync(dir, { recursive: true, force: true });
+    },
+  );
 });

@@ -209,9 +209,9 @@ describe('events', () => {
 
 describe('list limit clamping', () => {
   // SQLite reads a negative LIMIT as no limit, so without the store's clamp
-  // `listReceipts({ limit: -1 })` returns every row
-  const ROW_COUNT = 12;
-  const MAX_LIST_LIMIT = 500;
+  // `listReceipts({ limit: -1 })` returns every row. One row more than the
+  // default page, so a fallback to the default is visible.
+  const ROW_COUNT = 51;
   const DEFAULT_LIST_LIMIT = 50;
 
   let store: ReceiptStore;
@@ -263,14 +263,11 @@ describe('list limit clamping', () => {
     ['listReceipts', () => store.listReceipts.bind(store)],
     ['listEvents', () => store.listEvents.bind(store)],
     ['listPaymentAttempts', () => store.listPaymentAttempts.bind(store)],
-  ] as const)(
-    '%s: huge limit clamps to MAX_LIST_LIMIT, not the raw value',
-    async (_name, getFn) => {
-      const rows = await getFn()({ limit: 10_000_000 });
-      expect(rows.length).toBe(ROW_COUNT); // fewer rows than the cap exist
-      expect(rows.length).toBeLessThanOrEqual(MAX_LIST_LIMIT);
-    },
-  );
+  ] as const)('%s: huge limit returns every row below the cap', async (_name, getFn) => {
+    // The cap itself is asserted with 600 rows in the countReceipts tests
+    const rows = await getFn()({ limit: 10_000_000 });
+    expect(rows.length).toBe(ROW_COUNT);
+  });
 
   it.each([
     ['listReceipts', () => store.listReceipts.bind(store)],
@@ -287,7 +284,7 @@ describe('list limit clamping', () => {
     ['listPaymentAttempts', () => store.listPaymentAttempts.bind(store)],
   ] as const)('%s: undefined limit falls back to the default', async (_name, getFn) => {
     const rows = await getFn()({});
-    expect(rows.length).toBe(Math.min(ROW_COUNT, DEFAULT_LIST_LIMIT));
+    expect(rows.length).toBe(DEFAULT_LIST_LIMIT);
   });
 
   // NaN survives Math.trunc/max/min and would reach `LIMIT ?` as-is. The
@@ -301,7 +298,7 @@ describe('list limit clamping', () => {
     '%s: NaN limit falls back to the default, not an unbounded query',
     async (_name, getFn) => {
       const rows = await getFn()({ limit: Number.NaN });
-      expect(rows.length).toBe(Math.min(ROW_COUNT, DEFAULT_LIST_LIMIT));
+      expect(rows.length).toBe(DEFAULT_LIST_LIMIT);
     },
   );
 
@@ -309,10 +306,9 @@ describe('list limit clamping', () => {
     ['listReceipts', () => store.listReceipts.bind(store)],
     ['listEvents', () => store.listEvents.bind(store)],
     ['listPaymentAttempts', () => store.listPaymentAttempts.bind(store)],
-  ] as const)('%s: Infinity limit clamps to MAX_LIST_LIMIT', async (_name, getFn) => {
+  ] as const)('%s: Infinity limit falls back to the default', async (_name, getFn) => {
     const rows = await getFn()({ limit: Number.POSITIVE_INFINITY });
-    expect(rows.length).toBe(ROW_COUNT);
-    expect(rows.length).toBeLessThanOrEqual(MAX_LIST_LIMIT);
+    expect(rows.length).toBe(DEFAULT_LIST_LIMIT);
   });
 });
 

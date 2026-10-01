@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 // Quiet output, and no pino-pretty worker thread for each of the many Fastify
 // instances this file creates
@@ -12,8 +12,15 @@ import type {
   IdGenerator,
   Logger,
 } from '../../../src/core';
-import { PAYMENT_HEADER, PAYMENT_RESPONSE_HEADER } from '../../../src/core';
+import {
+  DELIVERY_SUMMARY_META_KEY,
+  PAYMENT_HEADER,
+  PAYMENT_REQUIRED_HEADER,
+  PAYMENT_RESPONSE_HEADER,
+} from '../../../src/core';
+import { MOUNT_BODY_LIMIT_BYTES } from '../../../src/gateway/adapters';
 import { createGateway, type GatewayInstance } from '../../../src/gateway/server';
+import { PACKAGE_VERSION } from '../../../src/version';
 import {
   createFakeHttpAdapter,
   createFakePaymentProvider,
@@ -128,35 +135,20 @@ describe('createGateway HTTP surface', () => {
     expect(captured[0]?.requestId).not.toBe(captured[1]?.requestId);
   });
 
-  it('mints its own request id when the caller supplies an out-of-pattern one', async () => {
+  it('keeps a caller X-Request-Id only as the clientRequestId log binding, and only in its bounded form', async () => {
     const gateway = await buildGateway();
-    const captured = spyOnPipelineExecute(gateway);
-    const hostile = 'x'.repeat(5000);
-
-    await gateway.server.inject({
-      method: 'POST',
-      url: '/api/resources/weather_basic/invoke',
-      headers: { 'x-request-id': hostile },
-      payload: { city: 'Berlin' },
-    });
-
-    expect(captured).toHaveLength(1);
-    expect(captured[0]?.requestId).not.toBe(hostile);
-    expect(captured[0]?.requestId.length).toBeLessThan(200);
-  });
-
-  it('ignores a request id containing characters outside the allowed set', async () => {
-    const gateway = await buildGateway();
-    const captured = spyOnPipelineExecute(gateway);
-
-    await gateway.server.inject({
-      method: 'POST',
-      url: '/api/resources/weather_basic/invoke',
-      headers: { 'x-request-id': 'legit-id/../with-slash' },
-      payload: { city: 'Berlin' },
-    });
-
-    expect(captured[0]?.requestId).not.toBe('legit-id/../with-slash');
+    const child = vi.spyOn(gateway.server.log, 'child');
+    for (const id of ['client-flow-abc.123:v2', 'x'.repeat(5000), 'legit-id/../with-slash']) {
+      await gateway.server.inject({
+        method: 'GET',
+        url: '/health',
+        headers: { 'x-request-id': id },
+      });
+    }
+    const bindings = child.mock.calls.map(
+      ([binding]) => (binding as Record<string, unknown>)['clientRequestId'],
+    );
+    expect(bindings).toEqual(['client-flow-abc.123:v2', undefined, undefined]);
   });
 
   it('GET /health always returns 200', async () => {
@@ -230,11 +222,25 @@ describe('createGateway HTTP surface', () => {
     expect(body.payments.x402.network).toBe('eip155:84532');
     expect(body.adapters).toHaveLength(1);
     expect(body.paymentProviders).toHaveLength(1);
-    expect(body.store).toBeDefined();
+    expect(body.store.name).toBe('fake-store');
 
     const raw = res.payload;
     expect(raw).not.toContain('TOTALLY_SECRET_KEY');
     expect(raw).not.toContain('signerPrivateKey');
+  });
+
+  // These wire identifiers are in deployed clients, so a rename breaks them.
+  // The MCP server name, x402 resource URI and local chain name belong to other areas.
+  it('publishes the agent-commerce wire identity at /.well-known/agent-commerce', async () => {
+    const gateway = await buildGateway();
+    const res = await gateway.server.inject({ method: 'GET', url: '/.well-known/agent-commerce' });
+    expect(res.statusCode).toBe(200);
+    // The spec names the wire contract and changes only with it, never with the package version
+    expect(res.json().gateway).toEqual({
+      implementationVersion: PACKAGE_VERSION,
+      supportedSpec: 'agent-commerce/v1.0.0',
+    });
+    expect(DELIVERY_SUMMARY_META_KEY).toBe('agent-commerce/delivery');
   });
 
   it('serves /.well-known adapter health from the memoized readiness probe, detail dropped', async () => {
@@ -334,6 +340,59 @@ describe('createGateway HTTP surface', () => {
     expect(res.json()).toEqual({ city: 'Berlin', tempC: 18 });
   });
 
+  it('parses a JSON, plain-text or empty invoke body and refuses any other content type before the pipeline', async () => {
+    const gateway = await buildGateway();
+    const captured = spyOnPipelineExecute(gateway);
+    const invoke = (headers: Record<string, string>, payload?: string) =>
+      gateway.server.inject({
+        method: 'POST',
+        url: '/api/resources/weather_basic/invoke',
+        headers,
+        ...(payload !== undefined ? { payload } : {}),
+      });
+
+    expect(
+      (await invoke({ 'content-type': 'application/json' }, '{"city":"Berlin"}')).statusCode,
+    ).toBe(200);
+    // A string fails the object schema, but only after reaching the pipeline
+    expect((await invoke({ 'content-type': 'text/plain' }, 'Berlin')).json().code).toBe(
+      'INPUT_INVALID',
+    );
+    expect((await invoke({})).json().code).toBe('INPUT_INVALID');
+    expect(captured.map((request) => request.input)).toEqual([{ city: 'Berlin' }, 'Berlin', {}]);
+
+    for (const contentType of [
+      'application/x-www-form-urlencoded',
+      'multipart/form-data; boundary=x',
+      'application/octet-stream',
+    ]) {
+      const res = await invoke({ 'content-type': contentType }, 'city=Berlin');
+      expect(res.statusCode, contentType).toBe(415);
+    }
+    expect(captured).toHaveLength(3);
+  });
+
+  it('refuses an invoke body over the 256 KiB limit with 413 before the pipeline', async () => {
+    const gateway = await buildGateway();
+    const captured = spyOnPipelineExecute(gateway);
+    const invoke = (city: string) =>
+      gateway.server.inject({
+        method: 'POST',
+        url: '/api/resources/weather_basic/invoke',
+        headers: { 'content-type': 'application/json' },
+        payload: JSON.stringify({ city }),
+      });
+
+    const oversized = await invoke('x'.repeat(MOUNT_BODY_LIMIT_BYTES));
+    expect(oversized.statusCode).toBe(413);
+    expect(captured).toHaveLength(0);
+
+    // Control: a body just under the limit is parsed and executed
+    const underLimit = await invoke('x'.repeat(MOUNT_BODY_LIMIT_BYTES - 64));
+    expect(underLimit.statusCode).toBe(200);
+    expect(captured).toHaveLength(1);
+  });
+
   it('the invoke route still gets normal JSON body parsing with an HttpProtocolAdapter mounted alongside it (content-type-parser encapsulation regression)', async () => {
     // The adapter mount's no-op content-type parsers live in its encapsulated
     // plugin and must not break the main server's JSON body parsing
@@ -359,8 +418,27 @@ describe('createGateway HTTP surface', () => {
     expect(mcpRes.statusCode).toBe(200);
   });
 
-  it('invoking a paid resource with no proof returns 402 with a PaymentRequiredEnvelope', async () => {
-    const gateway = await buildGateway({ paymentProviders: [createFakePaymentProvider()] });
+  it('invoking a paid resource with no proof returns 402 with the PAYMENT-REQUIRED challenge and delivers nothing', async () => {
+    const challengeEnvelope = { x402Version: 2, accepts: [{ scheme: 'exact', amount: '10000' }] };
+    const provider = createFakePaymentProvider({
+      createRequirement: async (ctx) => ({
+        id: 'requirement-1',
+        requestId: ctx.requestId,
+        resourceId: ctx.resource.id,
+        provider: 'x402',
+        amount: ctx.amount,
+        currency: ctx.currency,
+        destination: '0xMERCHANT',
+        challenge: { provider: 'x402', version: '2', accepts: [], envelope: challengeEnvelope },
+      }),
+    });
+    let backendCalls = 0;
+    const backend = createFakeBackend(async () => {
+      backendCalls += 1;
+      return { status: 200, headers: {}, body: { report: 'paid content' }, durationMs: 1 };
+    });
+    const gateway = await buildGateway({ backend, paymentProviders: [provider] });
+
     const res = await gateway.server.inject({
       method: 'POST',
       url: '/api/resources/market_report/invoke',
@@ -371,7 +449,26 @@ describe('createGateway HTTP surface', () => {
     expect(body.status).toBe('payment-required');
     expect(body.code).toBe('PAYMENT_REQUIRED');
     expect(body.payment.amount).toBe('0.01');
+    expect(res.payload).not.toContain('paid content');
+    expect(backendCalls).toBe(0);
+    // x402 v2 clients read the challenge from this header, not the body
+    const header = res.headers[PAYMENT_REQUIRED_HEADER];
+    expect(JSON.parse(Buffer.from(String(header), 'base64').toString('utf8'))).toEqual(
+      challengeEnvelope,
+    );
+    // Each challenge has its own expiry, so none may be served from a cache
+    expect(res.headers['cache-control']).toBe('no-store');
     expect(res.headers[PAYMENT_RESPONSE_HEADER]).toBeUndefined();
+
+    // Control: the same backend is reachable once a proof is attached
+    const paid = await gateway.server.inject({
+      method: 'POST',
+      url: '/api/resources/market_report/invoke',
+      headers: { [PAYMENT_HEADER]: 'proof-payload' },
+      payload: {},
+    });
+    expect(paid.statusCode).toBe(200);
+    expect(backendCalls).toBe(1);
   });
 
   it('invoking a paid resource with a valid proof returns 200 and sets X-PAYMENT-RESPONSE', async () => {
@@ -506,8 +603,10 @@ describe('createGateway HTTP surface', () => {
         details: { status: 500 },
       });
     });
+    const store = createFakeStore();
     const gateway = await buildGateway({
       backend,
+      store,
       paymentProviders: [createFakePaymentProvider()],
     });
     const res = await gateway.server.inject({
@@ -522,8 +621,17 @@ describe('createGateway HTTP surface', () => {
     const header = res.headers[PAYMENT_RESPONSE_HEADER];
     expect(typeof header).toBe('string');
     const decoded = JSON.parse(Buffer.from(header as string, 'base64').toString('utf8'));
-    expect(decoded.status).toBe('settled');
-    expect(decoded.externalReference).toBeDefined();
+    expect(decoded).toMatchObject({ success: true, status: 'settled', transaction: 'tx-1' });
+
+    // The ledger shows the purchase as paid and undelivered
+    expect(store.receipts).toHaveLength(1);
+    expect(store.receipts[0]).toMatchObject({
+      resourceId: 'market_report',
+      backendStatus: 500,
+      payment: { status: 'settled', externalReference: 'tx-1' },
+      metadata: { delivered: false },
+    });
+    expect(await store.countUndeliveredReceipts()).toBe(1);
   });
 
   it('does not set X-PAYMENT-RESPONSE on an ordinary backend error with no settlement in scope (control)', async () => {
@@ -762,7 +870,7 @@ describe('createGateway HTTP surface', () => {
     expect(res.payload).not.toContain('/var/secret/db.sqlite');
   });
 
-  it('accepts a numeric limit and clamps a non-numeric one to unlimited', async () => {
+  it('accepts a numeric limit and ignores a non-numeric one, leaving the store default', async () => {
     const config = makeGatewayConfig({
       server: { ...makeGatewayConfig().server, adminToken: ADMIN_TOKEN },
     });
@@ -891,7 +999,13 @@ describe('createGateway HTTP surface', () => {
     // Readiness reflects the failed adapter
     const ready = await gateway.server.inject({ method: 'GET', url: '/ready' });
     expect(ready.statusCode).toBe(503);
-    expect(ready.json().adapters.some((a: { status: string }) => a.status === 'fail')).toBe(true);
+    expect(ready.json().adapters).toContainEqual({
+      name: 'http',
+      status: 'fail',
+      detail: 'adapter-unreachable',
+    });
+    // The start error can name a port, host or path, so it stays in the log
+    expect(ready.payload).not.toContain('cannot bind');
 
     // The good adapter is still mounted and reachable
     const mounted = await gateway.server.inject({ method: 'GET', url: '/mcp' });

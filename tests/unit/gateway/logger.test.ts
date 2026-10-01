@@ -2,8 +2,8 @@ import { existsSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
 import { PassThrough } from 'node:stream';
 import Fastify from 'fastify';
-import pino from 'pino';
-import { describe, expect, it } from 'vitest';
+import pino, { type Logger as PinoLogger } from 'pino';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AUTHORIZATION_HEADER, PAYMENT_HEADER } from '../../../src/core';
 import {
   buildNotFoundHandler,
@@ -12,70 +12,94 @@ import {
   REDACT_PATHS,
 } from '../../../src/gateway/logger';
 
+// Parsed lines a createGatewayLogger instance writes. Its children share the
+// root's destination stream, so they are captured too.
+function captureLines(root: PinoLogger): Record<string, unknown>[] {
+  const lines: Record<string, unknown>[] = [];
+  const stream = (root as unknown as Record<symbol, { write(chunk: string): boolean }>)[
+    pino.symbols.streamSym
+  ];
+  if (stream === undefined) throw new Error('pino destination stream not found');
+  vi.spyOn(stream, 'write').mockImplementation((chunk: string) => {
+    lines.push(JSON.parse(chunk) as Record<string, unknown>);
+    return true;
+  });
+  return lines;
+}
+
 describe('createGatewayLogger', () => {
-  it('redacts configured secret-shaped paths from logged output', async () => {
-    const stream = new PassThrough();
-    const chunks: string[] = [];
-    stream.on('data', (chunk: Buffer) => chunks.push(chunk.toString('utf8')));
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
 
-    const instance = pino(
-      { level: 'info', redact: { paths: [...REDACT_PATHS], censor: '[REDACTED]' } },
-      stream,
-    );
+  it('redacts configured secret-shaped paths from logged output', () => {
+    const { pino: root, core } = createGatewayLogger({ level: 'info', prettyPrint: false });
+    const lines = captureLines(root);
 
-    instance.info({ wallet: { signerPrivateKey: '0xSUPER_SECRET' } }, 'facilitator configured');
-    instance.info(
+    core.info({ wallet: { signerPrivateKey: '0xSUPER_SECRET' } }, 'facilitator configured');
+    core.info(
       {
         req: {
           headers: {
             authorization: 'Bearer secret-token',
             'payment-signature': 'base64proof',
             'agent-authorization': 'base64mandate',
+            'content-type': 'application/json',
           },
         },
       },
       'request',
     );
 
-    await new Promise((resolve) => setImmediate(resolve));
-    const combined = chunks.join('');
-    expect(combined).not.toContain('0xSUPER_SECRET');
-    expect(combined).not.toContain('secret-token');
-    expect(combined).not.toContain('base64proof');
-    expect(combined).not.toContain('base64mandate');
-    expect(combined).toContain('[REDACTED]');
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toMatchObject({ wallet: { signerPrivateKey: '[REDACTED]' } });
+    expect(lines[1]).toMatchObject({
+      req: {
+        headers: {
+          authorization: '[REDACTED]',
+          'payment-signature': '[REDACTED]',
+          'agent-authorization': '[REDACTED]',
+          'content-type': 'application/json',
+        },
+      },
+    });
   });
 
-  it('redacts every wire header that carries a credential or a proof', async () => {
+  it('redacts every wire header that carries a credential or a proof', () => {
     // Asserts the redaction, not the spelling of the path: a new header
     // constant with no path has to fail here, and rewriting an existing path
     // in another notation that still redacts must not
     for (const header of ['authorization', PAYMENT_HEADER, AUTHORIZATION_HEADER]) {
-      const stream = new PassThrough();
-      const chunks: string[] = [];
-      stream.on('data', (chunk: Buffer) => chunks.push(chunk.toString('utf8')));
-      const instance = pino(
-        { level: 'info', redact: { paths: [...REDACT_PATHS], censor: '[REDACTED]' } },
-        stream,
-      );
+      const { pino: root, core } = createGatewayLogger({ level: 'info', prettyPrint: false });
+      const lines = captureLines(root);
 
-      instance.info({ req: { headers: { [header]: 'SENSITIVE-VALUE' } } }, 'request');
-      await new Promise((resolve) => setImmediate(resolve));
+      core.info({ req: { headers: { [header]: 'SENSITIVE-VALUE' } } }, 'request');
 
-      expect(chunks.join(''), header).not.toContain('SENSITIVE-VALUE');
+      expect(lines, header).toHaveLength(1);
+      expect(lines[0]?.['req'], header).toEqual({ headers: { [header]: '[REDACTED]' } });
     }
   });
 
-  it('exposes a Logger-shaped wrapper whose child() also redacts', async () => {
-    const { core } = createGatewayLogger({ level: 'silent', prettyPrint: false });
+  it('writes each Logger method at its own level, and a child keeps its bindings and the redaction', () => {
+    const { pino: root, core } = createGatewayLogger({ level: 'debug', prettyPrint: false });
+    const lines = captureLines(root);
     const child = core.child({ requestId: 'req-1' });
-    expect(typeof child.info).toBe('function');
-    expect(typeof child.child).toBe('function');
-    // Must not throw; nothing is asserted on output (level: silent)
-    child.debug({ apiKey: 'should-be-redacted' }, 'noop-debug');
-    child.info({ apiKey: 'should-be-redacted' }, 'noop-info');
-    child.warn({ apiKey: 'should-be-redacted' }, 'noop-warn');
-    child.error({ apiKey: 'should-be-redacted' }, 'noop-error');
+
+    child.debug({ apiKey: 'should-be-redacted' }, 'at-debug');
+    child.info({ apiKey: 'should-be-redacted' }, 'at-info');
+    child.warn({ apiKey: 'should-be-redacted' }, 'at-warn');
+    child.error({ apiKey: 'should-be-redacted', amount: '0.01' }, 'at-error');
+
+    expect(lines.map((line) => [line['level'], line['msg']])).toEqual([
+      [20, 'at-debug'],
+      [30, 'at-info'],
+      [40, 'at-warn'],
+      [50, 'at-error'],
+    ]);
+    for (const line of lines) {
+      expect(line).toMatchObject({ requestId: 'req-1', apiKey: '[REDACTED]' });
+    }
+    expect(lines[3]?.['amount']).toBe('0.01');
   });
 
   it('fastifyLoggerOptions returns a plain options object with the same redaction paths', () => {
@@ -111,10 +135,28 @@ describe('createGatewayLogger', () => {
     expect(existsSync(target as string)).toBe(true);
   });
 
-  it('degrades to JSON rather than throwing when pretty-printing is unavailable', () => {
-    // An explicit prettyPrint: true must never produce an unresolvable target.
-    // Constructing the logger proves pino accepts it.
-    expect(() => createGatewayLogger({ level: 'silent', prettyPrint: true })).not.toThrow();
+  it('degrades to JSON rather than throwing when pino-pretty cannot be resolved', async () => {
+    // A consumer install usually lacks pino-pretty. The test above, where it
+    // resolves, is the control.
+    vi.resetModules();
+    vi.doMock('node:module', async (importOriginal) => ({
+      ...(await importOriginal<typeof import('node:module')>()),
+      createRequire: () => ({
+        resolve: () => {
+          throw new Error("Cannot find module 'pino-pretty'");
+        },
+      }),
+    }));
+    try {
+      const logger = await import('../../../src/gateway/logger');
+      expect(logger.fastifyLoggerOptions({ prettyPrint: true }).transport).toBeUndefined();
+      expect(() =>
+        logger.createGatewayLogger({ level: 'silent', prettyPrint: true }),
+      ).not.toThrow();
+    } finally {
+      vi.doUnmock('node:module');
+      vi.resetModules();
+    }
   });
 
   it('redacts the query string from the logged request URL (?adminToken=)', () => {
@@ -193,17 +235,28 @@ describe('redaction depth', () => {
     return chunks.join('');
   }
 
-  it('redacts a bare top-level secret field, not only a nested one', () => {
+  // The key material, credentials and proofs the gateway handles. Listed here
+  // rather than read from logger.ts, so removing a name there fails here.
+  it.each([
+    'privateKey',
+    'signerPrivateKey',
+    'signature',
+    'seed',
+    'mnemonic',
+    'secret',
+    'challengeSecret',
+    'apiKey',
+    'adminToken',
+    'token',
+  ])('redacts a "%s" field at the top level and one level down', (name) => {
     // `'*.privateKey'` matches `{wallet:{privateKey}}` but not `{privateKey}`,
     // so the bare path is generated too
-    const out = logAndCapture({ privateKey: 'MUST-NOT-APPEAR' });
-    expect(out).not.toContain('MUST-NOT-APPEAR');
-    expect(out).toContain('[REDACTED]');
-  });
-
-  it('still redacts one level deep', () => {
-    const out = logAndCapture({ wallet: { privateKey: 'MUST-NOT-APPEAR' } });
-    expect(out).not.toContain('MUST-NOT-APPEAR');
+    const out = logAndCapture({ [name]: 'MUST-NOT-APPEAR', wallet: { [name]: 'MUST-NOT-APPEAR' } });
+    expect(JSON.parse(out)).toMatchObject({
+      msg: 'probe',
+      [name]: '[REDACTED]',
+      wallet: { [name]: '[REDACTED]' },
+    });
   });
 
   it('documents its limit: depth two is NOT redacted', () => {

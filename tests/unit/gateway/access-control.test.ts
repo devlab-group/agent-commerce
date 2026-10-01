@@ -1,10 +1,24 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import Fastify from 'fastify';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   buildAccessControlHook,
   buildOperatorTokenHook,
 } from '../../../src/gateway/access-control';
+
+// Records each timingSafeEqual call, so a test can show the admin token is
+// compared in constant time; a plain `===` makes the same decisions
+const comparisons = vi.hoisted(() => ({ byteLengths: [] as number[][] }));
+vi.mock('node:crypto', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:crypto')>();
+  return {
+    ...actual,
+    timingSafeEqual: (a: NodeJS.ArrayBufferView, b: NodeJS.ArrayBufferView) => {
+      comparisons.byteLengths.push([a.byteLength, b.byteLength]);
+      return actual.timingSafeEqual(a, b);
+    },
+  };
+});
 
 function fakeReply(): FastifyReply & {
   statusCode?: number;
@@ -67,6 +81,25 @@ describe('buildAccessControlHook (Host and CORS only)', () => {
     expect(reply.statusCode).toBe(403);
   });
 
+  it('rejects a Host that only contains or extends an allowed name', async () => {
+    // A rebinding page controls its own hostname, including public names that
+    // resolve to 127.0.0.1, so only an exact match may pass
+    const hook = buildAccessControlHook({ ...BASE, publicBaseUrl: 'https://shop.example.com' });
+    for (const host of [
+      'shop.example.com.attacker.net',
+      'evil-shop.example.com',
+      'localhost.attacker.example',
+      '127.0.0.1.nip.io',
+    ]) {
+      const reply = fakeReply();
+      await hook(fakeRequest({ host }), reply);
+      expect(reply.statusCode, host).toBe(403);
+    }
+    const control = fakeReply();
+    await hook(fakeRequest({ host: 'shop.example.com' }), control);
+    expect(control.statusCode).toBeUndefined();
+  });
+
   it('accepts every loopback alias regardless of publicBaseUrl', async () => {
     const hook = buildAccessControlHook(BASE);
     for (const host of ['127.0.0.1:9999', 'localhost:1', '[::1]:2']) {
@@ -107,6 +140,17 @@ describe('buildAccessControlHook (Host and CORS only)', () => {
     expect(allowed).toEqual(
       expect.arrayContaining(['payment-signature', 'agent-authorization', 'authorization']),
     );
+    // Browser code can read only the response headers named here: the
+    // challenge and the settlement result
+    const exposed = String(reply.headers['access-control-expose-headers']).split(',');
+    expect(exposed).toEqual(
+      expect.arrayContaining([
+        'payment-required',
+        'payment-response',
+        'www-authenticate',
+        'payment-receipt',
+      ]),
+    );
   });
 
   it('short-circuits an OPTIONS preflight for an allowlisted Origin with 204', async () => {
@@ -134,50 +178,74 @@ describe('buildAccessControlHook (Host and CORS only)', () => {
 });
 
 describe('buildOperatorTokenHook (unit, fakes)', () => {
-  it('404s with no adminToken configured', () => {
+  it('404s with no adminToken configured', async () => {
     const hook = buildOperatorTokenHook(undefined);
     const reply = fakeReply();
-    hook(fakeRequest({ url: '/api/receipts' }), reply);
+    await hook(fakeRequest({ url: '/api/receipts' }), reply);
     expect(reply.statusCode).toBe(404);
   });
 
-  it('401s with a missing or wrong token once one is configured', () => {
+  it('401s with a missing or wrong token once one is configured', async () => {
     const hook = buildOperatorTokenHook('right');
     const missing = fakeReply();
-    hook(fakeRequest({ url: '/api/events' }), missing);
+    await hook(fakeRequest({ url: '/api/events' }), missing);
     expect(missing.statusCode).toBe(401);
 
     const wrong = fakeReply();
-    hook(fakeRequest({ url: '/api/events', authorization: 'Bearer wrong' }), wrong);
+    await hook(fakeRequest({ url: '/api/events', authorization: 'Bearer wrong' }), wrong);
     expect(wrong.statusCode).toBe(401);
   });
 
-  it('lets the request through with the correct Bearer token', () => {
+  it('lets the request through with the correct Bearer token', async () => {
     const hook = buildOperatorTokenHook('right');
     const reply = fakeReply();
-    hook(fakeRequest({ url: '/api/receipts', authorization: 'Bearer right' }), reply);
+    await hook(fakeRequest({ url: '/api/receipts', authorization: 'Bearer right' }), reply);
     expect(reply.statusCode).toBeUndefined();
   });
 
-  it('matches the Bearer scheme case-insensitively (RFC 7235) but still needs the token', () => {
+  it('matches the Bearer scheme case-insensitively (RFC 7235) but still needs the token', async () => {
     const hook = buildOperatorTokenHook('right');
     for (const authorization of ['bearer right', 'BEARER right', 'Bearer  right']) {
       const reply = fakeReply();
-      hook(fakeRequest({ url: '/api/receipts', authorization }), reply);
+      await hook(fakeRequest({ url: '/api/receipts', authorization }), reply);
       expect(reply.statusCode, authorization).toBeUndefined();
     }
-    for (const authorization of ['Bearer ', 'Basic right', 'right']) {
+    for (const authorization of [
+      'Bearer ',
+      'Basic right',
+      'right',
+      // Prefix, extension and case variants of the token itself
+      'Bearer righ',
+      'Bearer rightt',
+      'Bearer RIGHT',
+    ]) {
       const reply = fakeReply();
-      hook(fakeRequest({ url: '/api/receipts', authorization }), reply);
+      await hook(fakeRequest({ url: '/api/receipts', authorization }), reply);
       expect(reply.statusCode, authorization).toBe(401);
     }
   });
 
-  it('does not accept the admin token as a query parameter on any route', () => {
+  it('compares the token in constant time over fixed-length digests, whatever length is presented', async () => {
+    const hook = buildOperatorTokenHook('right');
+    comparisons.byteLengths.length = 0;
+    for (const token of ['wrong', 'x'.repeat(500), 'right']) {
+      await hook(
+        fakeRequest({ url: '/api/receipts', authorization: `Bearer ${token}` }),
+        fakeReply(),
+      );
+    }
+    expect(comparisons.byteLengths).toEqual([
+      [32, 32],
+      [32, 32],
+      [32, 32],
+    ]);
+  });
+
+  it('does not accept the admin token as a query parameter on any route', async () => {
     for (const url of ['/api/receipts?adminToken=right', '/api/events?adminToken=right']) {
       const hook = buildOperatorTokenHook('right');
       const reply = fakeReply();
-      hook(fakeRequest({ url }), reply);
+      await hook(fakeRequest({ url }), reply);
       expect(reply.statusCode, url).toBe(401);
     }
   });
@@ -229,14 +297,12 @@ describe('regression: percent-encoded path cannot bypass the token gate', () => 
     const server = buildTestServer('right');
 
     // %2572 decodes once, to the literal "%72", so the router matches no route
-    // and answers 404; what matters is that it is never a 200
     const double = await server.inject({ method: 'GET', url: '/api/%2572eceipts' });
-    expect(double.statusCode).not.toBe(200);
+    expect(double.statusCode).toBe(404);
 
-    // A malformed escape (%zz): the router rejects it with 400 before any route
-    // matches
+    // A malformed escape (%zz): the router rejects it before any route matches
     const malformed = await server.inject({ method: 'GET', url: '/api/%zzeceipts' });
-    expect(malformed.statusCode).not.toBe(200);
+    expect(malformed.statusCode).toBe(400);
 
     await server.close();
   });
