@@ -210,9 +210,20 @@ describe('A2A adapter lifecycle', () => {
     expect(descriptor.supportedSpec).toBe('1.0.0');
     expect(descriptor.status).toBe('experimental');
     expect(descriptor.capabilities).toEqual(['agent-card', 'jsonrpc', 'SendMessage']);
-    expect(descriptor.unsupported).toContain('SendStreamingMessage');
-    expect(descriptor.unsupported).toContain('GetTask');
-    expect(descriptor.unsupported).toContain('gRPC binding');
+    // Every A2A feature the project scope leaves out is named, so no client
+    // reads the descriptor as full protocol support
+    expect(descriptor.unsupported).toEqual(
+      expect.arrayContaining([
+        'SendStreamingMessage',
+        'GetTask',
+        'long-running task persistence',
+        'push notifications',
+        'multi-turn conversational continuation',
+        'HTTP+JSON/REST binding',
+        'gRPC binding',
+        'A2A authentication schemes',
+      ]),
+    );
   });
 
   it('fails health before start and passes after, counting skills', async () => {

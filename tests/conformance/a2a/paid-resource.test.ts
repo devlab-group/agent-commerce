@@ -106,20 +106,29 @@ describe('paid resource over A2A', () => {
 
     const metadata = result.artifacts[0]?.metadata as Record<string, unknown> | undefined;
     const summary = metadata?.['agent-commerce/delivery'] as Record<string, unknown> | undefined;
-    expect(summary).toMatchObject({ resourceId: 'market_report' });
-    expect(JSON.stringify(summary)).toContain('0xTXHASH');
+    expect(summary).toMatchObject({
+      resourceId: 'market_report',
+      payment: { status: 'settled', externalReference: '0xTXHASH' },
+    });
   });
 
+  // An unusable proof is dropped, so the caller gets a challenge to act on;
+  // the provider decides the rest, and its outage is never the payer's fault
   it.each([
-    ['no proof at all', {}],
-    ['an empty proof', { [PAYMENT_INPUT_FIELD]: '' }],
-    ['a malformed proof', { [PAYMENT_INPUT_FIELD]: { not: 'a string' } }],
-    ['an invalid proof', { [PAYMENT_INPUT_FIELD]: 'forged-proof' }],
-    ['an unverifiable proof', { [PAYMENT_INPUT_FIELD]: 'unverifiable-proof' }],
-  ])('delivers nothing for %s', async (_label, payment) => {
-    const { state } = await send({ symbol: 'ETH', ...payment });
+    ['no proof at all', {}, 'PAYMENT_REQUIRED'],
+    ['an empty proof', { [PAYMENT_INPUT_FIELD]: '' }, 'PAYMENT_REQUIRED'],
+    ['a malformed proof', { [PAYMENT_INPUT_FIELD]: { not: 'a string' } }, 'PAYMENT_REQUIRED'],
+    ['an invalid proof', { [PAYMENT_INPUT_FIELD]: 'forged-proof' }, 'PAYMENT_INVALID'],
+    [
+      'an unverifiable proof',
+      { [PAYMENT_INPUT_FIELD]: 'unverifiable-proof' },
+      'PAYMENT_PROVIDER_UNAVAILABLE',
+    ],
+  ])('delivers nothing for %s', async (_label, payment, code) => {
+    const { state, data } = await send({ symbol: 'ETH', ...payment });
 
     expect(state).toBe(TaskState.TASK_STATE_FAILED);
+    expect(data?.['code']).toBe(code);
     expect(running.backendCalls()).toBe(0);
     expect(running.settleCalls()).toBe(0);
   });

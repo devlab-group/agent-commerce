@@ -280,6 +280,7 @@ describe('A2A JSON-RPC transport over the real gateway', () => {
       rpc(gw, sendMessage({ resource: 'weather_basic' }), { 'content-type': 'application/json' }),
     ]);
     for (const { body } of responses) {
+      expect(body.error?.code).toBeTypeOf('number');
       const message = body.error?.message ?? '';
       expect(message).not.toMatch(/\bat .*:\d+:\d+/); // stack frame
       expect(message).not.toMatch(/[/\\](src|node_modules)[/\\]/); // path
@@ -379,22 +380,19 @@ describe('A2A in gateway discovery', () => {
  * so this is driven through the gateway router, never the adapter directly.
  */
 describe('A2A request body handoff through the real gateway', () => {
-  it('parses a body the gateway would otherwise have consumed', async () => {
-    const gw = await startGateway();
-    const { body } = await rpc(
-      gw,
-      sendMessage({ resource: 'weather_basic', input: { city: 'Berlin' } }),
-    );
-
-    expect(body.result?.task?.status.state).toBe('TASK_STATE_COMPLETED');
-  });
-
   it('carries a large body and non-ASCII input through intact', async () => {
     const gw = await startGateway();
     // Big enough to arrive in several socket chunks, so a handler that reads only
-    // the first one fails here
+    // the first one fails here. `inject()` delivers a body as one chunk, so this
+    // test goes over a real socket.
     const city = `Köln-${'ß'.repeat(40_000)}`;
-    const { body } = await rpc(gw, sendMessage({ resource: 'weather_basic', input: { city } }));
+    const { url } = await gw.listen();
+    const res = await fetch(`${url}/a2a`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'a2a-version': '1.0' },
+      body: JSON.stringify(sendMessage({ resource: 'weather_basic', input: { city } })),
+    });
+    const body = (await res.json()) as JsonRpcResponse;
 
     expect(body.error).toBeUndefined();
     expect(body.result?.task?.status.state).toBe('TASK_STATE_COMPLETED');

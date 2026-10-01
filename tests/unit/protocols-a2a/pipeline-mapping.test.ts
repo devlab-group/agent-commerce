@@ -98,9 +98,10 @@ const delivered: ExecutionOutcome = {
   durationMs: 3,
 };
 
-function setup(outcome: ExecutionOutcome | CommerceError = delivered) {
+// An Error is thrown by the pipeline; anything else is returned as its outcome
+function setup(outcome: ExecutionOutcome | Error = delivered) {
   const execute = vi.fn(async (_request: CanonicalRequest): Promise<ExecutionOutcome> => {
-    if (outcome instanceof CommerceError) throw outcome;
+    if (outcome instanceof Error) throw outcome;
     return outcome;
   });
   const context: ProtocolAdapterContext = {
@@ -149,12 +150,8 @@ function artifactData(response: JsonRpcResponse): Record<string, unknown> {
   return part.data;
 }
 
-// Drives the mount handler with a minimal fake req/res pair
-async function send(
-  adapter: ReturnType<typeof createA2aAdapter>,
-  data: unknown,
-): Promise<JsonRpcResponse> {
-  const payload = JSON.stringify({
+function sendMessagePayload(data: unknown): string {
+  return JSON.stringify({
     jsonrpc: '2.0',
     id: 'req-1',
     method: 'SendMessage',
@@ -166,10 +163,19 @@ async function send(
       },
     },
   });
+}
+
+// Drives the mount handler with a minimal fake req/res pair
+async function post(
+  adapter: ReturnType<typeof createA2aAdapter>,
+  payload: string,
+): Promise<{ status: number; body: JsonRpcResponse }> {
+  let status = 0;
   let body = '';
   const res = {
     headersSent: false,
-    writeHead() {
+    writeHead(code: number) {
+      status = code;
       return res;
     },
     end(chunk?: string) {
@@ -184,7 +190,14 @@ async function send(
     { method: 'POST', headers: { 'a2a-version': '1.0' } },
   );
   await adapter.handleHttp(req as never, res as never);
-  return JSON.parse(body) as JsonRpcResponse;
+  return { status, body: JSON.parse(body) as JsonRpcResponse };
+}
+
+async function send(
+  adapter: ReturnType<typeof createA2aAdapter>,
+  data: unknown,
+): Promise<JsonRpcResponse> {
+  return (await post(adapter, sendMessagePayload(data))).body;
 }
 
 describe('A2A SendMessage onto the execution pipeline', () => {
@@ -201,6 +214,8 @@ describe('A2A SendMessage onto the execution pipeline', () => {
     expect(request.resourceId).toBe('market_report');
     expect(request.input).toEqual({ symbol: 'ETH' });
     expect(request.requestId).toMatch(/^a2a-/);
+    // The task id is the request id, so a task correlates with its receipt
+    expect(task(response).id).toBe(request.requestId);
     expect(task(response).status.state).toBe('TASK_STATE_COMPLETED');
   });
 
@@ -281,7 +296,17 @@ describe('A2A SendMessage onto the execution pipeline', () => {
     expect(task(response).status.state).toBe('TASK_STATE_FAILED');
     const data = artifactData(response);
     expect(data['status']).toBe('payment-required');
-    expect(data['payment']).toMatchObject({ amount: '0.01', currency: 'USDC' });
+    expect(data['payment']).toEqual({
+      provider: 'x402',
+      version: '2',
+      amount: '0.01',
+      currency: 'USDC',
+      destination: '0x1111111111111111111111111111111111111111',
+      network: 'eip155:84532',
+      asset: '0x2222222222222222222222222222222222222222',
+      expiresAt: '2026-01-01T00:05:00.000Z',
+      accepts: [{ scheme: 'exact' }],
+    });
   });
 
   it.each([
@@ -393,7 +418,7 @@ describe('A2A terminal task representation', () => {
 
   it('sanitizes an unexpected exception: nothing internal reaches the artifact', async () => {
     const boom = new Error('connect ECONNREFUSED 10.0.0.5:5432 while reading /etc/secret.key');
-    const { context } = setup(boom as unknown as CommerceError);
+    const { context } = setup(boom);
     const adapter = createA2aAdapter();
     await adapter.start(context);
 
@@ -406,17 +431,38 @@ describe('A2A terminal task representation', () => {
     expect(serialized).not.toContain('/etc/secret.key');
     expect(artifactData(response)['code']).toBe('INTERNAL_ERROR');
   });
+});
 
-  it.each([
-    ['a delivery', delivered],
-    ['a payment challenge', paymentRequired],
-    ['a domain failure', new CommerceError('BACKEND_ERROR', 'Backend returned 502.')],
-  ])('always reaches a terminal state for %s', async (_label, outcome) => {
-    const { context } = setup(outcome);
+describe('A2A request limits and lifecycle', () => {
+  it('refuses a body over the adapter cap without executing it', async () => {
+    const { execute, context } = setup();
     const adapter = createA2aAdapter();
     await adapter.start(context);
+    const padded = (bytes: number) =>
+      sendMessagePayload({ resource: 'market_report', input: { symbol: 'x'.repeat(bytes) } });
 
-    const state = task(await send(adapter, { resource: 'market_report', input: {} })).status.state;
-    expect(['TASK_STATE_COMPLETED', 'TASK_STATE_FAILED']).toContain(state);
+    const { body } = await post(adapter, padded(256 * 1024));
+    expect(body.error?.code).toBe(-32700);
+    expect(execute).not.toHaveBeenCalled();
+
+    // The same call under the cap executes
+    await post(adapter, padded(200 * 1024));
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  it('answers 503 once stopped and executes nothing', async () => {
+    const { execute, context } = setup();
+    const adapter = createA2aAdapter();
+    await adapter.start(context);
+    await adapter.stop();
+
+    const { status, body } = await post(
+      adapter,
+      sendMessagePayload({ resource: 'market_report', input: { symbol: 'ETH' } }),
+    );
+
+    expect(status).toBe(503);
+    expect(body.error?.code).toBe(-32603);
+    expect(execute).not.toHaveBeenCalled();
   });
 });

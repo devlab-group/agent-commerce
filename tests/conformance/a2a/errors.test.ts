@@ -45,12 +45,12 @@ function message(parts: unknown[], overrides: Record<string, unknown> = {}): unk
 
 describe('JSON-RPC framing errors', () => {
   it.each([
-    ['malformed JSON', '{"jsonrpc": "2.0", "id"', -32700],
-    ['a jsonrpc version other than 2.0', { jsonrpc: '1.0', id: 1, method: 'SendMessage' }, -32600],
-    ['a missing method', { jsonrpc: '2.0', id: 1 }, -32600],
-    ['a non-object request', '"SendMessage"', -32600],
-    ['invalid params', { jsonrpc: '2.0', id: 1, method: 'SendMessage', params: 'nope' }, -32602],
-  ])('answers %s with %i', async (_label, payload, code) => {
+    ['malformed JSON', -32700, '{"jsonrpc": "2.0", "id"'],
+    ['a jsonrpc version other than 2.0', -32600, { jsonrpc: '1.0', id: 1, method: 'SendMessage' }],
+    ['a missing method', -32600, { jsonrpc: '2.0', id: 1 }],
+    ['a non-object request', -32600, '"SendMessage"'],
+    ['invalid params', -32602, { jsonrpc: '2.0', id: 1, method: 'SendMessage', params: 'nope' }],
+  ])('answers %s with %i', async (_label, code, payload) => {
     const { status, body } = await post(payload);
 
     expect(status).toBe(200);
@@ -83,6 +83,16 @@ describe('method routing', () => {
   it('reports a method that does not exist as method-not-found', async () => {
     const { body } = await post({ jsonrpc: '2.0', id: 1, method: 'Frobnicate', params: {} });
     expect(body.error?.code).toBe(-32601);
+  });
+
+  it('echoes a string or number id and answers any other id with null', async () => {
+    const echoed = async (id: unknown) =>
+      (await post({ jsonrpc: '2.0', id, method: 'Frobnicate', params: {} })).body.id;
+
+    expect(await echoed('call-7')).toBe('call-7');
+    expect(await echoed(7)).toBe(7);
+    expect(await echoed({ injected: true })).toBeNull();
+    expect(await echoed(['call-7'])).toBeNull();
   });
 });
 

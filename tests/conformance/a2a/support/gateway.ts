@@ -23,6 +23,7 @@ import type {
   PaymentVerificationContext,
   ReceiptStore,
 } from '../../../../src/core';
+import { CommerceError } from '../../../../src/core';
 import { createGateway, type GatewayInstance } from '../../../../src/gateway';
 import { createA2aAdapter } from '../../../../src/protocols/a2a';
 
@@ -124,8 +125,10 @@ const paymentDescriptor: AdapterDescriptor = {
 /**
  * Verification and settlement live here, not in the adapter: the paid suite
  * asserts that the A2A code never decides whether a proof is good.
- * `'unverifiable-proof'` models a provider that cannot reach its facilitator,
- * which throws rather than rejects so the payer is not blamed for our outage.
+ * `'unverifiable-proof'` models a provider that cannot reach its facilitator:
+ * like the x402 provider, it throws `PAYMENT_PROVIDER_UNAVAILABLE` instead of
+ * rejecting, so the payer is not blamed for our outage. A bare `Error` would
+ * reach the payer as `PAYMENT_INVALID`.
  */
 function fakeProvider(): PaymentProvider & { settleCalls: () => number } {
   let settleCalls = 0;
@@ -146,7 +149,7 @@ function fakeProvider(): PaymentProvider & { settleCalls: () => number } {
     }),
     verify: async (ctx: PaymentVerificationContext): Promise<PaymentResult> => {
       if (ctx.submission.payload === 'unverifiable-proof') {
-        throw new Error('facilitator unreachable');
+        throw new CommerceError('PAYMENT_PROVIDER_UNAVAILABLE', 'Facilitator unreachable.');
       }
       return ctx.submission.payload === VALID_PROOF
         ? {
