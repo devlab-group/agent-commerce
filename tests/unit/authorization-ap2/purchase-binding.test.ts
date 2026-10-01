@@ -108,6 +108,11 @@ async function bindRejection(
     await bindMandateToPurchase(verified, ctx, {});
   } catch (error) {
     expect(isCommerceError(error)).toBe(true);
+    // The one coarse reason every binding refusal reports
+    expect(error).toMatchObject({
+      code: 'AUTHORIZATION_INVALID',
+      details: { reason: 'purchase_mismatch' },
+    });
     return error as CommerceError;
   }
   return expect.unreachable('expected the mandate to be refused') as never;
@@ -182,9 +187,7 @@ describe('binding a mandate to the resolved purchase', () => {
     ['a different network', { network: 'eip155:8453' }],
     ['a different asset', { asset: '0x2222222222222222222222222222222222222222' }],
   ])('refuses one carrying %s', async (_label, override) => {
-    const error = await bindRejection(await mandateFor(profileClaims(override)));
-    expect(error.code).toBe('AUTHORIZATION_INVALID');
-    expect(error.details?.['reason']).toBe('purchase_mismatch');
+    await bindRejection(await mandateFor(profileClaims(override)));
   });
 
   it.each([
@@ -209,11 +212,11 @@ describe('binding a mandate to the resolved purchase', () => {
   );
 
   it('refuses a mandate with no checkout profile at all', async () => {
-    const jwt = await signCheckoutJwt(parties.checkoutSigner, checkoutPayload());
-    const presentation = await mintMandate(parties.mandateSigner, jwt);
-    // The default fixture profile has a placeholder input hash, so this is
-    // also the "mandate for some other request" case
-    await bindRejection(presentation);
+    const jwt = await signCheckoutJwt(
+      parties.checkoutSigner,
+      checkoutPayload({ agent_commerce: undefined }),
+    );
+    await bindRejection(await mintMandate(parties.mandateSigner, jwt));
   });
 
   it('refuses a profile that is not an object', async () => {

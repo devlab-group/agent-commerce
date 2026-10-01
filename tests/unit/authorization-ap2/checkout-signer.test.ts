@@ -6,11 +6,12 @@
  * names on their own would pass while the digest silently disagreed, which is
  * the failure the helper exists to prevent.
  */
+import { createHash } from 'node:crypto';
 import { exportJWK, exportPKCS8, generateKeyPair } from 'jose';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { createCheckoutJwt } from '../../../src/authorization/ap2';
 import { AP2_CHECKOUT_PROFILE } from '../../../src/authorization/ap2/constants';
-import { bindMandateToPurchase, computeInputHash } from '../../../src/authorization/ap2/profile';
+import { bindMandateToPurchase } from '../../../src/authorization/ap2/profile';
 import {
   type Ap2MandateVerifier,
   createAp2MandateVerifier,
@@ -20,10 +21,12 @@ import { isCommerceError } from '../../../src/core';
 import { createParties, fixedClock, mintMandate, NOW, type Party } from './fixtures';
 
 const RESOURCE_ID = 'market_report';
-// Floats and a non-ASCII key: the inputs where a sorted-key JSON.stringify and
+// A float and non-ASCII text: inputs where some sorted-key serializers and
 // RFC 8785 part company, and a hand-rolled signer starts producing mandates
 // this gateway refuses
 const INPUT = { city: 'Zürich', precision: 1.5e30, tags: ['b', 'a'] };
+// INPUT in RFC 8785 form, written out by hand so the oracle is not the code under test
+const INPUT_JCS = '{"city":"Zürich","precision":1.5e+30,"tags":["b","a"]}';
 
 let parties: Party;
 let verifier: Ap2MandateVerifier;
@@ -107,12 +110,14 @@ describe('createCheckoutJwt', () => {
     await expect(bindMandateToPurchase(mandate, context(), {})).resolves.toBeUndefined();
   });
 
-  it('computes the same input hash the gateway computes', async () => {
+  it('signs the RFC 8785 digest of the input', async () => {
     const jwt = await createCheckoutJwt(signOptions());
     const mandate = await verifier.verify(await mintMandate(parties.mandateSigner, jwt));
 
     const profile = mandate.checkoutClaims['agent_commerce'] as Record<string, string>;
-    expect(profile['input_hash']).toBe(computeInputHash(INPUT));
+    expect(profile['input_hash']).toBe(
+      createHash('sha256').update(INPUT_JCS, 'utf8').digest('base64url'),
+    );
     expect(profile['profile']).toBe(AP2_CHECKOUT_PROFILE);
   });
 
@@ -135,6 +140,7 @@ describe('createCheckoutJwt', () => {
     // either side names one
     expect('destination' in profile).toBe(false);
     expect('network' in profile).toBe(false);
+    expect('asset' in profile).toBe(false);
   });
 
   it('mints a jti when none is supplied, and honors one that is', async () => {
@@ -216,7 +222,10 @@ describe('createCheckoutJwt', () => {
     const mandate = await verifier.verify(await mintMandate(parties.mandateSigner, jwt));
 
     await expect(bindMandateToPurchase(mandate, context(), {})).rejects.toSatisfy(
-      (error: unknown) => isCommerceError(error) && error.code === 'AUTHORIZATION_INVALID',
+      (error: unknown) =>
+        isCommerceError(error) &&
+        error.code === 'AUTHORIZATION_INVALID' &&
+        error.details?.['reason'] === 'purchase_mismatch',
     );
   });
 });

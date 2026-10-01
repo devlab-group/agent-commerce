@@ -385,22 +385,34 @@ describe('AP2 over x402: the purchase that works', () => {
 });
 
 describe('AP2 over x402: mandates that must not settle', () => {
-  // Every case here asserts the same thing: no money moved, nothing delivered
-  async function refuse(
-    presentation: string,
-    expected: { status: number; code: string },
-  ): Promise<void> {
+  // Every case here asserts the same thing: no money moved, nothing delivered.
+  // The reason pins which check refused it, so a case cannot pass on an
+  // earlier, unrelated failure.
+  async function refuse(presentation: string, reason: string): Promise<void> {
     const gw = await startGateway();
 
     const result = await purchase(presentation, gw);
 
-    expect(result.statusCode).toBe(expected.status);
-    expect(result.body['code']).toBe(expected.code);
+    expect(result.statusCode).toBe(403);
+    expect(result.body['code']).toBe('AUTHORIZATION_INVALID');
+    expect(result.body['details']).toEqual({ method: 'ap2', reason });
     expect(counts.settle).toBe(0);
     expect(counts.backend).toBe(0);
   }
 
-  const invalid = { status: 403, code: 'AUTHORIZATION_INVALID' } as const;
+  it('never lets a valid mandate stand in for a payment proof', async () => {
+    // AP2 gates settlement and is not a rail: with no payment proof the
+    // mandate is never checked, so it stays spendable
+    const gw = await startGateway();
+    const presentation = await mandate();
+
+    const unpaid = await invoke(gw, { presentation });
+
+    expect(unpaid.statusCode).toBe(402);
+    expect(unpaid.body['code']).toBe('PAYMENT_REQUIRED');
+    expect(counts).toEqual({ verify: 0, settle: 0, backend: 0 });
+    expect((await purchase(presentation, gw)).statusCode).toBe(200);
+  });
 
   it('refuses an altered mandate', async () => {
     const original = await mandate();
@@ -412,7 +424,7 @@ describe('AP2 over x402: mandates that must not settle', () => {
     const bytes = Buffer.from(signature as string, 'base64url');
     bytes[0] = (bytes[0] as number) ^ 0x01;
     const forged = `${header}.${payload}.${bytes.toString('base64url')}`;
-    await refuse([forged, ...rest].join('~'), invalid);
+    await refuse([forged, ...rest].join('~'), 'invalid_signature');
   });
 
   it('refuses an expired mandate', async () => {
@@ -420,14 +432,14 @@ describe('AP2 over x402: mandates that must not settle', () => {
       await mandate({
         mandate: { payloadOverrides: { iat: NOW_SECONDS - 7200, exp: NOW_SECONDS - 3600 } },
       }),
-      invalid,
+      'expired',
     );
   });
 
   it('refuses a mandate from an untrusted issuer', async () => {
     await refuse(
       await mandate({ mandate: { payloadOverrides: { iss: 'https://evil.example' } } }),
-      invalid,
+      'untrusted_issuer',
     );
   });
 
@@ -437,12 +449,16 @@ describe('AP2 over x402: mandates that must not settle', () => {
     // `kid` selects the verifying key rather than labeling it.
     await refuse(
       await mandate({ stranger: true, mandate: { header: { kid: parties.mandateSigner.kid } } }),
-      invalid,
+      'invalid_signature',
     );
   });
 
   it('refuses a mandate naming a kid the issuer does not have', async () => {
-    await refuse(await mandate({ mandate: { header: { kid: 'rotated-out-2025' } } }), invalid);
+    // Signed by the trusted key, so a "try every key" fallback would accept it
+    await refuse(
+      await mandate({ mandate: { header: { kid: 'rotated-out-2025' } } }),
+      'unknown_key',
+    );
   });
 
   it('refuses a mandate whose checkout_hash does not match the disclosed checkout', async () => {
@@ -450,41 +466,41 @@ describe('AP2 over x402: mandates that must not settle', () => {
       await mandate({
         mandate: { payloadOverrides: { checkout_hash: await sha256Base64url('another-document') } },
       }),
-      invalid,
+      'checkout_binding_failed',
     );
   });
 
   it('refuses a mandate approved for a different resource', async () => {
-    await refuse(await mandate({ profile: { resource_id: 'other_report' } }), invalid);
+    await refuse(await mandate({ profile: { resource_id: 'other_report' } }), 'purchase_mismatch');
   });
 
   it('refuses a mandate approved for different input', async () => {
     await refuse(
       await mandate({ profile: { input_hash: computeInputHash({ city: 'Paris' }) } }),
-      invalid,
+      'purchase_mismatch',
     );
   });
 
   it('refuses a mandate approved for a different amount', async () => {
-    await refuse(await mandate({ profile: { amount: '500.00' } }), invalid);
+    await refuse(await mandate({ profile: { amount: '500.00' } }), 'purchase_mismatch');
   });
 
   it('refuses a mandate approved in a different currency', async () => {
-    await refuse(await mandate({ profile: { currency: 'EURC' } }), invalid);
+    await refuse(await mandate({ profile: { currency: 'EURC' } }), 'purchase_mismatch');
   });
 
   it('refuses a mandate approved for a different payment method', async () => {
-    await refuse(await mandate({ profile: { payment_method: 'acp' } }), invalid);
+    await refuse(await mandate({ profile: { payment_method: 'acp' } }), 'purchase_mismatch');
   });
 
   it('refuses a mandate approved for a different network', async () => {
-    await refuse(await mandate({ profile: { network: 'eip155:8453' } }), invalid);
+    await refuse(await mandate({ profile: { network: 'eip155:8453' } }), 'purchase_mismatch');
   });
 
   it('refuses a mandate approved for a different asset', async () => {
     await refuse(
       await mandate({ profile: { asset: '0x2222222222222222222222222222222222222222' } }),
-      invalid,
+      'purchase_mismatch',
     );
   });
 
@@ -492,7 +508,10 @@ describe('AP2 over x402: mandates that must not settle', () => {
     // Fail closed both ways: a mandate that never mentioned a chain must not
     // unlock a settlement on one. `undefined` is dropped when the JWT is
     // serialized, so the mandate carries neither claim.
-    await refuse(await mandate({ profile: { network: undefined, asset: undefined } }), invalid);
+    await refuse(
+      await mandate({ profile: { network: undefined, asset: undefined } }),
+      'purchase_mismatch',
+    );
   });
 
   it('refuses a replayed mandate as replayed, not as invalid', async () => {

@@ -200,13 +200,21 @@ describe('durability', () => {
     second.close();
   });
 
-  it('reopens an existing file without re-running the migration', () => {
-    const path = join(scratch, 'migrate-once.sqlite');
+  it('still refuses a mandate left reserved by a process that stopped mid-settlement', () => {
+    // A process that stops between settlement and the local commit leaves the
+    // row reserved. A refused retry costs a round trip; handing it back could
+    // cost a second payment.
+    const path = join(scratch, 'reserved-reopen.sqlite');
     const first = createAp2ReplayStore({ path });
     first.reserve(request());
     first.close();
+
     const second = createAp2ReplayStore({ path });
     expect(second.stateOf('sha256:AAAA')).toBe('reserved');
+    expect(second.reserve(request({ requestId: 'req-2' }))).toEqual({
+      kind: 'replayed',
+      state: 'reserved',
+    });
     second.close();
   });
 });

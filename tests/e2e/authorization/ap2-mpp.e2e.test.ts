@@ -131,12 +131,14 @@ async function balances() {
 
 // A mandate approving the terms the 402 publishes, or the same terms for
 // another payment method. AP2 compares these strings exactly, and the MPP
-// provider publishes checksummed addresses.
+// provider publishes checksummed addresses. Each binds its own checkout `jti`:
+// a shared one would be refused as a replay of whichever mandate spent it first.
 async function mandate(paymentMethod = 'mpp'): Promise<string> {
   const payment = (await invoke()).body['payment'] as Record<string, string>;
   const jwt = await signCheckoutJwt(
     parties.checkoutSigner,
     checkoutPayload({
+      jti: `checkout_${crypto.randomUUID()}`,
       agent_commerce: {
         profile: AP2_CHECKOUT_PROFILE,
         resource_id: RESOURCE_ID,
@@ -301,10 +303,11 @@ describe('AP2-gated purchase over MPP - real local chain', () => {
 
   it('5. the same mandate with a fresh MPP credential moves no second payment', async () => {
     const presentation = await mandate();
-    await invoke({
+    const first = await invoke({
       authorization: await freshCredential(),
       [AUTHORIZATION_HEADER]: carrier(presentation),
     });
+    expect(first.statusCode).toBe(200);
 
     // A new, valid credential: only the mandate is reused
     await expectNothingSettled(

@@ -98,13 +98,18 @@ function makeProvider(replayStore?: Ap2ReplayStore): Ap2AuthorizationProvider {
   });
 }
 
-async function codeOf(run: () => Promise<unknown>): Promise<string> {
+async function errorOf(run: () => Promise<unknown>): Promise<unknown> {
   try {
     await run();
   } catch (error) {
-    return isCommerceError(error) ? error.code : `untyped:${String(error)}`;
+    return error;
   }
   return 'no-error';
+}
+
+async function codeOf(run: () => Promise<unknown>): Promise<string> {
+  const error = await errorOf(run);
+  return isCommerceError(error) ? error.code : `untyped:${String(error)}`;
 }
 
 beforeAll(async () => {
@@ -190,20 +195,28 @@ describe('createAp2AuthorizationProvider', () => {
     const provider = makeProvider();
     const presentation = await validMandate({ amount: '500.00' });
 
-    const code = await codeOf(() => provider.verifyAndReserve(context(presentation)));
+    const error = await errorOf(() => provider.verifyAndReserve(context(presentation)));
 
-    expect(code).toBe('AUTHORIZATION_INVALID');
+    expect(error).toMatchObject({
+      code: 'AUTHORIZATION_INVALID',
+      details: { reason: 'purchase_mismatch' },
+    });
     provider.close();
   });
 
   it('refuses a mandate from an untrusted issuer as invalid', async () => {
     const provider = makeProvider();
     const jwt = await signCheckoutJwt(parties.checkoutSigner, checkoutPayload());
-    const presentation = await mintMandate(parties.stranger, jwt);
+    const presentation = await mintMandate(parties.stranger, jwt, {
+      payloadOverrides: { iss: 'https://attacker.example' },
+    });
 
-    const code = await codeOf(() => provider.verifyAndReserve(context(presentation)));
+    const error = await errorOf(() => provider.verifyAndReserve(context(presentation)));
 
-    expect(code).toBe('AUTHORIZATION_INVALID');
+    expect(error).toMatchObject({
+      code: 'AUTHORIZATION_INVALID',
+      details: { reason: 'untrusted_issuer' },
+    });
     provider.close();
   });
 
@@ -212,11 +225,15 @@ describe('createAp2AuthorizationProvider', () => {
     const provider = makeProvider(recordingStore(reserved));
     const presentation = await validMandate({ amount: '9.99' });
 
-    await codeOf(() => provider.verifyAndReserve(context(presentation)));
+    const error = await errorOf(() => provider.verifyAndReserve(context(presentation)));
 
+    expect(error).toMatchObject({ details: { reason: 'purchase_mismatch' } });
     // Otherwise the buyer's own mandate is spent by the purchase it does not
     // authorize, and unusable for the one it does
     expect(reserved).toEqual([]);
+    // The same store does record a mandate that binds
+    await provider.verifyAndReserve(context(await validMandate()));
+    expect(reserved).toHaveLength(1);
     provider.close();
   });
 
@@ -224,9 +241,13 @@ describe('createAp2AuthorizationProvider', () => {
     const provider = makeProvider(throwingStore());
     const presentation = await validMandate();
 
-    const code = await codeOf(() => provider.verifyAndReserve(context(presentation)));
+    const error = await errorOf(() => provider.verifyAndReserve(context(presentation)));
 
-    expect(code).toBe('AUTHORIZATION_PROVIDER_UNAVAILABLE');
+    expect(error).toMatchObject({
+      code: 'AUTHORIZATION_PROVIDER_UNAVAILABLE',
+      httpStatus: 503,
+      retryable: true,
+    });
     provider.close();
   });
 

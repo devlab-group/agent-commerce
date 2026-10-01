@@ -214,12 +214,12 @@ describe('generic authorization carrier across every surface', () => {
     const mcp = await callMcp(gw, { [AUTHORIZATION_INPUT_FIELD]: ENVELOPE });
     const a2a = await callA2a(gw, { [AUTHORIZATION_INPUT_FIELD]: ENVELOPE });
 
-    // The resource schema is closed, so a leaked field would surface as
-    // INPUT_INVALID. All three deliver instead.
     expect(http.statusCode).toBe(200);
     expect(mcp.isError).not.toBe(true);
     expect(a2a).toEqual({ forecast: 'sunny' });
 
+    // Delivery alone proves nothing: the pipeline strips reserved fields again
+    // before validation. The input each adapter handed over is the check.
     for (const request of captured) {
       expect(request.input).toEqual({ city: 'Berlin' });
     }
@@ -268,10 +268,16 @@ describe('generic authorization carrier across every surface', () => {
     const gw = await startGateway();
     const captured = spyOnPipeline(gw);
 
-    const { statusCode, body } = await callHttp(gw, 'a'.repeat(MAX_AUTHORIZATION_HEADER_BYTES + 1));
+    // A well-formed envelope, so only the size limit can refuse it
+    const oversized = encodeHeader({
+      ...ENVELOPE,
+      payload: 'x'.repeat(MAX_AUTHORIZATION_HEADER_BYTES),
+    });
+    const { statusCode, body } = await callHttp(gw, oversized);
 
     expect(statusCode).toBe(403);
     expect(body).toMatchObject({ code: 'AUTHORIZATION_INVALID' });
+    expect((body as { message: string }).message).toContain(String(MAX_AUTHORIZATION_HEADER_BYTES));
     expect(captured).toHaveLength(0);
   });
 
@@ -282,7 +288,7 @@ describe('generic authorization carrier across every surface', () => {
 
     const { statusCode, body } = await callHttp(gw, encodeHeader({ method: 'ap2', payload: 42 }));
 
-    expect(statusCode).not.toBe(402);
-    expect((body as { code: string }).code).not.toMatch(/^PAYMENT_/);
+    expect(statusCode).toBe(403);
+    expect(body).toMatchObject({ code: 'AUTHORIZATION_INVALID', retryable: false });
   });
 });

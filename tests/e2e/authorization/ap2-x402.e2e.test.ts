@@ -125,11 +125,14 @@ async function balances() {
   });
 }
 
-// A mandate approving exactly what the gateway's own x402 challenge asks for
+// A mandate approving exactly what the gateway's own x402 challenge asks for.
+// Each binds its own checkout `jti`: a shared one would be refused as a replay
+// of whichever mandate spent it first.
 async function mandateForChallenge(): Promise<string> {
   const jwt = await signCheckoutJwt(
     parties.checkoutSigner,
     checkoutPayload({
+      jti: `checkout_${crypto.randomUUID()}`,
       agent_commerce: {
         profile: AP2_CHECKOUT_PROFILE,
         resource_id: RESOURCE_ID,
@@ -269,10 +272,11 @@ describe('AP2-gated purchase over x402 - real local chain', () => {
   it('3. the same mandate with a fresh payment proof moves no second payment', async () => {
     const proof = await freshProof();
     const presentation = await mandateForChallenge();
-    await invoke({
+    const first = await invoke({
       [PAYMENT_HEADER]: proof,
       [AUTHORIZATION_HEADER]: carrier(presentation),
     });
+    expect(first.statusCode).toBe(200);
 
     // A new, valid payment authorization. Only the mandate is reused, so only
     // the mandate can be what refuses this.
