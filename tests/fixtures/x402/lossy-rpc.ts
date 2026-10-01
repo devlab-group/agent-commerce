@@ -38,3 +38,14 @@ export async function startLossyRpc(upstream: string): Promise<LossyRpc> {
     close: () => new Promise((resolve) => server.close(() => resolve())),
   };
 }
+
+// A loopback RPC URL that refuses connections. The OS picks a free port and
+// the listener closes again, so the test does not depend on a fixed port that
+// another suite may bind, such as an Anvil chain.
+export async function unreachableRpcUrl(): Promise<string> {
+  const server = createServer();
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address() as AddressInfo;
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  return `http://127.0.0.1:${port}`;
+}

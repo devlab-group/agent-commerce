@@ -3,6 +3,10 @@
  * tears down, with a real MockUSDC and the real `createX402PaymentProvider`.
  * Settlement assertions read on-chain state: ERC-20 balance deltas and
  * transaction receipts. No public RPC or chain is touched.
+ *
+ * Most refused proofs go through a gateway built from parsed config, where the
+ * unaltered proof settles (test 1b). An unchanged balance there shows that the
+ * refusal stopped a payment that would otherwise have moved funds.
  */
 
 import { x402Client } from '@x402/core/client';
@@ -10,16 +14,24 @@ import type { PaymentRequired } from '@x402/core/types';
 import { registerExactEvmScheme } from '@x402/evm/exact/client';
 import { privateKeyToAccount } from 'viem/accounts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type {
-  CommerceResource,
-  PaymentContext,
-  PaymentProvider,
-  PaymentRequirement,
+import { parseConfig } from '../../../src/config';
+import {
+  type BackendExecutor,
+  type CommerceResource,
+  isCommerceError,
+  NOOP_LOGGER,
+  PAYMENT_HEADER,
+  type PaymentContext,
+  type PaymentProvider,
+  type PaymentRequirement,
+  type ReceiptStore,
 } from '../../../src/core';
-import { isCommerceError } from '../../../src/core';
+import { createGateway, type GatewayInstance } from '../../../src/gateway';
+import { createConfiguredPaymentProviders } from '../../../src/gateway/payment-providers';
 import { createPaymentProof, createX402PaymentProvider } from '../../../src/payments/x402';
 import { type AnvilHandle, deployLocalChain, startAnvil } from '../../../src/payments/x402/testing';
-import { startLossyRpc } from '../../fixtures/x402/lossy-rpc';
+import { createSqliteReceiptStore } from '../../../src/storage/receipts';
+import { startLossyRpc, unreachableRpcUrl } from '../../fixtures/x402/lossy-rpc';
 import {
   assertBalanceDelta,
   expectRealSettlement,
@@ -27,6 +39,7 @@ import {
 } from '../../fixtures/x402/settlement';
 
 const PORT = 18790;
+const RESOURCE_ID = 'market_report';
 
 const RESOURCE: CommerceResource = {
   id: 'demo.report',
@@ -52,6 +65,119 @@ function paymentContext(overrides: Partial<PaymentContext> = {}): PaymentContext
 let anvil: AnvilHandle;
 let deployment: Awaited<ReturnType<typeof deployLocalChain>>;
 let provider: PaymentProvider;
+let gateway: GatewayInstance;
+let store: ReceiptStore;
+let backendCalls = 0;
+let backendFails = false;
+
+const backend: BackendExecutor = {
+  async call() {
+    backendCalls += 1;
+    if (backendFails) throw new Error('merchant backend down');
+    return { status: 200, body: { report: 'ok' }, headers: {}, durationMs: 1 };
+  },
+};
+
+async function startGateway(): Promise<void> {
+  const config = parseConfig(
+    {
+      version: 1,
+      merchant: { id: 'x402-e2e', name: 'x402 E2E', publicBaseUrl: 'http://127.0.0.1:8080' },
+      server: { port: 8080, host: '127.0.0.1', allowedOrigins: [] },
+      storage: { receipts: { driver: 'sqlite', path: ':memory:' } },
+      protocols: { http: { enabled: true }, mcp: { enabled: false, mountPath: '/mcp' } },
+      resources: {
+        [RESOURCE_ID]: {
+          name: 'Market report',
+          backend: { type: 'http', method: 'GET', url: 'http://merchant.invalid/api/report' },
+          pricing: { type: 'fixed', amount: '1.00', currency: 'USDC' },
+          expose: ['http'],
+          payments: ['x402'],
+        },
+      },
+      payments: {
+        x402: {
+          enabled: true,
+          network: 'eip155:84532',
+          rpcUrl: anvil.rpcUrl,
+          asset: deployment.asset,
+          assetName: deployment.assetName,
+          assetVersion: deployment.assetVersion,
+          assetDecimals: deployment.assetDecimals,
+          payTo: deployment.merchant.address,
+          maxTimeoutSeconds: 120,
+          facilitator: { mode: 'local', signerPrivateKey: deployment.facilitator.privateKey },
+        },
+      },
+    },
+    {},
+  );
+  store = createSqliteReceiptStore({ path: ':memory:' });
+  await store.init();
+  gateway = await createGateway({
+    config,
+    store,
+    paymentProviders: createConfiguredPaymentProviders(config.payments, NOOP_LOGGER),
+    protocolAdapters: [],
+    backend,
+  });
+}
+
+interface Invocation {
+  readonly statusCode: number;
+  readonly headers: Record<string, unknown>;
+  readonly body: Record<string, unknown>;
+}
+
+async function invoke(headers: Record<string, string> = {}): Promise<Invocation> {
+  const res = await gateway.server.inject({
+    method: 'POST',
+    url: `/api/resources/${RESOURCE_ID}/invoke`,
+    headers: { 'content-type': 'application/json', ...headers },
+    payload: {},
+  });
+  return { statusCode: res.statusCode, headers: res.headers, body: res.json() };
+}
+
+// Asks the gateway for the resource unpaid and signs the challenge it returns
+async function gatewayProof(
+  overrides?: Parameters<typeof createPaymentProof>[0]['overrides'],
+): Promise<string> {
+  const challenged = await invoke();
+  expect(challenged.statusCode).toBe(402);
+  const payment = challenged.body['payment'] as { accepts: Record<string, unknown>[] };
+  return createPaymentProof({
+    buyerPrivateKey: deployment.buyer.privateKey,
+    accepts: payment.accepts[0] as Record<string, unknown>,
+    ...(overrides !== undefined ? { overrides } : {}),
+  });
+}
+
+interface MutableProof {
+  accepted: Record<string, unknown>;
+  payload: { signature: string; authorization: Record<string, string> };
+}
+
+// Re-encodes a proof with one part changed and nothing re-signed
+function altered(proof: string, change: (decoded: MutableProof) => void): string {
+  const decoded = JSON.parse(Buffer.from(proof, 'base64').toString('utf8')) as MutableProof;
+  change(decoded);
+  return Buffer.from(JSON.stringify(decoded)).toString('base64');
+}
+
+// A proof the gateway refuses: the named reason, no delivery, nothing moved
+async function expectRefused(proof: string, reason: string): Promise<void> {
+  const before = await balances();
+  const callsBefore = backendCalls;
+
+  const refused = await invoke({ [PAYMENT_HEADER]: proof });
+
+  expect(refused.statusCode).toBe(402);
+  expect(refused.body['code']).toBe('PAYMENT_INVALID');
+  expect(refused.body['message']).toBe(reason);
+  expect(backendCalls).toBe(callsBefore);
+  expect(await balances()).toEqual(before);
+}
 
 async function balances() {
   return readBalances({
@@ -89,9 +215,12 @@ beforeAll(async () => {
     payTo: deployment.merchant.address,
     facilitator: { mode: 'local', signerPrivateKey: deployment.facilitator.privateKey },
   });
+  await startGateway();
 }, 120_000);
 
 afterAll(async () => {
+  await gateway?.close().catch(() => {});
+  await store?.close().catch(() => {});
   await anvil?.stop();
 });
 
@@ -131,15 +260,43 @@ describe('x402 settlement - real local chain', () => {
     });
   });
 
-  it('2. missing payment proof is rejected, not delivered', async () => {
-    const requirement = await provider.createRequirement(paymentContext());
-    const result = await provider.verify({
-      requestId: requirement.requestId,
-      resource: RESOURCE,
-      requirement,
-      submission: { method: 'x402', payload: '' },
+  it('1b. through the gateway, a valid proof settles once, delivers, and the receipt names the transaction', async () => {
+    const proof = await gatewayProof();
+    const before = await balances();
+    const callsBefore = backendCalls;
+
+    const paid = await invoke({ [PAYMENT_HEADER]: proof });
+
+    expect(paid.statusCode).toBe(200);
+    expect(backendCalls).toBe(callsBefore + 1);
+    const [receipt] = await store.listReceipts({ limit: 1 });
+    expect(receipt?.payment).toMatchObject({ provider: 'x402', status: 'settled' });
+    await expectRealSettlement({
+      rpcUrl: anvil.rpcUrl,
+      asset: deployment.asset,
+      buyer: deployment.buyer.address,
+      merchant: deployment.merchant.address,
+      before,
+      after: await balances(),
+      amountBaseUnits: 1_000_000n,
+      txHash: receipt?.payment?.externalReference as string,
     });
-    expect(result.status).toBe('rejected');
+  });
+
+  it('2. no payment: the gateway answers 402 with a challenge and delivers nothing', async () => {
+    const callsBefore = backendCalls;
+
+    const challenged = await invoke();
+
+    expect(challenged.statusCode).toBe(402);
+    expect(challenged.body['code']).toBe('PAYMENT_REQUIRED');
+    const payment = challenged.body['payment'] as { accepts: Record<string, unknown>[] };
+    expect(payment.accepts[0]).toMatchObject({
+      amount: '1000000',
+      payTo: deployment.merchant.address,
+      asset: deployment.asset,
+    });
+    expect(backendCalls).toBe(callsBefore);
   });
 
   it('3. malformed proof is rejected in every variant, never thrown', async () => {
@@ -161,118 +318,55 @@ describe('x402 settlement - real local chain', () => {
     }
   });
 
-  it('3b. a signature or signed authorization field changed after signing is rejected', async () => {
-    const before = await balances();
-    const { requirement, proof } = await buildValidProof('1.00');
-    const decoded = JSON.parse(Buffer.from(proof, 'base64').toString('utf8'));
-    const signature = decoded.payload.signature as string;
-    const tampered = [
-      {
-        ...decoded,
-        payload: {
-          ...decoded.payload,
-          signature: `${signature.slice(0, 2)}${signature[2] === '0' ? '1' : '0'}${signature.slice(3)}`,
-        },
+  it('3b. a signature or signed authorization field changed after signing is refused', async () => {
+    const proof = await gatewayProof();
+    const flipFirstDigit = (hex: string) => `0x${hex[2] === '0' ? '1' : '0'}${hex.slice(3)}`;
+    const changes: ((decoded: MutableProof) => void)[] = [
+      (d) => {
+        d.payload.signature = flipFirstDigit(d.payload.signature);
       },
-      {
-        ...decoded,
-        payload: {
-          ...decoded.payload,
-          authorization: { ...decoded.payload.authorization, nonce: `0x${'ab'.repeat(32)}` },
-        },
+      (d) => {
+        d.payload.authorization['nonce'] = `0x${'ab'.repeat(32)}`;
       },
-      {
-        ...decoded,
-        payload: {
-          ...decoded.payload,
-          authorization: {
-            ...decoded.payload.authorization,
-            from: deployment.merchant.address,
-          },
-        },
+      (d) => {
+        d.payload.authorization['from'] = deployment.merchant.address;
       },
     ];
-
-    for (const changed of tampered) {
-      const verifyResult = await provider.verify({
-        requestId: requirement.requestId,
-        resource: RESOURCE,
-        requirement,
-        submission: {
-          method: 'x402',
-          payload: Buffer.from(JSON.stringify(changed)).toString('base64'),
-        },
-      });
-      expect(verifyResult.status).toBe('rejected');
+    for (const change of changes) {
+      await expectRefused(altered(proof, change), 'invalid_exact_evm_signature');
     }
-    const after = await balances();
-    expect(after).toEqual(before);
   });
 
-  it.each(['1', '1000001'])(
-    '4. an amount below or above the required amount is rejected before settlement: %s',
+  it.each(['999999', '1000001'])(
+    '4. an authorized value other than the price is refused before settlement: %s',
     async (value) => {
-      const before = await balances();
-      const { requirement, proof } = await buildValidProof('1.00', { value });
-      const verifyResult = await provider.verify({
-        requestId: requirement.requestId,
-        resource: RESOURCE,
-        requirement,
-        submission: { method: 'x402', payload: proof },
-      });
-      expect(verifyResult.status).toBe('rejected');
-      expect(verifyResult.rejectionReason).toBe('wrong_amount');
-      const after = await balances();
-      expect(after).toEqual(before);
+      await expectRefused(await gatewayProof({ value }), 'wrong_amount');
     },
   );
 
-  it('5. wrong recipient is rejected before settlement', async () => {
-    const before = await balances();
-    const { requirement, proof } = await buildValidProof('1.00', {
-      payTo: deployment.buyer.address, // a valid address, just not the merchant
-    });
-    const verifyResult = await provider.verify({
-      requestId: requirement.requestId,
-      resource: RESOURCE,
-      requirement,
-      submission: { method: 'x402', payload: proof },
-    });
-    expect(verifyResult.status).toBe('rejected');
-    expect(verifyResult.rejectionReason).toBe('wrong_recipient');
-    const after = await balances();
-    expect(after).toEqual(before);
+  it('5. a proof paying another recipient is refused before settlement', async () => {
+    // A valid address, just not the merchant
+    await expectRefused(await gatewayProof({ payTo: deployment.buyer.address }), 'wrong_recipient');
   });
 
-  it('6. wrong network is rejected before settlement', async () => {
-    const before = await balances();
-    const { requirement, proof } = await buildValidProof('1.00');
-    const decoded = JSON.parse(Buffer.from(proof, 'base64').toString('utf8'));
+  it('6. a proof for another network is refused before settlement', async () => {
     // v2 carries the network on the accepted requirement, not at the top level
-    decoded.accepted.network = 'eip155:8453';
-    const tamperedProof = Buffer.from(JSON.stringify(decoded)).toString('base64');
-
-    const verifyResult = await provider.verify({
-      requestId: requirement.requestId,
-      resource: RESOURCE,
-      requirement,
-      submission: { method: 'x402', payload: tamperedProof },
+    const proof = altered(await gatewayProof(), (d) => {
+      d.accepted['network'] = 'eip155:8453';
     });
-    expect(verifyResult.status).toBe('rejected');
-    expect(verifyResult.rejectionReason).toBe('wrong_network');
-    const after = await balances();
-    expect(after).toEqual(before);
+    await expectRefused(proof, 'wrong_network');
   });
 
-  it('7. another deployed token is rejected in the requirement or buyer proof', async () => {
-    // A second, independent MockUSDC on the same chain
+  it('7. another deployed token is refused in the requirement or the buyer proof', async () => {
+    // A second, independent MockUSDC on the same chain, which funds the buyer
     const otherToken = await deployLocalChain({
       rpcUrl: anvil.rpcUrl,
       buyerInitialBalance: '10.00',
     });
     expect(otherToken.asset).not.toBe(deployment.asset);
 
-    const before = await balances();
+    // The provider builds the requirement, so only a corrupted one can name
+    // another token. That never reaches the gateway's HTTP surface.
     const { requirement, proof } = await buildValidProof('1.00');
     const accepted = requirement.challenge.accepts[0] as Record<string, unknown>;
     const tamperedRequirement: PaymentRequirement = {
@@ -282,7 +376,6 @@ describe('x402 settlement - real local chain', () => {
         accepts: [{ ...accepted, asset: otherToken.asset }],
       },
     };
-
     const verifyResult = await provider.verify({
       requestId: requirement.requestId,
       resource: RESOURCE,
@@ -292,21 +385,14 @@ describe('x402 settlement - real local chain', () => {
     expect(verifyResult.status).toBe('rejected');
     expect(verifyResult.rejectionReason).toBe('wrong_asset');
 
+    const challenged = await invoke();
+    const offered = (challenged.body['payment'] as { accepts: Record<string, unknown>[] })
+      .accepts[0];
     const proofForOtherAsset = await createPaymentProof({
       buyerPrivateKey: deployment.buyer.privateKey,
-      accepts: { ...accepted, asset: otherToken.asset },
+      accepts: { ...offered, asset: otherToken.asset },
     });
-    const buyerProofResult = await provider.verify({
-      requestId: requirement.requestId,
-      resource: RESOURCE,
-      requirement,
-      submission: { method: 'x402', payload: proofForOtherAsset },
-    });
-    expect(buyerProofResult.status).toBe('rejected');
-    expect(buyerProofResult.rejectionReason).toBe('invalid_exact_evm_signature');
-
-    const after = await balances();
-    expect(after).toEqual(before);
+    await expectRefused(proofForOtherAsset, 'invalid_exact_evm_signature');
   });
 
   it('8. replay: replayKey is stable across presentations, the second settlement moves no funds', async () => {
@@ -356,6 +442,10 @@ describe('x402 settlement - real local chain', () => {
       submission: { method: 'x402', payload: proof },
     });
     expect(verifyAfterSettling.status).toBe('rejected');
+    // The SDK's transfer simulation reverts on the spent nonce
+    expect(verifyAfterSettling.rejectionReason).toBe(
+      'invalid_exact_evm_transaction_simulation_failed',
+    );
 
     // Settling the spent authorization anyway moves nothing. MockUSDC's custom
     // revert is not in the SDK's ABI, so the SDK reports its catch-all, which
@@ -377,46 +467,22 @@ describe('x402 settlement - real local chain', () => {
     expect(afterSecond.buyer).toBe(afterFirst.buyer);
   });
 
-  it('9. an expired authorization (validBefore in the past) is rejected before settlement', async () => {
-    const before = await balances();
-    const expiredValidBefore = Math.floor(Date.now() / 1000) - 60;
-    const { requirement, proof } = await buildValidProof('1.00', {
-      validBefore: expiredValidBefore,
-    });
-
-    const verifyResult = await provider.verify({
-      requestId: requirement.requestId,
-      resource: RESOURCE,
-      requirement,
-      submission: { method: 'x402', payload: proof },
-    });
-    expect(verifyResult.status).toBe('rejected');
-    const after = await balances();
-    expect(after).toEqual(before);
+  it('9. an expired authorization (validBefore in the past) is refused before settlement', async () => {
+    const proof = await gatewayProof({ validBefore: Math.floor(Date.now() / 1000) - 60 });
+    await expectRefused(proof, 'invalid_exact_evm_payload_authorization_valid_before');
   });
 
-  it('9b. an authorization that is not yet valid (validAfter in the future) is rejected before settlement', async () => {
+  it('9b. an authorization that is not yet valid (validAfter in the future) is refused before settlement', async () => {
     // The mirror image of test 9: EIP-3009 bounds an authorization at both
     // ends, and `MockUSDC` and the SDK (`ErrValidAfterInFuture`) enforce both
-    const before = await balances();
-    const notYetValid = Math.floor(Date.now() / 1000) + 3600;
-    const { requirement, proof } = await buildValidProof('1.00', { validAfter: notYetValid });
-
-    const verifyResult = await provider.verify({
-      requestId: requirement.requestId,
-      resource: RESOURCE,
-      requirement,
-      submission: { method: 'x402', payload: proof },
-    });
-    expect(verifyResult.status).toBe('rejected');
-    const after = await balances();
-    expect(after).toEqual(before);
+    const proof = await gatewayProof({ validAfter: Math.floor(Date.now() / 1000) + 3600 });
+    await expectRefused(proof, 'invalid_exact_evm_payload_authorization_valid_after');
   });
 
   it('10. provider failure: RPC unreachable yields PAYMENT_PROVIDER_UNAVAILABLE, not a silent pass', async () => {
     const unavailableProvider = createX402PaymentProvider({
       network: 'eip155:84532',
-      rpcUrl: 'http://127.0.0.1:18791', // nothing listening here
+      rpcUrl: await unreachableRpcUrl(),
       asset: deployment.asset,
       assetName: deployment.assetName,
       assetVersion: deployment.assetVersion,
@@ -548,6 +614,39 @@ describe('x402 settlement - real local chain', () => {
       after,
       amountBaseUnits: 1_000_000n,
       txHash: settleResult.externalReference as string,
+    });
+  });
+
+  it('13. a backend failure after settlement tells the payer what settled and records the payment undelivered', async () => {
+    const proof = await gatewayProof();
+    const before = await balances();
+
+    backendFails = true;
+    let failed: Invocation;
+    try {
+      failed = await invoke({ [PAYMENT_HEADER]: proof });
+    } finally {
+      backendFails = false;
+    }
+
+    expect(failed.body['code']).toBe('BACKEND_ERROR');
+    const [receipt] = await store.listReceipts({ limit: 1 });
+    expect(receipt?.metadata).toMatchObject({ delivered: false });
+    expect(receipt?.payment).toMatchObject({ provider: 'x402', status: 'settled' });
+    const txHash = receipt?.payment?.externalReference as string;
+    const summary = JSON.parse(
+      Buffer.from(String(failed.headers['payment-response']), 'base64').toString('utf8'),
+    );
+    expect(summary).toMatchObject({ success: true, transaction: txHash });
+    await expectRealSettlement({
+      rpcUrl: anvil.rpcUrl,
+      asset: deployment.asset,
+      buyer: deployment.buyer.address,
+      merchant: deployment.merchant.address,
+      before,
+      after: await balances(),
+      amountBaseUnits: 1_000_000n,
+      txHash,
     });
   });
 });

@@ -10,6 +10,7 @@ import {
   isCommerceError,
   type PaymentProvider,
   type PaymentRequirement,
+  type PaymentResult,
 } from '../../../src/core';
 import { createExecutionPipeline } from '../../../src/core/execution/pipeline';
 import { createResourceRegistry } from '../../../src/core/execution/registry';
@@ -54,6 +55,7 @@ vi.mock('mppx', async (importOriginal) => {
 
 const ASSET = '0x1111111111111111111111111111111111111111' as const;
 const OTHER_ASSET = '0x2222222222222222222222222222222222222222' as const;
+const BASE_USDC = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913' as const;
 const AUTHORIZATION = { name: 'MockUSDC', version: '2' };
 const SECRET = 's'.repeat(32);
 const recipient = privateKeyToAccount(generatePrivateKey()).address;
@@ -240,6 +242,8 @@ afterEach(() => {
 });
 
 describe('createMppPaymentProvider', () => {
+  // Reported as MPP errors, not as the x402 errors the settlement provider
+  // would raise for some of the same values
   it.each([
     ['a recipient that is not an address', { recipient: '0xnope' as `0x${string}` }],
     ['an asset that is not an address', { asset: '0x1234' as `0x${string}` }],
@@ -248,15 +252,27 @@ describe('createMppPaymentProvider', () => {
     ['a TTL that is not a positive whole number', { challengeTtlSeconds: 0 }],
     ['an asset without its EIP-712 domain name', { assetName: '' }],
     ['an unsupported network', { network: 'eip155:1' }],
-    ['Base mainnet without allowMainnet', { network: 'eip155:8453' }],
   ])('refuses %s at construction', (_label, overrides) => {
     expect(() => makeProvider(overrides)).toThrow(
-      expect.objectContaining({ code: 'CONFIG_INVALID' }),
+      expect.objectContaining({ code: 'CONFIG_INVALID', message: expect.stringMatching(/^MPP /) }),
     );
   });
 
-  it('reports a bad MPP option as an MPP error, not an x402 one', () => {
-    expect(() => makeProvider({ recipient: '0xnope' })).toThrow('MPP recipient');
+  it('refuses Base mainnet without allowMainnet when every other term is valid', () => {
+    const mainnet = {
+      network: 'eip155:8453',
+      rpcUrl: 'https://base.example',
+      asset: BASE_USDC,
+      assetName: 'USD Coin',
+      allowUnauthenticatedFacilitator: true,
+    };
+    expect(() => makeProvider(mainnet)).toThrow(
+      expect.objectContaining({
+        code: 'CONFIG_INVALID',
+        details: { path: 'payments.x402.allowMainnet' },
+      }),
+    );
+    expect(() => makeProvider({ ...mainnet, allowMainnet: true })).not.toThrow();
   });
 
   it('refuses a settlement provider that is not x402', () => {
@@ -306,19 +322,11 @@ describe('MPP createRequirement', () => {
     );
   });
 
-  it('refuses an x402 settlement provider that pays another recipient', async () => {
-    const provider = withSettlement(x402Settlement(stranger.address));
-    await expect(requirementFor(provider)).rejects.toSatisfy(
-      (error: unknown) => isCommerceError(error) && error.code === 'CONFIG_INVALID',
-    );
-  });
-
   it('issues the challenge for the configured network', async () => {
-    const baseUsdc = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913' as const;
     const provider = makeProvider({
       network: 'eip155:8453',
       rpcUrl: 'https://base.example',
-      asset: baseUsdc,
+      asset: BASE_USDC,
       assetName: 'USD Coin',
       allowMainnet: true,
       allowUnauthenticatedFacilitator: true,
@@ -329,17 +337,29 @@ describe('MPP createRequirement', () => {
     expect(request.methodDetails.chainId).toBe(8453);
   });
 
-  it('refuses an x402 settlement provider on another network', async () => {
+  function withExtra(r: PaymentRequirement, patch: Record<string, unknown>): PaymentRequirement {
+    const accepted = r.challenge.accepts[0] as Record<string, unknown>;
+    const extra = { ...(accepted['extra'] as Record<string, unknown>), ...patch };
+    return { ...r, challenge: { ...r.challenge, accepts: [{ ...accepted, extra }] } };
+  }
+
+  it.each<[string, (r: PaymentRequirement) => PaymentRequirement]>([
+    ['on another network', (r) => ({ ...r, network: 'eip155:8453' })],
+    ['in another asset', (r) => ({ ...r, asset: OTHER_ASSET })],
+    ['paying another recipient', (r) => ({ ...r, destination: stranger.address })],
+    ['with another EIP-712 name', (r) => withExtra(r, { name: 'USD Coin' })],
+    ['with another EIP-712 version', (r) => withExtra(r, { version: '1' })],
+  ])('refuses an x402 settlement provider %s', async (_label, change) => {
     const base = x402Settlement();
     const provider = withSettlement({
       ...base,
-      createRequirement: async (context) => ({
-        ...(await base.createRequirement(context)),
-        network: 'eip155:8453',
-      }),
+      createRequirement: async (context) => change(await base.createRequirement(context)),
     });
     await expect(requirementFor(provider)).rejects.toSatisfy(
-      (error: unknown) => isCommerceError(error) && error.code === 'CONFIG_INVALID',
+      (error: unknown) =>
+        isCommerceError(error) &&
+        error.code === 'CONFIG_INVALID' &&
+        error.message.startsWith('MPP settlement provider must use the same'),
     );
   });
 
@@ -507,29 +527,50 @@ describe('MPP verify', () => {
       expect(result.rejectionReason).toBe('wrong_asset');
     });
 
-    it('refuses a challenge on another network', async () => {
-      const onBase = Challenge.fromMethod(Methods.charge, {
-        secretKey: SECRET,
-        realm: 'gateway.test',
-        expires: new Date(Date.now() + 300_000),
-        meta: { resource: 'market_report' },
-        request: {
-          amount: '0.01',
-          currency: ASSET,
-          recipient,
-          chainId: 8453,
-          decimals: 6,
-          credentialTypes: ['authorization'],
-        },
-      });
-      const provider = makeProvider();
-      const result = await verifyWith(
-        provider,
-        await requirementFor(provider),
-        await signedCredential(onBase),
-      );
-      expect(result.rejectionReason).toBe('wrong_network');
-    });
+    // Issued with this gateway's secret, as another gateway sharing it would, so
+    // only the binding check tells it apart. The first case is the control.
+    it.each<[string, string, Record<string, unknown>, string | undefined]>([
+      ['identical terms', 'gateway.test', {}, undefined],
+      ['another realm', 'other.test', {}, 'wrong_realm'],
+      ['another network', 'gateway.test', { chainId: 8453 }, 'wrong_network'],
+      [
+        'splits',
+        'gateway.test',
+        { splits: [{ amount: '1', recipient: stranger.address }] },
+        'unsupported_credential',
+      ],
+      ['an external id', 'gateway.test', { externalId: 'order-1' }, 'wrong_terms'],
+    ])(
+      'checks a challenge from a gateway sharing the secret, with %s',
+      async (_label, realm, request, reason) => {
+        const shared = Challenge.fromMethod(Methods.charge, {
+          secretKey: SECRET,
+          realm,
+          expires: new Date(Date.now() + 300_000),
+          meta: { resource: 'market_report' },
+          request: {
+            amount: '0.01',
+            currency: ASSET,
+            recipient,
+            chainId: 84532,
+            decimals: 6,
+            credentialTypes: ['authorization'],
+            ...request,
+          },
+        });
+        const provider = makeProvider();
+        const result = await verifyWith(
+          provider,
+          await requirementFor(provider),
+          await signedCredential(shared),
+        );
+        expect(result).toMatchObject(
+          reason === undefined
+            ? { status: 'verified' }
+            : { status: 'rejected', rejectionReason: reason },
+        );
+      },
+    );
 
     it('refuses a challenge once its expiry has passed', async () => {
       const clock = movableClock();
@@ -684,19 +725,33 @@ describe('MPP settle', () => {
     });
   });
 
-  it('refuses to settle without a successful verify', async () => {
+  it.each<[string, PaymentResult]>([
+    [
+      'a rejected verification',
+      { status: 'rejected', provider: 'mpp', amount: '0.01', currency: 'USDC' },
+    ],
+    // Nothing was reserved against a replay, so nothing may settle
+    [
+      'a verification without a replay key',
+      { status: 'verified', provider: 'mpp', amount: '0.01', currency: 'USDC' },
+    ],
+  ])('refuses to settle after %s', async (_label, verification) => {
     const provider = makeProvider();
     const requirement = await requirementFor(provider);
     const settling = provider.settle({
       requestId: 'req-1',
       resource: paidResource(),
       requirement,
-      submission: { method: 'mpp', payload: 'Payment x' },
-      verification: { status: 'rejected', provider: 'mpp', amount: '0.01', currency: 'USDC' },
+      submission: { method: 'mpp', payload: await clientCredential(requirement) },
+      verification,
     });
     await expect(settling).rejects.toSatisfy(
-      (error: unknown) => isCommerceError(error) && error.code === 'PAYMENT_INVALID',
+      (error: unknown) =>
+        isCommerceError(error) &&
+        error.code === 'PAYMENT_INVALID' &&
+        error.message.startsWith('MPP settle()'),
     );
+    expect(facilitator.settle).not.toHaveBeenCalled();
   });
 
   it('returns a rejection when the settlement transaction fails', async () => {
@@ -735,7 +790,9 @@ describe('MPP settle', () => {
 
     await expect(settle()).rejects.toSatisfy(
       (error: unknown) =>
-        isCommerceError(error) && error.details?.['transactionHash'] === '0xpending',
+        isCommerceError(error) &&
+        error.code === 'PAYMENT_PROVIDER_UNAVAILABLE' &&
+        error.details?.['transactionHash'] === '0xpending',
     );
   });
 

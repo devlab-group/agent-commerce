@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   LOCAL_CHAIN_MANIFEST_PATH,
   type LocalChainManifest,
@@ -134,8 +134,13 @@ describe('readLocalChainManifest', () => {
   });
 
   it('defaults to process.cwd() when no cwd is given', () => {
-    // Whether a manifest exists depends on the caller's cwd, so only assert
-    // that the missing argument causes no TypeError
-    expect(() => readLocalChainManifest()).not.toThrow(TypeError);
+    const cwd = tmpCwd();
+    writeManifest(cwd, { ...VALID_MANIFEST, buyerInitialBalance: '42.00' });
+    const spy = vi.spyOn(process, 'cwd').mockReturnValue(cwd);
+    try {
+      expect(readLocalChainManifest().buyerInitialBalance).toBe('42.00');
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

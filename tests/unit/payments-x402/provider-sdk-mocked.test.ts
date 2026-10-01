@@ -18,12 +18,31 @@ import type { CommerceResource, PaymentContext } from '../../../src/core';
 import { isCommerceError } from '../../../src/core';
 import { createPaymentProof } from '../../../src/payments/x402/client';
 import { createX402PaymentProvider } from '../../../src/payments/x402/provider';
+import { computeReplayKey } from '../../../src/payments/x402/replay-key';
 
 const verifyMock = vi.fn();
 const settleMock = vi.fn();
 
+// Every client call the SDK's EVM signer can make
+const SIGNER_METHODS = [
+  'readContract',
+  'verifyTypedData',
+  'writeContract',
+  'sendTransaction',
+  'waitForTransactionReceipt',
+  'getCode',
+] as const;
+type SignerMethod = (typeof SIGNER_METHODS)[number];
+
+// The signer the provider hands the SDK for the current session, and the
+// error every call through it fails with
+const signer = vi.hoisted(() => ({
+  current: undefined as Record<SignerMethod, (args: object) => Promise<unknown>> | undefined,
+  error: new Error('unexpected signer call') as unknown,
+}));
+
 // The mocked facilitator answers verify() and settle() itself, so scheme
-// registration is a no-op
+// registration only records the signer
 vi.mock('@x402/core/facilitator', () => ({
   x402Facilitator: class {
     verify(...args: unknown[]) {
@@ -36,13 +55,34 @@ vi.mock('@x402/core/facilitator', () => ({
 }));
 
 vi.mock('@x402/evm/exact/facilitator', () => ({
-  registerExactEvmScheme: (facilitator: unknown) => facilitator,
+  registerExactEvmScheme: (facilitator: unknown, config: { signer: typeof signer.current }) => {
+    signer.current = config.signer;
+    return facilitator;
+  },
 }));
+
+vi.mock('../../../src/payments/x402/chain', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/payments/x402/chain')>();
+  const fail = () => Promise.reject(signer.error);
+  return {
+    ...actual,
+    createLocalFacilitatorClient: () => ({
+      account: { address: '0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266' },
+      readContract: fail,
+      verifyTypedData: fail,
+      writeContract: fail,
+      sendTransaction: fail,
+      waitForTransactionReceipt: fail,
+      getCode: fail,
+    }),
+  };
+});
 
 const ASSET = '0x5FbDB2315678afecb367f032d93F642f64180aa3' as const;
 const PAY_TO = '0x70997970C51812dc3A010C7d01b50e0d17dc79C8' as const;
 const BUYER_PRIVATE_KEY =
   '0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a' as const;
+const BUYER_ADDRESS = '0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC' as const;
 const RPC_URL = 'http://127.0.0.1:19321'; // never contacted: verify and settle are mocked
 
 const RESOURCE: CommerceResource = {
@@ -165,9 +205,51 @@ describe('provider - SDK-boundary branches (mocked x402/facilitator)', () => {
       submission: { method: 'x402', payload: proof },
     });
     expect(result.status).toBe('verified');
-    expect(result.replayKey).toMatch(/^0x[0-9a-f]{64}$/);
-    expect(result.payer?.toLowerCase()).toBe('0x3c44cdddb6a900fa2b585dd299e03d12fa4293bc');
+    // Chain id, asset, payer and nonce of this authorization, and nothing else
+    const { nonce } = JSON.parse(Buffer.from(proof, 'base64').toString('utf8')).payload
+      .authorization;
+    expect(result.replayKey).toBe(
+      computeReplayKey({ chainId: 84532, asset: ASSET, from: BUYER_ADDRESS, nonce }),
+    );
+    expect(result.payer).toBe(BUYER_ADDRESS);
     expect(verifyMock).toHaveBeenCalledOnce();
+  });
+
+  it('hands the facilitator its own requirement, never the copy the buyer echoes back', async () => {
+    const provider = makeProvider();
+    const requirement = await provider.createRequirement(paymentContext());
+    const offered = requirement.challenge.accepts[0] as Record<string, unknown>;
+    const proof = await createPaymentProof({
+      buyerPrivateKey: BUYER_PRIVATE_KEY,
+      accepts: offered,
+    });
+    // Another token and price in `accepted`, with the signed authorization unchanged
+    const decoded = JSON.parse(Buffer.from(proof, 'base64').toString('utf8'));
+    decoded.accepted = { ...decoded.accepted, asset: `0x${'dd'.repeat(20)}`, amount: '1' };
+    const payload = Buffer.from(JSON.stringify(decoded)).toString('base64');
+    verifyMock.mockResolvedValueOnce({ isValid: true });
+    settleMock.mockResolvedValueOnce({
+      success: true,
+      transaction: `0x${'ab'.repeat(32)}`,
+      network: 'eip155:84532',
+    });
+
+    const verification = await provider.verify({
+      requestId: 'req-1',
+      resource: RESOURCE,
+      requirement,
+      submission: { method: 'x402', payload },
+    });
+    await provider.settle({
+      requestId: 'req-1',
+      resource: RESOURCE,
+      requirement,
+      submission: { method: 'x402', payload },
+      verification,
+    });
+
+    expect(verifyMock.mock.calls[0]?.[1]).toEqual(offered);
+    expect(settleMock.mock.calls[0]?.[1]).toEqual(offered);
   });
 
   it('verify() falls back to "invalid_payment" when the SDK gives no invalidReason', async () => {
@@ -191,6 +273,7 @@ describe('provider - SDK-boundary branches (mocked x402/facilitator)', () => {
 
   it.each([
     ['unsupported characters', 'do not expose: secret', 'invalid_payment'],
+    ['exactly 64 characters', 'x'.repeat(64), 'x'.repeat(64)],
     ['more than 64 characters', 'x'.repeat(65), 'invalid_payment'],
     ['an empty value', '', 'invalid_payment'],
     ['only whitespace', '   ', 'invalid_payment'],
@@ -366,6 +449,7 @@ describe('provider - SDK-boundary branches (mocked x402/facilitator)', () => {
 
   it.each([
     ['unsupported characters', 'do not expose: secret', 'settlement_failed'],
+    ['exactly 64 characters', 'x'.repeat(64), 'x'.repeat(64)],
     ['more than 64 characters', 'x'.repeat(65), 'settlement_failed'],
     ['an empty value', '', 'settlement_failed'],
     ['only whitespace', '   ', 'settlement_failed'],
@@ -492,6 +576,7 @@ describe('provider - SDK-boundary branches (mocked x402/facilitator)', () => {
   it.each([
     ['without a hash, as an unknown outcome', '', 'throws'],
     ['with a value that is not a hash, as an unknown outcome', 'not-a-hash', 'throws'],
+    ['with a truncated hash, as an unknown outcome', '0xdeadbeef', 'throws'],
     ['with a hash, as a mined revert', `0x${'cd'.repeat(32)}`, 'rejected'],
   ])(
     'settle() treats the SDK catch-all transaction failure %s',
@@ -522,7 +607,10 @@ describe('provider - SDK-boundary branches (mocked x402/facilitator)', () => {
           (err: unknown) => isCommerceError(err) && err.code === 'PAYMENT_PROVIDER_UNAVAILABLE',
         );
       } else {
-        await expect(settled).resolves.toMatchObject({ status: 'rejected' });
+        await expect(settled).resolves.toMatchObject({
+          status: 'rejected',
+          rejectionReason: 'invalid_exact_evm_transaction_failed',
+        });
       }
     },
   );
@@ -606,10 +694,12 @@ describe('provider - SDK-boundary branches (mocked x402/facilitator)', () => {
   });
 });
 
-describe('provider - provider-unavailable classification against real viem error types', () => {
-  // Uses the error classes the pinned viem HTTP transport and
-  // waitForTransactionReceipt throw, not a hand-made
-  // `Error("timed out")`, because message matching breaks across upgrades
+describe('provider - a failed signer call is classified as an outage or a verdict', () => {
+  // The pinned SDK folds an RPC error inside verify() or settle() into an
+  // ordinary negative result, as these mocks do. Only the provider's watched
+  // signer can tell an outage from a bad payment. Most cases use the error
+  // classes the pinned viem transport and receipt poll throw, because message
+  // matching breaks across upgrades.
   beforeEach(() => {
     verifyMock.mockReset();
     settleMock.mockReset();
@@ -628,6 +718,54 @@ describe('provider - provider-unavailable classification against real viem error
     });
   }
 
+  async function signerCall(method: SignerMethod): Promise<boolean> {
+    try {
+      await signer.current?.[method]({});
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async function payThroughFailingSigner(error: unknown, method: SignerMethod = 'readContract') {
+    signer.error = error;
+    verifyMock.mockImplementationOnce(async () =>
+      (await signerCall(method))
+        ? { isValid: true }
+        : { isValid: false, invalidReason: 'invalid_exact_evm_signature' },
+    );
+    settleMock.mockImplementationOnce(async () =>
+      (await signerCall(method))
+        ? { success: true, transaction: `0x${'ab'.repeat(32)}`, network: 'eip155:84532' }
+        : {
+            success: false,
+            errorReason: 'invalid_exact_evm_signature',
+            transaction: '',
+            network: 'eip155:84532',
+          },
+    );
+    const provider = makeProvider();
+    const requirement = await provider.createRequirement(paymentContext());
+    const proof = await createPaymentProof({
+      buyerPrivateKey: BUYER_PRIVATE_KEY,
+      accepts: requirement.challenge.accepts[0] as Record<string, unknown>,
+    });
+    const context = {
+      requestId: 'req-1',
+      resource: RESOURCE,
+      requirement,
+      submission: { method: 'x402' as const, payload: proof },
+    };
+    return {
+      verify: () => provider.verify(context),
+      settle: () =>
+        provider.settle({
+          ...context,
+          verification: { status: 'verified', provider: 'x402', amount: '0.01', currency: 'USD' },
+        }),
+    };
+  }
+
   it.each([
     ['TimeoutError (fetch-level timeout)', () => new TimeoutError({ body: {}, url: RPC_URL })],
     [
@@ -638,56 +776,42 @@ describe('provider - provider-unavailable classification against real viem error
       'WaitForTransactionReceiptTimeoutError (settle() broadcast, then the receipt poll gave up)',
       () => new WaitForTransactionReceiptTimeoutError({ hash: `0x${'ab'.repeat(32)}` }),
     ],
-  ])('verify() throws PAYMENT_PROVIDER_UNAVAILABLE for a real %s', async (_label, makeError) => {
-    const provider = makeProvider();
-    const requirement = await provider.createRequirement(paymentContext());
-    const proof = await createPaymentProof({
-      buyerPrivateKey: BUYER_PRIVATE_KEY,
-      accepts: requirement.challenge.accepts[0] as Record<string, unknown>,
-    });
-    verifyMock.mockRejectedValueOnce(makeError());
+    // Outside viem's classes, so only the message identifies it
+    ['raw connection error', () => new Error('connect ECONNREFUSED 127.0.0.1:8545')],
+  ])(
+    'reports a %s as PAYMENT_PROVIDER_UNAVAILABLE, never as a rejection',
+    async (_label, makeError) => {
+      const { verify, settle } = await payThroughFailingSigner(makeError());
+      const unavailable = (err: unknown) =>
+        isCommerceError(err) && err.code === 'PAYMENT_PROVIDER_UNAVAILABLE';
 
-    await expect(
-      provider.verify({
-        requestId: 'req-1',
-        resource: RESOURCE,
-        requirement,
-        submission: { method: 'x402', payload: proof },
-      }),
-    ).rejects.toSatisfy(
-      (err: unknown) => isCommerceError(err) && err.code === 'PAYMENT_PROVIDER_UNAVAILABLE',
+      await expect(verify()).rejects.toSatisfy(unavailable);
+      await expect(settle()).rejects.toSatisfy(unavailable);
+    },
+  );
+
+  it.each(SIGNER_METHODS)('watches %s for a transport failure', async (method) => {
+    const { verify, settle } = await payThroughFailingSigner(
+      new HttpRequestError({ url: RPC_URL, body: {}, cause: new Error('ECONNREFUSED') }),
+      method,
     );
+    const unavailable = (err: unknown) =>
+      isCommerceError(err) && err.code === 'PAYMENT_PROVIDER_UNAVAILABLE';
+
+    await expect(verify()).rejects.toSatisfy(unavailable);
+    await expect(settle()).rejects.toSatisfy(unavailable);
   });
 
-  it.each([
-    ['TimeoutError (fetch-level timeout)', () => new TimeoutError({ body: {}, url: RPC_URL })],
-    [
-      'HttpRequestError (wraps ECONNREFUSED and other fetch failures)',
-      () => new HttpRequestError({ url: RPC_URL, body: {}, cause: new Error('ECONNREFUSED') }),
-    ],
-    [
-      'WaitForTransactionReceiptTimeoutError (settle() broadcast, then the receipt poll gave up)',
-      () => new WaitForTransactionReceiptTimeoutError({ hash: `0x${'ab'.repeat(32)}` }),
-    ],
-  ])('settle() throws PAYMENT_PROVIDER_UNAVAILABLE for a real %s', async (_label, makeError) => {
-    const provider = makeProvider();
-    const requirement = await provider.createRequirement(paymentContext());
-    const proof = await createPaymentProof({
-      buyerPrivateKey: BUYER_PRIVATE_KEY,
-      accepts: requirement.challenge.accepts[0] as Record<string, unknown>,
-    });
-    settleMock.mockRejectedValueOnce(makeError());
+  it('still rejects the payment when a signer call fails for a reason other than transport', async () => {
+    const { verify, settle } = await payThroughFailingSigner(new BaseError('execution reverted'));
 
-    await expect(
-      provider.settle({
-        requestId: 'req-1',
-        resource: RESOURCE,
-        requirement,
-        submission: { method: 'x402', payload: proof },
-        verification: { status: 'verified', provider: 'x402', amount: '0.01', currency: 'USD' },
-      }),
-    ).rejects.toSatisfy(
-      (err: unknown) => isCommerceError(err) && err.code === 'PAYMENT_PROVIDER_UNAVAILABLE',
-    );
+    await expect(verify()).resolves.toMatchObject({
+      status: 'rejected',
+      rejectionReason: 'invalid_exact_evm_signature',
+    });
+    await expect(settle()).resolves.toMatchObject({
+      status: 'rejected',
+      rejectionReason: 'invalid_exact_evm_signature',
+    });
   });
 });

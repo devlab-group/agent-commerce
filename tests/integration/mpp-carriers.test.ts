@@ -281,6 +281,8 @@ describe('MPP over HTTP', () => {
     const credential = await credentialFor((await invokeHttp(gw)).headers['www-authenticate']);
     const res = await invokeHttp(gw, { [PAYMENT_HEADER]: credential });
     expect(res.statusCode).toBe(402);
+    expect(res.json()).toMatchObject({ code: 'PAYMENT_REQUIRED' });
+    expect(facilitator.verify).not.toHaveBeenCalled();
     expect(facilitator.settle).not.toHaveBeenCalled();
   });
 });
