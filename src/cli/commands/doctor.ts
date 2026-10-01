@@ -1,56 +1,56 @@
 import { accessSync, existsSync, constants as fsConstants } from 'node:fs';
 import { dirname } from 'node:path';
 import picocolors from 'picocolors';
-// Constants and a descriptor only. Importing the AP2 provider here would pull
-// jose and @sd-jwt/core into the CLI bundle and make two optional peers
-// mandatory for anyone running `agent-commerce`.
+// Constants and a descriptor only: the AP2 provider would pull the optional
+// peers `jose`, `@sd-jwt/core` and `canonicalize` into the CLI bundle
 import {
   AP2_CHECKOUT_MANDATE_VCT,
   AP2_CHECKOUT_PROFILE,
   AP2_SPEC_VERSION,
-} from '../../authorization/ap2/constants.js';
-import { AP2_UNSUPPORTED } from '../../authorization/ap2/descriptor.js';
-import { extractPathParameterNames } from '../../core/execution/index.js';
-import { type CommerceResource, isCommerceError, type ReceiptStore } from '../../core/index.js';
+} from '../../authorization/ap2/constants';
+import { AP2_UNSUPPORTED } from '../../authorization/ap2/descriptor';
+import { type CommerceResource, isCommerceError, type ReceiptStore } from '../../core';
+import { extractPathParameterNames } from '../../core/execution';
 import {
   MPP_PROFILE,
   MPP_SPEC_COMMIT,
   MPP_SPEC_DRAFTS,
   MPPX_VERSION,
-} from '../../payments/mpp/constants.js';
+} from '../../payments/mpp/constants';
+import type { X402FacilitatorConfig } from '../../payments/x402/guardrails';
 import {
+  type DeploymentMode,
   describeDeploymentMode,
   findNetworkProfile,
   resolveDeploymentMode,
-} from '../../payments/x402/networks.js';
-// Narrow modules, not the package barrel: the CLI must pull in no protocol
-// SDK, and these two are plain constants and strings.
+} from '../../payments/x402/networks';
+// Narrow modules, not the protocol barrels: the CLI must pull in no protocol SDK
 import {
   A2A_AGENT_CARD_PATH,
   A2A_PROTOCOL_BINDING,
   A2A_PROTOCOL_VERSION,
   A2A_SPEC_VERSION,
-} from '../../protocols/a2a/constants.js';
-import { A2A_UNSUPPORTED } from '../../protocols/a2a/descriptor.js';
+} from '../../protocols/a2a/constants';
+import { A2A_UNSUPPORTED } from '../../protocols/a2a/descriptor';
 import {
   ACP_API_VERSION,
   ACP_SPEC_VERSION,
   ACP_WELL_KNOWN_PATH,
-} from '../../protocols/acp/constants.js';
-import { ACP_UNSUPPORTED } from '../../protocols/acp/descriptor.js';
-import { createSqliteReceiptStore } from '../../storage/receipts/index.js';
-import { type ConfigLoader, type GatewayConfig, loadConfigDynamic } from '../lib/config-client.js';
-import { type FetchLike, fetchJson } from '../lib/http.js';
-import { PLACEHOLDER_ASSET_ADDRESS } from '../lib/init-config.js';
-import type { Io } from '../lib/io.js';
+} from '../../protocols/acp/constants';
+import { ACP_UNSUPPORTED } from '../../protocols/acp/descriptor';
+import { createSqliteReceiptStore } from '../../storage/receipts';
+import { type ConfigLoader, type GatewayConfig, loadConfigDynamic } from '../lib/config-client';
+import { type FetchLike, fetchJson } from '../lib/http';
+import { PLACEHOLDER_ASSET_ADDRESS } from '../lib/init-config';
+import type { Io } from '../lib/io';
 import {
   fillEnvFromLocalChainManifest,
   LOCAL_CHAIN_MANIFEST_PATH,
   MANIFEST_FILLABLE_ENV_VAR_NAMES,
   type ManifestEnvFill,
-} from '../lib/manifest-env.js';
-import { maskMiddle } from '../lib/mask.js';
-import { readVersionReport } from '../lib/versions.js';
+} from '../lib/manifest-env';
+import { maskMiddle } from '../lib/mask';
+import { readVersionReport } from '../lib/versions';
 
 export type CheckStatus = 'PASS' | 'WARN' | 'FAIL' | 'INFO';
 
@@ -83,10 +83,9 @@ const CHECK_TIMEOUT_MS = 1500;
 function deriveGatewayUrl(explicit: string | undefined, config: GatewayConfig | undefined): string {
   if (explicit !== undefined) return explicit.replace(/\/$/, '');
   if (config !== undefined) {
-    // `0.0.0.0` means "all interfaces"; probe the loopback one. `::` is its
-    // IPv6 equivalent. A literal IPv6 host such as `::1`
-    // must be bracketed or the derived URL is invalid (`http://::1:8080`) and
-    // doctor reported every running gateway as unreachable.
+    // `0.0.0.0` and `::` mean all interfaces, so probe loopback. An IPv6
+    // literal such as `::1` must be bracketed, or the URL is invalid
+    // (`http://::1:8080`).
     const raw = config.server.host;
     const host = raw === '0.0.0.0' ? '127.0.0.1' : raw === '::' ? '::1' : raw;
     const authority = host.includes(':') ? `[${host}]` : host;
@@ -96,27 +95,21 @@ function deriveGatewayUrl(explicit: string | undefined, config: GatewayConfig | 
 }
 
 /**
- * Fill `{param}` slots with a probe value, using the *canonical* grammar.
- *
- * A local `/\{[^}]+\}/g` here would recognise more than the runtime does. A
- * kebab-case token like `{report-id}` would match here and not there, so
- * `doctor` would probe `/report/demo-check` — the URL the operator meant —
- * and report the backend reachable, while every real request went to
- * `/report/%7Breport-id%7D` and 404'd after settling payment. A diagnostic
- * that probes a URL the runtime would never build is
- * worse than no diagnostic: it certifies the broken thing as healthy. Anything
- * the shared extractor does not recognise is deliberately left as-is, so the
- * probe hits exactly what the gateway would send.
+ * Fills `{param}` slots with a probe value, using the runtime's own grammar
+ * (`extractPathParameterNames`). A looser local pattern would fill a token the
+ * runtime leaves literal, such as `{report id}`, and report the backend
+ * reachable at a URL no real request uses. Unrecognized tokens stay as they
+ * are, so the probe hits what the gateway would send.
  */
 function substitutePathParams(url: string): string {
   let filled = url;
   for (const name of extractPathParameterNames(url)) {
-    filled = filled.split(`{${name}}`).join('demo-check');
+    filled = filled.replaceAll(`{${name}}`, 'demo-check');
   }
   return filled;
 }
 
-// Shared settlement fields; payTo contains x402 `payTo` or MPP `recipient`
+// Shared settlement fields; `payTo` holds x402 `payTo` or MPP `recipient`
 interface LiveX402 {
   readonly asset: string;
   readonly network: string;
@@ -140,8 +133,6 @@ function extractWellKnownX402(
   const block = (payments as Record<string, unknown>)[rail];
   if (typeof block !== 'object' || block === null) return undefined;
   const rec = block as Record<string, unknown>;
-  // Only an explicit `false` is a positive statement. Anything else (absent,
-  // null, a non-boolean) is still "cannot tell".
   if (rec['enabled'] === false) return 'disabled';
   if (rec['enabled'] !== true) return undefined;
   const { asset, network } = rec;
@@ -186,6 +177,57 @@ function findX402Mismatch(
   return `${diffs.join('; ')}; the gateway may be running against an older deployment - restart it or re-run chain:deploy`;
 }
 
+/**
+ * Where a rail settles and through which facilitator. Chain id 84532 is both
+ * the local dev chain and public Base Sepolia, so the deployment mode (network
+ * plus facilitator) says which one this is. Local mode names the public
+ * network only as sharing its chain id, never as the place of settlement.
+ * `parseConfig` refuses an unknown network, so an absent profile means another
+ * loader produced this config, and the text says so rather than guessing.
+ */
+function describeSettlement(
+  network: string,
+  facilitator: X402FacilitatorConfig,
+): { readonly mode: DeploymentMode | undefined; readonly where: string; readonly via: string } {
+  const profile = findNetworkProfile(network);
+  const mode = profile ? resolveDeploymentMode(profile, facilitator.mode) : undefined;
+  const where =
+    profile === undefined || mode === undefined
+      ? `unknown network ${network}`
+      : mode === 'local'
+        ? `LOCAL dev chain (${network}, chain id shared with ${profile.displayName})`
+        : `${describeDeploymentMode(mode)} on ${profile.displayName} (${network})`;
+  const via =
+    facilitator.mode === 'local' ? 'local (in-process)' : `remote (auth=${facilitator.auth.type})`;
+  return { mode, where, via };
+}
+
+// Reports rather than re-checks: config load already enforced every guardrail
+// (src/payments/x402/guardrails.ts, shared by x402 and MPP). An operator about
+// to move real money sees which guarantees they rely on, including an
+// unauthenticated facilitator the config accepted through
+// `allowUnauthenticatedFacilitator`.
+function mainnetSafetyCheck(
+  name: string,
+  payToField: 'payTo' | 'recipient',
+  facilitator: X402FacilitatorConfig,
+): DoctorCheck {
+  const unauthenticated = facilitator.mode === 'remote' && facilitator.auth.type === 'none';
+  return {
+    name,
+    status: unauthenticated ? 'WARN' : 'INFO',
+    detail: unauthenticated
+      ? `${describeDeploymentMode('mainnet')}: no credential is sent to the remote facilitator ` +
+        '(accepted via allowUnauthenticatedFacilitator); its anonymous-access ' +
+        'limits apply. Config load also requires ' +
+        `allowMainnet, HTTPS, a non-development ${payToField} and the canonical asset. ` +
+        'Payments fail closed.'
+      : `${describeDeploymentMode('mainnet')}. Enforced at config load: explicit allowMainnet ` +
+        `opt-in, remote facilitator over HTTPS with a credential, non-development ${payToField}, ` +
+        'and the canonical asset for this network. Payments fail closed.',
+  };
+}
+
 // Issuer ids and how many keys each carries. Never a key
 function describeIssuers(
   label: string,
@@ -199,12 +241,7 @@ function describeIssuers(
   return `${label} issuers: ${described}`;
 }
 
-/**
- * Whether an existing file can be written, without creating one. Shared by the
- * two store checks below: each loses its guarantee on an unwritable file, and
- * a second copy of the probe is how one of them reports PASS on a path the
- * gateway cannot actually use.
- */
+// Whether an existing file is writable, without creating one
 function isWritableFile(path: string): boolean {
   try {
     accessSync(path, fsConstants.W_OK);
@@ -214,100 +251,47 @@ function isWritableFile(path: string): boolean {
   }
 }
 
-/**
- * The AP2 replay database, diagnosed without creating it. A read-only command
- * that produced the file would report a healthy empty store and shadow the
- * real one, exactly as the receipt-store check describes.
- */
-function ap2ReplayCheck(path: string): DoctorCheck {
-  const name = 'AP2 replay store';
+// A SQLite store file, diagnosed without creating it (see the Storage check in
+// `runDoctor`). `suffix` is appended to every detail.
+function storeFileCheck(
+  name: string,
+  path: string,
+  risk: { readonly inMemory: string; readonly unwritable: string },
+  suffix = '',
+): DoctorCheck {
   if (path === ':memory:') {
     return {
       name,
       status: 'WARN',
-      detail:
-        'in-memory store - every spent mandate is forgotten on restart, so one could authorize a second purchase; use a file path in production',
+      detail: `in-memory store: ${risk.inMemory}; use a file path in production${suffix}`,
     };
   }
   if (existsSync(path)) {
     return isWritableFile(path)
-      ? { name, status: 'PASS', detail: `writable at "${path}"` }
+      ? { name, status: 'PASS', detail: `writable at "${path}"${suffix}` }
       : {
           name,
           status: 'FAIL',
-          detail: `"${path}" exists but is not writable by this user - no mandate could be recorded as spent`,
+          detail: `"${path}" exists but is not writable by this user, so ${risk.unwritable}${suffix}`,
         };
   }
+  return { name, status: 'WARN', detail: `${missingStoreDetail(path)}${suffix}` };
+}
+
+// Every SQLite store opens through `openSqliteDatabase`, which creates the file
+// and a missing directory, so one wording covers them all
+function missingStoreDetail(path: string): string {
   const directory = dirname(path);
-  if (directory !== '' && directory !== '.' && !existsSync(directory)) {
-    return {
-      name,
-      status: 'WARN',
-      detail: `no store yet at "${path}" and its directory does not exist - it is created when the gateway starts, provided that path is writable`,
-    };
-  }
-  return {
-    name,
-    status: 'WARN',
-    detail: `no store yet at "${path}" - it is created the first time the gateway starts`,
-  };
+  return directory !== '.' && !existsSync(directory)
+    ? `no store at "${path}" and its directory does not exist. Both are created when the gateway starts, provided the path is writable`
+    : `no store at "${path}" yet. It is created the first time the gateway starts`;
 }
 
 /**
- * The idempotency database, diagnosed without creating it: `doctor` is
- * read-only, and opening a mistyped path would leave a fresh empty database
- * behind and report it as healthy.
- */
-function acpIdempotencyCheck(idempotency: {
-  readonly path: string;
-  readonly retentionHours: number;
-}): DoctorCheck {
-  // Config refuses anything below 24h, so this states the window rather than
-  // policing it - if it ever reads lower, the two layers have drifted.
-  const retention = `retention ${idempotency.retentionHours}h`;
-  if (idempotency.retentionHours < 24) {
-    return {
-      name: 'ACP idempotency',
-      status: 'FAIL',
-      detail: `${retention} is below the 24h ACP minimum — a replayed key could run a checkout twice`,
-    };
-  }
-  if (idempotency.path === ':memory:') {
-    return {
-      name: 'ACP idempotency',
-      status: 'WARN',
-      detail: `in-memory store, ${retention} — replay protection is lost on every restart; use a file path in production`,
-    };
-  }
-  const directory = dirname(idempotency.path);
-  if (existsSync(idempotency.path)) {
-    return isWritableFile(idempotency.path)
-      ? { name: 'ACP idempotency', status: 'PASS', detail: `writable, ${retention}` }
-      : {
-          name: 'ACP idempotency',
-          status: 'FAIL',
-          detail: `"${idempotency.path}" exists but is not writable by this user — the adapter cannot claim idempotency keys`,
-        };
-  }
-  if (directory !== '' && directory !== '.' && !existsSync(directory)) {
-    return {
-      name: 'ACP idempotency',
-      status: 'WARN',
-      detail: `no store yet at "${idempotency.path}" and its directory does not exist — it is created when the gateway starts, provided that path is writable`,
-    };
-  }
-  return {
-    name: 'ACP idempotency',
-    status: 'WARN',
-    detail: `no store yet at "${idempotency.path}" — it is created the first time the gateway starts (${retention})`,
-  };
-}
-
-/**
- * The five mapped resources, re-checked against the same rules config enforces:
- * present, acp-exposed, and free to invoke. Resource *ids* are named here
- * because an operator needs them to fix a mapping; the mapping itself is
- * config, not a secret, and never leaves this local report.
+ * The resource mapped to each checkout operation, re-checked against the rules
+ * config enforces: present, acp-exposed and free to invoke. Resource ids are
+ * printed because an operator needs them to fix a mapping; the mapping is
+ * config, not a secret.
  */
 function acpMappingCheck(
   config: GatewayConfig,
@@ -326,7 +310,7 @@ function acpMappingCheck(
       problems.push(`${operation} -> "${resourceId}" is not exposed via acp`);
     }
     // ACP checkout carries the merchant's own purchase payment; charging for
-    // the invocation as well would put two payment layers on one call.
+    // the invocation as well would put two payment layers on one call
     if (resource.pricing.type !== 'free' || resource.paymentMethods.length > 0) {
       problems.push(`${operation} -> "${resourceId}" is not free to invoke`);
     }
@@ -342,7 +326,7 @@ function acpMappingCheck(
   };
 }
 
-/** `agent-commerce doctor [--config] [--gateway] [--json]`. */
+/** `agent-commerce doctor [--config] [--gateway] [--json]` */
 export async function runDoctor(
   options: DoctorOptions,
   deps: DoctorDeps = {},
@@ -369,7 +353,7 @@ export async function runDoctor(
     checks.push({
       name: 'Config',
       status: 'PASS',
-      detail: `valid — ${config.resources.length} resource(s), merchant "${config.merchant.name}"${filledSuffix}`,
+      detail: `valid: ${config.resources.length} resource(s), merchant "${config.merchant.name}"${filledSuffix}`,
     });
   } catch (err) {
     const variable = isCommerceError(err) ? err.details?.['variable'] : undefined;
@@ -377,7 +361,7 @@ export async function runDoctor(
       !manifestFound &&
       typeof variable === 'string' &&
       MANIFEST_FILLABLE_ENV_VAR_NAMES.has(variable)
-        ? ` — run "npm run chain:deploy" (writes ${LOCAL_CHAIN_MANIFEST_PATH}, read automatically for local X402_*/MERCHANT_WALLET placeholders)`
+        ? `. Run "npm run chain:deploy": it writes ${LOCAL_CHAIN_MANIFEST_PATH}, which fills local X402_*/MERCHANT_WALLET placeholders automatically`
         : '';
     checks.push({
       name: 'Config',
@@ -413,7 +397,7 @@ export async function runDoctor(
 
   // 3. Backend(s)
   if (config === undefined) {
-    checks.push({ name: 'Backend', status: 'WARN', detail: 'skipped — config invalid' });
+    checks.push({ name: 'Backend', status: 'WARN', detail: 'skipped: config invalid' });
   } else if (config.resources.length === 0) {
     checks.push({ name: 'Backend', status: 'INFO', detail: 'no resources configured' });
   } else {
@@ -443,7 +427,7 @@ export async function runDoctor(
 
   // 5. Protocols
   if (config === undefined) {
-    checks.push({ name: 'Protocols', status: 'WARN', detail: 'skipped — config invalid' });
+    checks.push({ name: 'Protocols', status: 'WARN', detail: 'skipped: config invalid' });
   } else if (wellKnown === undefined || !wellKnown.ok) {
     checks.push({ name: 'Protocols', status: 'FAIL', detail: 'well-known document unreachable' });
   } else {
@@ -456,12 +440,10 @@ export async function runDoctor(
     });
   }
 
-  // 5b. A2A specifics. Reported from the pins rather than from the live
-  // gateway so the spec revision, the negotiation version and the binding are
-  // three separate, named values an operator can check against a client — the
-  // first two look alike and are routinely conflated.
+  // 5b. A2A specifics, from the pins rather than the live gateway. The spec
+  // revision and the negotiation version look alike, so each is named.
   if (config === undefined) {
-    checks.push({ name: 'A2A', status: 'WARN', detail: 'skipped — config invalid' });
+    checks.push({ name: 'A2A', status: 'WARN', detail: 'skipped: config invalid' });
   } else if (!config.protocols.a2a.enabled) {
     checks.push({ name: 'A2A', status: 'INFO', detail: 'disabled' });
   } else {
@@ -470,9 +452,8 @@ export async function runDoctor(
       status: 'PASS',
       detail: `experimental · spec ${A2A_SPEC_VERSION} · protocol ${A2A_PROTOCOL_VERSION} · binding ${A2A_PROTOCOL_BINDING} · mount ${config.protocols.a2a.mountPath} · card ${A2A_AGENT_CARD_PATH}`,
     });
-    // Listed in full, never summarised as a count: "18 unsupported" tells an
-    // operator nothing about whether the one operation their client needs is
-    // among them.
+    // Listed in full, as are ACP's and AP2's below: a count does not tell an
+    // operator whether the one feature their client needs is missing
     checks.push({
       name: 'A2A unsupported',
       status: 'INFO',
@@ -480,12 +461,11 @@ export async function runDoctor(
     });
   }
 
-  // 5c. ACP specifics. Read from config and the pins, never from the live
-  // gateway: the bearer token, the idempotency database path and the
-  // operation-to-resource mapping are all things this report must not print,
-  // and the well-known document deliberately does not carry them either.
+  // 5c. ACP specifics, from config and the pins: the well-known document omits
+  // the bearer token, the idempotency path and the operation mapping. This
+  // report prints the path and the mapping, never the token.
   if (config === undefined) {
-    checks.push({ name: 'ACP', status: 'WARN', detail: 'skipped — config invalid' });
+    checks.push({ name: 'ACP', status: 'WARN', detail: 'skipped: config invalid' });
   } else if (!config.protocols.acp.enabled) {
     checks.push({ name: 'ACP', status: 'INFO', detail: 'disabled' });
   } else {
@@ -496,20 +476,27 @@ export async function runDoctor(
       detail: `experimental · spec ${ACP_SPEC_VERSION} · API-Version ${ACP_API_VERSION} · service checkout · mount ${acp.mountPath} · discovery ${ACP_WELL_KNOWN_PATH}`,
     });
 
-    // Whether a token is configured, never which one. An empty one cannot
-    // reach here - config refuses it - so this states the shape, not a secret.
+    // Whether a token is configured and its length, never the token. Config
+    // refuses an empty one.
     checks.push({
       name: 'ACP auth',
       status: 'PASS',
       detail: `bearer token configured (${acp.auth.token.length} characters, not shown)`,
     });
 
-    checks.push(acpIdempotencyCheck(acp.idempotency));
+    checks.push(
+      storeFileCheck(
+        'ACP idempotency',
+        acp.idempotency.path,
+        {
+          inMemory: 'replay protection is lost on every restart',
+          unwritable: 'the adapter cannot claim idempotency keys',
+        },
+        ` (retention ${acp.idempotency.retentionHours}h)`,
+      ),
+    );
     checks.push(acpMappingCheck(config, acp.checkout.operations));
 
-    // Listed in full, never summarised as a count: "16 unsupported" tells an
-    // operator nothing about whether the one service their client needs is
-    // among them.
     checks.push({
       name: 'ACP unsupported',
       status: 'INFO',
@@ -517,12 +504,12 @@ export async function runDoctor(
     });
   }
 
-  // 5d. AP2 authorization. Read from config and the pins only. Verification
-  // keys are public, but they are still trust policy an operator did not ask
-  // this report to print, so only issuer ids and key counts appear.
+  // 5d. AP2 authorization, from config and the pins. Verification keys are
+  // public but still trust policy nobody asked this report to print, so only
+  // issuer ids and key counts appear.
   const ap2 = config?.authorization?.ap2;
   if (config === undefined) {
-    checks.push({ name: 'AP2', status: 'WARN', detail: 'skipped — config invalid' });
+    checks.push({ name: 'AP2', status: 'WARN', detail: 'skipped: config invalid' });
   } else if (ap2 === undefined || !ap2.enabled) {
     checks.push({ name: 'AP2', status: 'INFO', detail: 'disabled' });
   } else {
@@ -533,14 +520,20 @@ export async function runDoctor(
     });
 
     // Two lists, reported separately: signing the merchant's checkout
-    // documents must not read as the power to issue mandates.
+    // documents must not read as the power to issue mandates
     checks.push({
       name: 'AP2 trust',
       status: 'PASS',
       detail: `${describeIssuers('mandate', ap2.trust.mandateIssuers)} · ${describeIssuers('checkout', ap2.trust.checkoutIssuers)}`,
     });
 
-    checks.push(ap2ReplayCheck(ap2.replay.path));
+    checks.push(
+      storeFileCheck('AP2 replay store', ap2.replay.path, {
+        inMemory:
+          'every spent mandate is forgotten on restart, so one could authorize a second purchase',
+        unwritable: 'no mandate could be recorded as spent',
+      }),
+    );
 
     // Resource ids, so an operator can see exactly which purchases now need a
     // mandate. An empty list means AP2 is configured and gating nothing.
@@ -553,12 +546,9 @@ export async function runDoctor(
       detail:
         gated.length > 0
           ? gated.map((resource) => resource.id).join(', ')
-          : 'AP2 is enabled but no resource requires it — every purchase settles without a mandate',
+          : 'AP2 is enabled but no resource requires it, so every purchase settles without a mandate',
     });
 
-    // Listed in full, never summarised as a count: "14 unsupported" tells an
-    // operator nothing about whether the one thing their client sends is
-    // among them.
     checks.push({
       name: 'AP2 unsupported',
       status: 'INFO',
@@ -571,55 +561,29 @@ export async function runDoctor(
   if (x402 === undefined || !x402.enabled) {
     checks.push({ name: 'Payments', status: 'INFO', detail: 'x402 not configured' });
   } else {
-    // The protocol version is named because chain id 84532 is shared with the
-    // public Base Sepolia testnet: the *mode* is what says whether this
-    // deployment settles on a local dev node or a public network, and nothing
-    // here may be read as a claim about a public network on its own.
-    //
-    // A config whose network is unknown cannot reach here in normal operation
-    // — `parseConfig` refuses it — so an absent profile means doctor is
-    // reading a config some other loader produced. Say so rather than guess.
-    const profile = findNetworkProfile(x402.network);
-    const mode = profile ? resolveDeploymentMode(profile, x402.facilitator.mode) : undefined;
-    // Naming the public network while in local mode would read as a claim to
-    // be on it — the exact confusion the shared chain id creates. Local says
-    // "dev chain"; only a remote facilitator earns the network's name.
-    const where =
-      profile === undefined || mode === undefined
-        ? `unknown network ${x402.network}`
-        : mode === 'local'
-          ? `LOCAL dev chain (${x402.network}, chain id shared with ${profile.displayName})`
-          : `${describeDeploymentMode(mode)} on ${profile.displayName} (${x402.network})`;
-    const facilitatorDetail =
-      x402.facilitator.mode === 'local' ? 'local' : `remote (auth=${x402.facilitator.auth.type})`;
-    const summary = `x402 v2 (scheme=exact) enabled — ${where}, destination=${maskMiddle(x402.payTo)}, facilitator=${facilitatorDetail}`;
+    const { mode, where, via } = describeSettlement(x402.network, x402.facilitator);
+    const summary = `x402 v2 (scheme=exact) enabled - ${where}, destination=${maskMiddle(x402.payTo)}, facilitator=${via}`;
     const live = wellKnown?.ok ? extractWellKnownX402(wellKnown.body) : undefined;
     if (sameAddress(x402.asset, PLACEHOLDER_ASSET_ADDRESS)) {
-      // `init --yes` writes this placeholder, and the
-      // live cross-check compares config against the gateway's echo of the
-      // same config — so everything matched and the report said 7/7 PASS on a
-      // deployment where no paid call can ever succeed, because no token
-      // contract exists at that address. Fail-closed holds and no funds are at
-      // risk; the overstatement is the defect.
+      // `init` writes this placeholder, and the live cross-check below would
+      // pass it, since the gateway echoes the same config. No token contract
+      // exists there, so every paid call fails (closed, with no funds at
+      // risk).
       checks.push({
         name: 'Payments',
         status: 'WARN',
-        detail: `${summary}, but the asset is still the init placeholder ${maskMiddle(PLACEHOLDER_ASSET_ADDRESS)} — no token contract exists there, so every paid call will fail. Set payments.x402.asset (\${X402_ASSET} is filled from .deploy/local.json by "npm run chain:deploy")`,
+        detail: `${summary}, but the asset is still the init placeholder ${maskMiddle(PLACEHOLDER_ASSET_ADDRESS)}. No token contract exists there, so every paid call will fail. Set payments.x402.asset (\${X402_ASSET} is filled from .deploy/local.json, which "npm run chain:deploy" writes)`,
       });
     } else if (live === 'disabled') {
-      // Verified, and it disagrees. Every paid call against this gateway will
-      // be served free or refused, depending on the resource — either way the
-      // deployment is not what this config describes.
+      // Verified, and it disagrees: the gateway runs a different configuration
       checks.push({
         name: 'Payments',
         status: 'FAIL',
-        detail: `${summary}, but the gateway at ${gatewayUrl} reports x402 disabled — it is running a different configuration`,
+        detail: `${summary}, but the gateway at ${gatewayUrl} reports x402 disabled, so it is running a different configuration`,
       });
     } else if (live === undefined) {
-      // Gateway unreachable, x402 not (yet) reported live, or the document
-      // didn't parse as expected — can't judge a match either way, so this
-      // is not a FAIL: a doctor that fails on things it cannot check is as
-      // untrustworthy as one that passes on things it never checked.
+      // Gateway unreachable, or the document does not say: a match cannot be
+      // judged either way, so INFO rather than FAIL
       checks.push({
         name: 'Payments',
         status: 'INFO',
@@ -634,50 +598,18 @@ export async function runDoctor(
       );
     }
     if (mode === 'mainnet') {
-      // Reporting, not re-checking. Every one of these is refused at config
-      // load (src/payments/x402/guardrails.ts), so a config that got this far
-      // has already passed them — but an operator about to move real money
-      // should be told which guarantees they are relying on, and see the
-      // banner without having to read a log.
-      // An unauthenticated mainnet facilitator is allowed, but only by name.
-      // Saying so here is the point: the acknowledgement lives in a config
-      // file someone wrote weeks ago, and this is where they look today.
-      const unauthenticated =
-        x402.facilitator.mode === 'remote' && x402.facilitator.auth.type === 'none';
-      checks.push({
-        name: 'Mainnet safety',
-        status: unauthenticated ? 'WARN' : 'INFO',
-        detail: unauthenticated
-          ? `${describeDeploymentMode('mainnet')} — settling through a facilitator that takes no ` +
-            'credential, accepted via allowUnauthenticatedFacilitator. It sees every payment ' +
-            'authorisation you handle, with no account or terms behind it. Everything else is ' +
-            'enforced at config load: explicit allowMainnet opt-in, HTTPS, non-development ' +
-            'payTo, canonical asset. Payments are fail-closed.'
-          : `${describeDeploymentMode('mainnet')} — enforced at config load: explicit allowMainnet ` +
-            'opt-in, remote facilitator over HTTPS with a credential, non-development payTo, ' +
-            'and the canonical asset for this network. Payments are fail-closed.',
-      });
+      checks.push(mainnetSafetyCheck('Mainnet safety', 'payTo', x402.facilitator));
     }
   }
   const mpp = config?.payments.mpp;
   if (mpp === undefined || !mpp.enabled) {
     checks.push({ name: 'Payments (MPP)', status: 'INFO', detail: 'MPP not configured' });
   } else {
-    // parseConfig rejects unknown networks; keep a fallback for callers that bypass it
-    const profile = findNetworkProfile(mpp.network);
-    const mode = profile ? resolveDeploymentMode(profile, mpp.facilitator.mode) : undefined;
-    const where =
-      profile === undefined || mode === undefined
-        ? `unknown network ${mpp.network}`
-        : mode === 'local'
-          ? `LOCAL dev chain (${mpp.network}, chain id shared with ${profile.displayName})`
-          : `${describeDeploymentMode(mode)} on ${profile.displayName} (${mpp.network})`;
-    const facilitatorDetail =
-      mpp.facilitator.mode === 'local' ? 'local' : `remote (auth=${mpp.facilitator.auth.type})`;
+    const { mode, where, via } = describeSettlement(mpp.network, mpp.facilitator);
     const summary =
       `MPP ${MPP_PROFILE.intent}/${MPP_PROFILE.method}/${MPP_PROFILE.credentialType} enabled - ` +
       `${where}, asset=${MPP_PROFILE.assetSymbol} ${maskMiddle(mpp.asset)}, ` +
-      `recipient=${maskMiddle(mpp.recipient)}, facilitator=${facilitatorDetail}, ` +
+      `recipient=${maskMiddle(mpp.recipient)}, facilitator=${via}, ` +
       `spec ${MPP_SPEC_DRAFTS.core}@${MPP_SPEC_COMMIT.slice(0, 7)}, mppx ${MPPX_VERSION}`;
     const configured = { asset: mpp.asset, network: mpp.network, payTo: mpp.recipient };
     const live = wellKnown?.ok ? extractWellKnownX402(wellKnown.body, 'mpp') : undefined;
@@ -701,19 +633,20 @@ export async function runDoctor(
           : { name: 'Payments (MPP)', status: 'FAIL', detail: mismatch },
       );
     }
+    if (mode === 'mainnet') {
+      checks.push(mainnetSafetyCheck('Mainnet safety (MPP)', 'recipient', mpp.facilitator));
+    }
   }
 
   // 7. Storage
   if (config === undefined) {
-    checks.push({ name: 'Storage', status: 'WARN', detail: 'skipped — config invalid' });
+    checks.push({ name: 'Storage', status: 'WARN', detail: 'skipped: config invalid' });
   } else if (
-    // Diagnose without creating: createSqliteReceiptStore mkdir+creates the
-    // file, so calling it on a wrong path (a typo, or a container path read
-    // from the host) silently produces a fresh empty database and a false
-    // "healthy, receipts=0" PASS — a read-only command must not have this
-    // side effect, and it shadows the real store's real receipts entirely.
-    // `:memory:` never exists on disk by definition, so it always falls
-    // through to the real open/health/count branch below, same as today.
+    // Diagnose without creating: createSqliteReceiptStore creates the file,
+    // so opening a wrong path (a typo, or a container path read from the
+    // host) would leave an empty database and report it healthy, hiding the
+    // real one. `:memory:` never exists on disk, so it takes the open branch
+    // below.
     config.storage.receipts.path !== ':memory:' &&
     !existsSync(config.storage.receipts.path)
   ) {
@@ -721,9 +654,8 @@ export async function runDoctor(
       name: 'Storage',
       status: 'WARN',
       detail:
-        `no store exists yet at "${config.storage.receipts.path}" — it is created ` +
-        'automatically the first time the gateway starts. If the gateway is already ' +
-        'running, this path does not match the one it actually uses.',
+        `${missingStoreDetail(config.storage.receipts.path)}. If the gateway is ` +
+        'already running, this path does not match the one it uses.',
     });
   } else {
     let store: ReceiptStore | undefined;
@@ -733,19 +665,16 @@ export async function runDoctor(
       const storeHealth = await store.health();
       let receiptCount: number | undefined;
       try {
-        // Exact count, not a list length: listReceipts clamps to
-        // MAX_LIST_LIMIT (500, a store-level invariant) so counting via the
-        // list silently saturated at 500 forever.
+        // Exact count, not a list length: listReceipts clamps every page
         receiptCount = await store.countReceipts();
       } catch {
         receiptCount = undefined;
       }
       let undeliveredCount: number | undefined;
       try {
-        // A paid-but-undelivered purchase looks identical to a successful
-        // one everywhere else; this is what makes it visible to an operator
-        // running doctor. Same signal the
-        // dashboard's receipt table uses, so the two views cannot disagree.
+        // Paid but undelivered purchases (see
+        // `ReceiptStore.countUndeliveredReceipts`), the rows the dashboard
+        // flags as "Charged but not delivered"
         undeliveredCount = await store.countUndeliveredReceipts();
       } catch {
         undeliveredCount = undefined;
@@ -773,7 +702,7 @@ export async function runDoctor(
   }
 
   // 8. Protocol versions
-  if (wellKnown !== undefined && wellKnown.ok) {
+  if (wellKnown?.ok) {
     checks.push({
       name: 'Protocol versions',
       status: 'PASS',
@@ -784,7 +713,7 @@ export async function runDoctor(
     checks.push({
       name: 'Protocol versions',
       status: 'INFO',
-      detail: `gateway unreachable — local pins: ${local.pinned.map((p) => `${p.name}@${p.version}`).join(', ')}`,
+      detail: `gateway unreachable; local pins: ${local.pinned.map((p) => `${p.name}@${p.version}`).join(', ')}`,
     });
   }
 

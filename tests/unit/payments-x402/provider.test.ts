@@ -2,19 +2,20 @@ import { describe, expect, it } from 'vitest';
 import type {
   CommerceResource,
   PaymentContext,
+  PaymentRequirement,
   PaymentVerificationContext,
-} from '../../../src/core/index.js';
-import { isCommerceError } from '../../../src/core/index.js';
-import { createPaymentProof } from '../../../src/payments/x402/client.js';
+} from '../../../src/core';
+import { isCommerceError } from '../../../src/core';
+import { createPaymentProof } from '../../../src/payments/x402/client';
 import {
   createX402PaymentProvider,
   type X402ProviderOptions,
-} from '../../../src/payments/x402/provider.js';
+} from '../../../src/payments/x402/provider';
+import { unreachableRpcUrl } from '../../fixtures/x402/lossy-rpc';
 
-// A plausible-looking RPC URL nobody is listening on — connection refuses
-// immediately, letting us exercise the "provider unavailable" path without
-// booting a real chain (that happens in tests/e2e/payment).
-const UNREACHABLE_RPC_URL = 'http://127.0.0.1:18999';
+// The connection is refused at once, so the "provider unavailable" path runs
+// without a chain (tests/e2e/payment boots a real one)
+const UNREACHABLE_RPC_URL = await unreachableRpcUrl();
 
 const ASSET = '0x5FbDB2315678afecb367f032d93F642f64180aa3' as const;
 const PAY_TO = '0x70997970C51812dc3A010C7d01b50e0d17dc79C8' as const;
@@ -66,11 +67,12 @@ describe('descriptor', () => {
     expect(provider.descriptor.supportedSpec).toContain('x402/v2');
     expect(provider.descriptor.capabilities).toContain('exact-evm');
     expect(provider.descriptor.capabilities).toContain('eip-3009');
-    // Alpha honesty: things this provider does NOT implement must be listed.
+    // What the provider does not implement must be listed
     expect(provider.descriptor.unsupported).toContain('svm');
     expect(provider.descriptor.unsupported).toContain('permit2');
-    // The deployment this provider is configured for is part of its
-    // description: chain id 84532 alone cannot say local from Base Sepolia.
+    expect(provider.descriptor.unsupported).toContain('deferred scheme');
+    // The descriptor names the deployment, because chain id 84532 alone cannot
+    // tell local from Base Sepolia
     expect(provider.descriptor.capabilities).toContain('local-facilitator');
     expect(provider.descriptor.capabilities).toContain('mode=local');
   });
@@ -97,10 +99,8 @@ describe('createRequirement', () => {
     expect(accepted['amount']).toBe('10000'); // 0.01 * 10^6
     expect(accepted['payTo']).toBe(PAY_TO);
     expect(accepted['asset']).toBe(ASSET);
-    // extra.name/version is REQUIRED — the facilitator must never
-    // need an on-chain version() call to build the EIP-712 domain.
-    // assetTransferMethod pins the one method this provider settles, so a
-    // conforming client never picks the Permit2 path.
+    // extra.name/version are required so the EIP-712 domain needs no on-chain
+    // version() call, and assetTransferMethod keeps clients off Permit2
     expect(accepted['extra']).toEqual({
       name: 'MockUSDC',
       version: '2',
@@ -116,9 +116,7 @@ describe('createRequirement', () => {
     expect(envelope).toBeDefined();
     expect(envelope?.['x402Version']).toBe(2);
     expect(requirement.challenge.version).toBe('2');
-    // The envelope must offer the same requirement the challenge lists —
-    // two surfaces describing different offers is the drift this exists to
-    // prevent.
+    // The envelope must offer the same requirement the challenge lists
     expect(envelope?.['accepts']).toEqual(requirement.challenge.accepts);
 
     const resource = envelope?.['resource'] as Record<string, unknown>;
@@ -145,7 +143,7 @@ describe('createRequirement', () => {
   });
 });
 
-describe('verify — rejects before touching the network', () => {
+describe('verify - rejects before touching the network', () => {
   it('rejects a payload that is not valid base64/JSON', async () => {
     const provider = makeProvider();
     const requirement = await provider.createRequirement(paymentContext());
@@ -197,6 +195,7 @@ describe('verify — rejects before touching the network', () => {
       submission: { method: 'x402', payload: '' },
     });
     expect(result.status).toBe('rejected');
+    expect(result.rejectionReason).toBe('malformed_payment_payload');
   });
 
   it('rejects when the requirement has already expired', async () => {
@@ -205,7 +204,6 @@ describe('verify — rejects before touching the network', () => {
     const expired = { ...requirement, expiresAt: new Date(Date.now() - 60_000).toISOString() };
     const proof = await createPaymentProof({
       buyerPrivateKey: BUYER_PRIVATE_KEY,
-      rpcUrl: UNREACHABLE_RPC_URL,
       accepts: requirement.challenge.accepts[0] as Record<string, unknown>,
     });
     const result = await provider.verify({
@@ -218,10 +216,18 @@ describe('verify — rejects before touching the network', () => {
     expect(result.rejectionReason).toBe('requirement_expired');
   });
 
-  it('rejects when the requirement was generated for a different provider', async () => {
+  it.each([
+    ['the requirement', (r: PaymentRequirement) => ({ ...r, provider: 'mpp' as const })],
+    [
+      'its challenge',
+      (r: PaymentRequirement) => ({
+        ...r,
+        challenge: { ...r.challenge, provider: 'mpp' as const },
+      }),
+    ],
+  ])('rejects when %s was generated for another provider', async (_label, retag) => {
     const provider = makeProvider();
-    const requirement = await provider.createRequirement(paymentContext());
-    const tampered = { ...requirement, provider: 'other' as never };
+    const tampered = retag(await provider.createRequirement(paymentContext()));
     const result = await provider.verify({
       requestId: 'req-1',
       resource: RESOURCE,
@@ -258,11 +264,10 @@ describe('verify — rejects before touching the network', () => {
     const requirement = await provider.createRequirement(paymentContext());
     const proof = await createPaymentProof({
       buyerPrivateKey: BUYER_PRIVATE_KEY,
-      rpcUrl: UNREACHABLE_RPC_URL,
       accepts: requirement.challenge.accepts[0] as Record<string, unknown>,
     });
-    // Decode, tamper with the network, re-encode using the same wire format.
-    // v2 carries the network on the accepted requirement, not at the top level.
+    // Decode, change the network, re-encode. v2 carries the network on the
+    // accepted requirement, not at the top level.
     const decoded = JSON.parse(Buffer.from(proof, 'base64').toString('utf8'));
     decoded.accepted.network = 'eip155:8453';
     const tamperedProof = Buffer.from(JSON.stringify(decoded)).toString('base64');
@@ -282,7 +287,6 @@ describe('verify — rejects before touching the network', () => {
     const requirement = await provider.createRequirement(paymentContext());
     const proof = await createPaymentProof({
       buyerPrivateKey: BUYER_PRIVATE_KEY,
-      rpcUrl: UNREACHABLE_RPC_URL,
       accepts: requirement.challenge.accepts[0] as Record<string, unknown>,
       overrides: { payTo: '0x00000000000000000000000000000000000000ee' },
     });
@@ -296,31 +300,33 @@ describe('verify — rejects before touching the network', () => {
     expect(result.rejectionReason).toBe('wrong_recipient');
   });
 
-  it('rejects a value below maxAmountRequired', async () => {
-    const provider = makeProvider();
-    const requirement = await provider.createRequirement(paymentContext());
-    const proof = await createPaymentProof({
-      buyerPrivateKey: BUYER_PRIVATE_KEY,
-      rpcUrl: UNREACHABLE_RPC_URL,
-      accepts: requirement.challenge.accepts[0] as Record<string, unknown>,
-      overrides: { value: '1' }, // far less than the required 10000
-    });
-    const result = await provider.verify({
-      requestId: 'req-1',
-      resource: RESOURCE,
-      requirement,
-      submission: { method: 'x402', payload: proof },
-    });
-    expect(result.status).toBe('rejected');
-    expect(result.rejectionReason).toBe('wrong_amount');
-  });
+  // 0.01 at 6 decimals is 10000 base units. An overpayment is refused as well
+  it.each(['9999', '10001'])(
+    'rejects an authorized value other than the price: %s',
+    async (value) => {
+      const provider = makeProvider();
+      const requirement = await provider.createRequirement(paymentContext());
+      const proof = await createPaymentProof({
+        buyerPrivateKey: BUYER_PRIVATE_KEY,
+        accepts: requirement.challenge.accepts[0] as Record<string, unknown>,
+        overrides: { value },
+      });
+      const result = await provider.verify({
+        requestId: 'req-1',
+        resource: RESOURCE,
+        requirement,
+        submission: { method: 'x402', payload: proof },
+      });
+      expect(result.status).toBe('rejected');
+      expect(result.rejectionReason).toBe('wrong_amount');
+    },
+  );
 
   it('rejects a value that is not a valid integer string (malformed authorization)', async () => {
     const provider = makeProvider();
     const requirement = await provider.createRequirement(paymentContext());
     const proof = await createPaymentProof({
       buyerPrivateKey: BUYER_PRIVATE_KEY,
-      rpcUrl: UNREACHABLE_RPC_URL,
       accepts: requirement.challenge.accepts[0] as Record<string, unknown>,
     });
     const decoded = JSON.parse(Buffer.from(proof, 'base64').toString('utf8'));
@@ -337,12 +343,11 @@ describe('verify — rejects before touching the network', () => {
     expect(result.rejectionReason).toBe('malformed_payment_payload');
   });
 
-  it('rejects a malformed "from" address in the authorisation', async () => {
+  it('rejects a malformed "from" address in the authorization', async () => {
     const provider = makeProvider();
     const requirement = await provider.createRequirement(paymentContext());
     const proof = await createPaymentProof({
       buyerPrivateKey: BUYER_PRIVATE_KEY,
-      rpcUrl: UNREACHABLE_RPC_URL,
       accepts: requirement.challenge.accepts[0] as Record<string, unknown>,
     });
     const decoded = JSON.parse(Buffer.from(proof, 'base64').toString('utf8'));
@@ -359,7 +364,7 @@ describe('verify — rejects before touching the network', () => {
     expect(result.rejectionReason).toBe('malformed_payment_payload');
   });
 
-  it('rejects a v1 payload — this gateway speaks x402 v2 only', async () => {
+  it('rejects a v1 payload - this gateway speaks x402 v2 only', async () => {
     const provider = makeProvider();
     const requirement = await provider.createRequirement(paymentContext());
     const v1Payload = {
@@ -390,7 +395,7 @@ describe('verify — rejects before touching the network', () => {
     expect(result.rejectionReason).toBe('malformed_payment_payload');
   });
 
-  it('rejects a Permit2 payload — the challenge asks for EIP-3009', async () => {
+  it('rejects a Permit2 payload - the challenge asks for EIP-3009', async () => {
     const provider = makeProvider();
     const requirement = await provider.createRequirement(paymentContext());
     const permit2Payload = {
@@ -419,6 +424,29 @@ describe('verify — rejects before touching the network', () => {
     expect(result.rejectionReason).toBe('unsupported_scheme');
   });
 
+  it('rejects an EIP-3009 authorization offered under another scheme', async () => {
+    const provider = makeProvider();
+    const requirement = await provider.createRequirement(paymentContext());
+    const proof = await createPaymentProof({
+      buyerPrivateKey: BUYER_PRIVATE_KEY,
+      accepts: requirement.challenge.accepts[0] as Record<string, unknown>,
+    });
+    const decoded = JSON.parse(Buffer.from(proof, 'base64').toString('utf8'));
+    decoded.accepted.scheme = 'upto';
+
+    const result = await provider.verify({
+      requestId: 'req-1',
+      resource: RESOURCE,
+      requirement,
+      submission: {
+        method: 'x402',
+        payload: Buffer.from(JSON.stringify(decoded)).toString('base64'),
+      },
+    });
+    expect(result.status).toBe('rejected');
+    expect(result.rejectionReason).toBe('unsupported_scheme');
+  });
+
   it('omits network/asset from a rejected result when the requirement never had them', async () => {
     const provider = makeProvider();
     const requirement = await provider.createRequirement(paymentContext());
@@ -435,7 +463,7 @@ describe('verify — rejects before touching the network', () => {
     expect(result.asset).toBeUndefined();
   });
 
-  it('never throws for a garbage submission — always returns a rejected result', async () => {
+  it('never throws for a garbage submission - always returns a rejected result', async () => {
     const provider = makeProvider();
     const requirement = await provider.createRequirement(paymentContext());
     const verifyOnce = (payload: string) =>
@@ -457,13 +485,12 @@ describe('verify — rejects before touching the network', () => {
   });
 });
 
-describe('verify — provider unavailable', () => {
+describe('verify - provider unavailable', () => {
   it('throws PAYMENT_PROVIDER_UNAVAILABLE when the RPC is unreachable for an otherwise well-formed payload', async () => {
     const provider = makeProvider(); // rpcUrl points at nothing listening
     const requirement = await provider.createRequirement(paymentContext());
     const proof = await createPaymentProof({
       buyerPrivateKey: BUYER_PRIVATE_KEY,
-      rpcUrl: UNREACHABLE_RPC_URL,
       accepts: requirement.challenge.accepts[0] as Record<string, unknown>,
     });
 
@@ -480,13 +507,12 @@ describe('verify — provider unavailable', () => {
   });
 });
 
-describe('createX402PaymentProvider — payTo dev-address guard', () => {
+describe('createX402PaymentProvider - Anvil dev-key guards', () => {
   const PUBLIC_RPC_URL = 'https://mainnet.base.org';
   const DEV_PAY_TO = PAY_TO; // fixture PAY_TO is a well-known Anvil address
   const REAL_PAY_TO = `0x${'f0'.repeat(20)}` as const;
-  // Deliberately NOT a well-known Anvil key, so this isolates the payTo
-  // guard from assertDevKeyIsLocalOnly — the "own facilitator key + dev
-  // payTo" case.
+  // Not a well-known Anvil key, so only the payTo guard can fire: the "own
+  // facilitator key, dev payTo" case
   const REAL_FACILITATOR_KEY = `0x${'22'.repeat(32)}` as const;
 
   it("throws CONFIG_INVALID for a dev payTo against a public RPC, even with the operator's own facilitator key", () => {
@@ -511,10 +537,8 @@ describe('createX402PaymentProvider — payTo dev-address guard', () => {
   });
 
   it('throws CONFIG_INVALID for a dev payTo against a public RPC even with a remote facilitator', () => {
-    // The case this covers: an operator who brings their own
-    // facilitator key (so assertDevKeyIsLocalOnly has nothing to say) but
-    // forgets to change payTo away from the local-demo default. The
-    // destination guard must not depend on facilitator.mode.
+    // An operator brings their own facilitator key but keeps the local-demo
+    // payTo. The destination guard must not depend on facilitator.mode.
     expect(() =>
       makeProvider({
         rpcUrl: PUBLIC_RPC_URL,
@@ -535,7 +559,23 @@ describe('createX402PaymentProvider — payTo dev-address guard', () => {
     }
   });
 
-  it('accepts a real (non-dev) payTo against a public RPC — the correct configuration', () => {
+  it('throws CONFIG_INVALID for a well-known Anvil signer key against a public RPC', () => {
+    // The same configuration as the case below except for the key
+    expect(() =>
+      makeProvider({
+        rpcUrl: PUBLIC_RPC_URL,
+        payTo: REAL_PAY_TO,
+        facilitator: { mode: 'local', signerPrivateKey: BUYER_PRIVATE_KEY },
+      }),
+    ).toThrow(
+      expect.objectContaining({
+        code: 'CONFIG_INVALID',
+        message: expect.stringContaining('signerPrivateKey is a well-known Anvil development key'),
+      }),
+    );
+  });
+
+  it('accepts a real (non-dev) payTo against a public RPC - the correct configuration', () => {
     expect(() =>
       makeProvider({
         rpcUrl: PUBLIC_RPC_URL,
@@ -546,17 +586,95 @@ describe('createX402PaymentProvider — payTo dev-address guard', () => {
   });
 });
 
+describe('createX402PaymentProvider - deployment guardrails', () => {
+  // The provider applies these itself, for a library caller who never runs the
+  // config loader. Each case breaks one term of a valid Base mainnet deployment.
+  const BASE_USDC = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913' as const;
+  const MERCHANT = `0x${'f0'.repeat(20)}` as const;
+  const FACILITATOR_URL = 'https://facilitator.example';
+  const mainnet = (overrides: Partial<X402ProviderOptions> = {}) =>
+    makeProvider({
+      network: 'eip155:8453',
+      rpcUrl: 'https://base.example',
+      asset: BASE_USDC,
+      assetName: 'USD Coin',
+      payTo: MERCHANT,
+      facilitator: {
+        mode: 'remote',
+        url: FACILITATOR_URL,
+        auth: { type: 'bearer', token: 'facilitator-token' },
+      },
+      allowMainnet: true,
+      ...overrides,
+    });
+
+  it('builds a mainnet provider when every guardrail holds', () => {
+    expect(mainnet().descriptor.capabilities).toContain('mode=mainnet');
+  });
+
+  it.each<[string, Partial<X402ProviderOptions>, string]>([
+    ['no allowMainnet', { allowMainnet: false }, 'allowMainnet'],
+    [
+      'the in-process facilitator',
+      { facilitator: { mode: 'local', signerPrivateKey: `0x${'22'.repeat(32)}` } },
+      'facilitator.mode',
+    ],
+    [
+      'a plain-HTTP facilitator on a private host',
+      {
+        facilitator: {
+          mode: 'remote',
+          url: 'http://10.0.0.5',
+          auth: { type: 'bearer', token: 'facilitator-token' },
+        },
+      },
+      'facilitator.url',
+    ],
+    [
+      'a facilitator without a credential',
+      { facilitator: { mode: 'remote', url: FACILITATOR_URL, auth: { type: 'none' } } },
+      'allowUnauthenticatedFacilitator',
+    ],
+    [
+      'a blank bearer token',
+      {
+        facilitator: { mode: 'remote', url: FACILITATOR_URL, auth: { type: 'bearer', token: ' ' } },
+      },
+      'facilitator.auth.token',
+    ],
+    ['the zero address as payTo', { payTo: `0x${'0'.repeat(40)}` }, 'payTo'],
+    // A loopback RPC, so only the deployment check can see that the dev
+    // address would receive mainnet funds
+    ['a well-known Anvil payTo', { rpcUrl: 'http://127.0.0.1:8545', payTo: PAY_TO }, 'payTo'],
+    ['a token other than canonical USDC', { asset: ASSET }, 'asset'],
+    ["Base Sepolia's EIP-712 name", { assetName: 'USDC' }, 'assetName'],
+    ['another EIP-712 version', { assetVersion: '1' }, 'assetVersion'],
+  ])('refuses %s', (_label, overrides, field) => {
+    expect(() => mainnet(overrides)).toThrow(
+      expect.objectContaining({
+        code: 'CONFIG_INVALID',
+        details: { path: `payments.x402.${field}` },
+      }),
+    );
+  });
+});
+
 describe('settle', () => {
   it('throws PAYMENT_INVALID if settle() is called without a successful verify()', async () => {
     const provider = makeProvider();
     const requirement = await provider.createRequirement(paymentContext());
+    // A well-formed proof, so the verification guard is the only reason to refuse
+    const proof = await createPaymentProof({
+      buyerPrivateKey: BUYER_PRIVATE_KEY,
+      accepts: requirement.challenge.accepts[0] as Record<string, unknown>,
+    });
 
     await expect(
       provider.settle({
         requestId: 'req-1',
         resource: RESOURCE,
         requirement,
-        submission: { method: 'x402', payload: 'irrelevant' },
+        submission: { method: 'x402', payload: proof },
         verification: {
           status: 'rejected',
           provider: 'x402',
@@ -565,7 +683,35 @@ describe('settle', () => {
           rejectionReason: 'wrong_amount',
         },
       }),
-    ).rejects.toSatisfy((err: unknown) => isCommerceError(err) && err.code === 'PAYMENT_INVALID');
+    ).rejects.toSatisfy(
+      (err: unknown) =>
+        isCommerceError(err) &&
+        err.code === 'PAYMENT_INVALID' &&
+        err.message.includes('without a successful verify()'),
+    );
+  });
+
+  it('throws PAYMENT_PROVIDER_UNAVAILABLE, not a rejection, when the RPC fails during settle()', async () => {
+    // The SDK re-verifies inside settle() and returns the RPC failure as an
+    // ordinary `success: false`, so only the transport flag keeps it off the buyer
+    const provider = makeProvider();
+    const requirement = await provider.createRequirement(paymentContext());
+    const proof = await createPaymentProof({
+      buyerPrivateKey: BUYER_PRIVATE_KEY,
+      accepts: requirement.challenge.accepts[0] as Record<string, unknown>,
+    });
+
+    await expect(
+      provider.settle({
+        requestId: 'req-1',
+        resource: RESOURCE,
+        requirement,
+        submission: { method: 'x402', payload: proof },
+        verification: { status: 'verified', provider: 'x402', amount: '0.01', currency: 'USD' },
+      }),
+    ).rejects.toSatisfy(
+      (err: unknown) => isCommerceError(err) && err.code === 'PAYMENT_PROVIDER_UNAVAILABLE',
+    );
   });
 });
 
@@ -579,10 +725,20 @@ describe('health', () => {
   });
 
   it('rejects an invalid asset address at construction time (fail closed on bad config)', () => {
-    expect(() => makeProvider({ asset: 'not-an-address' as `0x${string}` })).toThrow();
+    expect(() => makeProvider({ asset: 'not-an-address' as `0x${string}` })).toThrow(
+      expect.objectContaining({
+        code: 'CONFIG_INVALID',
+        message: expect.stringContaining('"asset"'),
+      }),
+    );
   });
 
   it('rejects an invalid payTo address at construction time', () => {
-    expect(() => makeProvider({ payTo: 'not-an-address' as `0x${string}` })).toThrow();
+    expect(() => makeProvider({ payTo: 'not-an-address' as `0x${string}` })).toThrow(
+      expect.objectContaining({
+        code: 'CONFIG_INVALID',
+        message: expect.stringContaining('"payTo"'),
+      }),
+    );
   });
 });

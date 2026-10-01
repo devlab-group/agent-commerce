@@ -8,22 +8,23 @@
  * against the real gateway with the real adapters mounted, not against the
  * extraction helper on its own.
  *
- * Nothing verifies the proof yet. What is asserted here is transport
- * behaviour: it reaches the pipeline intact, it never reaches the resource
- * input, and a malformed envelope is refused before the pipeline runs.
+ * No authorization provider is configured, so nothing verifies the proof.
+ * What is asserted is transport behavior: it reaches the pipeline intact, it
+ * never reaches the resource input, and a malformed envelope is refused before
+ * the pipeline runs.
  */
 import { afterEach, describe, expect, it } from 'vitest';
-import type { GatewayConfig } from '../../src/config/index.js';
-import type { BackendExecutor, CanonicalRequest, ExecutionPipeline } from '../../src/core/index.js';
+import type { GatewayConfig } from '../../src/config';
+import type { BackendExecutor, CanonicalRequest, ExecutionPipeline } from '../../src/core';
 import {
   AUTHORIZATION_HEADER,
   AUTHORIZATION_INPUT_FIELD,
   MAX_AUTHORIZATION_HEADER_BYTES,
-} from '../../src/core/index.js';
-import { createGateway, type GatewayInstance } from '../../src/gateway/index.js';
-import { createA2aAdapter } from '../../src/protocols/a2a/index.js';
-import { createMcpAdapter } from '../../src/protocols/mcp/index.js';
-import { createFakeStore } from '../unit/gateway/helpers.js';
+} from '../../src/core';
+import { createGateway, type GatewayInstance } from '../../src/gateway';
+import { createA2aAdapter } from '../../src/protocols/a2a';
+import { createMcpAdapter } from '../../src/protocols/mcp';
+import { createFakeStore } from '../unit/gateway/helpers';
 
 process.env['NODE_ENV'] = 'test';
 
@@ -59,7 +60,7 @@ function config(): GatewayConfig {
           properties: { city: { type: 'string' } },
           required: ['city'],
           // Closed schema: if a reserved field survived extraction it would
-          // fail here as INPUT_INVALID rather than reaching the backend.
+          // fail here as INPUT_INVALID rather than reaching the backend
           additionalProperties: false,
         },
         handler: { type: 'http', method: 'GET', url: 'http://backend.local/weather/{city}' },
@@ -80,7 +81,7 @@ const backend: BackendExecutor = {
   },
 };
 
-/** Captures the exact CanonicalRequest each surface built, without re-routing. */
+// Captures the exact CanonicalRequest each surface built, without re-routing
 function spyOnPipeline(gw: GatewayInstance): CanonicalRequest[] {
   const captured: CanonicalRequest[] = [];
   const original = gw.pipeline.execute.bind(gw.pipeline);
@@ -147,7 +148,7 @@ async function callMcp(gw: GatewayInstance, args: Record<string, unknown>): Prom
     },
   });
   // The adapter answers over Streamable HTTP, which can frame the reply as a
-  // single SSE event rather than a bare JSON body.
+  // single SSE event rather than a bare JSON body
   const raw = res.body.startsWith('event:')
     ? (res.body.split('\n').find((line) => line.startsWith('data:')) ?? '').slice(5)
     : res.body;
@@ -191,7 +192,7 @@ async function callA2a(
 // --- tests -----------------------------------------------------------------
 
 describe('generic authorization carrier across every surface', () => {
-  it('normalises an HTTP header, an MCP argument and an A2A input field to the same submission', async () => {
+  it('normalizes an HTTP header, an MCP argument and an A2A input field to the same submission', async () => {
     const gw = await startGateway();
     const captured = spyOnPipeline(gw);
 
@@ -213,16 +214,16 @@ describe('generic authorization carrier across every surface', () => {
     const mcp = await callMcp(gw, { [AUTHORIZATION_INPUT_FIELD]: ENVELOPE });
     const a2a = await callA2a(gw, { [AUTHORIZATION_INPUT_FIELD]: ENVELOPE });
 
-    // The resource schema is closed, so a leaked field would surface as
-    // INPUT_INVALID. All three deliver instead.
     expect(http.statusCode).toBe(200);
     expect(mcp.isError).not.toBe(true);
     expect(a2a).toEqual({ forecast: 'sunny' });
 
+    // Delivery alone proves nothing: the pipeline strips reserved fields again
+    // before validation. The input each adapter handed over is the check.
     for (const request of captured) {
       expect(request.input).toEqual({ city: 'Berlin' });
     }
-    // And the merchant backend never sees a gateway-reserved field.
+    // And the merchant backend never sees a gateway-reserved field
     expect(backendInputs).toEqual([{ city: 'Berlin' }, { city: 'Berlin' }, { city: 'Berlin' }]);
   });
 
@@ -267,21 +268,27 @@ describe('generic authorization carrier across every surface', () => {
     const gw = await startGateway();
     const captured = spyOnPipeline(gw);
 
-    const { statusCode, body } = await callHttp(gw, 'a'.repeat(MAX_AUTHORIZATION_HEADER_BYTES + 1));
+    // A well-formed envelope, so only the size limit can refuse it
+    const oversized = encodeHeader({
+      ...ENVELOPE,
+      payload: 'x'.repeat(MAX_AUTHORIZATION_HEADER_BYTES),
+    });
+    const { statusCode, body } = await callHttp(gw, oversized);
 
     expect(statusCode).toBe(403);
     expect(body).toMatchObject({ code: 'AUTHORIZATION_INVALID' });
+    expect((body as { message: string }).message).toContain(String(MAX_AUTHORIZATION_HEADER_BYTES));
     expect(captured).toHaveLength(0);
   });
 
   it('never reports an authorization failure as a payment failure', async () => {
     // A 402 would tell an auto-paying client to spend money on a request that
-    // was never going to be delivered.
+    // was never going to be delivered
     const gw = await startGateway();
 
     const { statusCode, body } = await callHttp(gw, encodeHeader({ method: 'ap2', payload: 42 }));
 
-    expect(statusCode).not.toBe(402);
-    expect((body as { code: string }).code).not.toMatch(/^PAYMENT_/);
+    expect(statusCode).toBe(403);
+    expect(body).toMatchObject({ code: 'AUTHORIZATION_INVALID', retryable: false });
   });
 });

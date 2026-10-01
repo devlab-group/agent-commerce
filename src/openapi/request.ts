@@ -10,17 +10,14 @@
  * warning. Approximating it would produce a resource that looks importable,
  * takes payment, and then calls the backend wrongly.
  */
-import type { JsonSchema } from '../core/domain/common.js';
-import { extractPathParameterNames } from '../core/execution/index.js';
-import { dereference } from './refs.js';
-import { convertSchema, isPrimitiveSchema } from './schema.js';
-import type {
-  ImportDiagnostic,
-  LoadedOpenApiDocument,
-  OpenApiOperationCandidate,
-} from './types.js';
+import type { JsonSchema } from '../core/domain/common';
+import { extractPathParameterNames } from '../core/execution';
+import { isRecord } from '../core/is-record';
+import { dereference } from './refs';
+import { convertSchema, isPrimitiveSchema, type SchemaConversion } from './schema';
+import type { ImportDiagnostic, LoadedOpenApiDocument, OpenApiOperationCandidate } from './types';
 
-/** Top-level input property names. Also the binding values. */
+// Top-level input property names, which are also the binding values
 const PATH_GROUP = 'path';
 const QUERY_GROUP = 'query';
 const BODY_GROUP = 'body';
@@ -28,11 +25,11 @@ const BODY_GROUP = 'body';
 /**
  * OpenAPI: parameters named these "SHALL be ignored" - they are transport
  * concerns, and `Authorization` in particular is operator configuration that
- * must never become an agent-supplied input.
+ * must never become an agent-supplied input
  */
 const IGNORED_HEADER_NAMES = new Set(['accept', 'content-type', 'authorization']);
 
-/** Serialization styles the executor's plain `key=value` query cannot produce. */
+// Serialization styles the executor's plain `key=value` query cannot produce
 const UNSUPPORTED_QUERY_STYLES = new Set(['deepObject', 'spaceDelimited', 'pipeDelimited']);
 
 export interface RequestBindings {
@@ -46,9 +43,9 @@ export type RequestMapping =
       readonly supported: true;
       readonly inputSchema: JsonSchema;
       readonly inputBindings: RequestBindings;
-      /** Set only for a vendor `+json` body, which needs a static Content-Type. */
+      /** Set only for a vendor `+json` body, which needs a static Content-Type */
       readonly contentType?: string;
-      /** Schema constraints dropped because the gateway does not enforce them. */
+      /** Schema constraints dropped because the gateway does not enforce them */
       readonly droppedKeywords: readonly string[];
       readonly diagnostics: readonly ImportDiagnostic[];
     }
@@ -108,17 +105,10 @@ export function mapRequest(
       continue;
     }
 
-    const unsupported = describeUnsupportedParameter(document, parameter, location);
-    if (unsupported !== undefined) {
-      if (required) return skip('unsupported-required-parameter', `${label} ${unsupported}`);
-      warn('unsupported-optional-parameter', `Omitted optional ${label}: it ${unsupported}`);
-      continue;
-    }
-
-    const converted = convertSchema(document, parameter['schema']);
+    const converted = convertParameter(document, parameter, location);
     if (!converted.supported) {
       if (required) return skip('unsupported-required-parameter', `${label} ${converted.reason}`);
-      warn('unsupported-optional-parameter', `Omitted optional ${label}: ${converted.reason}`);
+      warn('unsupported-optional-parameter', `Omitted optional ${label}: it ${converted.reason}`);
       continue;
     }
     for (const keyword of converted.dropped) dropped.add(keyword);
@@ -164,7 +154,7 @@ export function mapRequest(
     properties[PATH_GROUP] = closedObject(pathProperties, Object.keys(pathProperties));
     // OpenAPI path parameters are always required, and a missing one makes the
     // request unbuildable - which on a paid resource is payment with no
-    // delivery, so config rejects the shape at load time too.
+    // delivery, so config rejects the shape at load time too
     required.push(PATH_GROUP);
     bindings.path = PATH_GROUP;
   }
@@ -199,7 +189,7 @@ export function mapRequest(
 /**
  * Path Item parameters first, operation parameters second, with the OpenAPI
  * identity rule: a parameter is the same one when `name` *and* `in` match, and
- * the operation's own definition wins.
+ * the operation's own definition wins
  */
 function mergeParameters(
   document: Record<string, unknown>,
@@ -207,41 +197,51 @@ function mergeParameters(
 ): Record<string, unknown>[] {
   const byIdentity = new Map<string, Record<string, unknown>>();
   for (const raw of parameters) {
-    const resolved = dereference(document, raw).value;
-    if (typeof resolved !== 'object' || resolved === null || Array.isArray(resolved)) continue;
-    const parameter = resolved as Record<string, unknown>;
+    const parameter = dereference(document, raw).value;
+    if (!isRecord(parameter)) continue;
     byIdentity.set(`${String(parameter['in'])}:${String(parameter['name'])}`, parameter);
   }
   return [...byIdentity.values()];
 }
 
 /**
- * Whether the executor can actually send this parameter the way the API reads
- * it. It writes one `key=value` pair per query parameter and substitutes one
- * URL-encoded value per path segment, so anything that serialises to several
- * pairs or to a structured segment is out of scope for this release.
+ * The parameter's schema, if the executor can send the parameter the way the
+ * API reads it. It writes one `key=value` pair per query parameter and
+ * substitutes one URL-encoded value per path segment, so anything that
+ * serializes to several pairs or to a structured segment is not supported.
+ * Each `reason` reads as a predicate of the parameter.
  */
-function describeUnsupportedParameter(
+function convertParameter(
   document: Record<string, unknown>,
   parameter: Record<string, unknown>,
   location: 'path' | 'query',
-): string | undefined {
+): SchemaConversion {
+  const unsupported = (reason: string): SchemaConversion => ({ supported: false, reason });
+  // Assigned as a key, it replaces the group object's prototype instead of
+  // adding the parameter
+  if (parameter['name'] === '__proto__') {
+    return unsupported('has a name that cannot be an input key');
+  }
   if (parameter['content'] !== undefined) {
-    return 'uses the `content` form, whose media-type serialization the gateway does not perform';
+    return unsupported(
+      'uses the `content` form, whose media-type serialization the gateway does not perform',
+    );
   }
   const style = parameter['style'];
   if (location === 'query' && typeof style === 'string' && UNSUPPORTED_QUERY_STYLES.has(style)) {
-    return `uses style "${style}", which the gateway does not serialize`;
+    return unsupported(`uses style "${style}", which the gateway does not serialize`);
   }
   if (location === 'path' && typeof style === 'string' && style !== 'simple') {
-    return `uses style "${style}"; the gateway substitutes plain values only`;
+    return unsupported(`uses style "${style}"; the gateway substitutes plain values only`);
   }
   const converted = convertSchema(document, parameter['schema']);
-  if (!converted.supported) return converted.reason;
+  if (!converted.supported) return unsupported(`has an unusable schema: ${converted.reason}`);
   if (!isPrimitiveSchema(converted.schema)) {
-    return 'is not a primitive; object and array parameters need serialization the gateway does not perform';
+    return unsupported(
+      'is not a primitive; object and array parameters need serialization the gateway does not perform',
+    );
   }
-  return undefined;
+  return converted;
 }
 
 type BodyResult =
@@ -261,14 +261,8 @@ function resolveBody(
 ): BodyResult {
   if (candidate.requestBody === undefined) return { kind: 'none' };
   const resolvedBody = dereference(document, candidate.requestBody);
-  if (
-    typeof resolvedBody.value !== 'object' ||
-    resolvedBody.value === null ||
-    Array.isArray(resolvedBody.value)
-  ) {
-    return { kind: 'none' };
-  }
-  const requestBody = resolvedBody.value as Record<string, unknown>;
+  const requestBody = resolvedBody.value;
+  if (!isRecord(requestBody)) return { kind: 'none' };
   const required = requestBody['required'] === true;
 
   if (candidate.method === 'GET' || candidate.method === 'DELETE') {
@@ -295,8 +289,9 @@ function resolveBody(
   const media = dereference(document, content[mediaType], resolvedBody.stack).value;
   const schemaNode = isRecord(media) ? media['schema'] : undefined;
   if (schemaNode === undefined) {
-    // A body with no schema accepts anything; an open object is the honest
-    // representation and the loader closes nothing it was not told to close.
+    // A body with no schema accepts anything. `additionalProperties: true` is
+    // written out because the config loader closes every object schema that
+    // does not state it.
     return {
       kind: 'schema',
       schema: { type: 'object', additionalProperties: true },
@@ -316,12 +311,12 @@ function resolveBody(
   };
 }
 
-/** Exact `application/json` wins; otherwise the first `+json` in sorted order. */
+/** Exact `application/json` wins; otherwise the first `+json` in sorted order */
 export function pickJsonMediaType(keys: readonly string[]): string | undefined {
-  const normalised = keys.map((key) => ({ key, type: key.split(';')[0]?.trim().toLowerCase() }));
-  const exact = normalised.find((entry) => entry.type === 'application/json');
+  const normalized = keys.map((key) => ({ key, type: key.split(';')[0]?.trim().toLowerCase() }));
+  const exact = normalized.find((entry) => entry.type === 'application/json');
   if (exact !== undefined) return exact.key;
-  return [...normalised]
+  return [...normalized]
     .sort((a, b) => (a.type ?? '').localeCompare(b.type ?? ''))
     .find((entry) => entry.type?.startsWith('application/') && entry.type.endsWith('+json'))?.key;
 }
@@ -336,8 +331,4 @@ function closedObject(
     ...(required.length > 0 ? { required: [...required] } : {}),
     additionalProperties: false,
   };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

@@ -1,16 +1,17 @@
 import type { CallToolResult, Tool } from '@modelcontextprotocol/sdk/types.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { DELIVERY_SUMMARY_META_KEY, type DeliverySummary } from '../../../src/core/index.js';
-import type { BalanceReader } from '../src/balances.js';
-import type { LocalChainManifest } from '../src/chain-manifest.js';
-import { createDemoLogger } from '../src/log.js';
-import type { McpSession } from '../src/mcp-client.js';
+import { DELIVERY_SUMMARY_META_KEY, type DeliverySummary } from '../../../src/core';
+import type { BalanceReader } from '../src/balances';
+import type { LocalChainManifest } from '../src/chain-manifest';
+import { createDemoLogger } from '../src/log';
+import type { McpSession } from '../src/mcp-client';
+import type { CreatePaymentProofOptions } from '../src/payment-client';
 import {
   assertPaymentIsExpected,
   type DemoAgentDeps,
   MAX_DEMO_PAYMENT_UNITS,
   runDemoAgent,
-} from '../src/run.js';
+} from '../src/run';
 
 const FREE_TOOL: Tool = {
   name: 'weather_basic',
@@ -77,14 +78,12 @@ const PAYMENT_REQUIRED_ENVELOPE = {
     amount: '0.01',
     currency: 'USDC',
     destination: '0x70997970C51812dc3A010C7d01b50e0d17dc79C8',
-    // Must match the fixture manifest's merchant/asset and stay under the
-    // demo's cap: the buyer now checks the challenge before signing it
-    //, so a fixture that does not match is a refusal.
+    // Must match the fixture manifest's merchant and asset and stay under the
+    // demo's cap, or the buyer refuses to sign
     accepts: [
       {
         scheme: 'exact',
-        // The buyer pins this before signing: it is what the EIP-712 chain id
-        // is derived from, so a fixture that omits it is a refusal.
+        // Pinned by the buyer before signing: the EIP-712 chain id comes from it
         network: 'eip155:84532',
         payTo: '0x70997970C51812dc3A010C7d01b50e0d17dc79C8',
         asset: '0x5fbdb2315678afecb367f032d93f642f64180aa3',
@@ -122,9 +121,19 @@ interface HarnessOptions {
   readonly overrides?: DemoAgentDeps;
 }
 
-function makeHappyDeps(options: HarnessOptions = {}): { deps: DemoAgentDeps; lines: string[] } {
+interface Harness {
+  readonly deps: DemoAgentDeps;
+  readonly lines: string[];
+  // Arguments of every paid-tool call, in order
+  readonly paidCalls: Record<string, unknown>[];
+  readonly proofRequests: CreatePaymentProofOptions[];
+}
+
+function makeHappyDeps(options: HarnessOptions = {}): Harness {
   const manifest = options.manifest ?? makeManifest();
   const lines: string[] = [];
+  const paidCalls: Record<string, unknown>[] = [];
+  const proofRequests: CreatePaymentProofOptions[] = [];
   const balancesBefore = {
     buyer: options.buyerBefore ?? 100_000_000n,
     merchant: options.merchantBefore ?? 0n,
@@ -154,11 +163,11 @@ function makeHappyDeps(options: HarnessOptions = {}): { deps: DemoAgentDeps; lin
       if (name === FREE_TOOL.name) {
         return options.freeResult ?? DEFAULT_FREE_RESULT;
       }
+      paidCalls.push(args);
       paidCallCount += 1;
       if (paidCallCount === 1) {
         return options.unpaidResult ?? DEFAULT_UNPAID_RESULT;
       }
-      expect(args['_payment']).toBeTruthy();
       return options.paidResult ?? DEFAULT_PAID_RESULT;
     },
     async close() {},
@@ -169,14 +178,17 @@ function makeHappyDeps(options: HarnessOptions = {}): { deps: DemoAgentDeps; lin
     gatewayUrl: 'http://127.0.0.1:8080',
     loadManifest: () => manifest,
     connectMcp: async () => session,
-    createPaymentProof: async () => 'base64-proof',
+    createPaymentProof: async (request) => {
+      proofRequests.push(request);
+      return 'base64-proof';
+    },
     createBalanceReader: () => balanceReader,
     ...options.overrides,
   };
-  return { deps, lines };
+  return { deps, lines, paidCalls, proofRequests };
 }
 
-describe('runDemoAgent — happy path', () => {
+describe('runDemoAgent: happy path', () => {
   it('completes with exit code 0 and verifies the balance delta', async () => {
     const { deps, lines } = makeHappyDeps();
     const code = await runDemoAgent(deps);
@@ -184,8 +196,22 @@ describe('runDemoAgent — happy path', () => {
     const text = lines.join('\n');
     expect(text).toContain('demo complete');
     expect(text).toContain('402 payment required');
-    expect(text).toContain('balance delta confirms on-chain settlement');
+    expect(text).toContain('on-chain balance changes match the expected payment amount');
     expect(text).toContain('settlementTx=0xtxhash');
+  });
+
+  it('signs the challenge it checked with the buyer key and retries with that proof', async () => {
+    const { deps, paidCalls, proofRequests } = makeHappyDeps();
+    expect(await runDemoAgent(deps)).toBe(0);
+    expect(proofRequests).toEqual([
+      {
+        buyerPrivateKey: makeManifest().buyer.privateKey,
+        accepts: PAYMENT_REQUIRED_ENVELOPE.payment.accepts[0],
+      },
+    ]);
+    expect(paidCalls).toHaveLength(2);
+    expect(paidCalls[0]).not.toHaveProperty('_payment');
+    expect(paidCalls[1]).toMatchObject({ _payment: 'base64-proof' });
   });
 
   it('discovers and prints the free and paid tools', async () => {
@@ -197,7 +223,7 @@ describe('runDemoAgent — happy path', () => {
   });
 });
 
-describe('runDemoAgent — failure steps fail loudly, naming the step, no retries', () => {
+describe('runDemoAgent: a failing step fails loudly, names the step and is not retried', () => {
   it('fails when the manifest cannot be loaded', async () => {
     const { deps, lines } = makeHappyDeps({
       overrides: {
@@ -234,7 +260,10 @@ describe('runDemoAgent — failure steps fail loudly, naming the step, no retrie
     });
     const code = await runDemoAgent(deps);
     expect(code).toBe(1);
-    expect(lines.join('\n')).toContain('call "market_report" with no payment proof');
+    // The envelope check shares the step name, so the message tells them apart
+    expect(lines.join('\n')).toContain(
+      'FAIL at step "call "market_report" with no payment proof": expected an isError response (PAYMENT_REQUIRED), delivery succeeded unpaid',
+    );
   });
 
   it('fails when the unpaid response is not a well-formed PaymentRequiredEnvelope', async () => {
@@ -250,10 +279,12 @@ describe('runDemoAgent — failure steps fail loudly, naming the step, no retrie
     expect(lines.join('\n')).toContain('PaymentRequiredEnvelope');
   });
 
-  it('fails when building the payment proof throws — no retry, immediate failure', async () => {
+  it('fails at once, without a retry, when building the payment proof throws', async () => {
+    let attempts = 0;
     const { deps, lines } = makeHappyDeps({
       overrides: {
         createPaymentProof: async () => {
+          attempts++;
           throw new Error('signing failed');
         },
       },
@@ -263,6 +294,28 @@ describe('runDemoAgent — failure steps fail loudly, naming the step, no retrie
     expect(lines.join('\n')).toContain(
       'FAIL at step "build the x402 payment proof": signing failed',
     );
+    expect(attempts).toBe(1);
+  });
+
+  it('refuses to sign a challenge that pays someone other than the merchant', async () => {
+    const [accepts] = PAYMENT_REQUIRED_ENVELOPE.payment.accepts;
+    const hostile = {
+      ...PAYMENT_REQUIRED_ENVELOPE,
+      payment: {
+        ...PAYMENT_REQUIRED_ENVELOPE.payment,
+        accepts: [{ ...accepts, payTo: '0x000000000000000000000000000000000000dEaD' }],
+      },
+    };
+    const { deps, lines, paidCalls, proofRequests } = makeHappyDeps({
+      unpaidResult: { ...DEFAULT_UNPAID_RESULT, structuredContent: hostile },
+    });
+    const code = await runDemoAgent(deps);
+    expect(code).toBe(1);
+    expect(lines.join('\n')).toContain(
+      'FAIL at step "check the payment requirement before signing"',
+    );
+    expect(proofRequests).toHaveLength(0);
+    expect(paidCalls).toHaveLength(1);
   });
 
   it('fails when the gateway rejects the paid retry', async () => {
@@ -283,8 +336,7 @@ describe('runDemoAgent — failure steps fail loudly, naming the step, no retrie
       paidResult: {
         content: [{ type: 'text', text: '{"report":"ok"}' }],
         structuredContent: { report: 'ok' },
-        // no _meta at all — the buyer has no admin token, so this is its
-        // only route to a receipt, and a defect here must not be skipped.
+        // No _meta: the buyer's only route to its receipt is missing
       },
     });
     const code = await runDemoAgent(deps);
@@ -329,12 +381,12 @@ describe('runDemoAgent — failure steps fail loudly, naming the step, no retrie
   });
 });
 
-describe('runDemoAgent — RPC URL resolution (host vs. container-internal)', () => {
+describe('runDemoAgent: RPC URL resolution (host vs. container-internal)', () => {
   afterEach(() => {
     vi.unstubAllEnvs();
   });
 
-  /** Runs just far enough to capture the rpcUrl handed to createBalanceReader, then bails out. */
+  // Runs only far enough to capture the rpcUrl passed to createBalanceReader
   async function resolvedRpcUrl(
     manifestOverrides: Partial<LocalChainManifest>,
   ): Promise<string | undefined> {
@@ -347,7 +399,7 @@ describe('runDemoAgent — RPC URL resolution (host vs. container-internal)', ()
         return { read: async () => 0n };
       },
       connectMcp: async () => {
-        throw new Error('stop here — only rpcUrl resolution is under test');
+        throw new Error('stop here: only rpcUrl resolution is under test');
       },
     };
     await runDemoAgent(deps);
@@ -378,11 +430,7 @@ describe('runDemoAgent — RPC URL resolution (host vs. container-internal)', ()
 });
 
 describe('the buyer checks the 402 challenge before signing', () => {
-  // `createPaymentProof` takes `to`, `value` and `asset` straight from the
-  // challenge and signs. The balance check after delivery compares the on-chain
-  // delta against that same server-supplied number, so it confirms arithmetic,
-  // not intent — by then the funds have moved. Demos get copied; this is the
-  // check a real buyer must make, and these are the cases it must refuse.
+  // The cases assertPaymentIsExpected must refuse; its doc comment says why
   const expected = {
     merchant: '0x70997970C51812dc3A010C7d01b50e0d17dc79C8',
     asset: '0x5FbDB2315678afecb367f032d93F642f64180aa3',
@@ -400,7 +448,7 @@ describe('the buyer checks the 402 challenge before signing', () => {
     expect(() => assertPaymentIsExpected(good, expected)).not.toThrow();
   });
 
-  it('accepts a differently-cased address — addresses are checksum-insensitive here', () => {
+  it('accepts a differently-cased address, because the check ignores checksum case', () => {
     expect(() =>
       assertPaymentIsExpected({ ...good, payTo: expected.merchant.toLowerCase() }, expected),
     ).not.toThrow();
@@ -421,8 +469,7 @@ describe('the buyer checks the 402 challenge before signing', () => {
     ['a zero amount', { amount: '0' }, 'outside the accepted range'],
     ['a non-integer amount', { amount: '1.5' }, 'not an integer'],
     ['a missing recipient', { payTo: undefined }, 'expected merchant'],
-    // The network decides the chain id signed into the EIP-712 domain, so an
-    // unpinned one lets the challenge choose which chain the signature is for.
+    // The network sets the EIP-712 chain id, so the challenge must not choose it
     ['a substituted network', { network: 'eip155:1' }, 'expected network'],
     ['a missing network', { network: undefined }, 'expected network'],
   ])('refuses to sign %s', (_label, override, expectedMessage) => {

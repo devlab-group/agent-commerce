@@ -1,23 +1,21 @@
 /**
- * src/core/execution
- *
- * The execution pipeline implementation: resource registry, backend executor,
- * event bus and the pipeline itself. Not part of the frozen `public-types.ts`
- * barrel — this is implementation, not contract — but exported as a stable
- * subpath so `src/gateway` (and tests) can wire it up.
+ * The pipeline implementation: resource registry, backend executor, store event
+ * sink and the pipeline itself. Internal to the package: other `src/` areas and
+ * tests import it, but it is outside the frozen `public-types.ts` barrel and no
+ * package entry point exports it.
  */
 
-export type { HttpBackendExecutorOptions } from './backend-http.js';
+export type { HttpBackendExecutorOptions } from './backend-http';
 export {
   extractPathParameterNames,
   findUnparsedBraceToken,
   HttpBackendExecutor,
   validateBackendRequestShape,
-} from './backend-http.js';
-export type { CreateEventBusOptions, EventBus } from './event-bus.js';
-export { createEventBus } from './event-bus.js';
-export type { CreateExecutionPipelineOptions } from './pipeline.js';
-export { createExecutionPipeline } from './pipeline.js';
-export { createResourceRegistry, ResourceRegistryImpl } from './registry.js';
-export type { FieldError, ValidationResult, Validator } from './validation.js';
-export { compileJsonSchema, isObjectSchemaNode } from './validation.js';
+} from './backend-http';
+export type { CreateExecutionPipelineOptions } from './pipeline';
+export { createExecutionPipeline } from './pipeline';
+export { createResourceRegistry } from './registry';
+export type { CreateStoreEventSinkOptions } from './store-event-sink';
+export { createStoreEventSink } from './store-event-sink';
+export type { FieldError, ValidationResult, Validator } from './validation';
+export { compileJsonSchema, isObjectSchemaNode } from './validation';

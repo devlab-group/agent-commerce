@@ -1,46 +1,34 @@
 /**
- * Everything that must be true before this gateway is allowed to settle a
- * payment on the configured network.
+ * What must hold before this gateway may settle a payment on the configured
+ * network. Two callers share these checks: the provider runs them at
+ * construction, so a library consumer who skips our config loader still gets
+ * them, and the config loader runs them, so `validate` and `doctor` report
+ * them too.
  *
- * One definition, two callers: the provider runs it at construction so a
- * library consumer who never touches our config loader still gets the checks,
- * and `doctor` runs it against the parsed config so an operator sees the same
- * verdict without starting the gateway. Sharing a *call* is not sharing a
- * definition — the checks live here, and nothing re-implements them.
+ * Both run before any request, because a failure found in `settle()` would
+ * come after the pipeline reserved the buyer's replay key.
  *
- * Every failure is a startup failure. None of these are request-time
- * decisions: a deployment that is unsafe is unsafe before the first buyer
- * arrives, and finding out during `settle()` means the buyer's authorisation
- * is already burned.
- *
- * Peer-free by construction (no viem, no `@x402/*`) so the CLI can import it.
+ * Imports no peer (no viem, no `@x402/*`), so the CLI can load it.
  */
-import { CommerceError } from '../../core/index.js';
-import { isLikelyLocalOrPrivateHost, isWellKnownDevAddress } from './dev-key-guard.js';
+import { CommerceError } from '../../core';
+import { isLikelyLocalOrPrivateHost, isWellKnownDevAddress } from './dev-key-guard';
 import {
   type DeploymentMode,
   type NetworkProfile,
   requireNetworkProfile,
   resolveDeploymentMode,
-} from './networks.js';
+} from './networks';
 
 /**
  * How the gateway authenticates to a remote facilitator.
  *
- * Deliberately a list, not a vendor: x402 facilitators are not a Coinbase-only
- * category, and a scheme that only fitted one vendor's credentials would make
- * the abstraction a fiction.
+ * - `none`: send no credential; use it when the facilitator accepts
+ *   anonymous requests.
+ * - `bearer`: send a static token; no extra peer package is needed.
+ * - `cdp`: Coinbase Developer Platform. The optional peer `@coinbase/x402`,
+ *   imported only for this type, signs a fresh JWT per request.
  *
- * - `none` — the facilitator takes no credential (the public testnet one).
- * - `bearer` — a static token. Covers most self-hosted and third-party
- * facilitators, and needs nothing installed.
- * - `cdp` — Coinbase Developer Platform, which signs a fresh JWT per request
- * over method + host + path, so a static header cannot express it. Handled by
- * the optional peer `@coinbase/x402`, imported only when this type is
- * configured. Anyone not using CDP never installs it.
- *
- * A facilitator whose scheme is none of these is refused at config load rather
- * than sent nothing.
+ * Any other auth type is refused at config load.
  */
 export type FacilitatorAuth =
   | { readonly type: 'none' }
@@ -55,19 +43,16 @@ export interface X402DeploymentInput {
   readonly network: string;
   readonly payTo: string;
   readonly asset: string;
-  /** EIP-712 domain of the asset, as the token itself reports it. */
+  /** EIP-712 domain of the asset, as the token itself reports it */
   readonly assetName?: string;
   readonly assetVersion?: string;
   readonly facilitator: X402FacilitatorConfig;
-  /** Required, and required to be `true`, before anything settles on a mainnet. */
+  /** Must be `true` before anything settles on a mainnet */
   readonly allowMainnet?: boolean;
   /**
-   * Required, and required to be `true`, to settle on a mainnet through a
-   * facilitator that takes no credential.
-   *
-   * Separate from `allowMainnet` because it names a different decision: not
-   * "I meant to use real money" but "I accept this particular counterparty
-   * without an account, terms, or anyone to call".
+   * Must be `true` on mainnet when facilitator auth is `none`. A separate
+   * decision from `allowMainnet`: it accepts settling without an account at
+   * the facilitator, under its anonymous-access limits.
    */
   readonly allowUnauthenticatedFacilitator?: boolean;
   /** Error-path prefix, `payments.x402` by default */
@@ -86,9 +71,9 @@ function invalid(message: string, path: string): CommerceError {
 }
 
 /**
- * Resolves the deployment and refuses every combination that could move real
- * money by accident. Order matters only in that the network must resolve
- * first; the rest are independent.
+ * Resolves the deployment and refuses the combinations that could move real
+ * money by accident. The network must resolve first; the other checks are
+ * independent.
  */
 export function resolveX402Deployment(input: X402DeploymentInput): X402Deployment {
   const at = input.configPath ?? 'payments.x402';
@@ -96,13 +81,8 @@ export function resolveX402Deployment(input: X402DeploymentInput): X402Deploymen
   const profile = requireNetworkProfile(input.network, `${at}.network`);
   const mode = resolveDeploymentMode(profile, input.facilitator.mode);
 
-  // The in-process facilitator signs with a key this process holds. Not a
-  // custody problem — that signer never holds buyer or merchant funds, it pays
-  // gas and broadcasts `transferWithAuthorization`, and the money moves buyer
-  // to merchant directly on-chain. What it *is*, on a mainnet, is a funded key
-  // inside the resource server: compromise that process and an attacker drains
-  // the gas wallet and broadcasts from it. Separate processes, separate blast
-  // radius — so it is refused, not warned about.
+  // Local mode keeps a gas-paying key in the gateway process. A compromise
+  // could expose that key, so mainnet requires a remote facilitator.
   if (profile.kind === 'mainnet' && input.facilitator.mode === 'local') {
     throw invalid(
       `${at}: network "${profile.id}" (${profile.displayName}) is a mainnet and cannot be served by facilitator.mode "local". A mainnet deployment must settle through a remote facilitator.`,
@@ -119,27 +99,22 @@ export function resolveX402Deployment(input: X402DeploymentInput): X402Deploymen
 
   if (input.facilitator.mode === 'remote') {
     assertFacilitatorUrlIsSafe(input.facilitator.url, mode, at);
-    // Not a funds check. An EIP-3009 authorisation names its recipient, its
-    // amount and its chain, so a facilitator can broadcast exactly that
-    // transfer or nothing — it cannot redirect the money. What a credential
-    // buys is a *relationship*: rate limits, terms, someone to call when
-    // settlement stops. Running production payments through a counterparty you
-    // have none of that with is a real choice, and this is where it gets made
-    // explicitly rather than by omission.
+    // The authorization fixes recipient, amount and chain, so a facilitator
+    // cannot redirect funds. A credential adds an account: rate limits, terms
+    // and support. On mainnet, going without one is an explicit choice.
     if (
       mode === 'mainnet' &&
       input.facilitator.auth.type === 'none' &&
       input.allowUnauthenticatedFacilitator !== true
     ) {
       throw invalid(
-        `${at}: facilitator ${describeOrigin(input.facilitator.url)} takes no credential, and this is a mainnet deployment. It will see every payment authorisation you handle, with no account, terms or support behind it. Set ${at}.allowUnauthenticatedFacilitator: true to accept that, or configure facilitator.auth.`,
+        `${at}: no credential is configured for facilitator ${describeOrigin(input.facilitator.url)} on mainnet. Set ${at}.allowUnauthenticatedFacilitator: true to accept anonymous access and the facilitator's limits, or configure facilitator.auth.`,
         `${at}.allowUnauthenticatedFacilitator`,
       );
     }
-    // An empty credential is refused rather than sent: a blank token or key
-    // reaches the facilitator as "unauthenticated" and fails every payment
-    // after the buyer has already signed. `${VAR:- }` resolving to whitespace
-    // is the realistic way this happens.
+    // A blank credential reaches the facilitator as "unauthenticated" and fails
+    // every payment after the buyer signed. `${VAR:- }` resolving to whitespace
+    // is the usual cause.
     for (const [field, value] of credentialFields(input.facilitator.auth)) {
       if (value.trim() === '') {
         throw invalid(
@@ -150,15 +125,8 @@ export function resolveX402Deployment(input: X402DeploymentInput): X402Deploymen
     }
   }
 
-  // The private key behind every well-known Anvil address is public knowledge.
-  // `dev-key-guard` already refuses one against a public *RPC*; this refuses
-  // one on any non-local *deployment*, which is the case a remote facilitator
-  // creates — there the RPC host says nothing about where settlement lands.
-  // The zero address lived only in the config loader, so a library consumer
-  // calling `createX402PaymentProvider` directly — the path this shared
-  // definition exists to cover — could boot a mainnet provider whose every
-  // payment burns — sharing a *call* is not sharing a definition, and this
-  // check had drifted out of the shared one.
+  // The config loader's address check refuses this too; repeated here for a
+  // library consumer who calls `createX402PaymentProvider` without it
   if (/^0x0{40}$/i.test(input.payTo)) {
     throw invalid(
       `${at}: "${payTo}" is the zero address. Every payment settled there is destroyed.`,
@@ -166,6 +134,9 @@ export function resolveX402Deployment(input: X402DeploymentInput): X402Deploymen
     );
   }
 
+  // Anyone can spend from a well-known Anvil address. `dev-key-guard` refuses
+  // one behind a public RPC; this refuses one on any non-local deployment,
+  // whose RPC host says nothing about where a remote facilitator settles.
   if (mode !== 'local' && isWellKnownDevAddress(input.payTo)) {
     throw invalid(
       `${at}: "${payTo}" (${input.payTo}) is a well-known Anvil development address and this is a ${mode} deployment. Anyone can spend what settles there. Set ${payTo} to your own merchant wallet.`,
@@ -173,8 +144,7 @@ export function resolveX402Deployment(input: X402DeploymentInput): X402Deploymen
     );
   }
 
-  // Mainnet only. A testnet is exactly where pointing at a mock token is the
-  // right thing to do, so the same check there would block the normal case.
+  // Mainnet only: a testnet is where pointing at a mock token is normal
   const canonical = profile.canonicalAsset;
   if (mode === 'mainnet' && canonical) {
     if (!sameAddress(input.asset, canonical.address)) {
@@ -183,10 +153,9 @@ export function resolveX402Deployment(input: X402DeploymentInput): X402Deploymen
         `${at}.asset`,
       );
     }
-    // The EIP-712 domain is signed by the buyer and checked by the scheme. Get
-    // it wrong and every payment is refused `invalid_exact_evm_token_name_mismatch`
-    // *after* the buyer signed — a config error charged to the buyer's patience.
-    // Caught here instead, before the gateway starts.
+    // The buyer signs the EIP-712 domain and the scheme checks it. A wrong one
+    // refuses every payment with `invalid_exact_evm_token_name_mismatch` after
+    // the buyer signed, so it is caught here, before the gateway starts.
     if (input.assetName !== undefined && input.assetName !== canonical.name) {
       throw invalid(
         `${at}: assetName "${input.assetName}" is not the EIP-712 domain name ${canonical.symbol} reports on ${profile.displayName} (expected "${canonical.name}"). Every payment would be refused after the buyer signed.`,
@@ -205,10 +174,10 @@ export function resolveX402Deployment(input: X402DeploymentInput): X402Deploymen
 }
 
 /**
- * A facilitator sees every payment authorisation this gateway handles. Plain
- * HTTP to one on a public network puts those on the wire in the clear and
- * lets anyone in the path rewrite a settlement result, so it is allowed only
- * where the endpoint cannot leave the host — a local or private address.
+ * A facilitator sees every payment authorization this gateway handles. Plain
+ * HTTP puts those on the wire in the clear and lets anyone in the path rewrite
+ * a settlement result, so it is allowed only to a local or private host, and
+ * never on a mainnet.
  */
 function assertFacilitatorUrlIsSafe(url: string, mode: DeploymentMode, at: string): void {
   let parsed: URL;
@@ -231,15 +200,14 @@ function assertFacilitatorUrlIsSafe(url: string, mode: DeploymentMode, at: strin
   if (mode !== 'mainnet' && isLikelyLocalOrPrivateHost(parsed.hostname)) return;
 
   // The origin, never the whole URL: the path can carry a tenant or an API
-  // key, which is why `/.well-known` withholds this field entirely. A refusal
-  // message goes to `validate`, `doctor`, startup output and CI logs.
+  // key, and this message reaches `validate`, `doctor`, startup output and CI logs
   throw invalid(
-    `${at}: facilitator ${describeOrigin(url)} is reached over plain HTTP. Payment authorisations and settlement results would travel unencrypted. Use https, or point at a local/private host on a non-mainnet deployment.`,
+    `${at}: facilitator ${describeOrigin(url)} is reached over plain HTTP. Payment authorizations and settlement results would travel unencrypted. Use https, or point at a local/private host on a non-mainnet deployment.`,
     `${at}.facilitator.url`,
   );
 }
 
-/** Host only — a facilitator URL can carry a tenant path or an API key. */
+// Origin only: a facilitator URL can carry a tenant path or an API key
 function describeOrigin(url: string): string {
   try {
     return new URL(url).origin;
@@ -248,7 +216,7 @@ function describeOrigin(url: string): string {
   }
 }
 
-/** The secret-bearing fields of an auth block, for emptiness checks only. Never logged. */
+// The secret-bearing fields of an auth block, for emptiness checks only. Never logged
 function credentialFields(auth: FacilitatorAuth): readonly (readonly [string, string])[] {
   switch (auth.type) {
     case 'bearer':

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { runVersion } from '../../../src/cli/commands/version.js';
-import { createCapturingIo } from '../../../src/cli/lib/io.js';
+import manifest from '../../../package.json' with { type: 'json' };
+import { runVersion } from '../../../src/cli/commands/version';
+import { createCapturingIo } from './fixtures';
 
 describe('runVersion', () => {
   it('prints only the version line when there are no pinned versions to report', () => {
@@ -19,15 +20,43 @@ describe('runVersion', () => {
     expect(io.out[0]).toMatch(/^agent-commerce v\d+\.\d+\.\d+/);
   });
 
-  it('prints pinned protocol/SDK versions read from installed manifests, not hard-coded', () => {
+  it('prints each pinned version exactly as package.json declares it', () => {
     const io = createCapturingIo();
     runVersion(io);
     const joined = io.out.join('\n');
     expect(joined).toContain('Pinned protocol / SDK versions:');
-    // These come from sibling package.json files, not literals in the source.
+    const declared: Record<string, string | undefined> = {
+      ...manifest.peerDependencies,
+      ...manifest.dependencies,
+    };
+    const printed = io.out.flatMap((line) => {
+      const match = /^ {2}(\S+)\s+(\S+)\s+\(via /.exec(line);
+      return match ? [[match[1] ?? '', match[2]] as const] : [];
+    });
+    expect(printed.length).toBeGreaterThan(0);
+    for (const [name, version] of printed) {
+      expect(version, name).toBe(declared[name]);
+    }
     expect(joined).toMatch(/@modelcontextprotocol\/sdk\s+1\.30\.0/);
     expect(joined).toMatch(/@x402\/core\s+2\.23\.0/);
     expect(joined).toMatch(/@x402\/evm\s+2\.23\.0/);
     expect(joined).toMatch(/better-sqlite3\s+13\.0\.3/);
+  });
+
+  it('also reports the MPP, AP2, ACP and OpenAPI import pins', () => {
+    const io = createCapturingIo();
+    runVersion(io);
+    const joined = io.out.join('\n');
+    for (const name of [
+      'mppx',
+      'jose',
+      '@sd-jwt/core',
+      'canonicalize',
+      'ajv',
+      'ajv-formats',
+      '@scalar/openapi-parser',
+    ]) {
+      expect(joined).toMatch(new RegExp(`^  ${name.replace('/', '\\/')}\\s`, 'm'));
+    }
   });
 });

@@ -6,13 +6,16 @@
  * payment problem would tell an auto-paying client to spend money on a request
  * that was never going to be delivered.
  */
+import { createHmac, createPublicKey } from 'node:crypto';
 import { beforeAll, describe, expect, it } from 'vitest';
-import type { EnabledAp2Config } from '../../../src/authorization/ap2/types.js';
+import { verifyMandate } from '../../../src/authorization/ap2/sd-jwt';
+import { createTrustStore } from '../../../src/authorization/ap2/trust';
+import type { EnabledAp2Config } from '../../../src/authorization/ap2/types';
 import {
   type Ap2MandateVerifier,
   createAp2MandateVerifier,
-} from '../../../src/authorization/ap2/verifier.js';
-import { type CommerceError, isCommerceError } from '../../../src/core/index.js';
+} from '../../../src/authorization/ap2/verifier';
+import { type CommerceError, isCommerceError } from '../../../src/core';
 import {
   CHECKOUT_AUDIENCE,
   CHECKOUT_ISSUER,
@@ -28,7 +31,7 @@ import {
   sha256Base64url,
   signCheckoutJwt,
   trustedIssuer,
-} from './fixtures.js';
+} from './fixtures';
 
 let parties: Party;
 let verifier: Ap2MandateVerifier;
@@ -62,6 +65,19 @@ async function rejection(run: Promise<unknown>): Promise<CommerceError> {
   return expect.unreachable('expected the mandate to be refused') as never;
 }
 
+// The valid mandate's payload and disclosures behind another header, with an
+// empty signature or an HMAC under `hmacSecret`
+function resignedMandate(header: Record<string, unknown>, hmacSecret?: string): string {
+  const [token, ...disclosures] = validPresentation.split('~');
+  const payload = (token as string).split('.')[1] as string;
+  const signingInput = `${Buffer.from(JSON.stringify(header)).toString('base64url')}.${payload}`;
+  const signature =
+    hmacSecret === undefined
+      ? ''
+      : createHmac('sha256', hmacSecret).update(signingInput).digest('base64url');
+  return [`${signingInput}.${signature}`, ...disclosures].join('~');
+}
+
 // Every refusal here must be an authorization failure, never a payment one
 async function expectRefused(run: Promise<unknown>, reason?: string): Promise<CommerceError> {
   const error = await rejection(run);
@@ -88,9 +104,17 @@ describe('a valid Direct closed Checkout Mandate', () => {
   });
 
   it('resolves the selectively disclosed checkout JWT into the mandate claims', async () => {
-    const result = await verifier.verify(validPresentation);
-    expect(result.mandateClaims['checkout_jwt']).toBe(checkoutJwt);
-    expect(result.mandateClaims['vct']).toBe('mandate.checkout.1');
+    const mandate = await verifyMandate(
+      validPresentation,
+      {
+        trust: createTrustStore(parties.mandateIssuers),
+        clock: fixedClock(),
+        clockSkewSeconds: 60,
+      },
+      {},
+    );
+    expect(mandate.claims['checkout_jwt']).toBe(checkoutJwt);
+    expect(mandate.claims['vct']).toBe('mandate.checkout.1');
   });
 
   it('hands back the checkout profile the purchase binding will read', async () => {
@@ -104,8 +128,8 @@ describe('a valid Direct closed Checkout Mandate', () => {
   });
 
   it('verifies a second time without the key cache changing the answer', async () => {
-    await expect(verifier.verify(validPresentation)).resolves.toBeDefined();
-    await expect(verifier.verify(validPresentation)).resolves.toBeDefined();
+    const first = await verifier.verify(validPresentation);
+    expect(await verifier.verify(validPresentation)).toEqual(first);
   });
 
   it('reports its trusted issuers for diagnostics without exposing keys', () => {
@@ -168,7 +192,10 @@ describe('signature and trust', () => {
         aud: 'someone.else',
       }),
     ).toString('base64url');
-    await expectRefused(verifier.verify(`${header}.${patched}.${signature}~${rest.join('~')}`));
+    await expectRefused(
+      verifier.verify(`${header}.${patched}.${signature}~${rest.join('~')}`),
+      'invalid_signature',
+    );
   });
 
   it('refuses a mandate from an issuer that is not configured', async () => {
@@ -194,11 +221,12 @@ describe('signature and trust', () => {
 
   it('refuses a mandate signed by a key that is trusted for checkout documents only', async () => {
     // Signing the merchant's checkout documents must not confer the power to
-    // issue mandates authorising purchases from them
+    // issue mandates authorizing purchases from them. Issuer, audience and kid
+    // all match the checkout trust entry, so only the list split refuses it.
     const presentation = await mintMandate(parties.checkoutSigner, checkoutJwt, {
-      header: { kid: parties.mandateSigner.kid },
+      payloadOverrides: { iss: CHECKOUT_ISSUER, aud: CHECKOUT_AUDIENCE },
     });
-    await expectRefused(verifier.verify(presentation));
+    await expectRefused(verifier.verify(presentation), 'untrusted_issuer');
   });
 
   it('refuses a mandate signed by a stranger under a trusted issuer and kid', async () => {
@@ -210,32 +238,21 @@ describe('signature and trust', () => {
   });
 
   it('refuses alg=none', async () => {
-    const payload = Buffer.from(
-      JSON.stringify({
-        vct: 'mandate.checkout.1',
-        iss: MANDATE_ISSUER,
-        aud: MANDATE_AUDIENCE,
-        iat: Math.floor(NOW.getTime() / 1000),
-        exp: Math.floor(NOW.getTime() / 1000) + 300,
-      }),
-    ).toString('base64url');
-    const header = Buffer.from(
-      JSON.stringify({ alg: 'none', kid: parties.mandateSigner.kid }),
-    ).toString('base64url');
-    await expectRefused(verifier.verify(`${header}.${payload}.~`), 'invalid_signature');
+    const presentation = resignedMandate({ alg: 'none', kid: parties.mandateSigner.kid });
+    await expectRefused(verifier.verify(presentation), 'invalid_signature');
   });
 
-  it('refuses HS256 forged against the public key', async () => {
-    // Take the public EC key, treat it as an HMAC secret, sign. Refused twice
-    // over (allowlist, and an EC key cannot do HMAC); this asserts the
-    // outcome, not which one got there first.
-    const header = Buffer.from(
-      JSON.stringify({ alg: 'HS256', kid: parties.mandateSigner.kid }),
-    ).toString('base64url');
-    const payload = Buffer.from(
-      JSON.stringify({ vct: 'mandate.checkout.1', iss: MANDATE_ISSUER, aud: MANDATE_AUDIENCE }),
-    ).toString('base64url');
-    await expectRefused(verifier.verify(`${header}.${payload}.deadbeef~`), 'invalid_signature');
+  it('refuses HS256 forged with the public key as the HMAC secret', async () => {
+    // Refused twice over (allowlist, and an EC key cannot do HMAC); this
+    // asserts the outcome, not which one got there first
+    const publicPem = createPublicKey({ key: parties.mandateSigner.publicJwk, format: 'jwk' })
+      .export({ type: 'spki', format: 'pem' })
+      .toString();
+    const presentation = resignedMandate(
+      { alg: 'HS256', kid: parties.mandateSigner.kid },
+      publicPem,
+    );
+    await expectRefused(verifier.verify(presentation), 'invalid_signature');
   });
 });
 
@@ -280,6 +297,13 @@ describe('mandate claims', () => {
     await expectRefused(verifier.verify(presentation), 'invalid_claims');
   });
 
+  it('refuses a mandate with no iat, which would skip the issued-in-the-future check', async () => {
+    const presentation = await mintMandate(parties.mandateSigner, checkoutJwt, {
+      payloadOverrides: { iat: undefined },
+    });
+    await expectRefused(verifier.verify(presentation), 'invalid_claims');
+  });
+
   it('refuses a mandate issued in the future', async () => {
     const presentation = await mintMandate(parties.mandateSigner, checkoutJwt, {
       payloadOverrides: { iat: Math.floor(NOW.getTime() / 1000) + 600 },
@@ -317,9 +341,10 @@ describe('the merchant checkout JWT', () => {
     await expectRefused(verifier.verify(presentation), 'invalid_claims');
   });
 
-  it('refuses a swapped checkout JWT, caught by checkout_hash', async () => {
-    // A genuine merchant document, for a different purchase: the signature
-    // verifies, the hash the buyer approved does not
+  it('refuses a swapped checkout JWT whose disclosure the mandate never committed to', async () => {
+    // A genuine merchant document for a different purchase. Its disclosure
+    // digest is not in the signed `_sd`, so it fails before `checkout_hash`;
+    // the checkout_hash cases below keep the disclosure and change the hash.
     const other = await signCheckoutJwt(
       parties.checkoutSigner,
       checkoutPayload({ jti: 'checkout_OTHER' }),
@@ -378,6 +403,18 @@ describe('the merchant checkout JWT', () => {
     );
     const presentation = await mintMandate(parties.mandateSigner, stale);
     await expectRefused(verifier.verify(presentation), 'checkout_binding_failed');
+  });
+
+  it('refuses a checkout JWT issued in the future', async () => {
+    const early = await signCheckoutJwt(
+      parties.checkoutSigner,
+      checkoutPayload({
+        iat: Math.floor(NOW.getTime() / 1000) + 600,
+        exp: Math.floor(NOW.getTime() / 1000) + 900,
+      }),
+    );
+    const presentation = await mintMandate(parties.mandateSigner, early);
+    await expectRefused(verifier.verify(presentation), 'expired');
   });
 
   it.each([

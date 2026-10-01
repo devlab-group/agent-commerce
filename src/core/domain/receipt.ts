@@ -1,57 +1,48 @@
-/**
- * Canonical receipt model.
- *
- * FROZEN CONTRACT.
- */
-import type { AuthorizationRecord } from './authorization.js';
-import type { IsoTimestamp } from './common.js';
-import type { PaymentResult } from './payment.js';
+// Canonical receipt model. FROZEN CONTRACT
+import type { AuthorizationRecord } from './authorization';
+import type { IsoTimestamp } from './common';
+import type { PaymentResult } from './payment';
 
 export interface CommerceReceipt {
   readonly id: string;
   readonly requestId: string;
   readonly resourceId: string;
-  /** Absent for free resources. */
+  /** Absent for free resources */
   readonly payment?: PaymentResult;
   /**
-   * Present only when the resource required one. A method and a digest, so the
-   * receipt records that consent existed without storing the proof of it.
+   * Present only when the resource required authorization. A method and a digest,
+   * so the receipt records that consent existed without storing the proof.
    */
   readonly authorization?: AuthorizationRecord;
   readonly deliveredAt: IsoTimestamp;
   readonly backendStatus: number;
   readonly durationMs?: number;
   readonly protocol?: string;
-  /** Non-secret summary only. Never the full backend body if it is sensitive. */
+  /** Non-secret summary only, never a sensitive backend body */
   readonly metadata?: Readonly<Record<string, unknown>>;
 }
 
-/** Record of a single payment authorisation seen by the gateway. */
+/** Record of a single payment authorization seen by the gateway */
 export interface PaymentAttempt {
   readonly id: string;
   readonly requestId: string;
   readonly resourceId: string;
   readonly provider: string;
-  /** See PaymentResult.replayKey — unique across the store. */
+  /** Unique across the store; see `PaymentResult.replayKey` */
   readonly replayKey: string;
   /**
-   * State of the authorisation, as far as the gateway can prove it.
+   * State of the authorization, as far as the gateway can prove it.
    *
-   * `settlement-uncertain` is deliberately distinct from `failed`: the
-   * settlement was attempted and no verdict came back (RPC timeout, dropped
-   * connection, a facilitator that accepted the transfer and then lost the
-   * response). "The facilitator did not answer" and "the transfer did not
-   * happen" are different facts, and recording the first as the second makes
-   * the merchant's reconciliation artefact wrong in exactly the case where
-   * reconciliation matters. `externalReference` carries the broadcast
-   * transaction hash when one is known, which is often not: the response
-   * that would have carried it is usually the thing that went missing. An
-   * attempt in this state is unresolved rather than terminal, and needs
-   * evidence from the chain, not a retry.
+   * `settlement-uncertain` means settlement was attempted and no verdict came
+   * back (RPC timeout, dropped connection, a facilitator that accepted the
+   * transfer and lost the response). The transfer may or may not have
+   * happened, so the attempt is unresolved rather than terminal and needs
+   * evidence from the chain, not a retry. `externalReference` holds the
+   * broadcast transaction hash when one is known.
    *
-   * `failed` is no longer written by the execution pipeline, because a throw
-   * out of settle() is never proof that nothing moved. It stays in the union
-   * because existing databases hold rows recorded under the old reading.
+   * The execution pipeline never writes `failed`: a throw out of `settle()`
+   * never proves that nothing moved. It stays in the union because existing
+   * databases hold rows with that status.
    */
   readonly status:
     | 'reserved'

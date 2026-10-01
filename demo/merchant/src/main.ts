@@ -1,9 +1,5 @@
-/**
- * Process entry point for the demo merchant API.
- *
- * `npm run dev:merchant` (watch) or `npm run demo:merchant`.
- */
-import { buildApp } from './app.js';
+// Demo merchant API entry point: `npm run demo:merchant`, or `dev:merchant` to watch
+import { buildApp } from './app';
 
 const port = Number(process.env.MERCHANT_API_PORT ?? 3000);
 const host = '0.0.0.0';

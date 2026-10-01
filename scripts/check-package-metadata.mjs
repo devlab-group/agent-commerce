@@ -1,13 +1,10 @@
 #!/usr/bin/env node
 /**
- * Assert the published package's provenance fields point at the real
- * repository.
- *
- * Stated positively rather than as a placeholder blocklist: a blocklist only
- * catches the placeholder spelling someone happened to think of. This is what
- * stops npm's repository link and "report a vulnerability" path resolving to a
- * namespace an attacker can register — which for a payments project whose
- * SECURITY.md asks for private disclosure is a cheap interception route.
+ * Asserts that the published package's provenance fields point at the real
+ * repository. Otherwise npm's repository link and "report a vulnerability"
+ * path could resolve to a namespace an attacker registers, a cheap way to
+ * intercept private disclosures. An allowlist, because a blocklist catches
+ * only the placeholder spellings someone thought of.
  */
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -25,9 +22,8 @@ const fields = [
   ['homepage', manifest.homepage],
 ];
 
-// `.includes()` accepts the expected string *anywhere*,
-// so `https://evil.example/github.com/devlab-group/agent-commerce` passed.
-// Anchor it to the host instead — npm renders these as links.
+// Anchored at the scheme and host, because npm renders these as links: a
+// substring match would accept `https://evil.example/github.com/devlab-group/agent-commerce`
 const ALLOWED_PREFIXES = [
   `https://${EXPECTED}`,
   `git+https://${EXPECTED}`,
@@ -55,4 +51,4 @@ if (manifest.private === true) {
   process.exit(1);
 }
 
-console.log(`provenance metadata ok — ${manifest.name}@${manifest.version} -> ${EXPECTED}`);
+console.log(`provenance metadata ok: ${manifest.name}@${manifest.version} -> ${EXPECTED}`);

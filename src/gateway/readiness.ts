@@ -1,41 +1,28 @@
 /**
- * `GET /ready` readiness computation: 503 unless the store, every configured
- * protocol adapter, every payment provider AND every authorization provider
- * are healthy. `status: 'warn'` is treated as still-serving (degraded); only
- * `status: 'fail'` blocks readiness — applied uniformly to all four kinds of
- * dependency.
+ * `GET /ready`: 503 when the store, a protocol adapter, or a payment or
+ * authorization provider reports `fail`; `warn` still counts as serving.
+ * Providers count because a payment provider that cannot reach its RPC would
+ * otherwise leave the gateway ready while it serves 402 challenges it cannot
+ * honor.
  *
- * Payment providers are consulted here alongside the store and protocol
- * adapters: without that, a gateway whose x402 RPC is unreachable reports
- * `ready: true` and goes on serving 402 challenges it cannot honour. `fail`, not `warn`, blocks readiness for a provider — same
- * threshold as the store and adapters, not a special case: a broken payment
- * provider is not "degraded but serving", it is a broken core promise for
- * every resource that requires payment, exactly like a store that cannot
- * record or a required adapter that cannot route.
+ * The route is unauthenticated, so a health `detail` or a thrown message never
+ * reaches the client, only a fixed vocabulary.
  *
- * A health result's raw `detail`, or a thrown error's message, is internal and
- * must stay off this unauthenticated route. The client sees a small fixed
- * vocabulary. Returned details are logged at debug; store and provider throws
- * are logged at error, while adapter throws become failed results logged at
- * debug.
- *
- * `/ready` is itself unauthenticated, with no cache and no rate
- * limit, and `checkReadiness` calls every dependency's `health()` fresh on
- * every request — on a commercial RPC provider that is a live, billed
- * upstream call an attacker spends for free (measured: 20 requests -> 60
- * upstream JSON-RPC calls). `createReadinessProbe` memoises the result for
- * READINESS_TTL_MS and collapses concurrent callers onto one in-flight
- * evaluation, so a burst of N requests produces at most one real check.
+ * An evaluation calls every dependency's `health()`, some of which make
+ * upstream RPC calls. `createReadinessProbe` memoizes it for
+ * READINESS_TTL_MS and collapses concurrent callers onto one evaluation, which
+ * `/ready` and `/.well-known/agent-commerce` share.
  */
 import type {
+  AdapterDescriptor,
   AdapterHealth,
   AuthorizationProvider,
   Clock,
   Logger,
   PaymentProvider,
   ReceiptStore,
-} from '../core/index.js';
-import { type AdapterRuntime, getAdapterHealth } from './adapters.js';
+} from '../core';
+import { type AdapterRuntime, getAdapterHealth } from './adapters';
 
 export interface ReadinessCheck {
   readonly name: string;
@@ -60,168 +47,179 @@ export interface CheckReadinessOptions {
   readonly logger: Logger;
 }
 
-const STORE_DETAIL: Readonly<Record<AdapterHealth['status'], string | undefined>> = {
+export interface ProbedAdapter {
+  readonly descriptor: AdapterDescriptor;
+  readonly health: AdapterHealth;
+}
+
+// The client-facing detail per status; `threw` covers a health() that threw
+// and defaults to the `fail` detail
+type HealthDetails = Readonly<Record<AdapterHealth['status'], string | undefined>> & {
+  readonly threw?: string;
+};
+
+const STORE_DETAIL: HealthDetails = {
   pass: undefined,
   warn: 'store-degraded',
   fail: 'store-unwritable',
+  threw: 'store-unreachable',
 };
 
-const ADAPTER_DETAIL: Readonly<Record<AdapterHealth['status'], string | undefined>> = {
+const ADAPTER_DETAIL: HealthDetails = {
   pass: undefined,
   warn: 'adapter-degraded',
   fail: 'adapter-unreachable',
 };
 
-const PAYMENT_PROVIDER_DETAIL: Readonly<Record<AdapterHealth['status'], string | undefined>> = {
+const PAYMENT_PROVIDER_DETAIL: HealthDetails = {
   pass: undefined,
   warn: 'payment-provider-degraded',
   fail: 'payment-provider-unreachable',
 };
 
-const AUTHORIZATION_PROVIDER_DETAIL: Readonly<Record<AdapterHealth['status'], string | undefined>> =
-  {
-    pass: undefined,
-    warn: 'authorization-provider-degraded',
-    fail: 'authorization-provider-unreachable',
-  };
+const AUTHORIZATION_PROVIDER_DETAIL: HealthDetails = {
+  pass: undefined,
+  warn: 'authorization-provider-degraded',
+  fail: 'authorization-provider-unreachable',
+};
+
+// A readiness check plus the health it came from, detail included. Only the
+// check reaches /ready; the well-known document publishes adapter health
+// without its detail.
+interface Probed {
+  readonly check: ReadinessCheck;
+  readonly health: AdapterHealth;
+}
 
 /**
- * One probe for both provider kinds. A provider whose `health()` throws told us
- * nothing, so it counts as failing rather than as absent, and only the fixed
- * vocabulary above reaches the client.
+ * One probe for the store, the adapters and both provider kinds. A `health()`
+ * that throws counts as failing and is logged at error; a returned detail is
+ * logged at debug.
  */
-async function probeProvider(
-  provider: { readonly name: string; health(): Promise<AdapterHealth> },
+async function probe(
+  target: { readonly name: string; health(): Promise<AdapterHealth> },
   kind: string,
-  details: Readonly<Record<AdapterHealth['status'], string | undefined>>,
+  details: HealthDetails,
   options: Pick<CheckReadinessOptions, 'clock' | 'logger'>,
-): Promise<ReadinessCheck> {
+): Promise<Probed> {
   let health: AdapterHealth;
+  let threw = false;
   try {
-    health = await provider.health();
+    health = await target.health();
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    options.logger.error({ err: message, provider: provider.name }, `${kind} health() threw`);
+    options.logger.error({ err: message, name: target.name }, `${kind} health() threw`);
     health = { status: 'fail', checkedAt: options.clock.nowIso() };
+    threw = true;
   }
   if (health.detail !== undefined) {
     options.logger.debug(
-      { provider: provider.name, detail: health.detail },
+      { name: target.name, detail: health.detail },
       `${kind} health detail (not sent to the client)`,
     );
   }
-  const detail = details[health.status];
+  const detail = threw ? (details.threw ?? details.fail) : details[health.status];
   return {
-    name: provider.name,
-    status: health.status,
-    ...(detail !== undefined ? { detail } : {}),
-  };
-}
-
-export async function checkReadiness(options: CheckReadinessOptions): Promise<ReadinessResult> {
-  let storeHealth: AdapterHealth;
-  let storeThrew = false;
-  try {
-    storeHealth = await options.store.health();
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    options.logger.error({ err: message }, 'store.health() threw');
-    storeHealth = { status: 'fail', checkedAt: options.clock.nowIso() };
-    storeThrew = true;
-  }
-  if (storeHealth.detail !== undefined) {
-    options.logger.debug(
-      { detail: storeHealth.detail },
-      'store health detail (not sent to the client)',
-    );
-  }
-
-  const adapterChecks = await Promise.all(
-    options.adapterRuntimes.map(async (runtime): Promise<ReadinessCheck> => {
-      const health = await getAdapterHealth(runtime, options.clock);
-      if (health.detail !== undefined) {
-        options.logger.debug(
-          { adapter: runtime.adapter.name, detail: health.detail },
-          'adapter health detail (not sent to the client)',
-        );
-      }
-      const detail = ADAPTER_DETAIL[health.status];
-      return {
-        name: runtime.adapter.name,
-        status: health.status,
-        ...(detail !== undefined ? { detail } : {}),
-      };
-    }),
-  );
-
-  const paymentProviderChecks = await Promise.all(
-    options.paymentProviders.map((provider) =>
-      probeProvider(provider, 'payment provider', PAYMENT_PROVIDER_DETAIL, options),
-    ),
-  );
-
-  // An unusable authorization provider blocks readiness on the same threshold
-  // as a payment one: a resource that requires a mandate cannot be served
-  // without it, and serving the challenge anyway promises what we cannot honour
-  const authorizationProviderChecks = await Promise.all(
-    options.authorizationProviders.map((provider) =>
-      probeProvider(provider, 'authorization provider', AUTHORIZATION_PROVIDER_DETAIL, options),
-    ),
-  );
-
-  const storeReady = storeHealth.status !== 'fail';
-  const adaptersReady = adapterChecks.every((check) => check.status !== 'fail');
-  const paymentProvidersReady = paymentProviderChecks.every((check) => check.status !== 'fail');
-  const authorizationProvidersReady = authorizationProviderChecks.every(
-    (check) => check.status !== 'fail',
-  );
-  const storeDetail = storeThrew ? 'store-unreachable' : STORE_DETAIL[storeHealth.status];
-
-  return {
-    ready: storeReady && adaptersReady && paymentProvidersReady && authorizationProvidersReady,
-    store: {
-      name: 'store',
-      status: storeHealth.status,
-      ...(storeDetail !== undefined ? { detail: storeDetail } : {}),
+    check: {
+      name: target.name,
+      status: health.status,
+      ...(detail !== undefined ? { detail } : {}),
     },
-    adapters: adapterChecks,
-    paymentProviders: paymentProviderChecks,
-    authorizationProviders: authorizationProviderChecks,
+    health,
   };
 }
 
-/** A readiness probe does not need sub-second freshness: a real outage is
- * still caught within one TTL window, and this is short enough that a burst
- * of requests during a genuine state change (e.g. right after startup) isn't
- * stuck looking at a stale answer for long. */
-export const READINESS_TTL_MS = 2_000;
+interface Evaluation {
+  readonly result: ReadinessResult;
+  readonly adapters: readonly ProbedAdapter[];
+}
+
+async function evaluate(options: CheckReadinessOptions): Promise<Evaluation> {
+  const [store, adapters, paymentProviders, authorizationProviders] = await Promise.all([
+    probe({ name: 'store', health: () => options.store.health() }, 'store', STORE_DETAIL, options),
+    Promise.all(
+      options.adapterRuntimes.map(async (runtime) => ({
+        runtime,
+        probed: await probe(
+          // getAdapterHealth turns a throw into a failed result, so an adapter
+          // failure is logged at debug as a detail rather than at error
+          { name: runtime.adapter.name, health: () => getAdapterHealth(runtime, options.clock) },
+          'adapter',
+          ADAPTER_DETAIL,
+          options,
+        ),
+      })),
+    ),
+    Promise.all(
+      options.paymentProviders.map((provider) =>
+        probe(provider, 'payment provider', PAYMENT_PROVIDER_DETAIL, options),
+      ),
+    ),
+    // An unusable authorization provider blocks readiness on the same threshold
+    // as a payment one: a resource that requires a mandate cannot be served
+    // without it, and serving the challenge anyway promises what we cannot honor
+    Promise.all(
+      options.authorizationProviders.map((provider) =>
+        probe(provider, 'authorization provider', AUTHORIZATION_PROVIDER_DETAIL, options),
+      ),
+    ),
+  ]);
+
+  const checks = [
+    store,
+    ...adapters.map((a) => a.probed),
+    ...paymentProviders,
+    ...authorizationProviders,
+  ];
+  return {
+    result: {
+      ready: checks.every((probed) => probed.check.status !== 'fail'),
+      store: store.check,
+      adapters: adapters.map((a) => a.probed.check),
+      paymentProviders: paymentProviders.map((p) => p.check),
+      authorizationProviders: authorizationProviders.map((p) => p.check),
+    },
+    adapters: adapters.map(({ runtime, probed }) => ({
+      descriptor: runtime.adapter.descriptor,
+      health: probed.health,
+    })),
+  };
+}
+
+// Short enough that an outage or a recovery shows within one window
+const READINESS_TTL_MS = 2_000;
 
 export interface ReadinessProbe {
   check(): Promise<ReadinessResult>;
+  /** Every adapter's health from the same memoized evaluation, detail included */
+  adapterHealth(): Promise<readonly ProbedAdapter[]>;
 }
 
 export function createReadinessProbe(
   options: CheckReadinessOptions,
   ttlMs: number = READINESS_TTL_MS,
 ): ReadinessProbe {
-  let cached: { readonly result: ReadinessResult; readonly at: number } | undefined;
-  let inFlight: Promise<ReadinessResult> | undefined;
+  let cached: { readonly evaluation: Evaluation; readonly at: number } | undefined;
+  let inFlight: Promise<Evaluation> | undefined;
+
+  const current = async (): Promise<Evaluation> => {
+    const now = options.clock.monotonicMs();
+    if (cached && now - cached.at < ttlMs) return cached.evaluation;
+    if (inFlight) return inFlight;
+
+    inFlight = evaluate(options)
+      .then((evaluation) => {
+        cached = { evaluation, at: options.clock.monotonicMs() };
+        return evaluation;
+      })
+      .finally(() => {
+        inFlight = undefined;
+      });
+    return inFlight;
+  };
 
   return {
-    async check(): Promise<ReadinessResult> {
-      const now = options.clock.monotonicMs();
-      if (cached && now - cached.at < ttlMs) return cached.result;
-      if (inFlight) return inFlight;
-
-      inFlight = checkReadiness(options)
-        .then((result) => {
-          cached = { result, at: options.clock.monotonicMs() };
-          return result;
-        })
-        .finally(() => {
-          inFlight = undefined;
-        });
-      return inFlight;
-    },
+    check: async () => (await current()).result,
+    adapterHealth: async () => (await current()).adapters,
   };
 }

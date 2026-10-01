@@ -3,16 +3,16 @@
  *
  * Every key was written into `config.yaml` by an operator. No JWKS fetch, no
  * `jku`, no `x5u`. A mandate's `iss` and `kid` only choose *which* trusted key
- * verifies it; an unrecognised pair is refused, so a mandate can never
+ * verifies it; an unrecognized pair is refused, so a mandate can never
  * nominate its own signer.
  *
  * Not a "try every key" loop: that would make `kid` advisory and accept a
  * mandate that named a key it was not signed with.
  */
 import { importJWK, type JWK } from 'jose';
-import { AP2_SIGNING_ALGORITHM } from './constants.js';
-import { type Ap2ErrorContext, ap2Rejected, ap2Unavailable } from './errors.js';
-import type { Ap2TrustedIssuer } from './types.js';
+import { AP2_SIGNING_ALGORITHM } from './constants';
+import { type Ap2ErrorContext, ap2Rejected, ap2Unavailable } from './errors';
+import type { Ap2TrustedIssuer } from './types';
 
 /** Named off `importJWK` because `CryptoKey` is a DOM type we do not load */
 export type VerificationKey = Awaited<ReturnType<typeof importJWK>>;
@@ -65,7 +65,7 @@ export function createTrustStore(issuers: readonly Ap2TrustedIssuer[]) {
       } catch (cause) {
         // Config already checked this JWK member by member, so reaching here
         // means our config is broken, not the mandate. Drop the cached
-        // rejection so a fixed config is not still failing against it.
+        // rejection so the next request retries the import.
         imported.delete(cacheKey);
         throw ap2Unavailable('configured verification key could not be imported', {
           ...context,

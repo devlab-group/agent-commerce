@@ -1,12 +1,12 @@
-import { formatPrice, formatProtocols } from '../lib/format.js';
-import type { PublicResource } from '../lib/types.js';
+import { formatPrice, formatProtocols } from '../lib/format';
+import type { PublicResource } from '../lib/types';
 
-export interface ResourceListProps {
+interface ResourceListProps {
   readonly resources: readonly PublicResource[];
   readonly error?: string;
 }
 
-/** `GET /api/resources` — every resource the gateway exposes, its price and its protocols. */
+/** `GET /api/resources`: every resource the gateway exposes, with its price and protocols */
 export function ResourceList({ resources, error }: ResourceListProps) {
   if (error !== undefined) {
     return (
@@ -39,7 +39,7 @@ export function ResourceList({ resources, error }: ResourceListProps) {
                 <td>{formatPrice(resource.pricing)}</td>
                 <td>{formatProtocols(resource.exposedVia)}</td>
                 <td>
-                  {resource.paymentMethods.length > 0 ? resource.paymentMethods.join(', ') : '—'}
+                  {resource.paymentMethods.length > 0 ? resource.paymentMethods.join(', ') : '-'}
                 </td>
               </tr>
             ))}

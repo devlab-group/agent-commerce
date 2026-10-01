@@ -9,15 +9,12 @@ permissions:
   contents: read
 
 env:
-  # Same pin as ci.yml and docker/chain.Dockerfile.
+  # Keep this pin in sync with ci.yml and docker/chain.Dockerfile
   FOUNDRY_VERSION: 'v1.7.1'
 
 jobs:
-  # The full CI suite — lint, typecheck, unit/integration, contracts, E2E, the
-  # package job's clean-consumer installs, and the Docker build — run against
-  # the exact commit being tagged. `prepublishOnly` covers build + verify + the
-  # built-CLI smoke test, but not the tarball installs, so without this a tag
-  # could ship a package that no consumer can install.
+  # Run CI against the tagged commit before publishing. Its tarball install
+  # checks and README quickstart are not part of `prepublishOnly`.
   ci:
     name: CI
     uses: ./.github/workflows/ci.yml
@@ -34,9 +31,8 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci
-      # Reported for human review. High/critical findings must be assessed and
-      # documented before release; irrelevant transitive advisories do not
-      # automatically block.
+      # Save audit results for review. Assess and document high or critical
+      # findings before release; a transitive advisory may not apply here.
       - run: npm audit --audit-level high || true
       - run: npm audit --json > audit.json || true
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -44,63 +40,22 @@ jobs:
           name: dependency-audit
           path: audit.json
 
-  fresh-clone:
-    name: Fresh-clone quickstart smoke test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        with:
-          node-version: '22'
-          cache: npm
-      - uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09 # v1.9.1
-        with:
-          # Pinned: the default is `nightly`, a mutable input to a suite this
-          # project calls deterministic.
-          version: ${{ env.FOUNDRY_VERSION }}
-      - name: Quickstart exactly as documented in the README
-        run: |
-          npm ci
-          # The README's own instruction for a user that is not uid 1000.
-          # GitHub runners are uid 1001, so the checkout is owned by 1001 while
-          # compose's `user:` default is 1000 — the chain-deploy step then
-          # cannot write .deploy/local.json and the whole stack fails.
-          export DOCKER_UID="$(id -u)" DOCKER_GID="$(id -g)"
-          docker compose up -d --build
-          npm run agent-commerce -- doctor --config config-demo.yaml
-          npm run demo:agent
-      - name: Compose logs on failure
-        if: failure()
-        run: docker compose logs
-      - name: Tear down
-        if: always()
-        run: docker compose down -v
-
   publish:
     name: Publish to npm
-    # Only a tag ships. A manual dispatch on a branch runs the checks above and
-    # stops here.
+    # A manual dispatch on a branch runs the checks but does not publish.
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [ci, audit, fresh-clone]
+    needs: [ci, audit]
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      # Trusted publishing: npm exchanges this short-lived OIDC token for
-      # publish rights. There is no NPM_TOKEN in this repository, and nothing
-      # here should ever add one — a long-lived token is the thing trusted
-      # publishing exists to remove. Configure the publisher on npmjs.com
-      # against this repository AND this workflow filename (release.yml); the
-      # claim is checked against both, so renaming this file breaks publishing
-      # until the setting is updated.
+      # This permission lets npm request a short-lived OIDC token for trusted
+      # publishing. Configure the publisher for this repository and
+      # release.yml on npmjs.com; update that setting if the file is renamed.
+      # Do not add a long-lived NPM_TOKEN.
       id-token: write
     steps:
-      # Every action below runs inside a job holding `id-token: write`, so a
-      # moving tag here is a publish credential: whoever can repoint
-      # `actions/checkout@v4` can mint an npm token for this package. Actions
-      # are pinned by commit SHA — the trailing comment is the human-readable
-      # version, the SHA is what GitHub resolves.
+      # This job can request OIDC tokens. Pin actions to commit SHAs so their
+      # code cannot change without a workflow edit; comments show versions.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
@@ -109,22 +64,13 @@ jobs:
           node-version: '22'
           cache: npm
           registry-url: 'https://registry.npmjs.org'
-      # `prepublishOnly` runs the full `npm run verify`, and part of that suite
-      # spawns a real Anvil. Without Foundry here the publish fails on a test
-      # that has nothing to do with the artifact being published.
+      # `prepublishOnly` runs `npm run verify`, including local-chain tests that
+      # start Anvil and require Foundry.
       - uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09 # v1.9.1
         with:
-          # Pinned: the default is `nightly`, a mutable input to a suite this
-          # project calls deterministic.
           version: ${{ env.FOUNDRY_VERSION }}
-      # setup-node pairs Node 22 with npm 10, which predates trusted
-      # publishing (needs >= 11.5.1). Without this the publish fails asking for
-      # credentials that deliberately do not exist.
-      #
-      # Exact version, not `@latest`: this npm is the process that mints the
-      # OIDC claim and uploads the tarball, so letting it float means the
-      # publish path changes under an unrelated release with nothing in this
-      # repository recording it.
+      # Trusted publishing needs npm >= 11.5.1. Pin the npm version used to
+      # request the OIDC token and upload the tarball.
       - run: npm install -g npm@11.6.2
       - run: npm ci
       - name: Publish

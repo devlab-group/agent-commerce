@@ -1,5 +1,5 @@
 /**
- * One mandate authorises one settlement. These are the ways a second could be
+ * One mandate authorizes one settlement. These are the ways a second could be
  * got out of the same approval, and the state machine that refuses them.
  */
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
@@ -11,7 +11,7 @@ import {
   type Ap2ReplayStore,
   type Ap2ReservationRequest,
   createAp2ReplayStore,
-} from '../../../src/authorization/ap2/replay-store.js';
+} from '../../../src/authorization/ap2/replay-store';
 
 const scratch = mkdtempSync(join(tmpdir(), 'ap2-replay-'));
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
@@ -135,7 +135,7 @@ describe('reserving', () => {
   });
 });
 
-describe('finalising', () => {
+describe('finalizing', () => {
   it('never lets a consumed mandate be released back into circulation', () => {
     // Stops a backend failure after settlement handing back a spent mandate
     store.reserve(request());
@@ -158,7 +158,7 @@ describe('finalising', () => {
     expect(store.stateOf('sha256:AAAA')).toBe('released');
   });
 
-  it('ignores a finalise for a mandate nobody reserved', () => {
+  it('ignores a finalize for a mandate nobody reserved', () => {
     store.consume('sha256:NEVER');
     expect(store.stateOf('sha256:NEVER')).toBeUndefined();
   });
@@ -200,13 +200,21 @@ describe('durability', () => {
     second.close();
   });
 
-  it('reopens an existing file without re-running the migration', () => {
-    const path = join(scratch, 'migrate-once.sqlite');
+  it('still refuses a mandate left reserved by a process that stopped mid-settlement', () => {
+    // A process that stops between settlement and the local commit leaves the
+    // row reserved. A refused retry costs a round trip; handing it back could
+    // cost a second payment.
+    const path = join(scratch, 'reserved-reopen.sqlite');
     const first = createAp2ReplayStore({ path });
     first.reserve(request());
     first.close();
+
     const second = createAp2ReplayStore({ path });
     expect(second.stateOf('sha256:AAAA')).toBe('reserved');
+    expect(second.reserve(request({ requestId: 'req-2' }))).toEqual({
+      kind: 'replayed',
+      state: 'reserved',
+    });
     second.close();
   });
 });

@@ -6,13 +6,14 @@
  * until the second half is checked.
  */
 import { describe, expect, it } from 'vitest';
-import type { ProtocolAdapterContext } from '../../../src/core/index.js';
-import { createAcpAdapter } from '../../../src/protocols/acp/adapter.js';
-import { ACP_SPEC_VERSION, ACP_WELL_KNOWN_PATH } from '../../../src/protocols/acp/constants.js';
-import { guardAcpRequest } from '../../../src/protocols/acp/request-guards.js';
-import { matchAcpRoute } from '../../../src/protocols/acp/router.js';
-import { validateAcpDocument } from '../../../src/protocols/acp/validation.js';
-import { adapterOptions, deliveredFor, MOUNT, setup, TOKEN } from './fixtures.js';
+import type { ProtocolAdapterContext } from '../../../src/core';
+import { createAcpAdapter } from '../../../src/protocols/acp/adapter';
+import { ACP_SPEC_VERSION, ACP_WELL_KNOWN_PATH } from '../../../src/protocols/acp/constants';
+import { guardAcpRequest } from '../../../src/protocols/acp/request-guards';
+import { matchAcpRoute } from '../../../src/protocols/acp/router';
+import { validateAcpDocument } from '../../../src/protocols/acp/validation';
+import { createBearerCheck } from '../../../src/protocols/http';
+import { adapterOptions, deliveredFor, MOUNT, setup, TOKEN } from './fixtures';
 
 interface HttpResult {
   status: number;
@@ -62,7 +63,7 @@ function fakeExchange(request: HttpRequest) {
   return { req, res, result };
 }
 
-/** An authenticated, correctly-versioned request. Individual cases override one piece. */
+// An authenticated, correctly-versioned request. Individual cases override one piece
 function goodHeaders(extra: Record<string, string> = {}): Record<string, string> {
   return {
     authorization: `Bearer ${TOKEN}`,
@@ -169,8 +170,8 @@ describe('ACP discovery', () => {
     expect(validateAcpDocument('discoveryResponse', result.body)).toBeUndefined();
   });
 
-  // Configured metadata is free text; publishing a document ACP's own schema
-  // rejects would be exactly the blanket claim this project refuses to make.
+  // Configured metadata is free text, so a document ACP's own schema rejects
+  // is never published
   it('refuses to start when configured metadata would break the document', async () => {
     const { context } = setup();
     const adapter = createAcpAdapter(
@@ -201,9 +202,16 @@ describe('ACP discovery', () => {
 describe('ACP request guards', () => {
   it.each([
     ['no Authorization header', { authorization: undefined }, 401, 'unauthorized'],
-    ['a non-bearer scheme', { authorization: 'Basic dXNlcjpwYXNz' }, 401, 'unauthorized'],
+    // The right token under another scheme, so only the scheme check can refuse it
+    ['a non-bearer scheme', { authorization: `Basic ${TOKEN}` }, 401, 'unauthorized'],
     ['an empty bearer token', { authorization: 'Bearer ' }, 401, 'unauthorized'],
     ['the wrong token', { authorization: 'Bearer wrong-token' }, 401, 'unauthorized'],
+    [
+      'a Signature header in place of a bearer token',
+      { authorization: undefined, signature: 'sig1=:c2lnbmF0dXJl:', timestamp: '1767225600' },
+      401,
+      'unauthorized',
+    ],
     ['no API-Version', { 'api-version': undefined }, 400, 'missing_api_version'],
     ['an older API-Version', { 'api-version': '2026-01-30' }, 400, 'unsupported_api_version'],
     ['API-Version: latest', { 'api-version': 'latest' }, 400, 'unsupported_api_version'],
@@ -227,6 +235,12 @@ describe('ACP request guards', () => {
       415,
       'unsupported_media_type',
     ],
+    [
+      'a JSON body with no content type',
+      { 'content-type': undefined },
+      415,
+      'unsupported_media_type',
+    ],
   ])('rejects %s', async (_label, overrides, status, code) => {
     const { context, execute } = setup();
     const headers = goodHeaders();
@@ -243,11 +257,17 @@ describe('ACP request guards', () => {
     expect(execute).not.toHaveBeenCalled();
   });
 
-  it('names the supported version on both version errors, and nothing else', async () => {
+  it.each([
+    ['a missing', undefined],
+    ['an unsupported', '2025-09-29'],
+  ])('names the supported version on %s API-Version, and nothing else', async (_label, version) => {
     const { context } = setup();
-    const headers = goodHeaders({ 'api-version': '2025-09-29' });
+    const headers = goodHeaders();
+    if (version === undefined) delete headers['api-version'];
+    else headers['api-version'] = version;
     const result = await checkout(context, { headers, body: VALID_CREATE });
 
+    expect(result.status).toBe(400);
     expect(result.body['supported_versions']).toEqual([ACP_SPEC_VERSION]);
     expect(validateAcpDocument('error', result.body)).toBeUndefined();
   });
@@ -289,32 +309,54 @@ describe('ACP request guards', () => {
   });
 
   // Route matching runs before authentication on purpose: a 404 for an
-  // unimplemented ACP service is not information worth authenticating for, and
-  // it keeps an unauthenticated caller from reaching the body reader.
-  it('reads no body for an unauthenticated request', async () => {
-    const { context } = setup();
-    let consumed = false;
-    const { res, result } = fakeExchange({ headers: {} });
+  // unimplemented ACP service is not information worth authenticating for.
+  // Authentication still runs before the body reader, which is what this
+  // checks. The valid token is the positive control: it shows the reader does
+  // consume this stream once authentication passes.
+  it.each([
+    ['no Authorization header', undefined, 401, false],
+    ['a non-bearer scheme', `Basic ${TOKEN}`, 401, false],
+    ['an empty bearer token', 'Bearer ', 401, false],
+    ['the wrong token', 'Bearer wrong-token', 401, false],
+    ['the valid token', `Bearer ${TOKEN}`, 201, true],
+  ])(
+    'reads the body only after authentication: %s',
+    async (_label, authorization, status, read) => {
+      const { context } = setup(deliveredFor('createCheckoutSession'));
+      let consumed = false;
+      const { res, result } = fakeExchange({});
+      const headers = goodHeaders();
+      if (authorization === undefined) delete headers['authorization'];
+      else headers['authorization'] = authorization;
+      const req = Object.assign(
+        (async function* () {
+          consumed = true;
+          yield Buffer.from(VALID_CREATE, 'utf8');
+        })(),
+        { method: 'POST', url: `${MOUNT}/checkout_sessions`, headers },
+      );
+      const adapter = await startedAdapter(context);
+      await adapter.handleHttp(req as never, res as never);
+
+      expect(result().status).toBe(status);
+      expect(consumed).toBe(read);
+    },
+  );
+
+  it('stops reading a body at the cap instead of buffering the rest', async () => {
+    let pulled = 0;
     const req = Object.assign(
       (async function* () {
-        consumed = true;
-        yield Buffer.from(VALID_CREATE, 'utf8');
+        for (let chunk = 0; chunk < 10; chunk += 1) {
+          pulled += 1;
+          yield Buffer.alloc(16, 0x20);
+        }
       })(),
-      { method: 'POST', url: `${MOUNT}/checkout_sessions`, headers: {} },
+      { method: 'POST', url: `${MOUNT}/checkout_sessions`, headers: goodHeaders() },
     );
-    const adapter = await startedAdapter(context);
-    await adapter.handleHttp(req as never, res as never);
-
-    expect(result().status).toBe(401);
-    expect(consumed).toBe(false);
-  });
-
-  it('rejects a body over the cap without buffering it', async () => {
-    const oversized = JSON.stringify({ currency: 'usd', note: 'x'.repeat(200) });
-    const { req } = fakeExchange({ headers: goodHeaders(), body: oversized });
     const guard = await guardAcpRequest(req as never, {
       mountPath: MOUNT,
-      token: TOKEN,
+      isAuthorized: createBearerCheck(TOKEN),
       maxBodyBytes: 32,
     });
 
@@ -323,11 +365,24 @@ describe('ACP request guards', () => {
       expect(guard.status).toBe(413);
       expect(guard.error.code).toBe('request_body_too_large');
     }
+    // The third 16-byte chunk crosses the 32-byte cap; nothing after it is pulled
+    expect(pulled).toBe(3);
   });
 
   it('accepts a well-formed request and executes it exactly once', async () => {
     const { context, execute } = setup(deliveredFor('createCheckoutSession'));
     const result = await checkout(context, { headers: goodHeaders(), body: VALID_CREATE });
+
+    expect(result.status).toBe(201);
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  it('accepts an Idempotency-Key of exactly 255 characters', async () => {
+    const { context, execute } = setup(deliveredFor('createCheckoutSession'));
+    const result = await checkout(context, {
+      headers: goodHeaders({ 'idempotency-key': 'k'.repeat(255) }),
+      body: VALID_CREATE,
+    });
 
     expect(result.status).toBe(201);
     expect(execute).toHaveBeenCalledTimes(1);
@@ -360,7 +415,7 @@ describe('ACP request guards', () => {
     expect(execute).toHaveBeenCalledTimes(1);
   });
 
-  it('echoes a usable Request-Id and drops one carrying control characters', async () => {
+  it('echoes a usable Request-Id, truncated, and drops one carrying control characters', async () => {
     const { context } = setup(deliveredFor('createCheckoutSession'));
     const echoed = await checkout(context, {
       headers: goodHeaders({ 'request-id': 'req_abc-123' }),
@@ -368,10 +423,17 @@ describe('ACP request guards', () => {
     });
     expect(echoed.headers['request-id']).toBe('req_abc-123');
 
+    const truncated = await checkout(context, {
+      headers: goodHeaders({ 'request-id': 'r'.repeat(300) }),
+      body: VALID_CREATE,
+    });
+    expect(truncated.headers['request-id']).toBe('r'.repeat(128));
+
     const dropped = await checkout(context, {
       headers: goodHeaders({ 'request-id': 'req\r\nx-injected: 1' }),
       body: VALID_CREATE,
     });
+    expect(dropped.status).toBe(201);
     expect(dropped.headers['request-id']).toBeUndefined();
   });
 
@@ -403,27 +465,66 @@ describe('ACP request guards', () => {
 });
 
 describe('ACP route matching', () => {
+  // `path` scopes idempotency keys, so a query string, a trailing slash or an
+  // escaped spelling of the same endpoint must not yield a second scope
   it.each([
-    ['POST', '/acp/checkout_sessions', 'createCheckoutSession', undefined],
-    ['POST', '/acp/checkout_sessions?trace=1', 'createCheckoutSession', undefined],
-    ['GET', '/acp/checkout_sessions/cs_1', 'getCheckoutSession', 'cs_1'],
-    ['POST', '/acp/checkout_sessions/cs_1', 'updateCheckoutSession', 'cs_1'],
-    ['POST', '/acp/checkout_sessions/cs_1/complete', 'completeCheckoutSession', 'cs_1'],
-    ['POST', '/acp/checkout_sessions/cs_1/cancel/', 'cancelCheckoutSession', 'cs_1'],
-  ])('maps %s %s', (method, url, operation, sessionId) => {
+    [
+      'POST',
+      '/acp/checkout_sessions',
+      'createCheckoutSession',
+      undefined,
+      '/acp/checkout_sessions',
+    ],
+    [
+      'POST',
+      '/acp/checkout_sessions?trace=1',
+      'createCheckoutSession',
+      undefined,
+      '/acp/checkout_sessions',
+    ],
+    [
+      'GET',
+      '/acp/checkout_sessions/cs_1',
+      'getCheckoutSession',
+      'cs_1',
+      '/acp/checkout_sessions/cs_1',
+    ],
+    [
+      'POST',
+      '/acp/checkout_sessions/cs_1',
+      'updateCheckoutSession',
+      'cs_1',
+      '/acp/checkout_sessions/cs_1',
+    ],
+    [
+      'POST',
+      '/acp/checkout_sessions/cs%5F1/complete',
+      'completeCheckoutSession',
+      'cs_1',
+      '/acp/checkout_sessions/cs_1/complete',
+    ],
+    [
+      'POST',
+      '/acp/checkout_sessions/cs_1/cancel/',
+      'cancelCheckoutSession',
+      'cs_1',
+      '/acp/checkout_sessions/cs_1/cancel',
+    ],
+  ])('maps %s %s', (method, url, operation, sessionId, path) => {
     const matched = matchAcpRoute(method, url, MOUNT);
     expect(matched.kind).toBe('match');
     if (matched.kind === 'match') {
       expect(matched.route.operation).toBe(operation);
       expect(matched.route.sessionId).toBe(sessionId);
+      expect(matched.route.path).toBe(path);
     }
   });
 
   // A percent-encoded separator must not become an extra path segment, and an
-  // id is a single opaque segment - not a place to hide a path.
+  // id is a single opaque segment - not a place to hide a path
   it.each([
     ['an encoded separator in the id', '/acp/checkout_sessions/cs%2F1/complete'],
-    ['a traversal segment', '/acp/checkout_sessions/../health'],
+    ['an encoded separator smuggling an action', '/acp/checkout_sessions/cs_1%2Fcomplete'],
     ['a malformed escape', '/acp/checkout_sessions/%zz'],
     ['a mount prefix that only looks like ours', '/acpx/checkout_sessions'],
     ['the bare mount', '/acp'],

@@ -1,31 +1,30 @@
 /**
  * A real listening gateway with a real merchant behind it.
  *
- * Everything between an HTTP client and the merchant's socket is the shipped
- * code: Fastify, the ACP adapter, the execution pipeline, and the real backend
- * executor building the outbound request from `inputBindings`. Only the receipt
- * store is faked, because durable receipts are not what ACP conformance is
- * about.
+ * Everything between an HTTP client and the merchant's socket is shipped code:
+ * Fastify, the ACP adapter, the execution pipeline and the real backend
+ * executor building the outbound request from `inputBindings`. Only the
+ * receipt store is faked.
  *
- * The merchant is an ordinary `node:http` server that records what it was sent,
- * so a test can assert the method, path, query and body that actually crossed
- * the wire - the one thing a mocked `BackendExecutor` cannot show.
+ * The merchant is a plain `node:http` server that records what it was sent, so
+ * a test can assert the method, path, query and body that crossed the wire,
+ * which a mocked `BackendExecutor` cannot show.
  */
 
 import { readFileSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import type { GatewayConfig } from '../../../../src/config/index.js';
-import { createGateway, type GatewayInstance } from '../../../../src/gateway/index.js';
-import { createAcpAdapter } from '../../../../src/protocols/acp/index.js';
-import { createFakeStore } from '../../../unit/gateway/helpers.js';
+import type { GatewayConfig } from '../../../../src/config';
+import { createGateway, type GatewayInstance } from '../../../../src/gateway';
+import { createAcpAdapter } from '../../../../src/protocols/acp';
+import { createFakeStore } from '../../../unit/gateway/helpers';
 
-/** The official examples, vendored from the same upstream commit as the schema. */
+/** The official examples, vendored from the same upstream commit as the schema */
 export const ACP_EXAMPLES = JSON.parse(
   readFileSync('tests/fixtures/acp/2026-04-17/examples.agentic_checkout.json', 'utf8'),
 ) as Record<string, Record<string, unknown>>;
 
-// Silences the gateway's pino instance for the run - see src/gateway/logger.ts.
+// Silences the gateway's pino instance for the run (see src/gateway/logger.ts)
 process.env['NODE_ENV'] = 'test';
 
 export const ACP_TOKEN = 'conformance-bearer-token';
@@ -38,28 +37,30 @@ export const ACP_OPERATIONS = {
   cancelCheckoutSession: 'acp_checkout_cancel',
 } as const;
 
-/** What the merchant actually received. */
+/** What the merchant received */
 export interface MerchantCall {
   readonly method: string;
   readonly path: string;
   readonly query: Record<string, string>;
   readonly body: unknown;
-  /** Lowercased, as Node delivers them. What the gateway sent, not what the ACP client did. */
+  /** Lowercased, as Node delivers them. What the gateway sent, not what the ACP client did */
   readonly headers: Record<string, string>;
 }
 
-/** How the merchant should answer the next call, when a test needs something specific. */
+/** How the merchant should answer the next call, when a test needs something specific */
 export interface MerchantReply {
   readonly status: number;
   readonly body: unknown;
-  /** Held open this long before replying, to provoke a gateway timeout. */
+  /** Held open this long before replying, to provoke a gateway timeout */
   readonly delayMs?: number;
+  /** Held open until this settles, for a test that must act while the merchant is mid-call */
+  readonly until?: Promise<unknown>;
 }
 
 export interface AcpStack {
   readonly url: string;
   readonly calls: readonly MerchantCall[];
-  /** Answer the next call (and only the next) with this. */
+  /** Answer the next call (and only the next) with this */
   nextReply(reply: MerchantReply): void;
   close(): Promise<void>;
 }
@@ -69,7 +70,7 @@ interface MerchantState {
   queued: MerchantReply | undefined;
 }
 
-/** The default merchant: conformant answers, taken from the snapshot's own examples. */
+// The default merchant: conformant answers, taken from the snapshot's own examples
 function defaultReply(method: string, path: string): MerchantReply {
   if (path.endsWith('/complete')) {
     return { status: 200, body: ACP_EXAMPLES['complete_checkout_session_response'] };
@@ -112,7 +113,8 @@ async function startMerchant(state: MerchantState): Promise<{ server: Server; or
         res.writeHead(reply.status, { 'content-type': 'application/json' });
         res.end(JSON.stringify(reply.body));
       };
-      if (reply.delayMs === undefined) send();
+      if (reply.until !== undefined) void reply.until.then(send);
+      else if (reply.delayMs === undefined) send();
       else setTimeout(send, reply.delayMs);
     });
   });
@@ -125,7 +127,7 @@ async function startMerchant(state: MerchantState): Promise<{ server: Server; or
 /**
  * The five checkout resources, wired the way an operator would: one resource
  * per operation, each `free`, `acp`-exposed, and binding the canonical envelope
- * onto a real merchant request through `inputBindings`.
+ * onto a real merchant request through `inputBindings`
  */
 function checkoutResources(origin: string, timeoutMs: number): GatewayConfig['resources'] {
   const sessionInput = {
@@ -224,7 +226,7 @@ function checkoutResources(origin: string, timeoutMs: number): GatewayConfig['re
 }
 
 export interface StartAcpStackOptions {
-  /** Backend timeout, lowered by the test that provokes one. */
+  /** Backend timeout, lowered by the test that provokes one */
   readonly backendTimeoutMs?: number;
 }
 
@@ -281,7 +283,7 @@ export async function startAcpStack(options: StartAcpStackOptions = {}): Promise
   };
 }
 
-/** Headers a conformant ACP client sends. Individual tests override one piece. */
+/** Headers a conformant ACP client sends. Individual tests override one piece */
 export function acpHeaders(extra: Record<string, string> = {}): Record<string, string> {
   return {
     authorization: `Bearer ${ACP_TOKEN}`,
@@ -298,7 +300,7 @@ export interface AcpHttpResult {
   readonly body: Record<string, unknown>;
 }
 
-/** One request over a real socket, the way an ACP client makes it. */
+/** One request over a real socket, the way an ACP client makes it */
 export async function acpFetch(
   stack: AcpStack,
   path: string,

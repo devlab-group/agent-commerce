@@ -11,7 +11,7 @@ import type {
   ProtocolAdapter,
   ProtocolAdapterContext,
   ResourceRegistry,
-} from '../../../src/core/index.js';
+} from '../../../src/core';
 import {
   type AdapterRuntime,
   getAdapterHealth,
@@ -19,8 +19,8 @@ import {
   MOUNT_MAX_CONCURRENT_REQUESTS,
   startAndMountAdapters,
   stopAdapters,
-} from '../../../src/gateway/adapters.js';
-import { createFakeHttpAdapter, createFakeProtocolAdapter } from './helpers.js';
+} from '../../../src/gateway/adapters';
+import { createFakeHttpAdapter, createFakeProtocolAdapter } from './helpers';
 
 const NOOP_LOGGER: Logger = {
   debug: () => {},
@@ -75,9 +75,11 @@ describe('startAndMountAdapters / adapter isolation', () => {
       clock,
     });
 
+    const [runtime] = runtimes;
     expect(runtimes).toHaveLength(1);
-    expect(runtimes[0]?.startFailure?.status).toBe('fail');
-    const health = await getAdapterHealth(runtimes[0]!, clock);
+    expect(runtime?.startFailure?.status).toBe('fail');
+    if (runtime === undefined) return;
+    const health = await getAdapterHealth(runtime, clock);
     expect(health.status).toBe('fail');
     await server.close();
   });
@@ -108,11 +110,11 @@ describe('startAndMountAdapters / adapter isolation', () => {
     await server.close();
   });
 
-  it('a POST with a real application/json body reaches the adapter intact (regression: Fastify must not drain it first)', async () => {
-    // Cheaper localiser for the same class of bug the full MCP-over-gateway
-    // integration test guards end to end: this asserts the raw request
-    // stream Fastify hands the adapter still has its body unconsumed, without
-    // needing a real MCP client/server round trip.
+  it('a POST body of any content type reaches the adapter intact (regression: Fastify must not drain it first)', async () => {
+    // The raw stream Fastify hands the adapter must still hold the body.
+    // Fastify's built-in JSON and text parsers match before '*', so each needs
+    // its own no-op. The MCP-over-gateway integration test checks this end to
+    // end; this one needs no MCP round trip.
     const server = Fastify({ logger: false });
     const sentBody = JSON.stringify({ jsonrpc: '2.0', method: 'tools/list', id: 1 });
     let seenBody = '';
@@ -136,24 +138,25 @@ describe('startAndMountAdapters / adapter isolation', () => {
     });
     await server.ready();
 
-    const res = await server.inject({
-      method: 'POST',
-      url: '/mcp',
-      headers: { 'content-type': 'application/json' },
-      payload: sentBody,
-    });
+    for (const contentType of ['application/json', 'text/plain', 'application/octet-stream']) {
+      seenBody = '';
+      const res = await server.inject({
+        method: 'POST',
+        url: '/mcp',
+        headers: { 'content-type': contentType },
+        payload: sentBody,
+      });
 
-    expect(res.statusCode).toBe(200);
-    expect(seenBody).toBe(sentBody);
+      expect(res.statusCode, contentType).toBe(200);
+      expect(seenBody, contentType).toBe(sentBody);
+    }
 
     await server.close();
   });
 
   it('destroys the connection once a CHUNKED (no Content-Length) body exceeds the mount limit', async () => {
-    // A Content-Length-only test would pass while the real hole (chunked
-    // transfer, which has no declared length up front) stayed open — this
-    // sends a real oversized body over a real socket with no Content-Length
-    // header at all, so Node's http client uses chunked transfer-encoding.
+    // An oversized body over a real socket with no Content-Length, so Node's
+    // client uses chunked transfer-encoding, which a Content-Length check misses
     const server = Fastify({ logger: false });
     let receivedBytes = 0;
     let handlerCompleted = false;
@@ -164,7 +167,7 @@ describe('startAndMountAdapters / adapter isolation', () => {
           for await (const chunk of req) receivedBytes += (chunk as Buffer).length;
           handlerCompleted = true;
         } catch {
-          // Expected once the server destroys the socket mid-body.
+          // Expected once the server destroys the socket mid-body
         }
         if (!res.headersSent) res.writeHead(200);
         res.end();
@@ -223,8 +226,7 @@ describe('startAndMountAdapters / adapter isolation', () => {
     });
 
     // The server must have cut the connection before the full body arrived:
-    // either the client saw a socket error, or the handler never got to
-    // finish reading (both are valid signals the destroy() fired in time).
+    // either the client saw a socket error or the handler never finished reading
     expect(clientError !== undefined || !handlerCompleted).toBe(true);
     expect(receivedBytes).toBeLessThan(totalToSend);
 
@@ -238,10 +240,10 @@ describe('startAndMountAdapters / adapter isolation', () => {
       handleHttp: async (req, res) => {
         try {
           for await (const _chunk of req) {
-            // never resolves before the cap fires — draining is the point
+            // never resolves before the cap fires; draining is the point
           }
         } catch {
-          // Expected once the server destroys the socket.
+          // Expected once the server destroys the socket
         }
         if (!res.headersSent) res.writeHead(200);
         res.end();
@@ -297,14 +299,9 @@ describe('startAndMountAdapters / adapter isolation', () => {
         writeMore();
       });
 
-    // The response callback fires once the write is handed to the OS, not
-    // once the peer has received it, so destroying the socket right after
-    // can occasionally race a still-in-flight response and truncate it into
-    // a bare client-side error instead — the same accepted trade documented
-    // on the `res.end(body, () => socket.destroy())` call this exercises.
-    // Retry rather than assert on a single attempt: what this test protects
-    // is that the diagnostic is actually reachable, not that every single
-    // request wins the race under system load.
+    // The destroy after `res.end()` can race the response and truncate it into
+    // a client-side error (accepted in adapters.ts). Retrying checks that the 413
+    // is reachable, not that every request wins the race under load.
     let result: { status: number | undefined; body: string } | undefined;
     for (let i = 0; i < 5 && result?.status !== 413; i += 1) {
       result = await attempt();
@@ -339,15 +336,14 @@ describe('startAndMountAdapters / adapter isolation', () => {
       clock,
     });
 
-    // Fill the cap: fire MOUNT_MAX_CONCURRENT_REQUESTS requests that all
-    // block inside handleHttp until released below.
+    // Fill the cap: MOUNT_MAX_CONCURRENT_REQUESTS requests that all block
+    // inside handleHttp until released below
     const inFlightResponses = Array.from({ length: MOUNT_MAX_CONCURRENT_REQUESTS }, () =>
       server.inject({ method: 'POST', url: '/mcp', payload: '{}' }),
     );
     await vi.waitFor(() => expect(entered).toBe(MOUNT_MAX_CONCURRENT_REQUESTS));
 
-    // The next one, over the cap, must be rejected immediately — it must
-    // not enter handleHttp at all.
+    // The next one is rejected at once, without entering handleHttp
     const busy = await server.inject({ method: 'POST', url: '/mcp', payload: '{}' });
     expect(entered).toBe(MOUNT_MAX_CONCURRENT_REQUESTS);
     expect(busy.statusCode).toBe(503);
@@ -356,24 +352,25 @@ describe('startAndMountAdapters / adapter isolation', () => {
     expect(body.code).toBe('GATEWAY_BUSY');
     expect(body.retryable).toBe(true);
 
-    // Release everyone and confirm they all actually completed (proves the
-    // counter isn't just permanently pinned at the cap for some other
-    // reason, e.g. a bug that never lets requests finish).
+    // All of them complete once released, so the counter is not pinned at the
+    // cap by requests that never finish
     for (const release of releasers) release();
     const settled = await Promise.all(inFlightResponses);
     for (const res of settled) expect(res.statusCode).toBe(200);
+
+    // Every finished request freed its slot, so the mount serves again
+    const next = server.inject({ method: 'POST', url: '/mcp', payload: '{}' });
+    await vi.waitFor(() => expect(entered).toBe(MOUNT_MAX_CONCURRENT_REQUESTS + 1));
+    releasers.at(-1)?.();
+    expect((await next).statusCode).toBe(200);
 
     await server.close();
   });
 
   it("does not leak a socket 'close' listener per request on a keep-alive connection", async () => {
-    // Under HTTP keep-alive — the normal mode for an MCP client holding a
-    // long-lived connection — every request adds a `once('close')` listener,
-    // and removing only the request's own 'data' listener would let the count
-    // grow by one per request for the life of the
-    // connection (MaxListenersExceededWarning at request 11).
-    // This drives N requests over ONE server-side socket
-    // and asserts the listener count stays flat.
+    // Under keep-alive, the normal mode for an MCP client, every request adds
+    // listeners to the same socket. N requests over one server-side socket must
+    // leave the listener count flat, not growing toward MaxListenersExceeded.
     const server = Fastify({ logger: false });
     const adapter = createFakeHttpAdapter({
       mountPath: '/mcp',
@@ -493,9 +490,8 @@ describe('startAndMountAdapters / adapter isolation', () => {
     });
     await server.ready();
     const res = await server.inject({ method: 'GET', url: '/mcp' });
-    // Fastify's injected response still completes; status reflects what the
-    // adapter itself wrote (200), not a synthetic 500, since headers were
-    // already sent before the throw.
+    // The response still completes with the 200 the adapter wrote, not a
+    // synthetic 500, because headers were sent before the throw
     expect(res.statusCode).toBe(200);
     await server.close();
   });
@@ -503,7 +499,6 @@ describe('startAndMountAdapters / adapter isolation', () => {
   it('getAdapterHealth tolerates a non-Error value thrown by health()', async () => {
     const adapter = createFakeProtocolAdapter({
       health: async () => {
-        // eslint-disable-next-line @typescript-eslint/no-throw-literal
         throw 'plain string failure';
       },
     });
@@ -532,7 +527,7 @@ describe('startAndMountAdapters / adapter isolation', () => {
 });
 
 describe('adapter-owned additional HTTP routes', () => {
-  /** A protocol whose spec pins a discovery URL outside its own mount. */
+  // A protocol whose spec pins a discovery URL outside its own mount
   function cardAdapter(overrides: Partial<HttpProtocolAdapter> = {}): HttpProtocolAdapter {
     return createFakeHttpAdapter({
       name: 'a2a',
@@ -661,14 +656,14 @@ describe('adapter-owned additional HTTP routes', () => {
       (await server.inject({ method: 'GET', url: '/.well-known/fake-card.json' })).statusCode,
     ).toBe(404);
     expect((await server.inject({ method: 'GET', url: '/fake' })).statusCode).toBe(404);
-    // The healthy adapter is untouched by its neighbour's failure.
+    // The healthy adapter is untouched by its neighbor's failure
     expect((await server.inject({ method: 'GET', url: '/mcp' })).statusCode).toBe(200);
 
     await server.close();
   });
 
-  // Fastify would only notice these inside deferred route registration and
-  // fail server.ready() with an FST_ERR_DUPLICATED_ROUTE naming no adapter.
+  // Fastify would only fail server.ready() with an FST_ERR_DUPLICATED_ROUTE
+  // naming no adapter
   it('rejects two adapters claiming the same fixed route, before either starts', async () => {
     const server = Fastify({ logger: false });
     const started: string[] = [];

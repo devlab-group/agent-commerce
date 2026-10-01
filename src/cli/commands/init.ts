@@ -2,14 +2,14 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import * as clack from '@clack/prompts';
-import { DEFAULT_CONFIG_FILENAME } from '../../config/filename.js';
+import { DEFAULT_CONFIG_FILENAME } from '../../config/filename';
 import {
   type ConfigLoader,
   type ConfigParser,
   type GatewayConfig,
   loadConfigDynamic,
   parseConfigDynamic,
-} from '../lib/config-client.js';
+} from '../lib/config-client';
 import {
   buildInitConfigObject,
   defaultInitAnswers,
@@ -17,9 +17,9 @@ import {
   type InitProtocolChoice,
   type InitResourceChoice,
   renderInitConfigYaml,
-} from '../lib/init-config.js';
-import type { Io } from '../lib/io.js';
-import { formatConfigError } from './validate.js';
+} from '../lib/init-config';
+import type { Io } from '../lib/io';
+import { formatConfigError } from './validate';
 
 export interface InitOptions {
   readonly outputPath?: string;
@@ -35,15 +35,14 @@ export interface InitDeps {
   readonly writeFile?: (path: string, content: string) => Promise<void>;
 }
 
-/** Exported for testing: the real interactive prompt flow (mocks `@clack/prompts`). */
+/** The interactive prompt flow, exported so tests can drive it with a mocked `@clack/prompts` */
 export async function collectAnswersInteractive(): Promise<InitAnswers | undefined> {
   clack.intro('agent-commerce init');
 
   const backendBaseUrl = await clack.text({
     message: 'Backend base URL (your existing merchant API)',
     initialValue: 'http://localhost:3000',
-    // shape-checked here, where the user can retype it,
-    // rather than surfacing as a config error after the fact.
+    // Checked here, where the user can retype it, rather than as a config error later
     validate: (value) => {
       const trimmed = (value ?? '').trim();
       if (trimmed.length === 0) return 'Required';
@@ -84,12 +83,8 @@ export async function collectAnswersInteractive(): Promise<InitAnswers | undefin
       { value: 'mcp', label: 'MCP' },
     ],
     initialValues: ['http', 'mcp'],
-    // `required: false` permits an empty selection, which renders
-    // `expose: []` on every resource and fails the schema's min(1). clack's
-    // multiselect has no `validate` hook, so this is caught by the in-memory
-    // validation in `runInit` — which now reports the real schema error and
-    // writes nothing, instead of leaving an invalid file behind.
-    required: false,
+    // Every resource needs at least one protocol in `expose`
+    required: true,
   });
   if (clack.isCancel(protocols)) {
     clack.cancel('Aborted.');
@@ -105,14 +100,12 @@ export async function collectAnswersInteractive(): Promise<InitAnswers | undefin
   let merchantPayTo = defaultInitAnswers().merchantPayTo;
   if (x402Enabled) {
     const answer = await clack.text({
-      message:
-        'Merchant settlement destination address (merchant-controlled — never a gateway-owned wallet)',
+      message: 'Merchant settlement address (enter an address you control)',
       initialValue: merchantPayTo,
       validate: (value) => {
         const trimmed = (value ?? '').trim();
         if (trimmed.length === 0) return 'Required';
-        // Same shape the config schema enforces; catching it here means a
-        // typo'd address never reaches the "generated config is invalid" path.
+        // The shape config enforces, checked here so a typo can be retyped
         return /^0x[0-9a-fA-F]{40}$/.test(trimmed)
           ? undefined
           : 'Must be a 0x-prefixed 20-byte EVM address (42 characters)';
@@ -130,7 +123,7 @@ export async function collectAnswersInteractive(): Promise<InitAnswers | undefin
   return { backendBaseUrl, resources, protocols, x402Enabled, merchantPayTo };
 }
 
-/** `agent-commerce init [--yes] [--force] [--output <path>]`. */
+/** `agent-commerce init [--yes] [--force] [--output <path>]` */
 export async function runInit(options: InitOptions, io: Io, deps: InitDeps = {}): Promise<number> {
   const outputPath = options.outputPath ?? DEFAULT_CONFIG_FILENAME;
   const loadConfig = deps.loadConfig ?? loadConfigDynamic;
@@ -157,12 +150,8 @@ export async function runInit(options: InitOptions, io: Io, deps: InitDeps = {})
     return 1;
   }
 
-  // Validate BEFORE writing. Interactive answers can legitimately fail
-  // validation — an empty protocol multiselect, a typo'd settlement address,
-  // a scheme-less backend URL — and writing first would print "PASS Wrote …"
-  // and then blame the tool: "please report this as a bug". Nothing is
-  // written unless it is valid, and the message is the real configuration
-  // error, which names the field the user can fix.
+  // Validate before writing. When the answers fail validation nothing is
+  // written, and the config error names the field to fix.
   let config: GatewayConfig;
   try {
     config = await parseConfigInMemory(buildInitConfigObject(answers));
@@ -173,25 +162,20 @@ export async function runInit(options: InitOptions, io: Io, deps: InitDeps = {})
   }
 
   const yamlContent = renderInitConfigYaml(answers);
-  const resolvedPath = resolve(outputPath);
-  const dir = dirname(resolvedPath);
-  if (dir !== '' && !existsSync(dir)) {
-    mkdirSync(dir, { recursive: true });
-  }
+  mkdirSync(dirname(resolve(outputPath)), { recursive: true });
   await writeFileImpl(outputPath, yamlContent);
   io.stdout(`PASS  Wrote ${outputPath}`);
-  io.stdout(`PASS  ${outputPath} is valid — ${config.resources.length} resource(s)`);
+  io.stdout(`PASS  ${outputPath} is valid: ${config.resources.length} resource(s)`);
 
-  // The YAML is rendered from the very object just validated, but it is
-  // rendered, not serialised from it — so read it back and confirm the two
-  // agree. A renderer bug is the one failure the in-memory check cannot see,
-  // and it IS a bug worth reporting.
+  // The file is a YAML serialization of the object just validated, plus a
+  // comment header. Loading it back catches the one failure the in-memory
+  // check cannot see: a rendering bug.
   try {
     await loadConfig({ path: outputPath });
   } catch (err) {
     io.stderr(formatConfigError(err));
     io.stderr(
-      `FAIL  ${outputPath} was written but does not parse, although the same answers validated in memory — this is a bug in the config renderer, please report it.`,
+      `FAIL  ${outputPath} was written but does not parse, although the same answers validated in memory. This is a bug in the config renderer; please report it.`,
     );
     return 1;
   }
@@ -199,9 +183,8 @@ export async function runInit(options: InitOptions, io: Io, deps: InitDeps = {})
   io.stdout('');
   io.stdout('Next steps:');
   io.stdout(`  agent-commerce validate --config ${outputPath}`);
-  // Only commands the reader can actually run. `npm run dev:merchant` and
-  // `npm run dev:gateway` exist solely inside the development repo, and this
-  // CLI ships to npm — telling an installed user to run them is a dead end.
+  // No `npm run dev:*`: those scripts exist only in a repo clone, and the
+  // compose line says it needs one
   io.stdout('  docker compose up     # start the local demo stack (from a repo clone)');
   io.stdout(`  agent-commerce doctor --config ${outputPath}`);
 

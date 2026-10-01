@@ -7,15 +7,15 @@
  * resources without taking the rest of the gateway down with them.
  */
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { AP2_CHECKOUT_PROFILE } from '../../src/authorization/ap2/constants.js';
-import { createAp2AuthorizationProvider } from '../../src/authorization/ap2/index.js';
-import { computeInputHash } from '../../src/authorization/ap2/profile.js';
-import type { Ap2ReplayStore } from '../../src/authorization/ap2/replay-store.js';
-import type { EnabledAp2Config } from '../../src/authorization/ap2/types.js';
-import type { GatewayConfig } from '../../src/config/index.js';
-import type { AuthorizationProvider, BackendExecutor } from '../../src/core/index.js';
-import { AUTHORIZATION_HEADER } from '../../src/core/index.js';
-import { createGateway, type GatewayInstance } from '../../src/gateway/index.js';
+import { createAp2AuthorizationProvider } from '../../src/authorization/ap2';
+import { AP2_CHECKOUT_PROFILE } from '../../src/authorization/ap2/constants';
+import { computeInputHash } from '../../src/authorization/ap2/profile';
+import type { Ap2ReplayStore } from '../../src/authorization/ap2/replay-store';
+import type { EnabledAp2Config } from '../../src/authorization/ap2/types';
+import type { GatewayConfig } from '../../src/config';
+import type { AuthorizationProvider, BackendExecutor } from '../../src/core';
+import { AUTHORIZATION_HEADER } from '../../src/core';
+import { createGateway, type GatewayInstance } from '../../src/gateway';
 import {
   checkoutPayload,
   createParties,
@@ -23,8 +23,8 @@ import {
   mintMandate,
   type Party,
   signCheckoutJwt,
-} from '../unit/authorization-ap2/fixtures.js';
-import { createFakePaymentProvider, createFakeStore } from '../unit/gateway/helpers.js';
+} from '../unit/authorization-ap2/fixtures';
+import { createFakePaymentProvider, createFakeStore } from '../unit/gateway/helpers';
 
 process.env['NODE_ENV'] = 'test';
 
@@ -151,7 +151,7 @@ function encodeCarrier(payload: string): string {
 
 /**
  * A mandate that authorizes exactly what `createFakePaymentProvider` requires
- * of `gated_report`, so a refusal can only come from the wiring under test.
+ * of `gated_report`, so a refusal can only come from the wiring under test
  */
 async function validCarrier(): Promise<string> {
   const jwt = await signCheckoutJwt(
@@ -160,7 +160,7 @@ async function validCarrier(): Promise<string> {
       agent_commerce: {
         profile: AP2_CHECKOUT_PROFILE,
         resource_id: 'gated_report',
-        input_hash: await computeInputHash({}),
+        input_hash: computeInputHash({}),
         amount: '0.01',
         currency: 'USDC',
         payment_method: 'x402',
@@ -283,7 +283,7 @@ describe('AP2 wired into the gateway', () => {
       expect((await invoke(gw, 'paid_report')).statusCode).toBe(402);
     });
 
-    it('blocks readiness, since a gated purchase cannot be honoured', async () => {
+    it('blocks readiness, since a gated purchase cannot be honored', async () => {
       const gw = await startGateway([startAp2(brokenStore())]);
 
       const res = await gw.server.inject({ method: 'GET', url: '/ready' });

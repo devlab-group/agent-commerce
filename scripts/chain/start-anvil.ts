@@ -1,13 +1,8 @@
 /**
- * CLI entry point for `npm run chain:start`.
- *
- * The actual implementation (spawn anvil, wait for the RPC, teardown) lives
- * in `src/payments/x402/local-chain/anvil.ts` — see that file's
- * header comment for why: `scripts/chain` has no `node_modules` of its own
- * (deliberately outside `src/`), so shared logic lives
- * inside a package that does, and this file is a thin CLI wrapper.
+ * `npm run chain:start`: a thin wrapper around `startAnvil`
+ * (`src/payments/x402/local-chain/anvil.ts`), which the test suites share
  */
-import { startAnvil } from '../../src/payments/x402/local-chain/anvil.js';
+import { startAnvil } from '../../src/payments/x402/local-chain/anvil';
 
 const DEFAULT_PORT = 8545;
 

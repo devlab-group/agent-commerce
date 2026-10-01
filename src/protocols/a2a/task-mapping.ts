@@ -1,21 +1,18 @@
 /**
  * Execution outcomes as terminal A2A Tasks.
  *
- * A2A models the output of an execution as a Task carrying Artifacts, so that
- * is what a completed purchase comes back as — not a plain Message, which
- * models conversation rather than result.
+ * A2A models an execution's output as a Task carrying Artifacts, so a
+ * completed purchase comes back as one, not as a plain Message, which models
+ * conversation.
  *
- * The critical split this file enforces: a commerce outcome is never a
- * JSON-RPC error. Payment required, an unknown resource, input that fails the
- * resource schema, a backend that broke — all of those are *answers*, and they
- * come back as a terminal Task in the JSON-RPC `result`. Only a malformed or
- * unsupported A2A request gets a JSON-RPC error. A client that treats a
- * transport failure and a refused purchase the same way is a client that
- * retries a 402 as if the gateway were broken.
+ * A commerce outcome is never a JSON-RPC error. Payment required, an unknown
+ * resource, input the resource schema rejects and a broken backend are all
+ * answers, returned as a terminal Task in the JSON-RPC `result`. Only a
+ * malformed or unsupported A2A request gets a JSON-RPC error, so a client can
+ * tell a refused purchase from a broken gateway.
  *
- * Every payload inside an artifact is an existing canonical envelope,
- * verbatim. There is no A2A-specific delivery, payment-required or error
- * schema to keep in step with the HTTP and MCP ones.
+ * Every artifact payload is an existing canonical envelope, verbatim: there is
+ * no A2A-specific delivery, payment-required or error schema.
  */
 import {
   type CommerceError,
@@ -25,36 +22,27 @@ import {
   toDeliverySummary,
   toErrorEnvelope,
   toPaymentRequiredEnvelope,
-} from '../../core/index.js';
-import {
-  A2A_JSON_MEDIA_TYPE,
-  A2A_TASK_STATE_COMPLETED,
-  A2A_TASK_STATE_FAILED,
-} from './constants.js';
-import type { A2aArtifact, A2aTask } from './types.js';
+} from '../../core';
+import { isRecord } from '../../core/is-record';
+import { A2A_JSON_MEDIA_TYPE, A2A_TASK_STATE_COMPLETED, A2A_TASK_STATE_FAILED } from './constants';
+import type { A2aArtifact, A2aTask } from './types';
 
 export interface TaskIdentity {
-  /** Gateway request id, reused so a task correlates with receipts and events. */
+  /** Gateway request id, reused so a task correlates with receipts and events */
   readonly taskId: string;
-  /** Fresh every time: nothing here can be continued, so nothing shares a context. */
+  /** Fresh every time: nothing here can be continued, so nothing shares a context */
   readonly contextId: string;
   readonly artifactId: string;
   readonly timestamp: string;
 }
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
 /**
  * A data part's payload must be a JSON object, but a merchant backend may
- * legitimately return a string, a number or an array. Those are wrapped under
- * `value` rather than dropped or stringified — one predictable rule a caller
- * can code against, instead of a shape that depends on what the backend felt
- * like returning.
+ * return a string, a number or an array. Those are wrapped under `value`, one
+ * predictable rule a caller can code against.
  */
 function dataPayload(body: unknown): Record<string, unknown> {
-  return isPlainObject(body) ? body : { value: body ?? null };
+  return isRecord(body) ? body : { value: body ?? null };
 }
 
 function task(
@@ -75,16 +63,15 @@ export function completedTask(outcome: DeliveredOutcome, identity: TaskIdentity)
     name: outcome.resourceId,
     parts: [{ data: dataPayload(outcome.body), mediaType: A2A_JSON_MEDIA_TYPE }],
     // Same meta key MCP attaches its summary under, so a buyer reads the
-    // record of their own purchase the same way on either protocol.
+    // record of their own purchase the same way on either protocol
     metadata: { [DELIVERY_SUMMARY_META_KEY]: { ...toDeliverySummary(outcome) } },
   });
 }
 
 /**
- * Terminal, not `input-required`: without a task store there is nothing to
- * continue, and advertising a resumable task the adapter cannot resume would
- * be worse than saying plainly that this attempt is over. The caller retries
- * by sending a new message carrying the proof.
+ * `TASK_STATE_FAILED`, not `TASK_STATE_INPUT_REQUIRED`: without a task store
+ * the adapter cannot resume the task, so it ends it. The caller retries by
+ * sending a new message carrying the proof.
  */
 export function paymentRequiredTask(
   outcome: PaymentRequiredOutcome,

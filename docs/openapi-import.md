@@ -182,10 +182,10 @@ omitted without dropping the operation.
 ## Security properties
 
 The importer accepts local files only, executes nothing from a document, and
-makes no network requests. It refuses sources larger than 10 MiB before parsing
-and rejects every external `$ref`
-before the OpenAPI validator runs. Internal references are resolved lazily with
-cycle and depth checks.
+makes no network requests. It refuses sources larger than 10 MiB before parsing.
+Before the OpenAPI validator runs, it rejects every `$ref` that is external or
+contains a malformed percent-escape. Internal references are resolved lazily
+with cycle and depth checks.
 
 Backend hosts come from operator-supplied `servers` entries or `--base-url`.
 A relative or malformed server URL, a non-HTTP(S) URL, or one with a query or
@@ -237,7 +237,7 @@ live under `src/cli/`:
 
 | File | Responsibility |
 | --- | --- |
-| `load.ts` | read, parse and validate the local document; reject external references |
+| `load.ts` | read, parse and validate the local document; reject external and malformed references |
 | `refs.ts` | resolve internal references |
 | `discover.ts` | find operations, ids and server URLs |
 | `schema.ts` | convert schemas |

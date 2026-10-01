@@ -1,11 +1,8 @@
 /**
- * Replay-key derivation.
- *
- *Per docs/contracts.md, `PaymentResult.replayKey` MUST be
- * derived only from the payment authorisation (chain id, asset, payer,
- * nonce) — never from the request id — so that the same authorisation
- * replayed against a *different* request still collides in the gateway's
- * receipt-store reservation.
+ * `PaymentResult.replayKey` is derived from the payment authorization alone
+ * (chain id, asset, payer, nonce), never from the request id, so the same
+ * authorization replayed on another request collides in the receipt store's
+ * reservation. The MPP provider uses the same derivation.
  */
 import { encodeAbiParameters, keccak256 } from 'viem';
 

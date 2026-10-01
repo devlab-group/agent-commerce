@@ -11,10 +11,10 @@ import { open, stat } from 'node:fs/promises';
 import { extname } from 'node:path';
 import { validate } from '@scalar/openapi-parser';
 import { parse as parseYaml } from 'yaml';
-import { CommerceError } from '../core/errors/index.js';
-import type { LoadedOpenApiDocument, OpenApiVersion } from './types.js';
+import { CommerceError } from '../core/errors';
+import type { LoadedOpenApiDocument, OpenApiVersion } from './types';
 
-/** Generous for a hand-written description; small enough that a stray file is refused. */
+/** Generous for a hand-written description; small enough that a stray file is refused */
 export const MAX_SOURCE_BYTES = 10 * 1024 * 1024;
 
 const SUPPORTED_EXTENSIONS = new Set(['.yaml', '.yml', '.json']);
@@ -93,8 +93,8 @@ export async function loadOpenApiDocument(sourcePath: string): Promise<LoadedOpe
   let parsed: unknown;
   try {
     // YAML is a superset of JSON, but JSON.parse gives the better message for a
-    // file that claims to be JSON, and refuses YAML that a .json file should
-    // not contain.
+    // file that claims to be JSON, and refuses YAML a .json file should not
+    // contain
     parsed = extension === '.json' ? JSON.parse(source) : parseYaml(source);
   } catch (error) {
     throw invalid(
@@ -111,8 +111,8 @@ export async function loadOpenApiDocument(sourcePath: string): Promise<LoadedOpe
   const version = readVersion(document, sourcePath);
   // Before validation, not after: the validator resolves references, and the
   // no-network guarantee is only worth something if nothing external ever
-  // reaches it.
-  rejectExternalReferences(document, sourcePath);
+  // reaches it
+  rejectUnsupportedReferences(document, sourcePath);
 
   const result = await validate(document);
   if (!result.valid) {
@@ -156,15 +156,16 @@ function readVersion(document: Record<string, unknown>, sourcePath: string): Ope
 }
 
 /**
- * An external `$ref` is refused rather than fetched or read from disk. Both
- * would be the importer acting on behalf of a document it was merely asked to
- * read - one as an outbound request from wherever the CLI runs, the other as a
- * filesystem read outside the source file. Multi-file descriptions are a later
- * feature; until then, saying so beats a silent partial import.
+ * An external `$ref` is refused rather than fetched or read from disk: either
+ * would be the importer acting on behalf of a document it was only asked to
+ * read, by an outbound request or a filesystem read outside the source file.
+ * Multi-file descriptions are out of scope, and refusing beats a silent partial
+ * import. A malformed percent-escape is refused here too, because the
+ * validator throws a bare `URIError` on one.
  */
-function rejectExternalReferences(document: Record<string, unknown>, sourcePath: string): void {
+function rejectUnsupportedReferences(document: Record<string, unknown>, sourcePath: string): void {
   // Iterative with a seen set: YAML aliases can make the parsed graph cyclic,
-  // and a deeply nested document would otherwise blow the call stack.
+  // and a deeply nested document would otherwise blow the call stack
   const seen = new WeakSet<object>();
   const queue: unknown[] = [document];
   while (queue.length > 0) {
@@ -177,13 +178,30 @@ function rejectExternalReferences(document: Record<string, unknown>, sourcePath:
       continue;
     }
     for (const [key, value] of Object.entries(node)) {
-      if (key === '$ref' && typeof value === 'string' && !value.startsWith('#')) {
-        throw invalid(
-          `OpenAPI document "${sourcePath}" contains an external reference "${value}". Only internal references (#/...) are supported; the importer performs no network or filesystem lookups`,
-          { sourcePath, ref: value },
-        );
+      if (key === '$ref' && typeof value === 'string') {
+        if (!value.startsWith('#')) {
+          throw invalid(
+            `OpenAPI document "${sourcePath}" contains an external reference "${value}". Only internal references (#/...) are supported; the importer performs no network or filesystem lookups`,
+            { sourcePath, ref: value },
+          );
+        }
+        if (!isPercentDecodable(value)) {
+          throw invalid(
+            `OpenAPI document "${sourcePath}" contains a reference "${value}" with a malformed percent-escape`,
+            { sourcePath, ref: value },
+          );
+        }
       }
       queue.push(value);
     }
+  }
+}
+
+function isPercentDecodable(value: string): boolean {
+  try {
+    decodeURIComponent(value);
+    return true;
+  } catch {
+    return false;
   }
 }

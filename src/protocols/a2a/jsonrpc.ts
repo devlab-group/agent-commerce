@@ -11,8 +11,9 @@
  * are reserved for things that are not JSON-RPC at all (wrong verb, adapter
  * down).
  */
+import { isRecord } from '../../core/is-record';
 
-/** JSON-RPC 2.0 reserved codes. */
+/** JSON-RPC 2.0 reserved codes */
 export const JSONRPC_PARSE_ERROR = -32700;
 export const JSONRPC_INVALID_REQUEST = -32600;
 export const JSONRPC_METHOD_NOT_FOUND = -32601;
@@ -20,13 +21,13 @@ export const JSONRPC_INVALID_PARAMS = -32602;
 export const JSONRPC_INTERNAL_ERROR = -32603;
 
 /**
- * A2A's own `UnsupportedOperationError`. Used for a real A2A operation this
- * deployment declines to serve — including an unsupported protocol version —
- * as distinct from `METHOD_NOT_FOUND`, which means the method does not exist.
+ * A2A's own `UnsupportedOperationError`, for a real A2A operation this
+ * deployment declines to serve (an unsupported protocol version included), as
+ * distinct from `METHOD_NOT_FOUND`, which means the method does not exist
  */
 export const A2A_ERROR_UNSUPPORTED_OPERATION = -32004;
 
-/** An id may legally be a string, a number or null; anything else is not one. */
+/** An id may legally be a string, a number or null; anything else is not one */
 export type JsonRpcId = string | number | null;
 
 export interface JsonRpcErrorBody {
@@ -44,11 +45,7 @@ export type JsonRpcParseResult =
   | { readonly ok: true; readonly request: JsonRpcRequest }
   | { readonly ok: false; readonly id: JsonRpcId; readonly error: JsonRpcErrorBody };
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-/** Echoed back only when the request carried a usable one. */
+// Echoed back only when the request carried a usable one
 function readId(value: unknown): JsonRpcId {
   if (typeof value === 'string' || typeof value === 'number') return value;
   return null;
@@ -72,7 +69,7 @@ export function parseJsonRpcRequest(rawBody: string): JsonRpcParseResult {
     payload = JSON.parse(rawBody);
   } catch {
     // The parser's own message names offsets and input fragments; neither is
-    // the caller's business, and echoing input is how bodies get reflected.
+    // the caller's business, and echoing input is how bodies get reflected
     return { ok: false, id: null, error: { code: JSONRPC_PARSE_ERROR, message: 'Invalid JSON.' } };
   }
 
@@ -86,7 +83,7 @@ export function parseJsonRpcRequest(rawBody: string): JsonRpcParseResult {
       },
     };
   }
-  if (!isPlainObject(payload)) {
+  if (!isRecord(payload)) {
     return {
       ok: false,
       id: null,
@@ -111,7 +108,7 @@ export function parseJsonRpcRequest(rawBody: string): JsonRpcParseResult {
     };
   }
   const params = payload['params'];
-  if (params !== undefined && !isPlainObject(params)) {
+  if (params !== undefined && !isRecord(params)) {
     return {
       ok: false,
       id,

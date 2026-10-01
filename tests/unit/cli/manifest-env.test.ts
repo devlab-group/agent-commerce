@@ -6,7 +6,7 @@ import {
   fillEnvFromLocalChainManifest,
   LOCAL_CHAIN_MANIFEST_PATH,
   MANIFEST_FILLABLE_ENV_VAR_NAMES,
-} from '../../../src/cli/lib/manifest-env.js';
+} from '../../../src/cli/lib/manifest-env';
 
 const MANIFEST = {
   chainId: 84532,
@@ -43,7 +43,7 @@ describe('fillEnvFromLocalChainManifest', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  /** Lays the fixture manifest out at the exact relative path readLocalChainManifest expects under `dir`. */
+  // Writes the fixture manifest where readLocalChainManifest expects it under `dir`
   function writeManifest(): void {
     mkdirSync(join(dir, '.deploy'), { recursive: true });
     writeFileSync(join(dir, LOCAL_CHAIN_MANIFEST_PATH), JSON.stringify(MANIFEST));

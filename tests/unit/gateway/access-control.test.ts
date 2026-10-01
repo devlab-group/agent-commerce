@@ -1,10 +1,24 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import Fastify from 'fastify';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   buildAccessControlHook,
   buildOperatorTokenHook,
-} from '../../../src/gateway/access-control.js';
+} from '../../../src/gateway/access-control';
+
+// Records each timingSafeEqual call, so a test can show the admin token is
+// compared in constant time; a plain `===` makes the same decisions
+const comparisons = vi.hoisted(() => ({ byteLengths: [] as number[][] }));
+vi.mock('node:crypto', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:crypto')>();
+  return {
+    ...actual,
+    timingSafeEqual: (a: NodeJS.ArrayBufferView, b: NodeJS.ArrayBufferView) => {
+      comparisons.byteLengths.push([a.byteLength, b.byteLength]);
+      return actual.timingSafeEqual(a, b);
+    },
+  };
+});
 
 function fakeReply(): FastifyReply & {
   statusCode?: number;
@@ -52,7 +66,7 @@ function fakeRequest(overrides: {
 
 const BASE = { publicBaseUrl: 'http://localhost:8080', allowedOrigins: [] as string[] };
 
-describe('buildAccessControlHook (Host + CORS only — token gate moved to buildOperatorTokenHook)', () => {
+describe('buildAccessControlHook (Host and CORS only)', () => {
   it('passes a plain request with no Origin and a matching Host', async () => {
     const hook = buildAccessControlHook(BASE);
     const reply = fakeReply();
@@ -65,6 +79,25 @@ describe('buildAccessControlHook (Host + CORS only — token gate moved to build
     const reply = fakeReply();
     await hook(fakeRequest({ host: 'attacker.example' }), reply);
     expect(reply.statusCode).toBe(403);
+  });
+
+  it('rejects a Host that only contains or extends an allowed name', async () => {
+    // A rebinding page controls its own hostname, including public names that
+    // resolve to 127.0.0.1, so only an exact match may pass
+    const hook = buildAccessControlHook({ ...BASE, publicBaseUrl: 'https://shop.example.com' });
+    for (const host of [
+      'shop.example.com.attacker.net',
+      'evil-shop.example.com',
+      'localhost.attacker.example',
+      '127.0.0.1.nip.io',
+    ]) {
+      const reply = fakeReply();
+      await hook(fakeRequest({ host }), reply);
+      expect(reply.statusCode, host).toBe(403);
+    }
+    const control = fakeReply();
+    await hook(fakeRequest({ host: 'shop.example.com' }), control);
+    expect(control.statusCode).toBeUndefined();
   });
 
   it('accepts every loopback alias regardless of publicBaseUrl', async () => {
@@ -100,6 +133,24 @@ describe('buildAccessControlHook (Host + CORS only — token gate moved to build
     expect(reply.statusCode).toBeUndefined();
     expect(reply.headers['access-control-allow-origin']).toBe('https://dash.example');
     expect(reply.headers['vary']).toBe('Origin');
+    // No gateway surface serves DELETE, so a preflight must not advertise it
+    expect(reply.headers['access-control-allow-methods']).toBe('GET,POST,OPTIONS');
+    // The request headers a browser client sends for payment and authorization
+    const allowed = String(reply.headers['access-control-allow-headers']).split(',');
+    expect(allowed).toEqual(
+      expect.arrayContaining(['payment-signature', 'agent-authorization', 'authorization']),
+    );
+    // Browser code can read only the response headers named here: the
+    // challenge and the settlement result
+    const exposed = String(reply.headers['access-control-expose-headers']).split(',');
+    expect(exposed).toEqual(
+      expect.arrayContaining([
+        'payment-required',
+        'payment-response',
+        'www-authenticate',
+        'payment-receipt',
+      ]),
+    );
   });
 
   it('short-circuits an OPTIONS preflight for an allowlisted Origin with 204', async () => {
@@ -126,59 +177,83 @@ describe('buildAccessControlHook (Host + CORS only — token gate moved to build
   });
 });
 
-describe('buildOperatorTokenHook (unit — fakes)', () => {
-  it('404s with no adminToken configured', () => {
+describe('buildOperatorTokenHook (unit, fakes)', () => {
+  it('404s with no adminToken configured', async () => {
     const hook = buildOperatorTokenHook(undefined);
     const reply = fakeReply();
-    hook(fakeRequest({ url: '/api/receipts' }), reply);
+    await hook(fakeRequest({ url: '/api/receipts' }), reply);
     expect(reply.statusCode).toBe(404);
   });
 
-  it('401s with a missing or wrong token once one is configured', () => {
+  it('401s with a missing or wrong token once one is configured', async () => {
     const hook = buildOperatorTokenHook('right');
     const missing = fakeReply();
-    hook(fakeRequest({ url: '/api/events' }), missing);
+    await hook(fakeRequest({ url: '/api/events' }), missing);
     expect(missing.statusCode).toBe(401);
 
     const wrong = fakeReply();
-    hook(fakeRequest({ url: '/api/events', authorization: 'Bearer wrong' }), wrong);
+    await hook(fakeRequest({ url: '/api/events', authorization: 'Bearer wrong' }), wrong);
     expect(wrong.statusCode).toBe(401);
   });
 
-  it('lets the request through with the correct Bearer token', () => {
+  it('lets the request through with the correct Bearer token', async () => {
     const hook = buildOperatorTokenHook('right');
     const reply = fakeReply();
-    hook(fakeRequest({ url: '/api/receipts', authorization: 'Bearer right' }), reply);
+    await hook(fakeRequest({ url: '/api/receipts', authorization: 'Bearer right' }), reply);
     expect(reply.statusCode).toBeUndefined();
   });
 
-  it('does not accept the admin token as a query parameter on any route, including the SSE one (removed; see SECURITY.md —)', () => {
-    for (const url of [
-      '/api/events/stream?adminToken=right',
-      '/api/receipts?adminToken=right',
-      '/api/events?adminToken=right',
-    ]) {
-      const hook = buildOperatorTokenHook('right');
+  it('matches the Bearer scheme case-insensitively (RFC 7235) but still needs the token', async () => {
+    const hook = buildOperatorTokenHook('right');
+    for (const authorization of ['bearer right', 'BEARER right', 'Bearer  right']) {
       const reply = fakeReply();
-      hook(fakeRequest({ url }), reply);
-      expect(reply.statusCode, url).toBe(401);
+      await hook(fakeRequest({ url: '/api/receipts', authorization }), reply);
+      expect(reply.statusCode, authorization).toBeUndefined();
+    }
+    for (const authorization of [
+      'Bearer ',
+      'Basic right',
+      'right',
+      // Prefix, extension and case variants of the token itself
+      'Bearer righ',
+      'Bearer rightt',
+      'Bearer RIGHT',
+    ]) {
+      const reply = fakeReply();
+      await hook(fakeRequest({ url: '/api/receipts', authorization }), reply);
+      expect(reply.statusCode, authorization).toBe(401);
     }
   });
 
-  it('the header path still authenticates the SSE route on its own, unaffected by the query-token removal', () => {
+  it('compares the token in constant time over fixed-length digests, whatever length is presented', async () => {
     const hook = buildOperatorTokenHook('right');
-    const reply = fakeReply();
-    hook(fakeRequest({ url: '/api/events/stream', authorization: 'Bearer right' }), reply);
-    expect(reply.statusCode).toBeUndefined();
+    comparisons.byteLengths.length = 0;
+    for (const token of ['wrong', 'x'.repeat(500), 'right']) {
+      await hook(
+        fakeRequest({ url: '/api/receipts', authorization: `Bearer ${token}` }),
+        fakeReply(),
+      );
+    }
+    expect(comparisons.byteLengths).toEqual([
+      [32, 32],
+      [32, 32],
+      [32, 32],
+    ]);
+  });
+
+  it('does not accept the admin token as a query parameter on any route', async () => {
+    for (const url of ['/api/receipts?adminToken=right', '/api/events?adminToken=right']) {
+      const hook = buildOperatorTokenHook('right');
+      const reply = fakeReply();
+      await hook(fakeRequest({ url }), reply);
+      expect(reply.statusCode, url).toBe(401);
+    }
   });
 });
 
 describe('regression: percent-encoded path cannot bypass the token gate', () => {
-  // Real Fastify + real routing — the bug was routing-level (find-my-way
-  // decodes before matching; the old global-hook gate compared the raw,
-  // still-encoded path against a literal string). A unit test against the
-  // hook function in isolation cannot see that class of bug at all; it has
-  // to go through `.inject()` so the real router runs.
+  // Through `.inject()`, so the real router runs: it decodes a path before
+  // matching, which a test of the hook function alone cannot see
   function buildTestServer(adminToken: string | undefined) {
     const server = Fastify({ logger: false });
     server.get('/api/receipts', { onRequest: buildOperatorTokenHook(adminToken) }, async () => ({
@@ -187,15 +262,10 @@ describe('regression: percent-encoded path cannot bypass the token gate', () => 
     server.get('/api/events', { onRequest: buildOperatorTokenHook(adminToken) }, async () => ({
       events: [],
     }));
-    server.get(
-      '/api/events/stream',
-      { onRequest: buildOperatorTokenHook(adminToken) },
-      async () => ({ ok: true }),
-    );
     return server;
   }
 
-  const ENCODED_PATHS = ['/api/%72eceipts', '/api/%65vents', '/api/events/%73tream'];
+  const ENCODED_PATHS = ['/api/%72eceipts', '/api/%65vents'];
 
   it('a percent-encoded path still requires the token (token configured)', async () => {
     const server = buildTestServer('right');
@@ -226,17 +296,13 @@ describe('regression: percent-encoded path cannot bypass the token gate', () => 
   it('double-encoded and malformed-escape paths do not bypass the gate either', async () => {
     const server = buildTestServer('right');
 
-    // %2572 decodes once to the literal string "%72", not to "r" — the
-    // router will not match this to /api/receipts at all (find-my-way
-    // decodes exactly once), so it 404s rather than reaching the handler.
-    // The point of this test is that it must NOT be a 200.
+    // %2572 decodes once, to the literal "%72", so the router matches no route
     const double = await server.inject({ method: 'GET', url: '/api/%2572eceipts' });
-    expect(double.statusCode).not.toBe(200);
+    expect(double.statusCode).toBe(404);
 
-    // A malformed escape (%zz is not valid percent-encoding) — Fastify/
-    // find-my-way itself rejects this with 400 before a route ever matches.
+    // A malformed escape (%zz): the router rejects it before any route matches
     const malformed = await server.inject({ method: 'GET', url: '/api/%zzeceipts' });
-    expect(malformed.statusCode).not.toBe(200);
+    expect(malformed.statusCode).toBe(400);
 
     await server.close();
   });

@@ -6,15 +6,13 @@
  * or on how many times the importer has run. Anything ambiguous fails the
  * import instead of being silently renamed.
  */
-import type { BackendMethod } from '../core/domain/resource.js';
-import { CommerceError } from '../core/errors/index.js';
-import { findUnparsedBraceToken } from '../core/execution/index.js';
-import { dereference } from './refs.js';
-import type {
-  ImportDiagnostic,
-  LoadedOpenApiDocument,
-  OpenApiOperationCandidate,
-} from './types.js';
+import type { BackendMethod } from '../core/domain/resource';
+import { CommerceError } from '../core/errors';
+import { findUnparsedBraceToken } from '../core/execution';
+import { isRecord } from '../core/is-record';
+import { MCP_TOOL_NAME_CHARS, MCP_TOOL_NAME_MAX_LENGTH } from '../protocols/mcp/constants';
+import { dereference } from './refs';
+import type { ImportDiagnostic, LoadedOpenApiDocument, OpenApiOperationCandidate } from './types';
 
 const SUPPORTED_METHODS: Readonly<Record<string, BackendMethod>> = {
   get: 'GET',
@@ -24,16 +22,16 @@ const SUPPORTED_METHODS: Readonly<Record<string, BackendMethod>> = {
   delete: 'DELETE',
 };
 
-/** Path Item members that are not operations. Anything else that is not a
- * supported method gets an explicit diagnostic rather than silent skipping. */
+// Path Item members that are not operations. Any other key, except an `x-`
+// extension, that is not a supported method gets a diagnostic.
 const NON_OPERATION_KEYS = new Set(['summary', 'description', 'servers', 'parameters', '$ref']);
 
-/** The id character set Agent Commerce and MCP tool names already share. */
-const ID_ALLOWED = /[^A-Za-z0-9_.-]+/g;
-const MAX_ID_LENGTH = 128;
+// Runs of characters outside the MCP tool-name set, which config requires of an
+// mcp-exposed resource id
+const ID_DISALLOWED = new RegExp(`[^${MCP_TOOL_NAME_CHARS}]+`, 'g');
 
 export interface DiscoverOptions {
-  /** CLI `--base-url`. Wins over every server declared in the document. */
+  /** CLI `--base-url`. Wins over every server declared in the document */
   readonly baseUrl?: string;
 }
 
@@ -49,7 +47,7 @@ export function discoverOperations(
   const { document } = loaded;
   const diagnostics: ImportDiagnostic[] = [];
   const operations: OpenApiOperationCandidate[] = [];
-  /** resource id -> the `METHOD path` that claimed it, for the collision message. */
+  // resource id -> the `METHOD path` that claimed it, for the collision message
   const claimed = new Map<string, string>();
 
   if (options.baseUrl !== undefined) assertAbsoluteHttpUrl(options.baseUrl, '--base-url');
@@ -152,8 +150,8 @@ export function discoverOperations(
         ...(description !== undefined ? { description } : {}),
         parameters: [
           ...toArray(pathItem['parameters']),
-          // Operation parameters last: Phase 4 lets the later one win, which is
-          // the OpenAPI override rule (same name + in).
+          // Operation parameters last: `mergeParameters` lets the later one win,
+          // the OpenAPI override rule (same `name` and `in`)
           ...toArray(operation['parameters']),
         ],
         ...(operation['requestBody'] !== undefined
@@ -169,7 +167,7 @@ export function discoverOperations(
 }
 
 /**
- * `operationId` if it survives normalisation, otherwise `method_path`.
+ * `operationId` if it survives normalization, otherwise `method_path`.
  *
  * No counters and no random suffixes: two runs over the same document must
  * produce the same ids, and a collision is reported rather than papered over.
@@ -179,17 +177,17 @@ function toResourceId(
   method: BackendMethod,
   path: string,
 ): string {
-  const fromOperationId = operationId === undefined ? '' : normaliseId(operationId);
+  const fromOperationId = operationId === undefined ? '' : normalizeId(operationId);
   if (fromOperationId !== '') return fromOperationId;
-  return normaliseId(`${method.toLowerCase()}_${path}`);
+  return normalizeId(`${method.toLowerCase()}_${path}`);
 }
 
-function normaliseId(value: string): string {
+function normalizeId(value: string): string {
   return value
-    .replace(ID_ALLOWED, '_')
+    .replace(ID_DISALLOWED, '_')
     .replace(/_+/g, '_')
     .replace(/^[_.-]+|[_.-]+$/g, '')
-    .slice(0, MAX_ID_LENGTH);
+    .slice(0, MCP_TOOL_NAME_MAX_LENGTH);
 }
 
 /**
@@ -323,10 +321,6 @@ function assertAbsoluteHttpUrl(value: string, label: string): void {
       { details: { value } },
     );
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function toArray(value: unknown): readonly unknown[] {

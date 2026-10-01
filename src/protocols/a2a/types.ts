@@ -4,7 +4,7 @@
  * Deliberately not imported from `@a2a-js/sdk`: the SDK is a test-only
  * dependency (conformance asserts these shapes against it), never a runtime
  * one, so a consumer installing the gateway does not install an A2A SDK to
- * serve an Agent Card. Only the subset this adapter emits is modelled.
+ * serve an Agent Card. Only the subset this adapter emits is modeled.
  */
 
 /**
@@ -27,11 +27,11 @@ export interface A2aAgentCapabilities {
 /**
  * A discovery descriptor, not a dispatch identifier: A2A has no `skillId` on
  * a request, so `id` is what a caller names inside the invocation envelope
- * (see the adapter), and it is the canonical resource id verbatim.
+ * (see `message-mapping.ts`), and it is the canonical resource id verbatim.
  *
- * Core A2A v1 `AgentSkill` has no input-schema field. One is not invented
- * here — a non-standard property would be ignored by conformant clients and
- * would misrepresent the card as carrying more than the protocol defines.
+ * Core A2A v1 `AgentSkill` has no input-schema field, and none is invented: a
+ * non-standard property would be ignored by conformant clients and would
+ * suggest the card carries more than the protocol defines.
  */
 export interface A2aAgentSkill {
   readonly id: string;
@@ -45,7 +45,7 @@ export interface A2aAgentSkill {
 export interface A2aAgentCard {
   readonly name: string;
   readonly description: string;
-  /** Version of the agent implementation, not of the protocol. */
+  /** Version of the agent implementation, not of the protocol */
   readonly version: string;
   readonly supportedInterfaces: readonly A2aAgentInterface[];
   readonly capabilities: A2aAgentCapabilities;
@@ -54,7 +54,7 @@ export interface A2aAgentCard {
   readonly skills: readonly A2aAgentSkill[];
 }
 
-/** A structured data part — the only part kind this adapter emits. */
+/** A structured data part, the only part kind this adapter emits */
 export interface A2aDataPart {
   readonly data: Record<string, unknown>;
   readonly mediaType: string;

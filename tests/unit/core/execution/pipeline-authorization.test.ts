@@ -1,22 +1,22 @@
 /**
  * Authorization is a gate on settlement, so these tests assert call counts and
  * ordering rather than return values: "the resource was refused" is worth
- * little if the payment settled on the way to refusing it.
+ * little if the payment settled on the way to refusing it
  */
 import { describe, expect, it } from 'vitest';
-import type { AuthorizationMethodName } from '../../../../src/core/domain/common.js';
-import type { CommerceEvent } from '../../../../src/core/domain/event.js';
+import type { AuthorizationMethodName } from '../../../../src/core/domain/common';
+import type { CommerceEvent } from '../../../../src/core/domain/event';
 import type {
   CanonicalRequest,
   DeliveredOutcome,
   PaymentRequiredOutcome,
-} from '../../../../src/core/domain/request.js';
-import { CommerceError, isCommerceError } from '../../../../src/core/errors/index.js';
+} from '../../../../src/core/domain/request';
+import { CommerceError, isCommerceError } from '../../../../src/core/errors';
 import {
   type CreateExecutionPipelineOptions,
   createExecutionPipeline,
-} from '../../../../src/core/execution/pipeline.js';
-import { createResourceRegistry } from '../../../../src/core/execution/registry.js';
+} from '../../../../src/core/execution/pipeline';
+import { createResourceRegistry } from '../../../../src/core/execution/registry';
 import {
   createCapturingLogger,
   createFakeAuthorizationProvider,
@@ -27,7 +27,7 @@ import {
   createFakeStore,
   type FakeStore,
   makeResource,
-} from './helpers.js';
+} from './helpers';
 
 const PAID = {
   pricing: { type: 'fixed', amount: '0.01', currency: 'USDC' },
@@ -274,8 +274,8 @@ describe('execution pipeline authorization', () => {
     });
 
     it('refuses a resource requiring two methods, since one request carries one proof', async () => {
-      // The union has one member today; the cast stands in for a second method
-      // and pins that it is refused rather than quietly skipped
+      // `AuthorizationMethodName` has one member, so the cast stands in for a
+      // second method and pins that it is refused rather than skipped
       const second = 'mock' as AuthorizationMethodName;
       const ap2 = createFakeAuthorizationProvider();
       const other = createFakeAuthorizationProvider({ name: second });
@@ -386,15 +386,18 @@ describe('execution pipeline authorization', () => {
               provider: 'x402',
               amount: '0.01',
               currency: 'USDC',
+              // Without a replay key the missing-key guard would refuse it too
+              replayKey: 'replay-rejected',
               rejectionReason: 'wrong amount',
             }),
           }),
         ],
       });
 
-      await expect(pipeline.execute(makeRequest())).rejects.toSatisfy(
-        (error: unknown) => codeOf(error) === 'PAYMENT_INVALID',
-      );
+      await expect(pipeline.execute(makeRequest())).rejects.toMatchObject({
+        code: 'PAYMENT_INVALID',
+        message: 'wrong amount',
+      });
       expect(auth.calls).toEqual([]);
     });
 

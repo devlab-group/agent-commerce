@@ -1,23 +1,21 @@
 /**
  * Anvil's well-known development accounts.
  *
- * LOCAL DEVELOPMENT ONLY — DO NOT FUND. These addresses and private keys are
- * derived from Foundry's public, well-documented default test mnemonic
- * ("test test test test test test test test test test test junk") and are
- * known to everyone who has ever run `anvil`. Anyone who sends real value to
- * one of these addresses on a real network will lose it.
+ * LOCAL DEVELOPMENT ONLY - DO NOT FUND. The keys come from Foundry's public
+ * default mnemonic ("test test ... junk"), so value sent to these addresses on
+ * a real network can be taken by anyone.
  *
- * Index layout used by the local demo chain (see docs/contracts.md):
- * 0 — deployer / local facilitator signer (pays gas, broadcasts settlement)
- * 1 — merchant settlement destination (`payTo`)
- * 2 — buyer (signs EIP-3009 authorisations; never held by the gateway)
+ * Index layout on the local demo chain:
+ * 0 - deployer and local facilitator signer (pays gas, broadcasts settlement)
+ * 1 - merchant settlement destination (`payTo`)
+ * 2 - buyer (signs EIP-3009 authorizations; never held by the gateway)
  */
 export interface AnvilWellKnownAccount {
   readonly address: `0x${string}`;
   readonly privateKey: `0x${string}`;
 }
 
-/** Fixed-length tuple (not a bare array) so indexing by the documented layout above is fully typed. */
+/** A fixed-length tuple, so indexing by the layout above is typed */
 export const ANVIL_WELL_KNOWN_ACCOUNTS: readonly [
   AnvilWellKnownAccount,
   AnvilWellKnownAccount,
@@ -41,5 +39,5 @@ export const LOCAL_FACILITATOR_ACCOUNT = ANVIL_WELL_KNOWN_ACCOUNTS[0];
 export const LOCAL_MERCHANT_ACCOUNT = ANVIL_WELL_KNOWN_ACCOUNTS[1];
 export const LOCAL_BUYER_ACCOUNT = ANVIL_WELL_KNOWN_ACCOUNTS[2];
 
-/** Safe label used everywhere a dev key appears in output, logs or manifests. */
+/** Label printed wherever a dev key appears in output, logs or manifests */
 export const DEV_KEY_LABEL = 'LOCAL DEVELOPMENT ONLY - DO NOT FUND';

@@ -1,21 +1,19 @@
 /**
  * Lazy internal `$ref` resolution.
  *
- * The document is deliberately *not* dereferenced up front. A recursive schema
- * (`Node.children[] -> Node`) expands without bound, so a whole-document
- * dereference turns a 30 kB file into an out-of-memory kill - an importer that
- * a merchant points at their own API must not be a way to do that. Instead
- * each pointer is followed on demand, with the chain that led here carried
- * along so a cycle is a diagnostic rather than a hang.
+ * The document is deliberately *not* dereferenced up front: a recursive schema
+ * (`Node.children[] -> Node`) expands without bound, turning a 30 kB file into
+ * an out-of-memory kill. Each pointer is followed on demand instead, carrying
+ * the chain that led to it so a cycle is a diagnostic rather than a hang.
  */
-import { CommerceError } from '../core/errors/index.js';
+import { CommerceError } from '../core/errors';
 
-/** Bounds a pathological but non-cyclic chain of `$ref`s pointing at `$ref`s. */
+// Bounds a pathological but non-cyclic chain of `$ref`s pointing at `$ref`s
 const MAX_REF_DEPTH = 100;
 
 export interface Dereferenced {
   readonly value: unknown;
-  /** Pointers already followed, oldest first. Pass it back in to keep detecting cycles. */
+  /** Pointers already followed, oldest first. Pass it back in to keep detecting cycles */
   readonly stack: readonly string[];
 }
 
@@ -70,10 +68,10 @@ export function dereference(
   return { value: current, stack: chain };
 }
 
-/** RFC 6901 JSON Pointer, rooted at the document (`#` or `#/a/b`). */
+// RFC 6901 JSON Pointer in a URI fragment: `#` is the document, `#/` its "" key
 function resolvePointer(document: Record<string, unknown>, ref: string): unknown {
   const pointer = ref.slice(1);
-  if (pointer === '' || pointer === '/') return document;
+  if (pointer === '') return document;
   if (!pointer.startsWith('/')) {
     throw new CommerceError(
       'CONFIG_INVALID',
@@ -83,13 +81,28 @@ function resolvePointer(document: Record<string, unknown>, ref: string): unknown
   }
   let current: unknown = document;
   for (const rawSegment of pointer.slice(1).split('/')) {
-    // `~1` before `~0`: the reverse order turns an escaped "~1" back into "/".
-    const segment = decodeURIComponent(rawSegment).replaceAll('~1', '/').replaceAll('~0', '~');
+    let decoded: string;
+    try {
+      decoded = decodeURIComponent(rawSegment);
+    } catch {
+      throw new CommerceError(
+        'CONFIG_INVALID',
+        `OpenAPI reference "${ref}" contains a malformed percent-escape`,
+        { details: { ref } },
+      );
+    }
+    // `~1` before `~0`, per RFC 6901: the other order decodes `~01` to "/"
+    // instead of "~1"
+    const segment = decoded.replaceAll('~1', '/').replaceAll('~0', '~');
     if (Array.isArray(current)) {
       const index = Number(segment);
       current = Number.isInteger(index) ? current[index] : undefined;
     } else if (typeof current === 'object' && current !== null) {
-      current = (current as Record<string, unknown>)[segment];
+      // Own members only: "__proto__" would otherwise resolve to Object.prototype,
+      // which converts to a schema that accepts anything
+      current = Object.hasOwn(current, segment)
+        ? (current as Record<string, unknown>)[segment]
+        : undefined;
     } else {
       current = undefined;
     }

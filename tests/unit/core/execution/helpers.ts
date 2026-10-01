@@ -1,7 +1,6 @@
 /**
- * Shared fakes for execution-pipeline tests. No dependency on any other
- * other area's internals — everything here implements the frozen core interfaces
- * directly.
+ * Shared fakes for execution-pipeline tests. They implement the frozen core
+ * interfaces directly, with no dependency on other areas' internals.
  */
 import type {
   AdapterDescriptor,
@@ -30,8 +29,8 @@ import type {
   PaymentSettlementContext,
   PaymentVerificationContext,
   ReceiptStore,
-} from '../../../../src/core/index.js';
-import { CommerceError } from '../../../../src/core/index.js';
+} from '../../../../src/core';
+import { CommerceError } from '../../../../src/core';
 
 export function createFakeClock(startIso = '2026-01-01T00:00:00.000Z'): Clock {
   let counter = 0;
@@ -62,9 +61,8 @@ const fakeDescriptor: AdapterDescriptor = {
 };
 
 /**
- * Doubles as a `ReceiptStore` (via `appendEvent`) and, for test convenience, an
- * `EventSink` (via `emit`, which just delegates to `appendEvent`) so a single
- * fake can be passed as both `store` and `events` to the pipeline.
+ * A `ReceiptStore` that is also an `EventSink` (`emit` delegates to
+ * `appendEvent`), so one fake serves as both `store` and `events`
  */
 export interface FakeStore extends ReceiptStore, EventSink {
   readonly events: CommerceEvent[];
@@ -201,6 +199,8 @@ export function createCapturingLogger(): Logger & {
 
 export interface FakePaymentProviderOptions {
   readonly name?: PaymentMethodName;
+  /** Sets `challenge.envelope` on the default requirement */
+  readonly challengeEnvelope?: Readonly<Record<string, unknown>>;
   readonly createRequirement?: (ctx: PaymentContext) => Promise<PaymentRequirement>;
   readonly verify?: (ctx: PaymentVerificationContext) => Promise<PaymentResult>;
   readonly settle?: (ctx: PaymentSettlementContext) => Promise<PaymentResult>;
@@ -223,7 +223,14 @@ export function createFakePaymentProvider(
         amount: ctx.amount,
         currency: ctx.currency,
         destination: '0xMERCHANT',
-        challenge: { provider: name, version: '1', accepts: [{ scheme: 'exact' }] },
+        challenge: {
+          provider: name,
+          version: '1',
+          accepts: [{ scheme: 'exact' }],
+          ...(options.challengeEnvelope !== undefined
+            ? { envelope: options.challengeEnvelope }
+            : {}),
+        },
       })),
     verify:
       options.verify ??

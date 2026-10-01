@@ -1,25 +1,23 @@
 /**
- * Exercises health()'s pass/warn/fail branches by mocking the local public
- * client it builds (`../src/chain.js`), rather than requiring a live chain —
- * `health()` must never throw and must classify every RPC/chain-state
- * outcome correctly; each of those outcomes is independent of any real
- * network and is cheap to force directly.
+ * Drives health()'s pass and fail branches through a mocked public client
+ * (`createLocalPublicClient`) instead of a live chain. health() must never
+ * throw, and every RPC or chain-state outcome is cheap to force this way.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Clock } from '../../../src/core/index.js';
+import type { Clock } from '../../../src/core';
 
 const getChainIdMock = vi.fn();
 const getCodeMock = vi.fn();
 const requestMock = vi.fn();
 const supportedMock = vi.fn();
 
-vi.mock('../../../src/payments/x402/facilitator.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../../src/payments/x402/facilitator.js')>();
+vi.mock('../../../src/payments/x402/facilitator', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/payments/x402/facilitator')>();
   return {
     ...actual,
-    // The remote binding's only job in health() is to report what the
-    // facilitator advertises; the HTTP call itself belongs to the SDK.
+    // In health() the remote binding only reports what the facilitator
+    // advertises; the HTTP call belongs to the SDK
     createRemoteFacilitatorBinding: () => ({
       kind: 'remote' as const,
       describe: 'remote https://facilitator.invalid (auth=none)',
@@ -31,8 +29,8 @@ vi.mock('../../../src/payments/x402/facilitator.js', async (importOriginal) => {
   };
 });
 
-vi.mock('../../../src/payments/x402/chain.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../../src/payments/x402/chain.js')>();
+vi.mock('../../../src/payments/x402/chain', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/payments/x402/chain')>();
   return {
     ...actual,
     createLocalPublicClient: () => ({
@@ -43,14 +41,14 @@ vi.mock('../../../src/payments/x402/chain.js', async (importOriginal) => {
   };
 });
 
-/** Anvil actually answers this; a real RPC returns a JSON-RPC error. */
+// Anvil answers this; a public RPC returns a JSON-RPC error
 function mockAsGenuineAnvilNode(): void {
   requestMock.mockResolvedValueOnce({ clientVersion: 'anvil/v1.1.0' });
 }
 
 const ASSET = '0x5FbDB2315678afecb367f032d93F642f64180aa3' as const;
 const PAY_TO = '0x70997970C51812dc3A010C7d01b50e0d17dc79C8' as const;
-/** A dev payTo is refused on any non-local deployment, so remote mode needs a real one. */
+// A dev payTo is refused on any non-local deployment, so remote mode needs another
 const REMOTE_PAY_TO = '0x1111111111111111111111111111111111111111' as const;
 const BUYER_PRIVATE_KEY =
   '0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a' as const;
@@ -60,7 +58,7 @@ async function makeProvider(
   clock?: Clock,
   rpcUrl = 'http://127.0.0.1:19322',
 ) {
-  const { createX402PaymentProvider } = await import('../../../src/payments/x402/provider.js');
+  const { createX402PaymentProvider } = await import('../../../src/payments/x402/provider');
   return createX402PaymentProvider({
     network: 'eip155:84532',
     rpcUrl,
@@ -77,7 +75,7 @@ async function makeProvider(
   });
 }
 
-/** Controllable monotonicMs() for cache-TTL tests — advance() moves it forward explicitly. */
+// A monotonicMs() that only advance() moves, for the cache-TTL tests
 function makeFakeClock(startMs = 0): { clock: Clock; advance: (deltaMs: number) => void } {
   let ms = startMs;
   return {
@@ -92,7 +90,7 @@ function makeFakeClock(startMs = 0): { clock: Clock; advance: (deltaMs: number) 
   };
 }
 
-describe('health() — mocked RPC client', () => {
+describe('health() - mocked RPC client', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -106,7 +104,7 @@ describe('health() — mocked RPC client', () => {
     expect(health.status).toBe('pass');
   });
 
-  it('fails when the chain id matches (84532) but the RPC does not answer anvil_nodeInfo — e.g. real Base Sepolia', async () => {
+  it('fails when the chain id matches (84532) but the RPC does not answer anvil_nodeInfo - e.g. real Base Sepolia', async () => {
     getChainIdMock.mockResolvedValueOnce(84532);
     getCodeMock.mockResolvedValueOnce('0x6080604052');
     requestMock.mockRejectedValueOnce(new Error('the method anvil_nodeInfo does not exist'));
@@ -126,14 +124,14 @@ describe('health() — mocked RPC client', () => {
     const health = await provider.health();
     expect(health.status).toBe('pass');
     expect(health.detail).toContain('TESTNET');
-    // The Anvil probe is a local-mode question; a public facilitator is not
-    // expected to answer it and must never be judged on it.
+    // The Anvil probe applies to local mode only; a remote deployment is never
+    // judged on it
     expect(requestMock).not.toHaveBeenCalled();
   });
 
   it('fails when the remote facilitator does not advertise our scheme on our network', async () => {
-    // A facilitator that is up but cannot settle this pair fails every
-    // payment — and does it after the buyer has already signed.
+    // A facilitator that is up but cannot settle this pair fails every payment,
+    // after the buyer has signed
     getChainIdMock.mockResolvedValueOnce(84532);
     getCodeMock.mockResolvedValueOnce('0x6080604052');
     supportedMock.mockResolvedValueOnce([
@@ -195,7 +193,7 @@ describe('health() — mocked RPC client', () => {
     expect(health.status).toBe('fail');
   });
 
-  it('never throws — catches an unexpected client error and reports fail', async () => {
+  it('never throws - catches an unexpected client error and reports fail', async () => {
     getChainIdMock.mockRejectedValueOnce(new Error('boom'));
     const provider = await makeProvider();
     const health = await provider.health();
@@ -204,7 +202,7 @@ describe('health() — mocked RPC client', () => {
   });
 });
 
-describe('health() — caching / single-flight', () => {
+describe('health() - caching / single-flight', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -223,7 +221,7 @@ describe('health() — caching / single-flight', () => {
     for (const result of results) expect(result.status).toBe('pass');
   });
 
-  it('serves the cached result for a second call within the TTL — no new RPC round-trip', async () => {
+  it('serves the cached result for a second call within the TTL - no new RPC round-trip', async () => {
     getChainIdMock.mockResolvedValueOnce(84532);
     getCodeMock.mockResolvedValueOnce('0x6080604052');
     mockAsGenuineAnvilNode();
@@ -249,14 +247,14 @@ describe('health() — caching / single-flight', () => {
     expect(getChainIdMock).toHaveBeenCalledTimes(1);
 
     advance(5_001); // just past the 5s TTL
-    getChainIdMock.mockResolvedValueOnce(1); // chain id now mismatched — proves this is a real second probe
+    getChainIdMock.mockResolvedValueOnce(1); // a mismatched chain id proves a second real probe
     const second = await provider.health();
 
     expect(getChainIdMock).toHaveBeenCalledTimes(2);
     expect(second.status).toBe('fail');
   });
 
-  it("caches a fail result for the same TTL as a pass — symmetric on purpose (see health()'s doc comment)", async () => {
+  it('caches a fail result for the same TTL as a pass - symmetric on purpose (see the health cache comment in provider.ts)', async () => {
     getChainIdMock.mockRejectedValueOnce(new Error('connection refused'));
     const { clock, advance } = makeFakeClock();
     const provider = await makeProvider('local', clock);
@@ -266,7 +264,7 @@ describe('health() — caching / single-flight', () => {
     const second = await provider.health();
 
     expect(first.status).toBe('fail');
-    expect(getChainIdMock).toHaveBeenCalledTimes(1); // second call served from cache, not re-probed
+    expect(getChainIdMock).toHaveBeenCalledTimes(1); // the second call is served from cache
     expect(second).toEqual(first);
   });
 });

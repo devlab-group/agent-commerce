@@ -2,23 +2,20 @@
  * ACP the way a client reaches it: over a real `createGateway()` Fastify
  * instance with a real `createAcpAdapter()` mounted.
  *
- * An adapter that works when driven directly but is unreachable through the
- * gateway is not a protocol, and only a test that traverses the mount can tell
- * the two apart - the body arriving intact through the mount's content-type
- * suppression is exactly the thing unit tests cannot see.
+ * Only a test that traverses the mount shows that the body arrives intact
+ * through its content-type suppression, which unit tests cannot see.
  *
  * Fakes: ReceiptStore and BackendExecutor. Everything else is the real thing.
  */
 import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { GatewayConfig } from '../../src/config/index.js';
-import type { BackendExecutor } from '../../src/core/index.js';
-import { createGateway, type GatewayInstance } from '../../src/gateway/index.js';
-import { createA2aAdapter } from '../../src/protocols/a2a/index.js';
-import { ACP_SPEC_VERSION, ACP_WELL_KNOWN_PATH } from '../../src/protocols/acp/constants.js';
-import { createAcpAdapter } from '../../src/protocols/acp/index.js';
-import { createMcpAdapter } from '../../src/protocols/mcp/index.js';
-import { createFakeStore } from '../unit/gateway/helpers.js';
+import type { GatewayConfig } from '../../src/config';
+import type { BackendExecutor } from '../../src/core';
+import { createGateway, type GatewayInstance } from '../../src/gateway';
+import { createA2aAdapter } from '../../src/protocols/a2a';
+import { createAcpAdapter } from '../../src/protocols/acp';
+import { createMcpAdapter } from '../../src/protocols/mcp';
+import { createFakeStore } from '../unit/gateway/helpers';
 
 process.env['NODE_ENV'] = 'test';
 
@@ -93,7 +90,7 @@ function config(acpEnabled: boolean): GatewayConfig {
 
 const backendCalls: { resourceId: string; input: unknown }[] = [];
 
-/** Answers every checkout call with the snapshot's own example documents. */
+// Answers every checkout call with the snapshot's own example documents
 const backend: BackendExecutor = {
   async call(handler, request) {
     backendCalls.push({ resourceId: request.resourceId, input: request.input });
@@ -150,7 +147,7 @@ async function startGateway(acpEnabled = true): Promise<GatewayInstance> {
 function acpHeaders(extra: Record<string, string> = {}): Record<string, string> {
   return {
     authorization: `Bearer ${TOKEN}`,
-    'api-version': ACP_SPEC_VERSION,
+    'api-version': '2026-04-17',
     'content-type': 'application/json',
     'idempotency-key': 'idem-integration-1',
     ...extra,
@@ -162,21 +159,18 @@ const CREATE_BODY = { line_items: [{ id: 'item_123' }], currency: 'usd', capabil
 describe('ACP over the gateway', () => {
   it('serves discovery at the specification-fixed path, unauthenticated', async () => {
     const gw = await startGateway();
-    const res = await gw.server.inject({ method: 'GET', url: ACP_WELL_KNOWN_PATH });
+    const res = await gw.server.inject({ method: 'GET', url: '/.well-known/acp.json' });
 
     expect(res.statusCode).toBe(200);
     expect(res.headers['cache-control']).toBe('public, max-age=3600');
     expect(res.json()).toMatchObject({
-      protocol: { name: 'acp', version: ACP_SPEC_VERSION },
+      protocol: { name: 'acp', version: '2026-04-17' },
       api_base_url: 'http://localhost:8080/acp',
       transports: ['rest'],
       capabilities: { services: ['checkout'] },
     });
   });
 
-  // The mount suppresses Fastify's body parsers so an adapter can read the
-  // stream itself. If that ever regresses, the adapter reads an empty body and
-  // every checkout fails to parse - which no unit test can see.
   it('receives a POST body intact through the mount', async () => {
     const gw = await startGateway();
     const res = await gw.server.inject({
@@ -197,7 +191,7 @@ describe('ACP over the gateway', () => {
     await gw.server.inject({
       method: 'GET',
       url: '/acp/checkout_sessions/cs_1',
-      headers: { authorization: `Bearer ${TOKEN}`, 'api-version': ACP_SPEC_VERSION },
+      headers: { authorization: `Bearer ${TOKEN}`, 'api-version': '2026-04-17' },
     });
     await gw.server.inject({
       method: 'POST',
@@ -230,7 +224,7 @@ describe('ACP over the gateway', () => {
     const res = await gw.server.inject({
       method: 'POST',
       url: '/acp/checkout_sessions',
-      headers: { 'content-type': 'application/json', 'api-version': ACP_SPEC_VERSION },
+      headers: { 'content-type': 'application/json', 'api-version': '2026-04-17' },
       payload: JSON.stringify(CREATE_BODY),
     });
 
@@ -243,7 +237,7 @@ describe('ACP disabled', () => {
   it('serves no ACP route at all', async () => {
     const gw = await startGateway(false);
 
-    const discovery = await gw.server.inject({ method: 'GET', url: ACP_WELL_KNOWN_PATH });
+    const discovery = await gw.server.inject({ method: 'GET', url: '/.well-known/acp.json' });
     const checkout = await gw.server.inject({
       method: 'POST',
       url: '/acp/checkout_sessions',
@@ -281,11 +275,11 @@ describe('ACP in the gateway discovery document', () => {
 
     expect(body.protocols['acp']).toEqual({ enabled: true, mountPath: '/acp' });
     const acp = body.adapters.find((adapter) => adapter.name === 'acp');
-    expect(acp).toMatchObject({ status: 'experimental', supportedSpec: ACP_SPEC_VERSION });
+    expect(acp).toMatchObject({ status: 'experimental', supportedSpec: '2026-04-17' });
     expect(acp?.unsupported).toContain('delegate_payment');
 
     // The bearer token, the idempotency database and the operation-to-resource
-    // mapping are configuration, not public protocol facts.
+    // mapping are configuration, not public protocol facts
     const serialized = JSON.stringify(body);
     expect(serialized).not.toContain(TOKEN);
     expect(serialized).not.toContain('idempotency');
@@ -301,7 +295,7 @@ describe('ACP adapter isolation', () => {
       operations: OPERATIONS,
       idempotency: { path: ':memory:', retentionHours: 24 },
       // A currency ACP's schema rejects: the adapter refuses to publish a
-      // non-conformant discovery document and fails its own start.
+      // non-conformant discovery document and fails its own start
       discovery: { supportedCurrencies: ['US Dollars'] },
     });
 
@@ -333,11 +327,11 @@ describe('ACP adapter isolation', () => {
     expect(health.statusCode).toBe(200);
     expect(mcp.statusCode).toBeLessThan(500);
     // The gateway's existing policy for a start failure: the adapter is not
-    // mounted at all, so its routes do not exist rather than half-answering.
+    // mounted at all, so its routes do not exist rather than half-answering
     expect(acp.statusCode).toBe(404);
 
     // It is still reported, with failing health - a silently missing protocol
-    // is how a broken deployment looks healthy.
+    // is how a broken deployment looks healthy
     const wellKnown = await gateway.server.inject({
       method: 'GET',
       url: '/.well-known/agent-commerce',

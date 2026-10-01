@@ -1,19 +1,15 @@
 import { defineConfig } from 'vitest/config';
 
 /**
- * Base mainnet smoke suite. **This spends real money.**
+ * Base mainnet smoke suite. This spends real money.
  *
- * Separate from every other vitest config on purpose. `vitest.config.ts` and
- * `vitest.e2e.config.ts` must never leave the machine; `vitest.testnet.config.ts`
- * spends test funds. This one moves real value, so it is never part of
- * `npm run verify` and skips itself unless a human has set
- * `ALLOW_X402_MAINNET=true` and supplied credentials.
+ * It is never part of `npm run verify`. Each suite skips itself unless its
+ * credentials are set and a human has opted in: `ALLOW_X402_MAINNET=true` for
+ * x402, `ALLOW_MPP_MAINNET=true` for MPP. Run `npm run test:mainnet` from the
+ * machine that holds the wallet.
  *
- * Run it with `npm run test:mainnet`, from a machine that holds the wallet.
- *
- * There is no CI workflow for it, and there must not be one. A workflow means
- * a mainnet key in repository secrets that anyone with write access can spend
- * — the single most dangerous thing this repository could hold.
+ * There is no CI workflow for it and there must not be one: a workflow means a
+ * mainnet key in repository secrets that anyone with write access could spend.
  */
 export default defineConfig({
   test: {
@@ -25,7 +21,7 @@ export default defineConfig({
     hookTimeout: 600_000,
     fileParallelism: false,
     pool: 'forks',
-    // No retries, ever: a retried settlement is a second payment.
+    // No retries: a retried settlement is a second payment
     retry: 0,
   },
 });

@@ -1,14 +1,13 @@
 /**
  * Agent Card discovery through the official SDK's own resolver.
  *
- * The SDK acts purely as an external client here. No SDK server helper is
- * used, and none is used to derive expected behaviour either — otherwise the
- * suite would be checking the SDK against itself rather than checking this
- * gateway against the protocol.
+ * The SDK acts only as an external client. No SDK server helper is used,
+ * not even to derive expected behavior, or the suite would check the SDK
+ * against itself instead of this gateway against the protocol.
  */
 import { DefaultAgentCardResolver } from '@a2a-js/sdk/client';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { type RunningGateway, startConformanceGateway } from './support/gateway.js';
+import { type RunningGateway, startConformanceGateway } from './support/gateway';
 
 let running: RunningGateway;
 
@@ -26,7 +25,10 @@ describe('A2A agent card, resolved by the official SDK', () => {
 
     expect(card.name).toBe('Demo Weather Store');
     expect(card.version).toBeTruthy();
-    expect(card.description).toBeTruthy();
+    // No agentDescription is configured, so this is the published default
+    expect(card.description).toBe(
+      'Agent Commerce Gateway: canonical commerce resources exposed as A2A skills.',
+    );
   });
 
   it('declares a JSONRPC interface at protocol version 1.0', async () => {
@@ -42,13 +44,13 @@ describe('A2A agent card, resolved by the official SDK', () => {
   it('publishes a2a-exposed resources as skills, and nothing else', async () => {
     const card = await new DefaultAgentCardResolver().resolve(running.url);
 
-    // `http_only` is configured but exposed elsewhere, so it must not appear.
+    // `http_only` is configured but exposed elsewhere, so it must not appear
     expect(card.skills.map((skill) => skill.id)).toEqual(['weather_basic', 'market_report']);
     const [skill] = card.skills;
     expect(skill?.name).toBe('Basic Weather');
     expect(skill?.inputModes).toEqual(['application/json']);
     expect(skill?.outputModes).toEqual(['application/json']);
-    // Core AgentSkill defines no input schema field; none is invented.
+    // Core AgentSkill defines no input schema field; none is invented
     expect(skill).not.toHaveProperty('inputSchema');
   });
 
@@ -70,9 +72,8 @@ describe('A2A agent card, resolved by the official SDK', () => {
   });
 
   /**
-   * A2A v1 carries the protocol version per interface. `@a2a-js/sdk@1.1.0`'s
-   * `AgentCard` has no top-level `protocolVersion` field, so emitting one would
-   * be a claim no conformant client reads — this pins that it stays absent.
+   * A2A v1 carries the protocol version per interface, and the SDK's `AgentCard`
+   * has no top-level `protocolVersion`, so none may be emitted
    */
   it('states the protocol version per interface, not on the card itself', async () => {
     const raw = (await (

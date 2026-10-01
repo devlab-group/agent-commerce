@@ -15,19 +15,19 @@ import { Challenge, Receipt } from 'mppx';
 import { charge as clientCharge } from 'mppx/evm/client';
 import { privateKeyToAccount } from 'viem/accounts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { parseConfig } from '../../src/config/index.js';
-import { isCommerceError, type Logger, type ReceiptStore } from '../../src/core/index.js';
-import { createGateway, type GatewayInstance } from '../../src/gateway/index.js';
-import { createConfiguredPaymentProviders } from '../../src/gateway/payment-providers.js';
-import { parseCanonicalAmount } from '../../src/payments/x402/amount.js';
-import { createSqliteReceiptStore } from '../../src/storage/receipts/index.js';
+import { parseConfig } from '../../src/config';
+import { isCommerceError, type Logger, type ReceiptStore } from '../../src/core';
+import { createGateway, type GatewayInstance } from '../../src/gateway';
+import { createConfiguredPaymentProviders } from '../../src/gateway/payment-providers';
+import { parseCanonicalAmount } from '../../src/payments/x402/amount';
+import { createSqliteReceiptStore } from '../../src/storage/receipts';
 import {
   assertBalanceDelta,
   assertTransactionSucceeded,
   type BalanceSnapshot,
   readBalances,
   waitForBalances,
-} from '../fixtures/x402/settlement.js';
+} from '../fixtures/x402/settlement';
 
 const ALLOWED = process.env['ALLOW_MPP_MAINNET'] === 'true';
 const BUYER_KEY = process.env['X402_MAINNET_BUYER_PRIVATE_KEY'];
@@ -56,7 +56,6 @@ const missing = [
 ].filter((name): name is string => name !== undefined);
 
 if (missing.length > 0) {
-  // eslint-disable-next-line no-console
   console.log(`[mainnet] MPP skipped - needs ${missing.join(', ')}. This suite spends REAL FUNDS.`);
 }
 
@@ -235,7 +234,9 @@ describeOrSkip('MPP on Base mainnet - real funds', () => {
       network: NETWORK,
       externalReference: receipt.reference,
     });
-    expect(stored?.deliveredAt).toBeDefined();
+    // A 2xx backend status is what marks the receipt delivered
+    expect(stored?.backendStatus).toBeGreaterThanOrEqual(200);
+    expect(stored?.backendStatus).toBeLessThan(300);
 
     // A spent authorization fails the facilitator check (402); a copy that
     // races the first settlement hits the gateway's replay reservation (409)
@@ -245,7 +246,6 @@ describeOrSkip('MPP on Base mainnet - real funds', () => {
     expect(afterReplay.buyer).toBe(after.buyer);
     expect(afterReplay.merchant).toBe(after.merchant);
 
-    // eslint-disable-next-line no-console
     console.log(
       `[mainnet] MPP settled ${amountBaseUnits} base units - https://basescan.org/tx/${receipt.reference}`,
     );

@@ -1,13 +1,13 @@
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { isCommerceError } from '../../../src/core/errors/index.js';
+import { isCommerceError } from '../../../src/core/errors';
 import {
   type DiscoverOptions,
   type DiscoveryResult,
   discoverOperations,
   loadOpenApiDocument,
-} from '../../../src/openapi/index.js';
+} from '../../../src/openapi';
 
 const fixture = (name: string): string =>
   join(fileURLToPath(new URL('./fixtures/', import.meta.url)), name);
@@ -17,17 +17,26 @@ async function discover(name: string, options: DiscoverOptions = {}): Promise<Di
 }
 
 const codes = (result: DiscoveryResult): string[] => result.diagnostics.map((d) => d.code);
+
+// For shapes the loader's validator refuses, or that need no fixture file
+function inline(document: Record<string, unknown>): DiscoveryResult {
+  return discoverOperations({
+    version: '3.1',
+    sourcePath: 'inline.yaml',
+    document: { paths: { '/items': { get: { operationId: 'items' } } }, ...document },
+  });
+}
 const ids = (result: DiscoveryResult): string[] => result.operations.map((o) => o.resourceId);
 
 describe('discoverOperations', () => {
-  it('uses operationId, falls back to method_path, and normalises both', async () => {
+  it('uses operationId, falls back to method_path, and normalizes both', async () => {
     const result = await discover('petstore-3.0.yaml');
     expect(ids(result)).toEqual(['listPets', 'post_pets', 'getPet']);
   });
 
-  it('normalises an operationId that is not a legal resource id', async () => {
+  it('normalizes an operationId that is not a legal resource id', async () => {
     const result = await discover('minimal-3.1.json');
-    // "list things!" - the space and "!" are not in the id character set.
+    // "list things!" - the space and "!" are not in the id character set
     expect(ids(result)).toEqual(['list_things']);
   });
 
@@ -119,18 +128,24 @@ describe('discoverOperations', () => {
   });
 
   it('rejects a --base-url that is not an absolute http(s) URL', async () => {
-    await expect(discover('petstore-3.0.yaml', { baseUrl: '/v1' })).rejects.toThrowError();
+    await expect(discover('petstore-3.0.yaml', { baseUrl: '/v1' })).rejects.toMatchObject({
+      code: 'CONFIG_INVALID',
+      message: expect.stringContaining('--base-url "/v1"'),
+    });
   });
 
   it('rejects a --base-url carrying a query string or fragment', async () => {
     // Concatenation puts the operation path AFTER the query, so the resulting
-    // URL parses and calls the wrong endpoint.
-    await expect(
-      discover('petstore-3.0.yaml', { baseUrl: 'https://api.example.com/v1?apikey=SECRET' }),
-    ).rejects.toThrowError();
-    await expect(
-      discover('petstore-3.0.yaml', { baseUrl: 'https://api.example.com/v1#frag' }),
-    ).rejects.toThrowError();
+    // URL parses and calls the wrong endpoint
+    for (const baseUrl of [
+      'https://api.example.com/v1?apikey=SECRET',
+      'https://api.example.com/v1#frag',
+    ]) {
+      await expect(discover('petstore-3.0.yaml', { baseUrl })).rejects.toMatchObject({
+        code: 'CONFIG_INVALID',
+        message: expect.stringContaining('no query string or fragment'),
+      });
+    }
   });
 
   it('skips an operation whose only server URL is relative, and says to pass --base-url', async () => {
@@ -165,6 +180,30 @@ describe('discoverOperations', () => {
       expect(result.diagnostics[0]?.message).toContain('query string or fragment');
       expect(result.diagnostics[0]?.message).not.toContain('is relative');
     }
+  });
+
+  it('skips a non-HTTP server URL', () => {
+    const result = inline({ servers: [{ url: 'ftp://api.example.com' }] });
+    expect(result.operations).toHaveLength(0);
+    expect(result.diagnostics[0]?.code).toBe('invalid-server-url');
+    expect(result.diagnostics[0]?.message).toContain('must use http:// or https://');
+  });
+
+  it('skips a server variable with no default instead of guessing a host', () => {
+    const result = inline({ servers: [{ url: 'https://{tenant}.example.com' }] });
+    expect(result.operations).toHaveLength(0);
+    expect(result.diagnostics[0]?.code).toBe('server-variable-without-default');
+  });
+
+  it('skips a Paths key that does not start with "/"', () => {
+    // Appended to the server URL it would name another host:
+    // https://api.example.com@evil.example/steal
+    const result = inline({
+      servers: [{ url: 'https://api.example.com' }],
+      paths: { '@evil.example/steal': { get: { operationId: 'steal' } } },
+    });
+    expect(result.operations).toHaveLength(0);
+    expect(result.diagnostics[0]?.code).toBe('invalid-path-key');
   });
 
   it('collects path-item parameters before operation parameters', async () => {

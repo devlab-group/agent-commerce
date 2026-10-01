@@ -2,11 +2,9 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { z } from 'zod';
-import { formatConfigError, runValidate } from '../../../src/cli/commands/validate.js';
-import { createCapturingIo } from '../../../src/cli/lib/io.js';
-import { CommerceError } from '../../../src/core/index.js';
-import { makeGatewayConfig } from './fixtures.js';
+import { formatConfigError, runValidate } from '../../../src/cli/commands/validate';
+import { CommerceError } from '../../../src/core';
+import { createCapturingIo, makeGatewayConfig } from './fixtures';
 
 describe('formatConfigError', () => {
   it('formats a CommerceError with its code, message and details', () => {
@@ -19,25 +17,6 @@ describe('formatConfigError', () => {
     expect(formatted).toContain('server.port');
   });
 
-  it('formats a ZodError with one line per issue path', () => {
-    const schema = z.object({ port: z.number() });
-    const result = schema.safeParse({ port: 'not-a-number' });
-    expect(result.success).toBe(false);
-    if (result.success) throw new Error('expected failure');
-    const formatted = formatConfigError(result.error);
-    expect(formatted).toContain('Configuration schema errors');
-    expect(formatted).toContain('port');
-  });
-
-  it('formats a root-level ZodError issue (empty path) as "(root)"', () => {
-    const schema = z.number();
-    const result = schema.safeParse('not-a-number');
-    expect(result.success).toBe(false);
-    if (result.success) throw new Error('expected failure');
-    const formatted = formatConfigError(result.error);
-    expect(formatted).toContain('(root)');
-  });
-
   it('formats a plain Error by message', () => {
     expect(formatConfigError(new Error('yaml syntax error'))).toContain('yaml syntax error');
   });
@@ -45,22 +24,9 @@ describe('formatConfigError', () => {
   it('formats a non-Error thrown value', () => {
     expect(formatConfigError('a string was thrown')).toContain('a string was thrown');
   });
-
-  it('never echoes a resolved secret value — only the error message text is surfaced', () => {
-    // The config package's real env-substitution error names only the
-    // variable, never a resolved value (src/config/env.ts). Assert
-    // the CLI's formatter doesn't add any additional value leakage.
-    const err = new CommerceError(
-      'CONFIG_INVALID',
-      'Unresolved environment variable "${FACILITATOR_PRIVATE_KEY}" referenced at config path "payments.x402.facilitator.signerPrivateKey"',
-    );
-    const formatted = formatConfigError(err);
-    expect(formatted).toContain('FACILITATOR_PRIVATE_KEY');
-    expect(formatted).not.toMatch(/0x[0-9a-fA-F]{64}/); // no private-key-shaped value ever appears
-  });
 });
 
-describe('runValidate — with an injected loader (isolated branch coverage)', () => {
+describe('runValidate with an injected loader (isolated branch coverage)', () => {
   it('PASS: prints a summary and returns exit code 0 for a valid config', async () => {
     const io = createCapturingIo();
     const code = await runValidate({}, io, { loadConfig: async () => makeGatewayConfig() });
@@ -96,6 +62,13 @@ describe('runValidate — with an injected loader (isolated branch coverage)', (
     expect(io.out.join('\n')).toContain('protocols: http=off mcp=off');
   });
 
+  it('reports every payment rail and authorization method, not only x402', async () => {
+    const io = createCapturingIo();
+    await runValidate({}, io, { loadConfig: async () => makeGatewayConfig() });
+    expect(io.out.join('\n')).toContain('payments: x402=off mpp=off');
+    expect(io.out.join('\n')).toContain('authorization: ap2=off');
+  });
+
   it('passes the --config path through to the loader', async () => {
     let receivedPath: string | undefined;
     const io = createCapturingIo();
@@ -109,8 +82,9 @@ describe('runValidate — with an injected loader (isolated branch coverage)', (
   });
 });
 
-describe('runValidate — local chain manifest fill (docker vs. host env parity)', () => {
-  it('prints a notice and passes the filled env through to loadConfig, when the manifest supplies something', async () => {
+describe('runValidate: local chain manifest fill (docker vs. host env parity)', () => {
+  it('prints a notice naming the filled variables, not their values, and passes the filled env to loadConfig', async () => {
+    const key = `0x${'ab'.repeat(32)}`;
     let receivedEnv: NodeJS.ProcessEnv | undefined;
     const io = createCapturingIo();
     const code = await runValidate({}, io, {
@@ -119,16 +93,17 @@ describe('runValidate — local chain manifest fill (docker vs. host env parity)
         return makeGatewayConfig();
       },
       fillEnvFromManifest: () => ({
-        env: { X402_ASSET: '0xfilled', FOO: 'bar' },
-        filled: ['X402_ASSET'],
+        env: { X402_ASSET: '0xfilled', X402_FACILITATOR_PRIVATE_KEY: key, FOO: 'bar' },
+        filled: ['X402_ASSET', 'X402_FACILITATOR_PRIVATE_KEY'],
         manifestFound: true,
       }),
     });
     expect(code).toBe(0);
     expect(io.out.join('\n')).toContain(
-      'using local chain manifest .deploy/local.json for X402_ASSET',
+      'using local chain manifest .deploy/local.json for X402_ASSET, X402_FACILITATOR_PRIVATE_KEY',
     );
-    expect(receivedEnv?.['X402_ASSET']).toBe('0xfilled');
+    expect(io.out.join('\n')).not.toContain(key);
+    expect(receivedEnv?.['X402_FACILITATOR_PRIVATE_KEY']).toBe(key);
   });
 
   it('prints nothing when nothing needed filling (manifest absent, or everything already set)', async () => {
@@ -187,7 +162,7 @@ describe('runValidate — local chain manifest fill (docker vs. host env parity)
   });
 });
 
-describe('runValidate — real src/config integration', () => {
+describe('runValidate against the real src/config', () => {
   let dir: string;
 
   beforeEach(() => {
@@ -251,7 +226,7 @@ payments: {}
     const io = createCapturingIo();
     const code = await runValidate({ configPath }, io);
     expect(code).toBe(1);
-    expect(io.err.join('\n')).toContain('FAIL');
+    expect(io.err.join('\n')).toContain('is not valid YAML');
   });
 
   it('rejects a schema violation with the failing path named', async () => {
@@ -289,7 +264,7 @@ payments: {}
     expect(io.err.join('\n')).toMatch(/server\.port/);
   });
 
-  it('rejects an unresolved ${ENV} variable, naming the variable but never a resolved value', async () => {
+  it('rejects an unresolved ${ENV} variable, naming the variable', async () => {
     const configPath = join(dir, 'config.yaml');
     writeFileSync(
       configPath,
@@ -324,17 +299,14 @@ payments: {}
     expect(io.err.join('\n')).toContain('DOES_NOT_EXIST_ENV_VAR');
   });
 
-  it('rejects a duplicate resource id at the YAML level (YAML maps cannot even express one — the schema instead rejects the raw config root shape when malformed)', async () => {
-    // config.yaml expresses resources as a map keyed by id, so a
-    // literal "duplicate id" is structurally impossible in valid YAML — the
-    // failure mode this test actually exercises is a non-object root, which
-    // the schema explicitly rejects with an actionable path.
+  it('rejects a config whose root is not a map', async () => {
     const configPath = join(dir, 'config.yaml');
     writeFileSync(configPath, '- just\n- a\n- list\n', 'utf8');
 
     const io = createCapturingIo();
     const code = await runValidate({ configPath }, io);
     expect(code).toBe(1);
+    expect(io.err.join('\n')).toContain('root must be a mapping');
   });
 
   it('rejects an unsupported protocol on a resource', async () => {
@@ -424,5 +396,78 @@ payments: {}
     const io = createCapturingIo();
     const code = await runValidate({ configPath }, io);
     expect(code).toBe(1);
+    expect(io.err.join('\n')).toContain('has fixed pricing but declares no "payments"');
+  });
+
+  describe('credentials resolved from the environment', () => {
+    const SECRETS = {
+      ADMIN_TOKEN: 'ADMIN-TOKEN-0123456789abcdef',
+      RPC_KEY: 'RPC-KEY-SECRET',
+      FACILITATOR_TOKEN: 'FACILITATOR-TOKEN-SECRET',
+      MPP_CHALLENGE_SECRET: 'MPP-CHALLENGE-SECRET-0123456789abcdef',
+    };
+    const rail = `
+    network: eip155:84532
+    rpcUrl: "https://rpc.example/v2/\${RPC_KEY}"
+    asset: "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
+    assetName: USDC
+    assetVersion: "2"
+    facilitator:
+      mode: remote
+      url: https://facilitator.example
+      auth: { type: bearer, token: "\${FACILITATOR_TOKEN}" }`;
+    const configWith = (port: string) => `
+version: 1
+merchant: { id: demo, name: Demo, publicBaseUrl: http://localhost:8080 }
+server: { port: ${port}, host: 127.0.0.1, adminToken: "\${ADMIN_TOKEN}" }
+storage: { receipts: { driver: sqlite, path: ./data/receipts.db } }
+protocols: { http: { enabled: true }, mcp: { enabled: true, mountPath: /mcp } }
+resources:
+  report:
+    name: Report
+    backend: { type: http, method: GET, url: "http://localhost:3000/api/report" }
+    pricing: { type: fixed, amount: "0.01", currency: USDC }
+    expose: [http]
+    payments: [x402, mpp]
+payments:
+  x402:
+    enabled: true
+    assetDecimals: 6
+    payTo: "0x1111111111111111111111111111111111111111"
+    maxTimeoutSeconds: 60${rail}
+  mpp:
+    enabled: true
+    recipient: "0x1111111111111111111111111111111111111111"
+    realm: api.example.com
+    challengeSecret: "\${MPP_CHALLENGE_SECRET}"${rail}
+`;
+
+    async function validate(port: string) {
+      const configPath = join(dir, 'config.yaml');
+      writeFileSync(configPath, configWith(port), 'utf8');
+      const io = createCapturingIo();
+      const code = await runValidate({ configPath }, io, {
+        fillEnvFromManifest: () => ({ env: SECRETS, filled: [], manifestFound: false }),
+      });
+      return { code, printed: [...io.out, ...io.err].join('\n') };
+    }
+
+    it('are never printed when the config is valid', async () => {
+      const { code, printed } = await validate('8080');
+      expect(code).toBe(0);
+      expect(printed).toContain('payments: x402=on mpp=on');
+      for (const secret of Object.values(SECRETS)) {
+        expect(printed).not.toContain(secret);
+      }
+    });
+
+    it('are never printed when another field is invalid', async () => {
+      const { code, printed } = await validate('not-a-port');
+      expect(code).toBe(1);
+      expect(printed).toContain('server.port');
+      for (const secret of Object.values(SECRETS)) {
+        expect(printed).not.toContain(secret);
+      }
+    });
   });
 });

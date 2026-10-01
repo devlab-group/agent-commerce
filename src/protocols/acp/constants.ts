@@ -17,7 +17,7 @@
 export const ACP_SPEC_VERSION = '2026-04-17';
 export const ACP_API_VERSION = '2026-04-17';
 
-/** Discovery path fixed by the ACP specification - never a configurable mount. */
+/** Discovery path fixed by the ACP specification, never a configurable mount */
 export const ACP_WELL_KNOWN_PATH = '/.well-known/acp.json';
 
 /**
@@ -39,9 +39,6 @@ export type AcpCheckoutOperation = (typeof ACP_CHECKOUT_OPERATIONS)[number];
  * Top-level canonical-input properties each operation always supplies.
  *
  * `path` carries `{ checkout_session_id }`, `body` the ACP request document.
- * Cancel is deliberately absent a body: the pinned schema does not require
- * one, and inventing one would make every cancel resource declare a property
- * ACP may never fill.
  */
 export const ACP_OPERATION_INPUT_KEYS: Readonly<
   Record<AcpCheckoutOperation, readonly ('path' | 'body')[]>
@@ -53,7 +50,18 @@ export const ACP_OPERATION_INPUT_KEYS: Readonly<
   cancelCheckoutSession: ['path'],
 };
 
-/** Media type for every ACP request and response body. */
+/**
+ * Canonical-input properties an operation supplies only when the caller sends
+ * them. The pinned schema lets a cancel omit its body, so a bare cancel has no
+ * `body`, but one carrying `intent_trace` passes it on.
+ */
+export const ACP_OPERATION_OPTIONAL_INPUT_KEYS: Readonly<
+  Partial<Record<AcpCheckoutOperation, readonly 'body'[]>>
+> = {
+  cancelCheckoutSession: ['body'],
+};
+
+/** Media type for every ACP request and response body */
 export const ACP_JSON_MEDIA_TYPE = 'application/json';
 
 /**

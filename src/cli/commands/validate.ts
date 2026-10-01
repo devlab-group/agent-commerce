@@ -1,13 +1,12 @@
-import { ZodError } from 'zod';
-import { isCommerceError } from '../../core/index.js';
-import { type ConfigLoader, loadConfigDynamic } from '../lib/config-client.js';
-import type { Io } from '../lib/io.js';
+import { isCommerceError } from '../../core';
+import { type ConfigLoader, loadConfigDynamic } from '../lib/config-client';
+import type { Io } from '../lib/io';
 import {
   fillEnvFromLocalChainManifest,
   LOCAL_CHAIN_MANIFEST_PATH,
   MANIFEST_FILLABLE_ENV_VAR_NAMES,
   type ManifestEnvFill,
-} from '../lib/manifest-env.js';
+} from '../lib/manifest-env';
 
 export interface ValidateOptions {
   readonly configPath?: string;
@@ -21,16 +20,15 @@ export interface ValidateDeps {
 /**
  * Formats a config-loading failure into an actionable report.
  *
- * Handles the three error shapes `src/config` can produce:
- * a `CommerceError('CONFIG_INVALID', …)` with structured details, a raw
- * `ZodError` (schema errors, one line per failing path), or a plain Error
- * (e.g. a YAML syntax error, or the "config package not available yet"
- * integration-gap error). Never prints a resolved `${ENV}` value — only ever
- * the variable name, which the underlying error message is expected to carry.
+ * `src/config` reports file, YAML, schema and environment failures as
+ * `CommerceError('CONFIG_INVALID')` with structured details, and
+ * `config-client` reports a config module that fails to load as
+ * `INTERNAL_ERROR`. Nothing here adds a resolved `${ENV}` value: the config
+ * error names only the variable.
  *
- * `manifestFound` adds one more hint line when the failure is specifically an
- * unresolved variable that `.deploy/local.json` would have supplied, had
- * `npm run chain:deploy` been run — see `../lib/manifest-env.js`.
+ * When no manifest was found, an unresolved variable that `.deploy/local.json`
+ * would supply gets a hint to run `npm run chain:deploy` (see
+ * `../lib/manifest-env`).
  */
 export function formatConfigError(err: unknown, manifestFound = false): string {
   if (isCommerceError(err)) {
@@ -50,21 +48,13 @@ export function formatConfigError(err: unknown, manifestFound = false): string {
     }
     return lines.join('\n');
   }
-  if (err instanceof ZodError) {
-    const lines = ['FAIL  Configuration schema errors:'];
-    for (const issue of err.issues) {
-      const path = issue.path.length > 0 ? issue.path.join('.') : '(root)';
-      lines.push(`      - ${path}: ${issue.message}`);
-    }
-    return lines.join('\n');
-  }
   if (err instanceof Error) {
     return `FAIL  ${err.message}`;
   }
   return `FAIL  ${String(err)}`;
 }
 
-/** `agent-commerce validate [--config <path>]`. Exit code is non-zero on invalid configuration. */
+/** `agent-commerce validate [--config <path>]`. Exits non-zero on invalid configuration */
 export async function runValidate(
   options: ValidateOptions,
   io: Io,
@@ -87,7 +77,11 @@ export async function runValidate(
     io.stdout(
       `      protocols: http=${config.protocols.http.enabled ? 'on' : 'off'} mcp=${config.protocols.mcp.enabled ? 'on' : 'off'} a2a=${config.protocols.a2a.enabled ? 'on' : 'off'} acp=${config.protocols.acp.enabled ? 'on' : 'off'}`,
     );
-    io.stdout(`      payments: x402=${config.payments.x402?.enabled === true ? 'on' : 'off'}`);
+    const onOff = (enabled: boolean | undefined): string => (enabled === true ? 'on' : 'off');
+    io.stdout(
+      `      payments: x402=${onOff(config.payments.x402?.enabled)} mpp=${onOff(config.payments.mpp?.enabled)}`,
+    );
+    io.stdout(`      authorization: ap2=${onOff(config.authorization?.ap2.enabled)}`);
     return 0;
   } catch (err) {
     io.stderr(formatConfigError(err, manifestFound));

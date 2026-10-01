@@ -1,16 +1,16 @@
 # Contributing
 
-Thanks for looking at Agent Commerce Gateway. The architecture is deliberate and
-the scope is deliberately narrow; both of those are load-bearing, and most of
-the rules below exist to keep them that way.
+Thanks for contributing to Agent Commerce Gateway. These rules keep protocol
+support, payment behavior and area boundaries consistent.
 
 ## Ground rules
 
-1. **Scope discipline is a release requirement.** Supported today: MCP, HTTP and
-   x402. Experimental and off by default: A2A, ACP, AP2 and OpenAPI import. New
-   protocols and rails land after the adapter model survives real use. Classify
-   every proposal as `BLOCKER` / `QUALITY` / `NICE-TO-HAVE` / `POST-1.0` - the
-   default answer to a new capability is `POST-1.0`.
+1. **Scope discipline is a release requirement.** Supported: MCP, HTTP and
+   x402. Experimental and off by default: MPP, A2A, ACP and AP2; OpenAPI import
+   is an experimental CLI command. New protocols and rails land after the
+   adapter model survives real use. Classify every proposal as `BLOCKER` /
+   `QUALITY` / `NICE-TO-HAVE` / `POST-1.0` - the default answer to a new
+   capability is `POST-1.0`.
 2. **Never make the gateway custodial.** No PR may introduce storage of a
    merchant or buyer private key, seed phrase or fund custody. See
    [`SECURITY.md`](SECURITY.md).
@@ -20,8 +20,8 @@ the rules below exist to keep them that way.
    in `src/core`. Map at adapter boundaries.
 5. **Tests ship with implementation.** Code without a happy path *and* a
    negative path is not a complete change.
-6. **Alpha honesty.** Partial support is labelled `experimental` / `partial` /
-   `planned`. Never widen a compatibility claim without the test to back it.
+6. **Accurate support claims.** Label partial support `experimental`,
+   `partial` or `planned`. Back wider compatibility claims with tests.
 
 ## Getting set up
 
@@ -57,18 +57,17 @@ fails.
 Read, in order:
 
 1. [`docs/architecture.md`](docs/architecture.md) - the shape of the system.
-2. [`docs/contracts.md`](docs/contracts.md) - the frozen cross-package contract.
+2. [`docs/contracts.md`](docs/contracts.md) - the frozen cross-area contract.
 
-The one rule that surprises people: **every protocol adapter converges on
-`ExecutionPipeline.execute`**. An adapter never calls a merchant backend and
-never implements payment logic.
+Every protocol adapter calls `ExecutionPipeline.execute`. Adapters map protocol
+requests and responses; the pipeline handles backend calls and payment.
 
 ## Adding a protocol adapter
 
 See [`docs/contributing-adapters.md`](docs/contributing-adapters.md). Checklist:
 
 - [ ] schema mapping from `CommerceResource`
-- [ ] request normalisation into `CanonicalRequest`
+- [ ] request normalization into `CanonicalRequest`
 - [ ] deterministic mapping of `CommerceError` and `PaymentRequiredEnvelope`
 - [ ] an honest `AdapterDescriptor` (`supportedSpec`, `capabilities`,
       `unsupported`, `status`)
@@ -81,11 +80,12 @@ See [`docs/contributing-adapters.md`](docs/contributing-adapters.md). Checklist:
 Implement `PaymentProvider`. Required before review:
 
 - [ ] `verify` has no fund-moving side effects
-- [ ] a `replayKey` derived only from the payment authorisation
+- [ ] a `replayKey` derived only from the payment authorization
 - [ ] negative tests: no payment, malformed, wrong amount, wrong recipient,
       wrong network, wrong asset, replay, provider unavailable
 - [ ] a deterministic settlement proof - real state change, not a mocked success
-- [ ] no private key held by the gateway
+- [ ] no buyer or merchant private key required; keep a local facilitator's
+      gas signer separate
 
 ## Adding an authorization method
 
@@ -106,18 +106,19 @@ AP2 is the worked example: [`docs/ap2.md`](docs/ap2.md).
 
 ## Publishing
 
-The repository *is* the package: one `package.json`, published as
-**`@devlab.group/agent-commerce`**. It ships the `agent-commerce` binary and four
-library paths - `.`, `./ap2`, `./mcp`, `./x402` - built from `src/` into
-`dist/`.
+The repository has one `package.json` and publishes
+**`@devlab.group/agent-commerce`**. The package includes the `agent-commerce`
+binary and five library paths - `.`, `./ap2`, `./mcp`, `./mpp` and `./x402` -
+built from `src/` into `dist/`.
 
-Two constraints a PR must not break. **The heavy rails are optional peer
-dependencies** (`@modelcontextprotocol/sdk`, `@x402/core`, `@x402/evm`, `viem`,
-`jose`, `@sd-jwt/core`, `canonicalize`, `@coinbase/x402`), and neither the main
-entry nor the CLI may import one, or a default install breaks. **Architectural
-boundaries live in directories under `src/`**, not in package manifests, so a
-reappearing `pnpm-workspace.yaml` or `packages/` directory means two models are
-being run at once. The packaging tests fail on either.
+The main entry and the CLI must import no optional peer. Peers load only
+through the subpaths that use them, and `@coinbase/x402` only for
+`auth.type: cdp`;
+[published entry points](docs/contracts.md#published-entry-points) lists which
+entry imports which peer.
+Architectural boundaries are directories under `src/`, not package manifests.
+The packaging tests enforce both, and reject a `pnpm-workspace.yaml` file or a
+`packages/` directory.
 
 ```bash
 npm run build # bundle -> dist/index.js + dist/cli/index.js
@@ -125,10 +126,9 @@ npm run test:cli:dist # run the built binary under plain node
 npm run pack:dry # inspect what would be published
 ```
 
-Only `dist/`, `README.md` and `LICENSE` are published. Everything else -
-`src/`, `tests/`, `demo/`, `scripts/`, `docs/` - stays in the repository. Note
-that `dist/` ships sourcemaps that embed the TypeScript they were built from;
-that is intended (public source, real stack traces), not an oversight.
+The tarball includes `package.json`, `dist/`, `README.md` and `LICENSE`.
+Source, tests, demos, scripts and docs stay in the repository. Sourcemaps in
+`dist/` embed the public TypeScript source for stack traces.
 
 Never run `npm publish` without explicit maintainer approval.
 
@@ -159,7 +159,7 @@ follow [`SECURITY.md`](SECURITY.md) instead - do not open a public issue.
 Be straightforward and civil. Assume good faith, disagree with the argument
 rather than the person, and keep reviews about the code.
 
-## Licence
+## License
 
 By contributing you agree that your contributions are licensed under the
 Apache License 2.0.

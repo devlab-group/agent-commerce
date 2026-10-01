@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { substituteEnv } from '../../../src/config/env.js';
-import { isCommerceError } from '../../../src/core/index.js';
+import { substituteEnv } from '../../../src/config/env';
+import { isCommerceError } from '../../../src/core';
 
 describe('substituteEnv', () => {
   it('leaves non-template strings unchanged', () => {
@@ -9,6 +9,10 @@ describe('substituteEnv', () => {
 
   it('substitutes a simple ${VAR}', () => {
     expect(substituteEnv('${FOO}', { FOO: 'bar' })).toBe('bar');
+  });
+
+  it('substitutes a ${VAR} set to an empty string rather than treating it as unset', () => {
+    expect(substituteEnv('${EMPTY}', { EMPTY: '' })).toBe('');
   });
 
   it('substitutes a ${VAR} embedded in a larger string', () => {
@@ -64,51 +68,41 @@ describe('substituteEnv', () => {
     expect(substituteEnv(null, {})).toBe(null);
   });
 
-  it('includes the config path in the unresolved-variable error', () => {
+  it('includes the config path, array indexes too, in the unresolved-variable error', () => {
     try {
-      substituteEnv({ merchant: { publicBaseUrl: '${MISSING}' } }, {});
+      substituteEnv({ server: { allowedOrigins: ['http://a.test', '${MISSING}'] } }, {});
       expect.unreachable();
     } catch (error) {
-      if (isCommerceError(error)) {
-        expect(error.message).toContain('merchant.publicBaseUrl');
-      }
+      if (!isCommerceError(error)) throw error;
+      expect(error.message).toContain('"$.server.allowedOrigins[1]"');
+      expect(error.details).toEqual({ variable: 'MISSING', path: '$.server.allowedOrigins[1]' });
     }
   });
 });
 
 describe('nested placeholders and the unresolved-placeholder promise', () => {
-  // `${A:-${B}}` is not resolvable: `[^}]*` cannot span the inner `}`, so the
-  // match consumes `${A:-${B` and a stray `}` is left as ordinary text.
-  //
-  // The first fix caught this by scanning the *result*, which only works on the
-  // branch where `A` is unset — the leftover `${B}` is visible. With `A` set —
-  // the normal case, and the entire reason someone writes a default —
-  // substitution succeeded and the stray `}` was appended to the value with
-  // nothing to notice it. For `adminToken` that means the gateway compares
-  // against a credential the operator does not hold. So the decision moved to
-  // the *template*, and `A` set is the case that matters most here.
+  // `${A:-${B}}` is refused from the template, whichever variables are set.
+  // With `A` set, substitution would otherwise succeed and leave a stray `}`
+  // in the value (see assertTemplateIsSupported).
   it.each([
     ['neither variable set', {}],
     ['the inner variable set', { B: 'bee' }],
-    ['the outer variable set — the branch the result-scan missed', { A: 'real-secret-token' }],
+    ['the outer variable set', { A: 'real-secret-token' }],
     ['both set', { A: 'real-secret-token', B: 'bee' }],
   ])('rejects ${A:-${B}} when %s', (_label, env) => {
     expect(() => substituteEnv({ x: '${A:-${B}}' }, env)).toThrowError(/nests placeholders/);
   });
 
-  it('never quotes a resolved value back in an error', () => {
-    // The result-scan reproduced a verbatim fragment of the resolved secret
-    // into the message and into `details`. Deciding from the template means a
-    // value that merely looks like a placeholder is passed through untouched.
-    expect(substituteEnv({ x: '${SECRET}' }, { SECRET: 'prefix-${INNER}-suffix' })).toEqual({
-      x: 'prefix-${INNER}-suffix',
-    });
+  it('neither expands nor validates brace text inside a resolved value', () => {
+    // Checks run on the template, so a secret containing `${...}` passes
+    // through untouched: it is never substituted again, and never refused in
+    // an error that would quote it
+    const secret = 'prefix-${INNER}-${SHELL-form}-suffix';
+    expect(substituteEnv({ x: '${SECRET}' }, { SECRET: secret })).toEqual({ x: secret });
   });
 
-  // Valid shell, unsupported here, and previously loaded as literal text. Most
-  // fields reject the literal downstream; `adminToken` does not, and would run
-  // the gateway with `"${ADMIN_TOKEN-fallback}"` as the ledger credential while
-  // the operator believed an env secret gated it.
+  // Valid shell, unsupported here. Loaded literally, `adminToken` would make
+  // `"${ADMIN_TOKEN-fallback}"` the ledger credential.
   it.each(['${VAR-default}', '${VAR:=default}', '${VAR:?message}'])(
     'rejects the unsupported shell form %s rather than loading it literally',
     (template) => {
@@ -118,7 +112,7 @@ describe('nested placeholders and the unresolved-placeholder promise', () => {
     },
   );
 
-  it('control: a bare $VAR is left alone — it is not brace-shaped', () => {
+  it('control: a bare $VAR is left alone, since it is not brace-shaped', () => {
     expect(substituteEnv({ x: 'pa$$word and $VAR' }, { VAR: 'v' })).toEqual({
       x: 'pa$$word and $VAR',
     });

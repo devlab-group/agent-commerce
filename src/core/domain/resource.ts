@@ -1,45 +1,39 @@
-/**
- * Canonical resource model.
- *
- * FROZEN CONTRACT.
- */
+// Canonical resource model. FROZEN CONTRACT
 import type {
   AuthorizationMethodName,
   DecimalAmount,
   JsonSchema,
   PaymentMethodName,
   ProtocolName,
-} from './common.js';
+} from './common';
 
-/** HTTP methods a backend handler may use. */
+/** HTTP methods a backend handler may use */
 export type BackendMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
 /**
- * Describes how the gateway calls the merchant's existing backend.
+ * How the gateway calls the merchant's existing backend.
  *
- * Backend URLs are administrator-controlled configuration only. User- or
- * agent-controlled backend URLs are forbidden (see docs/security.md, SSRF).
- * Secret header values must come from `${ENV_VAR}` placeholders resolved by
- * the config loader, never from plaintext configuration.
+ * Backend URLs come from operator configuration only, never from users or
+ * agents (docs/security.md, SSRF). Secret header values belong in `${ENV_VAR}`
+ * placeholders resolved by the config loader, not in plaintext configuration.
  */
 export interface BackendHandler {
   readonly type: 'http';
   readonly method: BackendMethod;
   readonly url: string;
   readonly headers?: Readonly<Record<string, string>>;
-  /** Hard upper bound on the backend call. Defaults to DEFAULT_BACKEND_TIMEOUT_MS. */
+  /** Hard upper bound on the backend call. Defaults to `DEFAULT_BACKEND_TIMEOUT_MS` */
   readonly timeoutMs?: number;
   /**
    * Names the top-level input properties carrying each part of the request.
    *
-   * Absent (the default) keeps the original mapping: `{param}` values are read
-   * from top-level input and everything left over becomes either the query
-   * string (GET/DELETE) or the entire JSON body (POST/PUT/PATCH). That mapping
-   * cannot express `POST /users/{userId}/orders?notify=true` with a JSON body
-   * - one perfectly ordinary REST operation with all three parts at once.
+   * When absent, `{param}` values come from top-level input and everything left
+   * over becomes the query string (GET/DELETE) or the whole JSON body
+   * (POST/PUT/PATCH). That cannot express an operation with path, query and
+   * body at once, such as `POST /users/{userId}/orders?notify=true`.
    *
-   * When present, each group is sourced independently and top-level input that
-   * no binding names is not forwarded to the backend at all.
+   * When present, each group comes from its named property, and top-level input
+   * that no binding names is not forwarded.
    */
   readonly inputBindings?: {
     readonly path?: string;
@@ -48,14 +42,12 @@ export interface BackendHandler {
   };
 }
 
-/** Default backend timeout when a resource does not specify one. */
+/** Default backend timeout when a resource does not specify one */
 export const DEFAULT_BACKEND_TIMEOUT_MS = 10_000;
 
 /**
- * Canonical pricing.
- *
- * `dynamic` exists in the type system for forward compatibility but is
- * REJECTED by config validation in this release.
+ * Canonical pricing. `dynamic` exists in the type for forward compatibility;
+ * config validation rejects it and the pipeline refuses it as defense in depth.
  */
 export type Pricing =
   | { readonly type: 'free' }
@@ -70,10 +62,8 @@ export type Pricing =
     };
 
 /**
- * A merchant capability exposed to agents.
- *
- * The canonical resource is the single source of truth: protocol adapters map
- * it outward, they never define their own parallel notion of a resource.
+ * A merchant capability exposed to agents. Protocol adapters map it outward and
+ * never define their own parallel notion of a resource.
  */
 export interface CommerceResource {
   readonly id: string;
@@ -86,23 +76,21 @@ export interface CommerceResource {
   readonly exposedVia: readonly ProtocolName[];
   readonly paymentMethods: readonly PaymentMethodName[];
   /**
-   * Authorization the buyer must present in addition to payment.
-   *
-   * Opt-in per resource and absent by default, so every resource configured
-   * before this existed behaves exactly as it did. It sits beside
-   * `paymentMethods` rather than inside it: an authorization method is not a
-   * payment rail and must never be selectable as one.
+   * Authorization the buyer must present in addition to payment. Opt-in per
+   * resource. It sits beside `paymentMethods`, not inside it, because an
+   * authorization method is not a payment rail and must never be selectable as
+   * one.
    */
   readonly authorization?: {
     readonly required: readonly AuthorizationMethodName[];
   };
 }
 
-/** Read-only view of every configured resource. */
+/** Read-only view of every configured resource */
 export interface ResourceRegistry {
   get(id: string): CommerceResource | undefined;
   list(): readonly CommerceResource[];
-  /** Resources exposed through a given protocol surface. */
+  /** Resources exposed through a given protocol surface */
   listExposedVia(protocol: ProtocolName): readonly CommerceResource[];
   has(id: string): boolean;
 }

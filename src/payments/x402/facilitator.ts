@@ -1,51 +1,43 @@
 /**
- * The facilitator seam.
+ * The facilitator verifies an authorization and broadcasts the transfer. Two
+ * kinds sit behind one interface, both driving the SDK's own code:
  *
- * A facilitator is whatever verifies an authorisation and broadcasts the
- * transfer. This gateway supports two, behind one interface:
+ *   local   the SDK's in-process `x402Facilitator`, signing against a dev node
+ *   remote  the SDK's HTTP facilitator client, with or without a credential
  *
- *   local   the SDK's in-process `x402Facilitator` signing against a dev node
- *   remote  an HTTP facilitator, with or without a credential
- *
- * Both are the SDK's own `FacilitatorClient` contract underneath, so neither
- * is a bespoke reimplementation of the protocol — the local one is the same
- * code a hosted facilitator runs, pointed at the local chain.
- *
- * A *session* is opened per verify/settle call rather than reused, because
- * `transportFailed()` has to be scoped to one request: two concurrent
- * payments must not see each other's transport failures. The cost is an
- * object literal against an RPC or HTTP round-trip.
+ * Each verify or settle call opens its own session so that `transportFailed()`
+ * covers one request only: concurrent payments must not see each other's
+ * transport failures.
  */
 import { x402Facilitator } from '@x402/core/facilitator';
 import { HTTPFacilitatorClient } from '@x402/core/http';
-import type {
-  Network,
-  PaymentPayload,
-  PaymentRequirements,
-  SettleResponse,
-  VerifyResponse,
+import {
+  type Network,
+  type PaymentPayload,
+  type PaymentRequirements,
+  type SettleResponse,
+  VerifyError,
+  type VerifyResponse,
 } from '@x402/core/types';
 import { toFacilitatorEvmSigner } from '@x402/evm';
 import { registerExactEvmScheme } from '@x402/evm/exact/facilitator';
-import { CommerceError } from '../../core/index.js';
-import type { LocalFacilitatorClient } from './chain.js';
-import type { FacilitatorAuth } from './guardrails.js';
+import { CommerceError } from '../../core';
+import type { LocalFacilitatorClient } from './chain';
+import type { FacilitatorAuth } from './guardrails';
 
-/** One verify or one settle, with its own transport-failure flag. */
+/** One verify or one settle, with its own transport-failure flag */
 export interface FacilitatorSession {
   verify(payload: PaymentPayload, requirements: PaymentRequirements): Promise<VerifyResponse>;
   settle(payload: PaymentPayload, requirements: PaymentRequirements): Promise<SettleResponse>;
   /**
-   * True when the call failed to reach the facilitator (or the chain behind
-   * it) rather than producing a verdict.
+   * True when the call produced no verdict: the local binding sets it when an
+   * RPC call to the chain fails in transport, the remote binding on every
+   * throw other than a 400 refusal.
    *
-   * The SDK's `exact`/EVM scheme catches its own RPC errors and reports them
-   * as an ordinary verification failure — an unreachable node comes back as
-   * `invalid_exact_evm_signature`. Fail-closed still holds, but the buyer is
-   * told their signature is bad and the attempt is recorded as their fault,
-   * when nothing about their payment was ever checked. This flag is how the
-   * provider tells "we looked and it was wrong" apart from "we could not
-   * look".
+   * The SDK's `exact`/EVM scheme reports its own RPC errors as ordinary
+   * verification failures: an unreachable node comes back as
+   * `invalid_exact_evm_signature`. Without this flag the buyer would be told
+   * their signature is bad for a payment nothing checked.
    */
   transportFailed(): boolean;
 }
@@ -56,25 +48,28 @@ export interface SupportedKind {
   readonly network: string;
 }
 
-export interface FacilitatorBinding {
-  readonly kind: 'local' | 'remote';
-  /** Human-readable, never a credential. */
+interface BindingBase {
+  /** Human-readable, never a credential */
   readonly describe: string;
   open(): FacilitatorSession;
-  /** What the facilitator says it can settle. Used by health(), not by the payment path. */
-  supported(): Promise<readonly SupportedKind[]>;
 }
 
-/** Bounds every receipt wait the in-process facilitator performs. */
-export const SETTLEMENT_CONFIRMATION_TIMEOUT_MS = 60_000;
+export type FacilitatorBinding =
+  | (BindingBase & { readonly kind: 'local' })
+  | (BindingBase & {
+      readonly kind: 'remote';
+      /** What the facilitator says it can settle. Used by health(), not by the payment path */
+      supported(): Promise<readonly SupportedKind[]>;
+    });
+
+// Bounds each receipt wait of the in-process facilitator, and each request to a
+// remote one
+const SETTLEMENT_CONFIRMATION_TIMEOUT_MS = 60_000;
 
 /**
- * An in-process `x402Facilitator` with the `exact`/EVM scheme registered
- * against exactly one network.
- *
- * One network, not the `eip155:*` wildcard the SDK would otherwise derive: a
- * payload naming some other chain must find no facilitator at all rather than
- * reaching a scheme that would then have to reject it.
+ * An in-process `x402Facilitator` with the `exact`/EVM scheme registered for
+ * one network rather than an `eip155:*` wildcard, so a payload naming another
+ * chain finds no scheme at all
  */
 export function createLocalFacilitatorBinding(
   client: LocalFacilitatorClient,
@@ -89,9 +84,9 @@ export function createLocalFacilitatorBinding(
         throw err;
       });
 
-    // Exactly the `FacilitatorEvmSigner` surface, so the wrapper covers every
-    // call the SDK can make. `toFacilitatorEvmSigner` wants a flat `address`,
-    // which viem carries on `client.account` instead.
+    // Exactly the `FacilitatorEvmSigner` surface, so every call the SDK makes is
+    // watched. `toFacilitatorEvmSigner` wants a flat `address`, which viem
+    // keeps on `client.account`.
     const signer = {
       address: client.account.address,
       readContract: (args: Parameters<LocalFacilitatorClient['readContract']>[0]) =>
@@ -109,8 +104,8 @@ export function createLocalFacilitatorBinding(
         watch(client.getCode(args)),
     } as unknown as Parameters<typeof toFacilitatorEvmSigner>[0];
 
-    // `confirmationTimeoutMs` is what turns a lost receipt wait into
-    // `settlement_pending` + the broadcast hash instead of a discarded broadcast.
+    // `confirmationTimeoutMs` turns a lost receipt wait into `settlement_pending`
+    // with the broadcast hash, instead of a discarded broadcast
     const facilitator = registerExactEvmScheme(new x402Facilitator(), {
       signer: toFacilitatorEvmSigner(signer, {
         confirmationTimeoutMs: SETTLEMENT_CONFIRMATION_TIMEOUT_MS,
@@ -132,32 +127,26 @@ export function createLocalFacilitatorBinding(
         transportFailed: failed,
       };
     },
-    async supported(): Promise<readonly SupportedKind[]> {
-      return build().facilitator.getSupported().kinds;
-    },
   };
 }
 
 export interface RemoteFacilitatorOptions {
   readonly url: string;
   readonly auth: FacilitatorAuth;
-  readonly timeoutMs?: number;
 }
 
-/** The SDK's path-keyed auth-header shape. A flat object throws inside it. */
+// The SDK's path-keyed auth-header shape. A flat object throws inside it
 type AuthHeaderFactory = () => Promise<Record<string, Record<string, string>>>;
 
 /**
- * CDP signs a fresh JWT per request over method + host + path, so a static
- * header cannot express it. `@coinbase/x402` does that signing, and is
- * imported dynamically: a static import would drag the whole CDP SDK — and its
- * Solana, axios and JOSE dependencies — into the `/x402` subpath for everyone,
- * including the majority who use a facilitator that needs no credential at all.
+ * CDP needs a fresh JWT per request over method, host and path, which a static
+ * header cannot express. The optional peer `@coinbase/x402` does the signing.
+ * It is imported dynamically, so only `auth.type: cdp` pulls in the CDP SDK and
+ * its Solana, axios and JOSE dependencies.
  *
- * The import is started at construction rather than on the first payment. A
- * missing peer must surface as an unhealthy provider before a buyer signs
- * anything, not as a failure inside verify() with their authorisation already
- * spent.
+ * The import starts at construction, so a missing peer fails the health check
+ * before any payment needs it. A payment that arrives first fails as
+ * `PAYMENT_PROVIDER_UNAVAILABLE`, never as a rejection blamed on the buyer.
  */
 function cdpAuthHeaders(apiKeyId: string, apiKeySecret: string): AuthHeaderFactory {
   const loading = import('@coinbase/x402').then(
@@ -172,8 +161,8 @@ function cdpAuthHeaders(apiKeyId: string, apiKeySecret: string): AuthHeaderFacto
       );
     },
   );
-  // Nothing awaits this until the first call; without a handler the rejection
-  // above would be an unhandled promise rejection at startup.
+  // Nothing awaits this before the first call, so without a handler a failed
+  // import would be an unhandled rejection at startup
   loading.catch(() => {});
 
   return async () => {
@@ -189,10 +178,31 @@ function cdpAuthHeaders(apiKeyId: string, apiKeySecret: string): AuthHeaderFacto
 }
 
 /**
- * An HTTP facilitator.
- *
- * Auth headers are produced per request by the SDK client and never logged,
- * never echoed into `/.well-known`, and never included in `describe`.
+ * A 400 from `/verify` whose body names an `invalidReason` is the facilitator
+ * refusing the payment, so it returns as an invalid verdict. The SDK throws it
+ * as a `VerifyError`, which keeps the status and reason but not `isValid`.
+ * A 400 without a reason and every other status, 401, 403, 429 and 5xx
+ * included, are rethrown as "no verdict".
+ */
+function verdictFromVerifyError(err: unknown): VerifyResponse {
+  if (
+    err instanceof VerifyError &&
+    err.statusCode === 400 &&
+    typeof err.invalidReason === 'string'
+  ) {
+    return {
+      isValid: false,
+      invalidReason: err.invalidReason,
+      ...(err.payer !== undefined ? { payer: err.payer } : {}),
+    };
+  }
+  throw err;
+}
+
+/**
+ * An HTTP facilitator. The SDK client produces the auth headers per request;
+ * this module never logs them, and they appear neither in `/.well-known` nor
+ * in `describe`.
  */
 export function createRemoteFacilitatorBinding(
   options: RemoteFacilitatorOptions,
@@ -201,8 +211,7 @@ export function createRemoteFacilitatorBinding(
   let createAuthHeaders: AuthHeaderFactory | undefined;
   if (auth.type === 'bearer') {
     createAuthHeaders = async () => {
-      // The SDK requires a path-keyed object; a flat headers object throws
-      // rather than silently dropping auth on every request.
+      // Path-keyed, as the SDK requires (see `AuthHeaderFactory`)
       const headers = { Authorization: `Bearer ${auth.token}` };
       return { verify: headers, settle: headers, supported: headers };
     };
@@ -212,7 +221,7 @@ export function createRemoteFacilitatorBinding(
 
   const client = new HTTPFacilitatorClient({
     url: options.url,
-    timeoutMs: options.timeoutMs ?? SETTLEMENT_CONFIRMATION_TIMEOUT_MS,
+    timeoutMs: SETTLEMENT_CONFIRMATION_TIMEOUT_MS,
     ...(createAuthHeaders ? { createAuthHeaders } : {}),
   });
 
@@ -225,26 +234,21 @@ export function createRemoteFacilitatorBinding(
         try {
           return await call();
         } catch (err) {
-          // *Any* throw out of the SDK client means no verdict was obtained.
-          // A verdict arrives as a returned `VerifyResponse`/`SettleResponse`,
-          // including a negative one; the client only throws when it could not
-          // reach the facilitator, could not authenticate to it, got a non-2xx,
-          // or could not parse what came back. None of those are facts about
-          // the payment, and recording them against the payer would blame the
-          // buyer for our credential or the facilitator's outage.
-          //
-          // Deliberately not a predicate over error shapes: the SDK throws a
-          // bare `Error` for an HTTP status (`Facilitator verify failed (401)`)
-          // and a `FacilitatorResponseError` for a bad body, so matching on
-          // type or message would have missed exactly the credential case that
-          // matters most. For settle() this also preserves the indeterminate
-          // reading — a timeout may have settled after we stopped waiting.
+          // A throw here means no verdict (`verdictFromVerifyError` has already
+          // turned a 400 refusal into one): the client could not reach or
+          // authenticate to the facilitator, got another non-2xx, or could not
+          // parse the body. None of that may be recorded against the payer.
+          // Every throw counts, whatever its type: the SDK can report a 401 as a
+          // bare `Error`, so no type singles out a credential failure. For
+          // settle(), the facilitator may have settled after we stopped waiting,
+          // so the outcome stays unknown.
           failed = true;
           throw err;
         }
       };
       return {
-        verify: (payload, requirements) => watch(() => client.verify(payload, requirements)),
+        verify: (payload, requirements) =>
+          watch(() => client.verify(payload, requirements).catch(verdictFromVerifyError)),
         settle: (payload, requirements) => watch(() => client.settle(payload, requirements)),
         transportFailed: () => failed,
       };

@@ -10,7 +10,7 @@ export {
   type Ap2SigningKey,
   type CreateCheckoutJwtOptions,
   createCheckoutJwt,
-} from './checkout-signer.js';
+} from './checkout-signer';
 export {
   AP2_CHECKOUT_MANDATE_VCT,
   AP2_CHECKOUT_PROFILE,
@@ -21,27 +21,27 @@ export {
   AP2_SIGNING_ALGORITHM,
   AP2_SPEC_VERSION,
   type Ap2Mode,
-} from './constants.js';
+} from './constants';
 export {
   AP2_CAPABILITIES,
   AP2_UNSUPPORTED,
   buildAp2Descriptor,
-} from './descriptor.js';
-export { AP2_REJECTION_REASONS, type Ap2RejectionReason } from './errors.js';
+} from './descriptor';
+export { AP2_REJECTION_REASONS, type Ap2RejectionReason } from './errors';
 export {
   type Ap2AuthorizationProvider,
   type Ap2AuthorizationProviderOptions,
   createAp2AuthorizationProvider,
-} from './provider.js';
+} from './provider';
 export {
   type Ap2AuthorizationState,
   type Ap2ReplayStore,
   createAp2ReplayStore,
-} from './replay-store.js';
+} from './replay-store';
 export type {
   Ap2AuthorizationConfig,
   Ap2TrustedIssuer,
   Ap2TrustedKey,
   EnabledAp2Config,
   VerifiedCheckoutMandate,
-} from './types.js';
+} from './types';

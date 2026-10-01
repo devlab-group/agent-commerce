@@ -9,19 +9,19 @@ import { Challenge, Receipt } from 'mppx';
 import { charge as clientCharge } from 'mppx/evm/client';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { GatewayConfig } from '../../src/config/index.js';
+import type { GatewayConfig } from '../../src/config';
 import {
   type BackendExecutor,
   PAYMENT_HEADER,
   PAYMENT_INPUT_FIELD,
   type ReceiptStore,
-} from '../../src/core/index.js';
-import { createGateway, type GatewayInstance } from '../../src/gateway/index.js';
-import { createMppPaymentProvider } from '../../src/payments/mpp/provider.js';
-import { createA2aAdapter } from '../../src/protocols/a2a/index.js';
-import { createMcpAdapter } from '../../src/protocols/mcp/index.js';
-import { createSqliteReceiptStore } from '../../src/storage/receipts/index.js';
-import { createFakeStore } from '../unit/gateway/helpers.js';
+} from '../../src/core';
+import { createGateway, type GatewayInstance } from '../../src/gateway';
+import { createMppPaymentProvider } from '../../src/payments/mpp/provider';
+import { createA2aAdapter } from '../../src/protocols/a2a';
+import { createMcpAdapter } from '../../src/protocols/mcp';
+import { createSqliteReceiptStore } from '../../src/storage/receipts';
+import { createFakeStore } from '../unit/gateway/helpers';
 
 process.env['NODE_ENV'] = 'test';
 
@@ -281,6 +281,8 @@ describe('MPP over HTTP', () => {
     const credential = await credentialFor((await invokeHttp(gw)).headers['www-authenticate']);
     const res = await invokeHttp(gw, { [PAYMENT_HEADER]: credential });
     expect(res.statusCode).toBe(402);
+    expect(res.json()).toMatchObject({ code: 'PAYMENT_REQUIRED' });
+    expect(facilitator.verify).not.toHaveBeenCalled();
     expect(facilitator.settle).not.toHaveBeenCalled();
   });
 });

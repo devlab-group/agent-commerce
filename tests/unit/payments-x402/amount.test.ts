@@ -1,6 +1,7 @@
+import { formatUnits } from 'viem';
 import { describe, expect, it } from 'vitest';
-import { isCommerceError } from '../../../src/core/index.js';
-import { formatCanonicalAmount, parseCanonicalAmount } from '../../../src/payments/x402/amount.js';
+import { isCommerceError } from '../../../src/core';
+import { parseCanonicalAmount } from '../../../src/payments/x402/amount';
 
 describe('parseCanonicalAmount', () => {
   it('converts "0.01" at 6 decimals to 10000n', () => {
@@ -51,8 +52,8 @@ describe('parseCanonicalAmount', () => {
   });
 
   it('never produces a floating point rounding artifact (0.1 + 0.2 style bug)', () => {
-    // 0.1 in float is 0.1000000000000000055511151231257827021181583404541015625 —
-    // this must convert exactly, not via Number arithmetic.
+    // 0.1 as a float is 0.1000000000000000055511151231257827021181583404541015625,
+    // so this must convert exactly, not through Number arithmetic
     expect(parseCanonicalAmount('0.1', 6)).toBe(100_000n);
   });
 
@@ -65,37 +66,10 @@ describe('parseCanonicalAmount', () => {
   });
 });
 
-describe('formatCanonicalAmount', () => {
-  it('formats base units back to "0.01"', () => {
-    expect(formatCanonicalAmount(10_000n, 6)).toBe('0.01');
-  });
-
-  it('formats whole units without a trailing decimal point', () => {
-    expect(formatCanonicalAmount(1_000_000n, 6)).toBe('1');
-  });
-
-  it('formats the smallest unit', () => {
-    expect(formatCanonicalAmount(1n, 6)).toBe('0.000001');
-  });
-
-  it('formats zero as "0"', () => {
-    expect(formatCanonicalAmount(0n, 6)).toBe('0');
-  });
-
-  it('rejects a negative decimals count', () => {
-    expect(() => formatCanonicalAmount(1n, -1)).toThrow();
-  });
-
-  it('formats a negative bigint with a leading minus sign', () => {
-    // Not a realistic payment amount, but formatCanonicalAmount is a pure
-    // function and must handle it correctly (defensive branch).
-    expect(formatCanonicalAmount(-10_000n, 6)).toBe('-0.01');
-  });
-
-  it('round-trips parseCanonicalAmount for a range of values', () => {
+describe('parseCanonicalAmount and viem formatUnits', () => {
+  it('round-trip exactly, as the provider relies on', () => {
     for (const amount of ['0.01', '1', '0.000001', '123.456789', '0']) {
-      const baseUnits = parseCanonicalAmount(amount, 6);
-      expect(formatCanonicalAmount(baseUnits, 6)).toBe(amount === '0' ? '0' : amount);
+      expect(formatUnits(parseCanonicalAmount(amount, 6), 6)).toBe(amount);
     }
   });
 });

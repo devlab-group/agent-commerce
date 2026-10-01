@@ -1,25 +1,11 @@
 /**
- * Reusable "prove a real settlement happened" helper.
- *
- * A console message saying "payment successful" is not proof: the provider can
- * report success while nothing moved on-chain. This module reads actual
- * ERC-20 balances and actual transaction receipts, so the payment E2E suite —
- * and any later cross-area E2E that reuses it — asserts real settlement state
- * rather than a self-reported one.
+ * Proof that a settlement happened, from on-chain state: ERC-20 balances and
+ * transaction receipts, never the provider's own report of success
  */
 
-import { createPublicClient, http, type PublicClient } from 'viem';
+import { setTimeout as sleep } from 'node:timers/promises';
+import { createPublicClient, erc20Abi, http, type PublicClient } from 'viem';
 import { expect } from 'vitest';
-
-const BALANCE_OF_ABI = [
-  {
-    type: 'function',
-    name: 'balanceOf',
-    stateMutability: 'view',
-    inputs: [{ name: 'account', type: 'address' }],
-    outputs: [{ name: '', type: 'uint256' }],
-  },
-] as const;
 
 export interface Erc20BalanceQuery {
   readonly rpcUrl: string;
@@ -37,19 +23,19 @@ function client(rpcUrl: string): PublicClient {
   return createPublicClient({ transport: http(rpcUrl) });
 }
 
-/** Reads the buyer's and merchant's current on-chain ERC-20 balances. */
+/** Reads the buyer's and merchant's current on-chain ERC-20 balances */
 export async function readBalances(query: Erc20BalanceQuery): Promise<BalanceSnapshot> {
   const publicClient = client(query.rpcUrl);
   const [buyer, merchant] = await Promise.all([
     publicClient.readContract({
       address: query.asset,
-      abi: BALANCE_OF_ABI,
+      abi: erc20Abi,
       functionName: 'balanceOf',
       args: [query.buyer],
     }),
     publicClient.readContract({
       address: query.asset,
-      abi: BALANCE_OF_ABI,
+      abi: erc20Abi,
       functionName: 'balanceOf',
       args: [query.merchant],
     }),
@@ -57,10 +43,7 @@ export async function readBalances(query: Erc20BalanceQuery): Promise<BalanceSna
   return { buyer, merchant };
 }
 
-/**
- * Asserts a real, on-chain transaction exists and succeeded — not merely
- * that some string looking like a hash was returned.
- */
+/** Asserts that the transaction exists on-chain and succeeded, not just that a hash came back */
 export async function assertTransactionSucceeded(rpcUrl: string, txHash: string): Promise<void> {
   expect(txHash).toMatch(/^0x[0-9a-fA-F]{64}$/);
   const publicClient = client(rpcUrl);
@@ -70,10 +53,7 @@ export async function assertTransactionSucceeded(rpcUrl: string, txHash: string)
   expect(receipt.transactionHash.toLowerCase()).toBe(txHash.toLowerCase());
 }
 
-/**
- * Asserts that settlement moved *exactly* `amountBaseUnits` from buyer to
- * merchant — buyer down, merchant up, by the same amount, no more, no less.
- */
+/** Asserts that settlement moved exactly `amountBaseUnits` from buyer to merchant */
 export function assertBalanceDelta(
   before: BalanceSnapshot,
   after: BalanceSnapshot,
@@ -83,10 +63,7 @@ export function assertBalanceDelta(
   expect(after.merchant - before.merchant).toBe(amountBaseUnits);
 }
 
-/**
- * Full settlement proof in one call: real balance deltas AND a real,
- * successful on-chain transaction.
- */
+/** Full settlement proof: exact balance deltas and a successful on-chain transaction */
 export async function expectRealSettlement(options: {
   readonly rpcUrl: string;
   readonly asset: `0x${string}`;
@@ -105,7 +82,8 @@ export async function expectRealSettlement(options: {
  * Polls balances until `predicate` holds or the timeout passes, and returns
  * the last snapshot read. It throws only when no snapshot was ever read. It
  * waits out a public RPC node that lags the facilitator's by a block or two;
- * callers still assert the exact delta.
+ * callers still assert the exact delta. It reads every 6 s, because a public
+ * endpoint may rate-limit a faster loop.
  */
 export async function waitForBalances(
   query: Erc20BalanceQuery,
@@ -124,7 +102,7 @@ export async function waitForBalances(
       // A public RPC rate-limiting the poll is not evidence about the payment
       lastError = err;
     }
-    await new Promise((resolve) => setTimeout(resolve, 3_000));
+    await sleep(6_000);
   }
   if (snapshot) return snapshot;
   throw lastError ?? new Error('no balance snapshot was ever read');

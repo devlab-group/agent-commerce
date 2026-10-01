@@ -12,24 +12,20 @@
  * stubbed, because what is under test is everything in front of it.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { AP2_CHECKOUT_PROFILE } from '../../../src/authorization/ap2/constants.js';
 import {
   type Ap2AuthorizationProvider,
   createAp2AuthorizationProvider,
-} from '../../../src/authorization/ap2/index.js';
-import { computeInputHash } from '../../../src/authorization/ap2/profile.js';
-import { type GatewayConfig, parseConfig } from '../../../src/config/index.js';
-import type { BackendExecutor, ReceiptStore } from '../../../src/core/index.js';
-import { AUTHORIZATION_HEADER, PAYMENT_HEADER } from '../../../src/core/index.js';
-import { createGateway, type GatewayInstance } from '../../../src/gateway/index.js';
-import { createPaymentProof, createX402PaymentProvider } from '../../../src/payments/x402/index.js';
-import {
-  type AnvilHandle,
-  deployLocalChain,
-  startAnvil,
-} from '../../../src/payments/x402/testing.js';
-import { createSqliteReceiptStore } from '../../../src/storage/receipts/index.js';
-import { expectRealSettlement, readBalances } from '../../fixtures/x402/settlement.js';
+} from '../../../src/authorization/ap2';
+import { AP2_CHECKOUT_PROFILE } from '../../../src/authorization/ap2/constants';
+import { computeInputHash } from '../../../src/authorization/ap2/profile';
+import { type GatewayConfig, parseConfig } from '../../../src/config';
+import type { BackendExecutor, ReceiptStore } from '../../../src/core';
+import { AUTHORIZATION_HEADER, PAYMENT_HEADER } from '../../../src/core';
+import { createGateway, type GatewayInstance } from '../../../src/gateway';
+import { createPaymentProof, createX402PaymentProvider } from '../../../src/payments/x402';
+import { type AnvilHandle, deployLocalChain, startAnvil } from '../../../src/payments/x402/testing';
+import { createSqliteReceiptStore } from '../../../src/storage/receipts';
+import { expectRealSettlement, readBalances } from '../../fixtures/x402/settlement';
 import {
   checkoutPayload,
   createParties,
@@ -37,7 +33,7 @@ import {
   mintMandate,
   type Party,
   signCheckoutJwt,
-} from '../../unit/authorization-ap2/fixtures.js';
+} from '../../unit/authorization-ap2/fixtures';
 
 const PORT = 18791;
 const RESOURCE_ID = 'market_report';
@@ -129,15 +125,18 @@ async function balances() {
   });
 }
 
-// A mandate approving exactly what the gateway's own x402 challenge asks for
+// A mandate approving exactly what the gateway's own x402 challenge asks for.
+// Each binds its own checkout `jti`: a shared one would be refused as a replay
+// of whichever mandate spent it first.
 async function mandateForChallenge(): Promise<string> {
   const jwt = await signCheckoutJwt(
     parties.checkoutSigner,
     checkoutPayload({
+      jti: `checkout_${crypto.randomUUID()}`,
       agent_commerce: {
         profile: AP2_CHECKOUT_PROFILE,
         resource_id: RESOURCE_ID,
-        input_hash: await computeInputHash(INPUT),
+        input_hash: computeInputHash(INPUT),
         amount: AMOUNT,
         currency: CURRENCY,
         payment_method: 'x402',
@@ -178,7 +177,6 @@ async function freshProof(): Promise<string> {
   const payment = challenge.body['payment'] as { accepts: Record<string, unknown>[] };
   return createPaymentProof({
     buyerPrivateKey: deployment.buyer.privateKey,
-    rpcUrl: anvil.rpcUrl,
     accepts: payment.accepts[0] as Record<string, unknown>,
   });
 }
@@ -274,13 +272,14 @@ describe('AP2-gated purchase over x402 - real local chain', () => {
   it('3. the same mandate with a fresh payment proof moves no second payment', async () => {
     const proof = await freshProof();
     const presentation = await mandateForChallenge();
-    await invoke({
+    const first = await invoke({
       [PAYMENT_HEADER]: proof,
       [AUTHORIZATION_HEADER]: carrier(presentation),
     });
+    expect(first.statusCode).toBe(200);
 
-    // A brand-new, perfectly good payment authorisation. Only the mandate is
-    // reused, so nothing but the mandate can be what refuses this.
+    // A new, valid payment authorization. Only the mandate is reused, so only
+    // the mandate can be what refuses this.
     const replayProof = await freshProof();
     const before = await balances();
     const callsBefore = backendCalls;
@@ -306,7 +305,7 @@ describe('AP2-gated purchase over x402 - real local chain', () => {
         agent_commerce: {
           profile: AP2_CHECKOUT_PROFILE,
           resource_id: RESOURCE_ID,
-          input_hash: await computeInputHash(INPUT),
+          input_hash: computeInputHash(INPUT),
           amount: '0.01',
           currency: CURRENCY,
           payment_method: 'x402',

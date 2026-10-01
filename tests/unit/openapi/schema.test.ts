@@ -1,7 +1,7 @@
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { convertSchema, loadOpenApiDocument } from '../../../src/openapi/index.js';
+import { convertSchema, loadOpenApiDocument } from '../../../src/openapi';
 
 const fixture = (name: string): string =>
   join(fileURLToPath(new URL('./fixtures/', import.meta.url)), name);
@@ -76,7 +76,7 @@ describe('convertSchema', () => {
 
   it('drops tuple-form items rather than implying they are checked', () => {
     // Tuple `items` is not legal OpenAPI 3.0, so it is converted directly
-    // rather than through a fixture the loader would reject.
+    // rather than through a fixture the loader would reject
     const result = convertSchema(document, {
       type: 'array',
       items: [{ type: 'string' }, { type: 'integer' }],
@@ -128,6 +128,47 @@ describe('convertSchema', () => {
     const result = convert('ConflictingAllOf');
     expect(result.supported).toBe(false);
     expect(!result.supported && result.reason).toContain('cannot be merged');
+  });
+
+  it('merges allOf branches that declare a property identically in a different key order', () => {
+    const result = convertSchema(document, {
+      allOf: [
+        {
+          type: 'object',
+          properties: {
+            address: { type: 'object', properties: { street: {}, city: {} } },
+          },
+        },
+        {
+          type: 'object',
+          properties: {
+            address: { type: 'object', properties: { city: {}, street: {} } },
+          },
+        },
+      ],
+    });
+    expect(result.supported).toBe(true);
+  });
+
+  it('refuses an allOf it can only merge by widening what is accepted', () => {
+    const object = { type: 'object', properties: { id: { type: 'string' } } };
+    for (const [branch, reason] of [
+      [{ enum: [{ id: 'a' }] }, '"enum"'],
+      [{ type: 'object', items: { type: 'string' } }, '"items"'],
+      [{ type: 'string' }, 'mixes object and non-object'],
+    ] as const) {
+      const result = convertSchema(document, { allOf: [object, branch] });
+      expect(!result.supported && result.reason).toContain(reason);
+    }
+  });
+
+  it('refuses a "__proto__" property instead of losing it while it stays required', () => {
+    // JSON.parse makes "__proto__" an own key, as the YAML and JSON loaders do
+    const node: unknown = JSON.parse(
+      '{"type":"object","properties":{"__proto__":{"type":"string"}},"required":["__proto__"]}',
+    );
+    const result = convertSchema(document, node);
+    expect(!result.supported && result.reason).toContain('"__proto__" property');
   });
 
   it('refuses oneOf/anyOf/not rather than widening what is accepted', () => {

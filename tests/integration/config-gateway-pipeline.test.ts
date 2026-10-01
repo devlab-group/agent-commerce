@@ -1,19 +1,18 @@
 /**
- * Cross-package integration: config.yaml -> src/config
- * -> src/gateway (which wires src/core's
- * execution pipeline internally). No dependency on protocol-mcp, payment-x402
- * or receipt-store — those are fakes here, so a failure points at the
- * config/gateway/pipeline seam and not at an adapter.
+ * Integration across config.yaml, src/config and src/gateway, which wires
+ * src/core's pipeline. The payment provider and receipt store are fakes and no
+ * protocol adapter is mounted, so a failure points at the
+ * config/gateway/pipeline seam.
  */
 import { promises as fs } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
-// Keep test output quiet and avoid spawning a pino-pretty worker thread.
+// Keep test output quiet and avoid spawning a pino-pretty worker thread
 process.env['NODE_ENV'] = 'test';
 
-import { loadConfig, parseConfig } from '../../src/config/index.js';
+import { loadConfig, parseConfig } from '../../src/config';
 import {
   type AdapterDescriptor,
   type Clock,
@@ -32,8 +31,8 @@ import {
   type PaymentSettlementContext,
   type PaymentVerificationContext,
   type ReceiptStore,
-} from '../../src/core/index.js';
-import { createGateway, type GatewayInstance } from '../../src/gateway/index.js';
+} from '../../src/core';
+import { createGateway, type GatewayInstance } from '../../src/gateway';
 
 const descriptor: AdapterDescriptor = {
   name: 'fake',
@@ -323,7 +322,10 @@ describe('config -> gateway -> core execution pipeline (integration)', () => {
       });
       expect(paid.statusCode).toBe(200);
       expect(paid.json()).toEqual({ report: 'premium data' });
-      expect(paid.headers[PAYMENT_RESPONSE_HEADER]).toBeDefined();
+      const settlement = JSON.parse(
+        Buffer.from(String(paid.headers[PAYMENT_RESPONSE_HEADER]), 'base64').toString('utf8'),
+      );
+      expect(settlement).toMatchObject({ success: true, transaction: '0xTXHASH' });
       expect(store.receipts).toHaveLength(1);
       expect(store.receipts[0]?.payment?.status).toBe('settled');
     })();
@@ -331,7 +333,9 @@ describe('config -> gateway -> core execution pipeline (integration)', () => {
 
   it('config validation errors surface before any gateway is created, and never print the facilitator key', () => {
     const raw = buildRawConfig();
-    (raw.payments as { x402: Record<string, unknown> }).x402['payTo'] = 'not-an-address';
+    // An operator swaps two variables: the refused value is the key itself
+    (raw.payments as { x402: Record<string, unknown> }).x402['payTo'] =
+      '${X402_FACILITATOR_PRIVATE_KEY}';
 
     let thrown: unknown;
     try {
@@ -342,6 +346,7 @@ describe('config -> gateway -> core execution pipeline (integration)', () => {
     expect(isCommerceError(thrown)).toBe(true);
     if (isCommerceError(thrown)) {
       expect(thrown.code).toBe('CONFIG_INVALID');
+      expect(thrown.details).toEqual({ path: 'payments.x402.payTo' });
       expect(JSON.stringify(thrown.details)).not.toContain(ENV.X402_FACILITATOR_PRIVATE_KEY);
       expect(thrown.message).not.toContain(ENV.X402_FACILITATOR_PRIVATE_KEY);
     }

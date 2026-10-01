@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { isCommerceError } from '../../../src/core/index.js';
+import { isCommerceError } from '../../../src/core';
 import {
   assertDevKeyIsLocalOnly,
   assertPayToIsNotDevAddress,
   isLikelyLocalOrPrivateHost,
   isWellKnownDevKey,
-} from '../../../src/payments/x402/dev-key-guard.js';
-import { ANVIL_WELL_KNOWN_ACCOUNTS } from '../../../src/payments/x402/local-chain/accounts.js';
+} from '../../../src/payments/x402/dev-key-guard';
+import { ANVIL_WELL_KNOWN_ACCOUNTS } from '../../../src/payments/x402/local-chain/accounts';
 
 const DEV_KEY = ANVIL_WELL_KNOWN_ACCOUNTS[0].privateKey;
 const REAL_KEY = `0x${'11'.repeat(32)}` as `0x${string}`;
@@ -14,7 +14,7 @@ const DEV_PAY_TO = ANVIL_WELL_KNOWN_ACCOUNTS[1].address;
 const REAL_PAY_TO = `0x${'f0'.repeat(20)}`;
 
 describe('isWellKnownDevKey', () => {
-  it('recognises every Anvil well-known key, case-insensitively', () => {
+  it('recognizes every Anvil well-known key, case-insensitively', () => {
     for (const account of ANVIL_WELL_KNOWN_ACCOUNTS) {
       expect(isWellKnownDevKey(account.privateKey)).toBe(true);
       expect(isWellKnownDevKey(account.privateKey.toUpperCase())).toBe(true);
@@ -53,7 +53,7 @@ describe('isLikelyLocalOrPrivateHost', () => {
   });
 });
 
-describe('assertDevKeyIsLocalOnly — adversarial cases', () => {
+describe('assertDevKeyIsLocalOnly - adversarial cases', () => {
   it('rejects a well-known dev key pointed at a public-looking RPC', () => {
     expect(() => assertDevKeyIsLocalOnly('https://sepolia.base.org', DEV_KEY)).toThrow();
     try {
@@ -73,7 +73,7 @@ describe('assertDevKeyIsLocalOnly — adversarial cases', () => {
     expect(() => assertDevKeyIsLocalOnly('http://anvil:8545', DEV_KEY)).not.toThrow();
   });
 
-  it("allows a real (non-dev) key against a public RPC — someone's own facilitator", () => {
+  it("allows a real (non-dev) key against a public RPC - someone's own facilitator", () => {
     expect(() => assertDevKeyIsLocalOnly('https://sepolia.base.org', REAL_KEY)).not.toThrow();
   });
 
@@ -98,9 +98,8 @@ describe('assertDevKeyIsLocalOnly — adversarial cases', () => {
   });
 
   it('rejects a malformed key even against a public-looking RPC (not silently treated as "someone else\'s real key")', () => {
-    // Regression for the bug thefound: a shape check must
-    // run before the well-known-key lookup, so a garbage string can never
-    // fall through the `!isWellKnownDevKey` early exit and return cleanly.
+    // The shape check must run before the well-known-key lookup, or a garbage
+    // string falls through the `!isWellKnownDevKey` early exit and passes
     expect(() =>
       assertDevKeyIsLocalOnly('https://sepolia.base.org', 'not-a-private-key-at-all'),
     ).toThrow();
@@ -123,7 +122,7 @@ describe('assertDevKeyIsLocalOnly — adversarial cases', () => {
   });
 });
 
-describe('assertPayToIsNotDevAddress — adversarial cases', () => {
+describe('assertPayToIsNotDevAddress - adversarial cases', () => {
   it('rejects a well-known dev payTo address pointed at a public-looking RPC', () => {
     expect(() => assertPayToIsNotDevAddress('https://mainnet.base.org', DEV_PAY_TO)).toThrow();
     try {
@@ -143,7 +142,7 @@ describe('assertPayToIsNotDevAddress — adversarial cases', () => {
     expect(() => assertPayToIsNotDevAddress('http://anvil:8545', DEV_PAY_TO)).not.toThrow();
   });
 
-  it("allows a real (non-dev) payTo against a public RPC — someone's own merchant wallet", () => {
+  it("allows a real (non-dev) payTo against a public RPC - someone's own merchant wallet", () => {
     expect(() => assertPayToIsNotDevAddress('https://mainnet.base.org', REAL_PAY_TO)).not.toThrow();
   });
 

@@ -6,10 +6,10 @@
  * a merchant body, a stack, a database string, a backend URL - come with it.
  */
 import { describe, expect, it } from 'vitest';
-import { CommerceError, type CommerceErrorCode } from '../../../src/core/index.js';
-import { createAcpAdapter } from '../../../src/protocols/acp/adapter.js';
-import { ACP_SPEC_VERSION } from '../../../src/protocols/acp/constants.js';
-import { validateAcpDocument } from '../../../src/protocols/acp/validation.js';
+import { CommerceError, type CommerceErrorCode } from '../../../src/core';
+import { createAcpAdapter } from '../../../src/protocols/acp/adapter';
+import { ACP_SPEC_VERSION } from '../../../src/protocols/acp/constants';
+import { validateAcpDocument } from '../../../src/protocols/acp/validation';
 import {
   ACP_EXAMPLES,
   adapterOptions,
@@ -19,7 +19,7 @@ import {
   sessionDocument,
   setup,
   TOKEN,
-} from './fixtures.js';
+} from './fixtures';
 
 interface Sent {
   status: number;
@@ -108,7 +108,7 @@ describe('ACP success responses', () => {
 
   // A completion that ends in a declined payment is a legitimate 200 with an
   // ordinary session and no order - both are examples in the snapshot - so the
-  // session's own status decides which contract applies.
+  // session's own status decides which contract applies
   it('accepts a completion that did not complete, and requires no order for it', async () => {
     const { context } = setup(
       delivered(ACP_EXAMPLES['checkout_session_with_payment_declined'], 200),
@@ -135,8 +135,8 @@ describe('ACP success responses', () => {
 });
 
 describe('ACP refuses a non-conformant merchant answer', () => {
-  // Silently renumbering a merchant 200 to ACP's 201 would publish a backend
-  // that has not implemented the operation as if it had.
+  // Silently renumbering a merchant 200 to ACP's 201 would present a backend
+  // that has not implemented the operation as if it had
   it('fails safely when create succeeds with the wrong status', async () => {
     const { context } = setup(delivered(sessionDocument(), 200));
     const result = await send(context, { body: CREATE_BODY });
@@ -173,17 +173,20 @@ describe('ACP error mapping', () => {
 
   it.each([
     ['a backend 404', 'BACKEND_ERROR', { status: 404 }, 404, 'checkout_session_not_found'],
+    ['a backend 400', 'BACKEND_ERROR', { status: 400 }, 422, 'invalid_request_body'],
     ['a backend 422', 'BACKEND_ERROR', { status: 422 }, 422, 'invalid_request_body'],
     ['a backend 409', 'BACKEND_ERROR', { status: 409 }, 409, 'checkout_session_conflict'],
+    ['a backend 405 outside cancel', 'BACKEND_ERROR', { status: 405 }, 405, 'method_not_allowed'],
     ['a backend 500', 'BACKEND_ERROR', { status: 500 }, 502, 'processing_error'],
-    // Relaying it would tell the agent its own bearer token failed.
+    ['a backend error with no status', 'BACKEND_ERROR', undefined, 502, 'processing_error'],
+    // Relaying it would tell the agent its own bearer token failed
     ['a backend 401', 'BACKEND_ERROR', { status: 401 }, 502, 'processing_error'],
     ['a timeout', 'BACKEND_TIMEOUT', undefined, 504, 'service_unavailable'],
     ['invalid input', 'INPUT_INVALID', undefined, 400, 'invalid_request_body'],
     ['a broken mapping', 'RESOURCE_NOT_FOUND', undefined, 500, 'processing_error'],
     ['a storage failure', 'STORAGE_ERROR', undefined, 500, 'processing_error'],
     ['load shedding', 'GATEWAY_BUSY', undefined, 503, 'service_unavailable'],
-    // A checkout resource can only be paid through a configuration mistake.
+    // A checkout resource can only be paid through a configuration mistake
     ['a payment failure', 'PAYMENT_INVALID', undefined, 500, 'processing_error'],
   ] as const)('maps %s', async (_label, code, details, status, expectedCode) => {
     const { context } = failing(code, details as Record<string, unknown> | undefined);

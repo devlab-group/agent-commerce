@@ -1,28 +1,14 @@
 /**
- * Local deterministic chain wiring.
+ * viem clients for the x402 provider, built on the configured `rpcUrl`. The
+ * SDK uses the client it is handed, so the provider's chain calls reach no
+ * other RPC.
  *
- * The x402 SDK resolves RPC endpoints for public networks from its own
- * tables — exactly what we must never touch: the tests must stay
- * deterministic. Instead we build plain viem clients pointed at
- * `options.rpcUrl`, using a custom `Chain` object whose id is 84532, the
- * chain id carried by the CAIP-2 network identifier the gateway advertises
- * (`eip155:84532`).
- *
- * The `Local` prefix on everything here describes the *chain* these clients
- * are built for, not a test-only status: `provider.ts` calls
- * `createLocalPublicClient` and `createLocalFacilitatorClient` on the real
- * settlement path, and this is not demo scaffolding a production build could
- * drop.
- *
- * Public networks are supported, and `buildLocalChain` now takes the chain id
- * as a parameter — exactly what this comment used to say would be required.
- * What stays local is the *facilitator* client: signing in-process is refused
- * on any mainnet, so that client can only ever exist on the dev chain. The
- * read-only health client is built for whatever network is configured.
- *
- * `dev-key-guard.ts` is the boundary that keeps that arrangement safe: it
- * refuses at provider construction if a dev key or dev `payTo` is pointed at
- * anything other than a loopback/private RPC.
+ * Despite the `Local` names, `createLocalFacilitatorClient` sits on the
+ * settlement path and `createLocalPublicClient` backs `health()`. The health
+ * client is built for whichever network is configured. The facilitator client
+ * always uses chain id 84532: an in-process facilitator is refused on a
+ * mainnet, and Base Sepolia is the registry's only testnet. Registering a
+ * second testnet means building this client for the configured chain.
  */
 import {
   type Account,
@@ -38,8 +24,9 @@ import {
   type WalletActions,
 } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
+import { LOCAL_CHAIN_ID } from './networks';
 
-/** A wallet client that can also read chain state — matches x402's `SignerWallet`. */
+/** A wallet client that can also read chain state, matching x402's `SignerWallet` */
 export type LocalFacilitatorClient = Client<
   Transport,
   Chain,
@@ -48,24 +35,13 @@ export type LocalFacilitatorClient = Client<
   PublicActions<Transport, Chain, Account> & WalletActions<Chain, Account>
 >;
 
-/**
- * Chain id of the local deterministic dev chain. Shared with the public Base
- * Sepolia testnet, which is why nothing may infer "this is a public network"
- * from the id alone — `provider.ts` probes for a real Anvil node instead.
- */
-export const LOCAL_CHAIN_ID = 84532;
-
-/** CAIP-2 identifier the local dev chain is advertised under. */
+/** CAIP-2 identifier the local dev chain is advertised under */
 export const LOCAL_NETWORK = `eip155:${LOCAL_CHAIN_ID}`;
 
 /**
- * Chain id carried by a CAIP-2 `eip155` network identifier.
- *
- * x402 v2 identifies networks as CAIP-2 strings rather than the v1 name table,
- * so the chain id a signature is bound to is read straight off the wire value
- * instead of looked up. Returns `undefined` for anything that is not an
- * `eip155` identifier — a caller must never fall back to a default chain id,
- * because the chain id is part of the EIP-712 domain a buyer signed.
+ * Chain id carried by a CAIP-2 `eip155` network identifier, or `undefined` for
+ * anything else. A caller must never fall back to a default chain id, because
+ * the chain id is part of the EIP-712 domain the buyer signed.
  */
 export function chainIdFromCaip2(network: string): number | undefined {
   const match = /^eip155:(\d+)$/.exec(network);
@@ -75,14 +51,10 @@ export function chainIdFromCaip2(network: string): number | undefined {
 }
 
 /**
- * `chainId` defaults to the local dev chain because the *facilitator* client
- * can only ever exist there — a local facilitator is refused on any mainnet.
- * The read-only health client is different: it is built for whatever network
- * is configured, including Base, and inherited 84532 on every one of them.
- * Inert while it only issues raw `getChainId`/`getCode`/`anvil_nodeInfo`, and
- * wrong the moment anything through it consults `chain.id`.
+ * `chainId` defaults to the local dev chain, the only chain the facilitator
+ * client is built for. The health client passes the configured network's id.
  */
-export function buildLocalChain(rpcUrl: string, chainId: number = LOCAL_CHAIN_ID): Chain {
+function buildLocalChain(rpcUrl: string, chainId: number = LOCAL_CHAIN_ID): Chain {
   return {
     id: chainId,
     name: 'agent-commerce-local',
@@ -94,14 +66,11 @@ export function buildLocalChain(rpcUrl: string, chainId: number = LOCAL_CHAIN_ID
 }
 
 /**
- * A viem `PublicClient` for the local chain — read-only, no signing capability.
+ * A read-only viem `PublicClient`.
  *
- * `timeoutMs`, when given, is passed straight to viem's `http()` transport,
- * which ties it to a real `AbortController` around the underlying `fetch`
- * (see viem's `utils/promise/withTimeout.js` — `signal: true`). That is a
- * genuine cancellation, unlike a bare `Promise.race` against a timer, which
- * only stops *waiting* for the request while the request itself keeps
- * running server-side. Omit it to keep viem's own default (10s).
+ * `timeoutMs` goes to viem's `http()` transport, which aborts the underlying
+ * `fetch` when it expires rather than only abandoning the wait. Omit it to keep
+ * viem's default of 10s.
  */
 export function createLocalPublicClient(
   rpcUrl: string,
@@ -116,14 +85,12 @@ export function createLocalPublicClient(
 
 /**
  * A viem `WalletClient` extended with public actions, for the local
- * facilitator signer only. x402's `settle()` calls `writeContract`,
- * `waitForTransactionReceipt` and `getCode` on this client — i.e. it needs
- * both `WalletActions` and `PublicActions`, matching x402's `SignerWallet`
- * type.
+ * facilitator signer only: the SDK's settlement both writes and reads through
+ * it.
  *
- * LOCAL DEVELOPMENT ONLY — the private key behind this client must always be
- * an Anvil well-known development key, never a merchant or buyer key, and
- * never a production key of any kind.
+ * LOCAL DEVELOPMENT ONLY. The key behind it pays gas on the dev chain. It is
+ * usually an Anvil well-known key, and must never be a merchant, buyer or
+ * production key.
  */
 export function createLocalFacilitatorClient(
   rpcUrl: string,

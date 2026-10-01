@@ -1,11 +1,9 @@
-/**
- * In-memory implementation of the frozen `ResourceRegistry` interface.
- */
-import type { ProtocolName } from '../domain/common.js';
-import type { CommerceResource, ResourceRegistry } from '../domain/resource.js';
-import { CommerceError } from '../errors/index.js';
+// In-memory implementation of the frozen `ResourceRegistry` interface
+import type { ProtocolName } from '../domain/common';
+import type { CommerceResource, ResourceRegistry } from '../domain/resource';
+import { CommerceError } from '../errors';
 
-export class ResourceRegistryImpl implements ResourceRegistry {
+class ResourceRegistryImpl implements ResourceRegistry {
   private readonly byId = new Map<string, CommerceResource>();
   private readonly ordered: readonly CommerceResource[];
 
@@ -38,7 +36,7 @@ export class ResourceRegistryImpl implements ResourceRegistry {
   }
 }
 
-/** Build a `ResourceRegistry` from a validated list of canonical resources. */
+/** Build a `ResourceRegistry` from a validated list of canonical resources */
 export function createResourceRegistry(resources: readonly CommerceResource[]): ResourceRegistry {
   return new ResourceRegistryImpl(resources);
 }

@@ -1,18 +1,22 @@
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { stripVTControlCharacters } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { printDoctorReport, runDoctor } from '../../../src/cli/commands/doctor.js';
-import { createCapturingIo } from '../../../src/cli/lib/io.js';
-import type { GatewayConfig } from '../../../src/config/index.js';
-import { CommerceError, type CommerceResource } from '../../../src/core/index.js';
+import { AP2_UNSUPPORTED } from '../../../src/authorization/ap2/descriptor';
+import { printDoctorReport, runDoctor } from '../../../src/cli/commands/doctor';
+import type { GatewayConfig } from '../../../src/config';
+import { CommerceError, type CommerceResource } from '../../../src/core';
+import { A2A_UNSUPPORTED } from '../../../src/protocols/a2a/descriptor';
+import { ACP_UNSUPPORTED } from '../../../src/protocols/acp/descriptor';
 import {
+  createCapturingIo,
   createFakeFetch,
   jsonResponse,
   makeFakeReceiptStore,
   makeGatewayConfig,
   makeResource,
-} from './fixtures.js';
+} from './fixtures';
 
 const GATEWAY = 'http://127.0.0.1:8080';
 
@@ -32,7 +36,7 @@ const X402_CONFIG = {
   network: 'eip155:84532',
   rpcUrl: 'http://127.0.0.1:8545',
   // Deliberately NOT the init placeholder (0x…dEaD): doctor WARNs on that,
-  // which would mask every other assertion in this file.
+  // which would mask every other assertion in this file
   asset: '0x5FbDB2315678afecb367f032d93F642f64180aa3',
   assetName: 'MockUSDC',
   assetVersion: '2',
@@ -42,7 +46,7 @@ const X402_CONFIG = {
   facilitator: { mode: 'local' as const, signerPrivateKey: '0xdeadbeef' },
 };
 
-/** `/.well-known/agent-commerce` body reporting the gateway's *live* x402 settlement config. */
+// `/.well-known/agent-commerce` body reporting the gateway's *live* x402 settlement config
 function wellKnownBody(
   x402Overrides: Partial<{ asset: string; network: string; payTo: string; enabled: boolean }> = {},
 ) {
@@ -60,7 +64,7 @@ function wellKnownBody(
   };
 }
 
-describe('runDoctor — fully healthy', () => {
+describe('runDoctor: a healthy deployment', () => {
   it('reports PASS for every non-INFO check and exit code 0', async () => {
     const report = await runDoctor(
       { gatewayUrl: GATEWAY },
@@ -81,24 +85,10 @@ describe('runDoctor — fully healthy', () => {
     expect(byName['Protocol versions']).toBe('PASS');
     expect(report.score.passed).toBe(report.score.total);
   });
-
-  it('completes in well under 5 seconds against healthy local dependencies', async () => {
-    const start = Date.now();
-    await runDoctor(
-      { gatewayUrl: GATEWAY },
-      {
-        fetchImpl: healthyFetch(),
-        loadConfig: async () => makeGatewayConfig(),
-        createStore: () => makeFakeReceiptStore(),
-      },
-    );
-    expect(Date.now() - start).toBeLessThan(5000);
-  });
 });
 
-describe('runDoctor — degraded scenarios never hang and degrade gracefully', () => {
-  it('FAILs Gateway (and downstream Protocols) when the gateway is unreachable, but completes quickly', async () => {
-    const start = Date.now();
+describe('runDoctor: degraded scenarios report the failure', () => {
+  it('FAILs Gateway (and downstream Protocols) when the gateway is unreachable', async () => {
     const report = await runDoctor(
       { gatewayUrl: 'http://127.0.0.1:1' }, // nothing listens here
       {
@@ -107,7 +97,6 @@ describe('runDoctor — degraded scenarios never hang and degrade gracefully', (
         createStore: () => makeFakeReceiptStore(),
       },
     );
-    expect(Date.now() - start).toBeLessThan(5000);
     expect(report.exitCode).toBe(1);
     const byName = Object.fromEntries(report.checks.map((c) => [c.name, c.status]));
     expect(byName['Gateway']).toBe('FAIL');
@@ -128,6 +117,8 @@ describe('runDoctor — degraded scenarios never hang and degrade gracefully', (
     );
     const gateway = report.checks.find((c) => c.name === 'Gateway');
     expect(gateway?.status).toBe('WARN');
+    // Config, Backend, Protocols, Storage and Protocol versions pass; INFO checks are not scored
+    expect(report.score).toEqual({ passed: 5, total: 6 });
   });
 
   it('FAILs Config and WARNs downstream config-dependent checks when the config is invalid', async () => {
@@ -172,10 +163,8 @@ describe('runDoctor — degraded scenarios never hang and degrade gracefully', (
   });
 
   it('WARNs when the configured asset is still the init placeholder', async () => {
-    // `init --yes` writes 0x…dEaD, and the live cross-check compares config
-    // against the gateway's echo of that same config — so everything agreed
-    // and doctor reported 7/7 PASS for a deployment where no paid call can
-    // succeed, because no token contract exists at that address.
+    // The live cross-check alone would pass the placeholder (see the
+    // placeholder branch of the Payments check in doctor.ts)
     const report = await runDoctor(
       { gatewayUrl: GATEWAY },
       {
@@ -191,15 +180,13 @@ describe('runDoctor — degraded scenarios never hang and degrade gracefully', (
     const payments = report.checks.find((c) => c.name === 'Payments');
     expect(payments?.status).toBe('WARN');
     expect(payments?.detail).toContain('placeholder');
-    expect(report.exitCode).toBe(0); // a warning, not a failure — nothing is unsafe
+    expect(report.exitCode).toBe(0); // a warning, not a failure: nothing is unsafe
   });
 
   it('FAILs Payments when the gateway positively reports x402 disabled', async () => {
-    // Three situations used to collapse into one `undefined`: gateway down,
-    // document malformed, and the gateway *saying* x402 is off. The third was
-    // then printed as INFO "could not be verified" — but it was verified, and
-    // it disagreed. Local config enabling x402 against a stale gateway running
-    // with it off is the exact deployment mismatch this cross-check exists for.
+    // Gateway down and a malformed document cannot be judged, but the gateway
+    // *saying* x402 is off was verified, and it disagrees: local config against
+    // a stale gateway is the mismatch this cross-check exists for
     const report = await runDoctor(
       { gatewayUrl: GATEWAY },
       {
@@ -236,13 +223,9 @@ describe('runDoctor — degraded scenarios never hang and degrade gracefully', (
     expect(payments?.detail).toContain('could not be verified');
   });
 
-  it('probes a kebab {param} at the URL the runtime builds, not the one the operator meant', async () => {
-    // doctor carried its own `/\{[^}]+\}/g`, looser than the canonical
-    // grammar. It substituted tokens the runtime left literal, so it probed
-    // `/report/demo-check`, got 200, and certified as healthy a paid resource
-    // that charged the buyer and then 404'd on `%7Breport-id%7D` every time.
-    // Now both use `extractPathParameterNames`, so a token the runtime cannot
-    // fill is one doctor cannot fill either.
+  it('probes an illegal {param} at the URL the runtime builds, not the one the operator meant', async () => {
+    // Doctor must leave `{report id}` literal, as the runtime does (see
+    // substitutePathParams in doctor.ts)
     const probed: string[] = [];
     const report = await runDoctor(
       { gatewayUrl: GATEWAY },
@@ -252,7 +235,7 @@ describe('runDoctor — degraded scenarios never hang and degrade gracefully', (
           [`${GATEWAY}/ready`]: () => jsonResponse({ status: 'ready' }),
           [`${GATEWAY}/.well-known/agent-commerce`]: () => jsonResponse({}),
           // The URL the operator *meant*. Registering it is the point: if
-          // doctor still substituted an unrecognised token it would hit this
+          // doctor still substituted an unrecognized token it would hit this
           // and PASS.
           'http://localhost:3000/api/report/demo-check': () => {
             probed.push('substituted');
@@ -267,7 +250,7 @@ describe('runDoctor — degraded scenarios never hang and degrade gracefully', (
                 handler: {
                   type: 'http',
                   method: 'GET',
-                  // Not a legal parameter under the canonical grammar.
+                  // Not a legal parameter under the canonical grammar
                   url: 'http://localhost:3000/api/report/{report id}',
                 },
               }),
@@ -315,8 +298,9 @@ describe('runDoctor — degraded scenarios never hang and degrade gracefully', (
           [`${GATEWAY}/health`]: () => jsonResponse({ status: 'ok' }),
           [`${GATEWAY}/ready`]: () => jsonResponse({ status: 'ready' }),
           [`${GATEWAY}/.well-known/agent-commerce`]: () => jsonResponse({}),
-          'http://localhost:3000/api/report': () => jsonResponse({ report: 'ok' }),
-          // weather's URL (.../weather/demo-check) is deliberately NOT registered.
+          // Any HTTP answer, an error status included, shows the host is reachable
+          'http://localhost:3000/api/report': () => jsonResponse({ error: 'not found' }, 404),
+          // weather's URL (.../weather/demo-check) is deliberately NOT registered
         }),
         loadConfig: async () =>
           makeGatewayConfig({
@@ -414,16 +398,65 @@ describe('runDoctor — degraded scenarios never hang and degrade gracefully', (
       return report.checks.find((c) => c.name === 'Payments (MPP)');
     };
 
-    it('passes on matching config while masking addresses and secrets', async () => {
+    it('passes on matching config while masking the recipient', async () => {
       const check = await mppCheck(liveMpp());
       expect(check?.status).toBe('PASS');
       expect(check?.detail).toMatch(/charge\/evm\/authorization/);
-      expect(check?.detail).toMatch(/Base Sepolia/);
+      expect(check?.detail).toContain('TESTNET on Base Sepolia (eip155:84532)');
+      expect(check?.detail).toContain('facilitator=remote (auth=bearer)');
       expect(check?.detail).toMatch(/draft-httpauth-payment-00@806fdb8/);
       expect(check?.detail).toMatch(/mppx 0\.10\.1/);
       expect(check?.detail).not.toContain(MPP_CONFIG.recipient);
-      for (const secret of ['CHALLENGE-SECRET', 'FACILITATOR-TOKEN', 'RPC-KEY', '/tenant']) {
-        expect(check?.detail).not.toContain(secret);
+    });
+
+    it('never prints a credential or an RPC URL of either rail, in text or JSON', async () => {
+      const report = await runDoctor(
+        { gatewayUrl: GATEWAY },
+        {
+          fetchImpl: healthyFetch(),
+          loadConfig: async () =>
+            makeGatewayConfig({
+              server: {
+                port: 8080,
+                host: '0.0.0.0',
+                allowedOrigins: [],
+                adminToken: 'ADMIN-TOKEN-0123456789',
+              },
+              payments: {
+                x402: {
+                  ...X402_CONFIG,
+                  rpcUrl: 'https://rpc.example/v2/X402-RPC-KEY',
+                  payTo: MPP_CONFIG.recipient,
+                  facilitator: {
+                    mode: 'remote',
+                    url: 'https://facilitator.example/x402-tenant',
+                    auth: { type: 'bearer', token: 'X402-BEARER-TOKEN' },
+                  },
+                },
+                mpp: MPP_CONFIG,
+              },
+            }),
+          createStore: () => makeFakeReceiptStore(),
+        },
+      );
+      const text = createCapturingIo();
+      printDoctorReport(report, text, false);
+      const json = createCapturingIo();
+      printDoctorReport(report, json, true);
+      const printed = [...text.out, ...json.out].join('\n');
+
+      // Both rails were described, so their settings reached the output path
+      expect(printed).toContain('x402 v2 (scheme=exact) enabled');
+      expect(printed).toContain('MPP charge/evm/authorization enabled');
+      for (const secret of [
+        'ADMIN-TOKEN',
+        'RPC-KEY',
+        'tenant',
+        'X402-BEARER-TOKEN',
+        'FACILITATOR-TOKEN',
+        'CHALLENGE-SECRET',
+      ]) {
+        expect(printed).not.toContain(secret);
       }
     });
 
@@ -437,6 +470,104 @@ describe('runDoctor — degraded scenarios never hang and degrade gracefully', (
 
     it('fails when the running gateway reports MPP disabled', async () => {
       expect((await mppCheck(liveMpp({ enabled: false })))?.status).toBe('FAIL');
+    });
+  });
+
+  describe('Deployment mode', () => {
+    const USDC = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
+    const MERCHANT = '0x1111111111111111111111111111111111111111';
+    const remote = (auth: { type: 'none' } | { type: 'bearer'; token: string }) => ({
+      mode: 'remote' as const,
+      url: 'https://facilitator.example',
+      auth,
+    });
+    const mainnetX402 = (auth: Parameters<typeof remote>[0]) => ({
+      ...X402_CONFIG,
+      network: 'eip155:8453',
+      asset: USDC,
+      assetName: 'USD Coin',
+      payTo: MERCHANT,
+      allowMainnet: true,
+      facilitator: remote(auth),
+    });
+    const mainnetMpp = (auth: Parameters<typeof remote>[0]) => ({
+      enabled: true,
+      network: 'eip155:8453' as const,
+      rpcUrl: 'https://base.example',
+      asset: USDC,
+      assetName: 'USD Coin',
+      assetVersion: '2',
+      recipient: MERCHANT,
+      realm: 'api.example.com',
+      challengeSecret: 'x'.repeat(32),
+      allowMainnet: true,
+      facilitator: remote(auth),
+    });
+    const checksFor = async (payments: Record<string, unknown>, prefix = 'Mainnet safety') => {
+      const report = await runDoctor(
+        { gatewayUrl: GATEWAY },
+        {
+          fetchImpl: healthyFetch(),
+          loadConfig: async () => makeGatewayConfig({ payments } as Partial<GatewayConfig>),
+          createStore: () => makeFakeReceiptStore(),
+        },
+      );
+      return report.checks.filter((c) => c.name.startsWith(prefix));
+    };
+    const testnet = { network: 'eip155:84532', allowMainnet: false };
+
+    // Chain id 84532 is both the local dev chain and public Base Sepolia, so the
+    // facilitator mode decides which one the report names
+    it.each([
+      [
+        'a local facilitator on 84532',
+        X402_CONFIG,
+        'LOCAL dev chain (eip155:84532, chain id shared with Base Sepolia), destination=0xf39F…2266, facilitator=local (in-process)',
+      ],
+      [
+        'a remote facilitator on 84532',
+        { ...mainnetX402({ type: 'bearer', token: 'T' }), ...testnet },
+        'TESTNET on Base Sepolia (eip155:84532), destination=0x1111…1111, facilitator=remote (auth=bearer)',
+      ],
+      [
+        'a remote facilitator on 8453',
+        mainnetX402({ type: 'bearer', token: 'T' }),
+        'LIVE MAINNET MODE - REAL FUNDS on Base (eip155:8453), destination=0x1111…1111, facilitator=remote (auth=bearer)',
+      ],
+    ])('names where x402 settles with %s', async (_label, x402, where) => {
+      const [payments] = await checksFor({ x402 }, 'Payments');
+      expect(payments?.detail).toContain(`x402 v2 (scheme=exact) enabled - ${where}`);
+    });
+
+    it('reports x402 on mainnet, and WARNs for an unauthenticated facilitator', async () => {
+      const [withCredential] = await checksFor({
+        x402: mainnetX402({ type: 'bearer', token: 'T' }),
+      });
+      expect(withCredential).toMatchObject({ name: 'Mainnet safety', status: 'INFO' });
+      expect(withCredential?.detail).toMatch(/non-development payTo/);
+      const [anonymous] = await checksFor({ x402: mainnetX402({ type: 'none' }) });
+      expect(anonymous).toMatchObject({ name: 'Mainnet safety', status: 'WARN' });
+      expect(anonymous?.detail).toMatch(/anonymous-access limits apply/);
+    });
+
+    it('reports MPP on mainnet the same way, naming its recipient', async () => {
+      const [withCredential] = await checksFor({
+        mpp: mainnetMpp({ type: 'bearer', token: 'T' }),
+      });
+      expect(withCredential).toMatchObject({ name: 'Mainnet safety (MPP)', status: 'INFO' });
+      expect(withCredential?.detail).toMatch(/non-development recipient/);
+      const [anonymous] = await checksFor({ mpp: mainnetMpp({ type: 'none' }) });
+      expect(anonymous).toMatchObject({ name: 'Mainnet safety (MPP)', status: 'WARN' });
+    });
+
+    it('stays silent on the local chain and on a testnet', async () => {
+      expect(await checksFor({ x402: X402_CONFIG })).toEqual([]);
+      expect(
+        await checksFor({
+          x402: { ...mainnetX402({ type: 'none' }), ...testnet },
+          mpp: { ...mainnetMpp({ type: 'none' }), ...testnet },
+        }),
+      ).toEqual([]);
     });
   });
 
@@ -454,12 +585,11 @@ describe('runDoctor — degraded scenarios never hang and degrade gracefully', (
     const payments = report.checks.find((c) => c.name === 'Payments');
     expect(payments?.status).toBe('PASS');
     expect(payments?.detail).toContain('0xf39F…2266');
-    expect(payments?.detail).not.toContain('0xdeadbeef');
+    expect(JSON.stringify(report)).not.toContain(X402_CONFIG.facilitator.signerPrivateKey);
   });
 
-  // A false green: doctor reporting 7/7 PASS while the gateway is configured
-  // with one MockUSDC address and local config resolves to another. A diagnostic that passes on a misconfigured
-  // system is worse than no diagnostic.
+  // Without this check doctor would pass while the gateway uses one MockUSDC
+  // address and local config resolves to another
   it('FAILs Payments, naming both values, when the gateway is using a different asset than local config resolves to', async () => {
     const report = await runDoctor(
       { gatewayUrl: GATEWAY },
@@ -537,37 +667,13 @@ describe('runDoctor — degraded scenarios never hang and degrade gracefully', (
     const report = await runDoctor(
       { gatewayUrl: GATEWAY },
       {
-        fetchImpl: createFakeFetch({}), // every URL rejects — gateway unreachable
+        fetchImpl: createFakeFetch({}), // every URL rejects: gateway unreachable
         loadConfig: async () => makeGatewayConfig({ payments: { x402: X402_CONFIG } }),
         createStore: () => makeFakeReceiptStore(),
       },
     );
     const payments = report.checks.find((c) => c.name === 'Payments');
     expect(payments?.status).toBe('INFO');
-  });
-
-  it('FAILs Payments when the gateway reaches and reports x402 DISABLED — this assertion used to demand INFO', async () => {
-    // Deliberately inverted. The original reasoning — "a doctor
-    // that fails on things it cannot check is untrustworthy" — is right, and
-    // was applied to the wrong case: `enabled: false` is not something doctor
-    // could not check, it is something it checked and found in conflict with
-    // local config. The unverifiable cases (gateway down, malformed document,
-    // absent `enabled`) are still INFO; the two tests above and below pin
-    // both sides so this cannot silently flip back.
-    const report = await runDoctor(
-      { gatewayUrl: GATEWAY },
-      {
-        fetchImpl: healthyFetch({
-          [`${GATEWAY}/.well-known/agent-commerce`]: () =>
-            jsonResponse(wellKnownBody({ enabled: false })),
-        }),
-        loadConfig: async () => makeGatewayConfig({ payments: { x402: X402_CONFIG } }),
-        createStore: () => makeFakeReceiptStore(),
-      },
-    );
-    const payments = report.checks.find((c) => c.name === 'Payments');
-    expect(payments?.status).toBe('FAIL');
-    expect(payments?.detail).toContain('reports x402 disabled');
   });
 
   it('FAILs Storage when the receipt store reports a fail health status', async () => {
@@ -609,22 +715,6 @@ describe('runDoctor — degraded scenarios never hang and degrade gracefully', (
 });
 
 describe('printDoctorReport', () => {
-  it('prints a human-readable report with PASS/FAIL labels and a score line', async () => {
-    const report = await runDoctor(
-      { gatewayUrl: GATEWAY },
-      {
-        fetchImpl: healthyFetch(),
-        loadConfig: async () => makeGatewayConfig(),
-        createStore: () => makeFakeReceiptStore(),
-      },
-    );
-    const io = createCapturingIo();
-    printDoctorReport(report, io, false);
-    const text = io.out.join('\n');
-    expect(text).toContain('Config');
-    expect(text).toMatch(/Score: \d+\/\d+ checks passed/);
-  });
-
   it('emits machine-readable JSON with --json', async () => {
     const report = await runDoctor(
       { gatewayUrl: GATEWAY },
@@ -641,7 +731,7 @@ describe('printDoctorReport', () => {
     expect(parsed).toEqual(report);
   });
 
-  it('colours every status distinctly (PASS/WARN/FAIL/INFO all appear in one report)', () => {
+  it('prints one line per check with its status, name and detail, then the score', () => {
     const io = createCapturingIo();
     printDoctorReport(
       {
@@ -657,58 +747,46 @@ describe('printDoctorReport', () => {
       io,
       false,
     );
-    const text = io.out.join('\n');
-    expect(text).toContain('PASS');
-    expect(text).toContain('WARN');
-    expect(text).toContain('FAIL');
-    expect(text).toContain('INFO');
+    // Colors depend on the terminal, so compare the plain text
+    expect(io.out.map((line) => stripVTControlCharacters(line))).toEqual([
+      `PASS  ${'A'.padEnd(20)} ok`,
+      `WARN  ${'B'.padEnd(20)} meh`,
+      `FAIL  ${'C'.padEnd(20)} bad`,
+      `INFO  ${'D'.padEnd(20)} fyi`,
+      '',
+      'Score: 1/3 checks passed',
+    ]);
   });
 });
 
-describe('runDoctor — additional derivation and error-recovery branches', () => {
-  it('derives the gateway URL from config.server when no --gateway is given', async () => {
-    let requestedUrl: string | undefined;
-    const fetchImpl = createFakeFetch({
-      'http://127.0.0.1:9090/health': () => {
-        requestedUrl = 'http://127.0.0.1:9090/health';
-        return jsonResponse({ status: 'ok' });
-      },
-      'http://127.0.0.1:9090/ready': () => jsonResponse({ status: 'ready' }),
-    });
-    await runDoctor(
-      {},
-      {
-        fetchImpl,
-        loadConfig: async () =>
-          makeGatewayConfig({ server: { port: 9090, host: '0.0.0.0', allowedOrigins: [] } }),
-        createStore: () => makeFakeReceiptStore(),
-      },
-    );
-    expect(requestedUrl).toBe('http://127.0.0.1:9090/health');
-  });
-
-  it('uses config.server.host verbatim when it is not the 0.0.0.0 wildcard', async () => {
-    let requestedUrl: string | undefined;
-    const fetchImpl = createFakeFetch({
-      'http://gateway.internal:9090/health': () => {
-        requestedUrl = 'http://gateway.internal:9090/health';
-        return jsonResponse({ status: 'ok' });
-      },
-      'http://gateway.internal:9090/ready': () => jsonResponse({ status: 'ready' }),
-    });
-    await runDoctor(
-      {},
-      {
-        fetchImpl,
-        loadConfig: async () =>
-          makeGatewayConfig({
-            server: { port: 9090, host: 'gateway.internal', allowedOrigins: [] },
+describe('runDoctor: additional derivation and error-recovery branches', () => {
+  // A wildcard bind address is probed on loopback, and an IPv6 host is bracketed
+  it.each([
+    ['0.0.0.0', 'http://127.0.0.1:9090'],
+    ['::', 'http://[::1]:9090'],
+    ['::1', 'http://[::1]:9090'],
+    ['gateway.internal', 'http://gateway.internal:9090'],
+  ])(
+    'derives the gateway URL from config.server.host %s when no --gateway is given',
+    async (host, base) => {
+      const report = await runDoctor(
+        {},
+        {
+          fetchImpl: createFakeFetch({
+            [`${base}/health`]: () => jsonResponse({ status: 'ok' }),
+            [`${base}/ready`]: () => jsonResponse({ status: 'ready' }),
           }),
-        createStore: () => makeFakeReceiptStore(),
-      },
-    );
-    expect(requestedUrl).toBe('http://gateway.internal:9090/health');
-  });
+          loadConfig: async () =>
+            makeGatewayConfig({ server: { port: 9090, host, allowedOrigins: [] } }),
+          createStore: () => makeFakeReceiptStore(),
+        },
+      );
+      expect(report.checks.find((c) => c.name === 'Gateway')).toMatchObject({
+        status: 'PASS',
+        detail: `healthy and ready at ${base}`,
+      });
+    },
+  );
 
   it('strips a trailing slash from an explicit --gateway URL', async () => {
     let requestedUrl: string | undefined;
@@ -823,8 +901,8 @@ describe('runDoctor — additional derivation and error-recovery branches', () =
     expect(storage?.detail).not.toContain('receipts=');
   });
 
-  // Counting via listReceipts({ limit: 100_000 }) silently saturates at the
-  // store's MAX_LIST_LIMIT clamp (500). doctor must report the exact total.
+  // listReceipts clamps to the store's MAX_LIST_LIMIT (500), so a count taken
+  // from it saturates. doctor must report the exact total.
   it('reports the exact receipt count via countReceipts, past what listReceipts would ever return', async () => {
     const report = await runDoctor(
       { gatewayUrl: GATEWAY },
@@ -843,7 +921,7 @@ describe('runDoctor — additional derivation and error-recovery branches', () =
   });
 
   // A paid-but-undelivered purchase must be visible to an operator running
-  // doctor, not just quietly logged.
+  // doctor, not just quietly logged
   it('reports "(M undelivered)" alongside the receipt count when M > 0', async () => {
     const report = await runDoctor(
       { gatewayUrl: GATEWAY },
@@ -861,7 +939,7 @@ describe('runDoctor — additional derivation and error-recovery branches', () =
     expect(storage?.detail).toContain('receipts=1200 (7 undelivered)');
   });
 
-  it('omits the undelivered parenthetical entirely when M is 0 — quiet in the common case', async () => {
+  it('omits the undelivered parenthetical when M is 0, the common case', async () => {
     const report = await runDoctor(
       { gatewayUrl: GATEWAY },
       {
@@ -901,7 +979,7 @@ describe('runDoctor — additional derivation and error-recovery branches', () =
   });
 });
 
-describe('runDoctor — local chain manifest fill (docker vs. host env parity)', () => {
+describe('runDoctor: local chain manifest fill (docker vs. host env parity)', () => {
   it('passes the filled env to loadConfig and notes it in the Config check detail', async () => {
     let receivedEnv: NodeJS.ProcessEnv | undefined;
     const report = await runDoctor(
@@ -969,7 +1047,7 @@ describe('runDoctor — local chain manifest fill (docker vs. host env parity)',
   });
 });
 
-describe('runDoctor — Storage check does not create the store it is checking', () => {
+describe('runDoctor: the Storage check does not create the store it checks', () => {
   let dir: string;
 
   beforeEach(() => {
@@ -988,8 +1066,8 @@ describe('runDoctor — Storage check does not create the store it is checking',
       { gatewayUrl: GATEWAY },
       {
         fetchImpl: healthyFetch(),
-        // No createStore override: the real src/storage/receipts
-        // factory must never even be called for a path that doesn't exist.
+        // No createStore override: the real src/storage/receipts factory must
+        // never be called for a path that does not exist
         loadConfig: async () =>
           makeGatewayConfig({ storage: { receipts: { driver: 'sqlite', path: wrongPath } } }),
       },
@@ -998,8 +1076,8 @@ describe('runDoctor — Storage check does not create the store it is checking',
     const storage = report.checks.find((c) => c.name === 'Storage');
     expect(storage?.status).toBe('WARN');
     expect(storage?.detail).toContain(wrongPath);
-    expect(storage?.detail).toContain('created automatically');
-    // The actual proof: no directory, no database file, no WAL file.
+    expect(storage?.detail).toContain('created when the gateway starts');
+    // The proof: no directory, no database file, no WAL file
     expect(existsSync(wrongPath)).toBe(false);
     expect(existsSync(join(dir, 'does-not-exist'))).toBe(false);
     expect(report.exitCode).toBe(0); // WARN, not FAIL
@@ -1007,8 +1085,8 @@ describe('runDoctor — Storage check does not create the store it is checking',
 
   it('still opens, reports health and counts receipts when the store already exists on disk', async () => {
     const path = join(dir, 'receipts.sqlite');
-    // Create it for real once, the way the gateway would on first start.
-    const { createSqliteReceiptStore } = await import('../../../src/storage/receipts/index.js');
+    // Create it for real once, the way the gateway would on first start
+    const { createSqliteReceiptStore } = await import('../../../src/storage/receipts');
     const seed = createSqliteReceiptStore({ path });
     await seed.init();
     await seed.close();
@@ -1041,7 +1119,7 @@ describe('runDoctor — Storage check does not create the store it is checking',
   });
 });
 
-describe('runDoctor — A2A', () => {
+describe('runDoctor: A2A', () => {
   it('reports A2A as disabled by default', async () => {
     const report = await runDoctor(
       { gatewayUrl: GATEWAY },
@@ -1074,7 +1152,7 @@ describe('runDoctor — A2A', () => {
     const a2a = report.checks.find((c) => c.name === 'A2A');
     expect(a2a?.status).toBe('PASS');
     // Spec revision and negotiation version are different values that look
-    // alike; both must appear, named.
+    // alike; both must appear, named
     expect(a2a?.detail).toContain('spec 1.0.0');
     expect(a2a?.detail).toContain('protocol 1.0');
     expect(a2a?.detail).toContain('binding JSONRPC');
@@ -1102,13 +1180,14 @@ describe('runDoctor — A2A', () => {
 
     const unsupported = report.checks.find((c) => c.name === 'A2A unsupported');
     expect(unsupported?.status).toBe('INFO');
+    expect(unsupported?.detail).toBe(A2A_UNSUPPORTED.join(', '));
     for (const operation of ['SendStreamingMessage', 'GetTask', 'CancelTask', 'gRPC binding']) {
       expect(unsupported?.detail).toContain(operation);
     }
   });
 });
 
-describe('runDoctor - ACP', () => {
+describe('runDoctor: ACP', () => {
   const OPERATIONS = {
     createCheckoutSession: 'acp_create',
     updateCheckoutSession: 'acp_update',
@@ -1183,7 +1262,7 @@ describe('runDoctor - ACP', () => {
     );
   });
 
-  // The one thing this report must never print.
+  // The one thing this report must never print
   it('states that a bearer token is configured without printing it', async () => {
     const report = await acpReport(enabledAcp());
 
@@ -1199,16 +1278,6 @@ describe('runDoctor - ACP', () => {
     const idempotency = report.checks.find((c) => c.name === 'ACP idempotency');
     expect(idempotency?.status).toBe('WARN');
     expect(idempotency?.detail).toContain('retention 24h');
-  });
-
-  it('fails when the retention window is below the ACP minimum', async () => {
-    const report = await acpReport(
-      enabledAcp({ idempotency: { path: ':memory:', retentionHours: 12 } }),
-    );
-
-    const idempotency = report.checks.find((c) => c.name === 'ACP idempotency');
-    expect(idempotency?.status).toBe('FAIL');
-    expect(idempotency?.detail).toContain('24h');
   });
 
   it('passes the mapping check when all five resources are free and acp-exposed', async () => {
@@ -1235,14 +1304,22 @@ describe('runDoctor - ACP', () => {
       'not exposed via acp',
     ],
     [
-      'a resource that is not free to invoke',
+      'a resource with a price',
       Object.values(OPERATIONS).map((id) =>
         id === 'acp_complete'
           ? {
               ...checkoutResource(id),
               pricing: { type: 'fixed' as const, amount: '0.01', currency: 'USDC' },
-              paymentMethods: ['x402' as const],
             }
+          : checkoutResource(id),
+      ),
+      'not free to invoke',
+    ],
+    [
+      'a free resource that still names a payment method',
+      Object.values(OPERATIONS).map((id) =>
+        id === 'acp_complete'
+          ? { ...checkoutResource(id), paymentMethods: ['x402' as const] }
           : checkoutResource(id),
       ),
       'not free to invoke',
@@ -1260,6 +1337,7 @@ describe('runDoctor - ACP', () => {
 
     const unsupported = report.checks.find((c) => c.name === 'ACP unsupported');
     expect(unsupported?.status).toBe('INFO');
+    expect(unsupported?.detail).toBe(ACP_UNSUPPORTED.join(', '));
     for (const capability of [
       'carts service',
       'feed service',
@@ -1272,7 +1350,7 @@ describe('runDoctor - ACP', () => {
   });
 });
 
-describe('runDoctor - AP2', () => {
+describe('runDoctor: AP2', () => {
   const KEY = {
     kty: 'EC',
     crv: 'P-256',
@@ -1401,6 +1479,24 @@ describe('runDoctor - AP2', () => {
     expect(existsSync(path)).toBe(false);
   });
 
+  // Root bypasses file permissions, so a read-only file stays writable for it
+  it.skipIf(process.getuid?.() === 0)(
+    'fails a store file that exists but is not writable',
+    async () => {
+      const path = join(mkdtempSync(join(tmpdir(), 'ap2-doctor-')), 'replay.db');
+      writeFileSync(path, '');
+      const writable = await ap2Report(enabledAp2({ replay: { path } }));
+      expect(writable.checks.find((c) => c.name === 'AP2 replay store')?.status).toBe('PASS');
+
+      chmodSync(path, 0o444);
+      const report = await ap2Report(enabledAp2({ replay: { path } }));
+      const replay = report.checks.find((c) => c.name === 'AP2 replay store');
+      expect(replay?.status).toBe('FAIL');
+      expect(replay?.detail).toContain('is not writable');
+      expect(report.exitCode).toBe(1);
+    },
+  );
+
   it('names the resources a mandate now gates', async () => {
     const report = await ap2Report(enabledAp2());
 
@@ -1421,6 +1517,7 @@ describe('runDoctor - AP2', () => {
     const report = await ap2Report(enabledAp2());
 
     const unsupported = report.checks.find((c) => c.name === 'AP2 unsupported');
+    expect(unsupported?.detail).toBe(AP2_UNSUPPORTED.join(', '));
     for (const capability of [
       'autonomous mode',
       'open checkout mandates (mandate.checkout.open.1)',

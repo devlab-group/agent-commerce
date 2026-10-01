@@ -5,26 +5,20 @@
  * tells the truth about a store it cannot read.
  */
 import { beforeAll, describe, expect, it } from 'vitest';
-import {
-  AP2_CHECKOUT_PROFILE,
-  AP2_SPEC_VERSION,
-} from '../../../src/authorization/ap2/constants.js';
-import { AP2_UNSUPPORTED } from '../../../src/authorization/ap2/descriptor.js';
-import { computeInputHash } from '../../../src/authorization/ap2/profile.js';
+import { AP2_CHECKOUT_PROFILE, AP2_SPEC_VERSION } from '../../../src/authorization/ap2/constants';
+import { AP2_UNSUPPORTED } from '../../../src/authorization/ap2/descriptor';
+import { computeInputHash } from '../../../src/authorization/ap2/profile';
 import {
   type Ap2AuthorizationProvider,
   createAp2AuthorizationProvider,
-} from '../../../src/authorization/ap2/provider.js';
+} from '../../../src/authorization/ap2/provider';
 import {
   type Ap2ReplayStore,
   createAp2ReplayStore,
-} from '../../../src/authorization/ap2/replay-store.js';
-import type { EnabledAp2Config } from '../../../src/authorization/ap2/types.js';
-import type {
-  AuthorizationVerificationContext,
-  PaymentRequirement,
-} from '../../../src/core/index.js';
-import { isCommerceError } from '../../../src/core/index.js';
+} from '../../../src/authorization/ap2/replay-store';
+import type { EnabledAp2Config } from '../../../src/authorization/ap2/types';
+import type { AuthorizationVerificationContext, PaymentRequirement } from '../../../src/core';
+import { isCommerceError } from '../../../src/core';
 import {
   checkoutPayload,
   createParties,
@@ -32,7 +26,7 @@ import {
   mintMandate,
   type Party,
   signCheckoutJwt,
-} from './fixtures.js';
+} from './fixtures';
 
 const RESOURCE_ID = 'market_report';
 const INPUT = { city: 'Berlin' };
@@ -104,18 +98,23 @@ function makeProvider(replayStore?: Ap2ReplayStore): Ap2AuthorizationProvider {
   });
 }
 
-async function codeOf(run: () => Promise<unknown>): Promise<string> {
+async function errorOf(run: () => Promise<unknown>): Promise<unknown> {
   try {
     await run();
   } catch (error) {
-    return isCommerceError(error) ? error.code : `untyped:${String(error)}`;
+    return error;
   }
   return 'no-error';
 }
 
+async function codeOf(run: () => Promise<unknown>): Promise<string> {
+  const error = await errorOf(run);
+  return isCommerceError(error) ? error.code : `untyped:${String(error)}`;
+}
+
 beforeAll(async () => {
   parties = await createParties();
-  inputHash = await computeInputHash(INPUT);
+  inputHash = computeInputHash(INPUT);
 });
 
 describe('createAp2AuthorizationProvider', () => {
@@ -129,7 +128,7 @@ describe('createAp2AuthorizationProvider', () => {
     provider.close();
   });
 
-  it('names what it does not do, rather than summarising it as a count', () => {
+  it('names what it does not do, rather than summarizing it as a count', () => {
     const provider = makeProvider();
     expect(provider.descriptor.unsupported).toEqual(AP2_UNSUPPORTED);
     // The two an operator is most likely to assume they have
@@ -196,20 +195,28 @@ describe('createAp2AuthorizationProvider', () => {
     const provider = makeProvider();
     const presentation = await validMandate({ amount: '500.00' });
 
-    const code = await codeOf(() => provider.verifyAndReserve(context(presentation)));
+    const error = await errorOf(() => provider.verifyAndReserve(context(presentation)));
 
-    expect(code).toBe('AUTHORIZATION_INVALID');
+    expect(error).toMatchObject({
+      code: 'AUTHORIZATION_INVALID',
+      details: { reason: 'purchase_mismatch' },
+    });
     provider.close();
   });
 
   it('refuses a mandate from an untrusted issuer as invalid', async () => {
     const provider = makeProvider();
     const jwt = await signCheckoutJwt(parties.checkoutSigner, checkoutPayload());
-    const presentation = await mintMandate(parties.stranger, jwt);
+    const presentation = await mintMandate(parties.stranger, jwt, {
+      payloadOverrides: { iss: 'https://attacker.example' },
+    });
 
-    const code = await codeOf(() => provider.verifyAndReserve(context(presentation)));
+    const error = await errorOf(() => provider.verifyAndReserve(context(presentation)));
 
-    expect(code).toBe('AUTHORIZATION_INVALID');
+    expect(error).toMatchObject({
+      code: 'AUTHORIZATION_INVALID',
+      details: { reason: 'untrusted_issuer' },
+    });
     provider.close();
   });
 
@@ -218,11 +225,15 @@ describe('createAp2AuthorizationProvider', () => {
     const provider = makeProvider(recordingStore(reserved));
     const presentation = await validMandate({ amount: '9.99' });
 
-    await codeOf(() => provider.verifyAndReserve(context(presentation)));
+    const error = await errorOf(() => provider.verifyAndReserve(context(presentation)));
 
+    expect(error).toMatchObject({ details: { reason: 'purchase_mismatch' } });
     // Otherwise the buyer's own mandate is spent by the purchase it does not
     // authorize, and unusable for the one it does
     expect(reserved).toEqual([]);
+    // The same store does record a mandate that binds
+    await provider.verifyAndReserve(context(await validMandate()));
+    expect(reserved).toHaveLength(1);
     provider.close();
   });
 
@@ -230,9 +241,13 @@ describe('createAp2AuthorizationProvider', () => {
     const provider = makeProvider(throwingStore());
     const presentation = await validMandate();
 
-    const code = await codeOf(() => provider.verifyAndReserve(context(presentation)));
+    const error = await errorOf(() => provider.verifyAndReserve(context(presentation)));
 
-    expect(code).toBe('AUTHORIZATION_PROVIDER_UNAVAILABLE');
+    expect(error).toMatchObject({
+      code: 'AUTHORIZATION_PROVIDER_UNAVAILABLE',
+      httpStatus: 503,
+      retryable: true,
+    });
     provider.close();
   });
 
@@ -294,6 +309,26 @@ describe('createAp2AuthorizationProvider', () => {
       expect(health.status).toBe('pass');
       expect(health.detail).toBe('mandate-issuers=1 checkout-issuers=1');
       expect(JSON.stringify(health)).not.toContain(parties.mandateSigner.publicJwk['x']);
+      provider.close();
+    });
+
+    it('times the replay store probe', async () => {
+      let elapsed = 0;
+      const inner = createAp2ReplayStore({ path: ':memory:' });
+      const slowStore: Ap2ReplayStore = {
+        ...inner,
+        stateOf(reference) {
+          elapsed += 7;
+          return inner.stateOf(reference);
+        },
+      };
+      const provider = createAp2AuthorizationProvider({
+        config: config(),
+        clock: { ...fixedClock(), monotonicMs: () => elapsed },
+        replayStore: slowStore,
+      });
+
+      expect((await provider.health()).durationMs).toBe(7);
       provider.close();
     });
 

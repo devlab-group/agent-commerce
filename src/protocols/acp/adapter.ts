@@ -1,18 +1,14 @@
 /**
- * ACP (Agentic Commerce Protocol) adapter - experimental.
+ * ACP (Agentic Commerce Protocol) adapter, experimental.
  *
  * Serves two paths: the configured mount (`/acp`), where the five stable
  * checkout routes live, and the specification-fixed `/.well-known/acp.json`,
  * declared through `additionalHttpRoutes` so the gateway needs no ACP-specific
  * routing.
  *
- * Discovery and every protocol guard that must hold before canonical execution
- * are implemented. A guarded request is not executed yet: until checkout
- * operations reach the pipeline, a fully-valid request is answered with an
- * honest "not implemented" rather than a fabricated session.
- *
- * This file never calls a merchant backend and never inspects a payment
- * object.
+ * A request that passes every protocol guard runs its mapped resource through
+ * the pipeline, under an idempotency claim when it carries a key. This file
+ * never calls a merchant backend and never inspects a payment object.
  */
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import {
@@ -25,9 +21,11 @@ import {
   type HttpProtocolAdapter,
   type ProtocolAdapterContext,
   toCommerceError,
-} from '../../core/index.js';
-import { PACKAGE_VERSION } from '../../version.js';
-import { toCanonicalRequest } from './checkout-mapping.js';
+} from '../../core';
+import { toLogInfo } from '../../core/errors';
+import { PACKAGE_VERSION } from '../../version';
+import { createBearerCheck } from '../http';
+import { toCanonicalRequest } from './checkout-mapping';
 import {
   ACP_CHECKOUT_OPERATIONS,
   ACP_IDEMPOTENCY_KEY_HEADER,
@@ -36,34 +34,32 @@ import {
   ACP_REQUEST_ID_HEADER,
   ACP_WELL_KNOWN_PATH,
   type AcpCheckoutOperation,
-} from './constants.js';
-import { buildDescriptor } from './descriptor.js';
-import { type AcpDiscoveryMetadata, buildAcpDiscoveryDocument } from './discovery.js';
-import { type AcpFailure, acpFailure, writeAcpFailure, writeAcpJson } from './errors.js';
-import { operationKey, requestFingerprint } from './idempotency/fingerprint.js';
+} from './constants';
+import { buildDescriptor } from './descriptor';
+import { type AcpDiscoveryMetadata, buildAcpDiscoveryDocument } from './discovery';
+import { type AcpFailure, acpFailure, writeAcpFailure, writeAcpJson } from './errors';
+import { operationKey, requestFingerprint } from './idempotency/fingerprint';
 import {
   type AcpIdempotencyScope,
   type AcpIdempotencyStore,
   createAcpIdempotencyStore,
-} from './idempotency/store.js';
-import { type AcpGuardedRequest, guardAcpRequest } from './request-guards.js';
+} from './idempotency/store';
+import { type AcpGuardedRequest, guardAcpRequest } from './request-guards';
 import {
   type AcpResponse,
   asResponse,
   mapCommerceErrorToAcp,
   toAcpResponse,
-} from './response-mapping.js';
-import { validateAcpDocument } from './validation.js';
+} from './response-mapping';
+import { validateAcpDocument } from './validation';
 
-/** Discovery is stable for the life of the process, so it is safe to cache at the edge. */
+// Discovery is fixed for the life of the process, so edge caches may keep it
 const DISCOVERY_CACHE_CONTROL = 'public, max-age=3600';
 
 /**
- * Whether this attempt could have changed anything at the merchant.
- *
- * `no` has to be a proof, never a guess: it is the only value that frees an
- * idempotency key for a retry. The caller treats `unknown` and `yes` alike,
- * and they are kept apart only so a log says which it was.
+ * Whether this attempt could have changed anything at the merchant. `no` must
+ * be proven, because only `no` frees an idempotency key for a retry; `unknown`
+ * and `yes` are treated alike and differ only in the log.
  */
 type MerchantReach = 'no' | 'unknown' | 'yes';
 
@@ -73,11 +69,11 @@ interface AcpCheckoutAttempt {
 }
 
 /**
- * The codes the pipeline raises strictly before it calls the merchant.
- *
- * An allowlist, so a code added later is ambiguous by default rather than
- * silently freeing a key. `STORAGE_ERROR` is deliberately absent: the receipt
- * is written *after* delivery, so it means the merchant did act.
+ * The codes the pipeline raises strictly before it calls the merchant. An
+ * allowlist, so a new code counts as ambiguous rather than freeing a key.
+ * `STORAGE_ERROR` is absent: the pipeline raises it only when reserving a
+ * payment attempt, which a free checkout resource never does, so on this route
+ * it can only be unexpected and counts as ambiguous.
  */
 const PRE_BACKEND_ERROR_CODES: ReadonlySet<string> = new Set([
   'CONFIG_INVALID',
@@ -106,11 +102,11 @@ function notReached(failure: AcpFailure): AcpCheckoutAttempt {
 
 export interface AcpAdapterOptions {
   readonly mountPath: string;
-  /** The configured bearer token. Never logged, never echoed, never published. */
+  /** The configured bearer token. Never logged, never echoed, never published */
   readonly token: string;
-  /** Which canonical resource implements each ACP checkout operation. */
+  /** Which canonical resource implements each ACP checkout operation */
   readonly operations: Readonly<Record<AcpCheckoutOperation, string>>;
-  /** Where checkout idempotency records live, and how long they are kept. */
+  /** Where checkout idempotency records live, and how long they are kept */
   readonly idempotency: { readonly path: string; readonly retentionHours: number };
   readonly discovery?: AcpDiscoveryMetadata;
 }
@@ -121,15 +117,12 @@ export class AcpProtocolAdapter implements HttpProtocolAdapter {
   readonly descriptor: AdapterDescriptor;
   readonly additionalHttpRoutes: readonly AdapterHttpRoute[];
 
-  private readonly token: string;
+  private readonly isAuthorized: (authorizationHeader: string | undefined) => boolean;
   private readonly operations: Readonly<Record<AcpCheckoutOperation, string>>;
   private readonly idempotencyOptions: AcpAdapterOptions['idempotency'];
   /**
-   * What an idempotency claim is scoped to, from `context.publicBaseUrl`.
-   *
-   * Not readonly because, unlike the token, it is known only once the adapter
-   * starts. Worth that: scoping by the credential meant a rotation freed
-   * every outstanding claim.
+   * The deployment an idempotency claim is scoped to, `context.publicBaseUrl`.
+   * Not readonly because it is known only once the adapter starts.
    */
   private deployment: string | undefined;
   private readonly discoveryMetadata: AcpDiscoveryMetadata | undefined;
@@ -138,14 +131,13 @@ export class AcpProtocolAdapter implements HttpProtocolAdapter {
 
   private context: ProtocolAdapterContext | undefined;
   private started = false;
-  // Built once at start: the document is fixed by config, and rebuilding it
-  // per request would let an unauthenticated GET do work a caller controls the
-  // cost of.
+  // Built once at start: the document is fixed by config, and a per-request
+  // build would be work an unauthenticated GET could trigger at will
   private discovery: Record<string, unknown> | undefined;
 
   constructor(options: AcpAdapterOptions) {
     this.mountPath = options.mountPath;
-    this.token = options.token;
+    this.isAuthorized = createBearerCheck(options.token);
     this.operations = options.operations;
     this.idempotencyOptions = options.idempotency;
     this.discoveryMetadata = options.discovery;
@@ -168,11 +160,10 @@ export class AcpProtocolAdapter implements HttpProtocolAdapter {
       mountPath: this.mountPath,
       ...(this.discoveryMetadata !== undefined ? { metadata: this.discoveryMetadata } : {}),
     });
-    // Validated against the pinned snapshot rather than trusted: configured
-    // metadata is free text (a currency that is not ISO 4217, an intervention
-    // type ACP does not define), and publishing a document that fails ACP's own
-    // schema would be the blanket-compatibility claim this project refuses to
-    // make. Failing here fails only this adapter - the gateway isolates it.
+    // Configured metadata is free text (a currency that is not ISO 4217, an
+    // intervention type ACP does not define), so the document is validated
+    // against the pinned snapshot before it is published. A failure stops only
+    // this adapter.
     const invalid = validateAcpDocument('discoveryResponse', document);
     if (invalid !== undefined) {
       throw new CommerceError(
@@ -182,10 +173,8 @@ export class AcpProtocolAdapter implements HttpProtocolAdapter {
       );
     }
 
-    // The same defence in depth MCP and A2A apply: config already refuses a
-    // mapping to a resource that is not acp-exposed, but the adapter must not
-    // rely on that alone to keep a resource scoped to another protocol out of
-    // an ACP checkout.
+    // Config already refuses a mapping to a resource that is not acp-exposed;
+    // the adapter checks again, as MCP and A2A do
     const exposed = new Map(
       context.resources.listExposedVia('acp').map((resource) => [resource.id, resource]),
     );
@@ -223,7 +212,7 @@ export class AcpProtocolAdapter implements HttpProtocolAdapter {
     );
   }
 
-  /** `GET /.well-known/acp.json` - public, unauthenticated, cacheable. */
+  /** `GET /.well-known/acp.json`: public, unauthenticated, cacheable */
   async handleDiscovery(req: IncomingMessage, res: ServerResponse): Promise<void> {
     try {
       if (!this.started || this.discovery === undefined) {
@@ -256,7 +245,7 @@ export class AcpProtocolAdapter implements HttpProtocolAdapter {
     }
   }
 
-  /** `<mountPath>/checkout_sessions...` - the five stable checkout routes. */
+  /** `<mountPath>/checkout_sessions...`: the five stable checkout routes */
   async handleHttp(req: IncomingMessage, res: ServerResponse): Promise<void> {
     try {
       if (!this.started) {
@@ -274,11 +263,11 @@ export class AcpProtocolAdapter implements HttpProtocolAdapter {
 
       const guarded = await guardAcpRequest(req, {
         mountPath: this.mountPath,
-        token: this.token,
+        isAuthorized: this.isAuthorized,
       });
       if (!guarded.ok) {
-        // A guard failure never carries a Request-Id echo: the header is only
-        // normalised once the request is known to be well-formed.
+        // A guard failure echoes no Request-Id: the header is only normalized
+        // once the request is known to be well formed
         writeAcpFailure(res, guarded);
         return;
       }
@@ -292,12 +281,9 @@ export class AcpProtocolAdapter implements HttpProtocolAdapter {
   }
 
   /**
-   * One request, at most one execution.
-   *
-   * A body-bearing route claims its idempotency key *before* the work starts,
-   * so a retry that arrives while the first one is still running finds the
-   * claim instead of starting a second checkout. A route with no key (the GET)
-   * is read-only and needs none.
+   * One request, at most one execution. A body-bearing route claims its
+   * idempotency key before the work starts, so a retry arriving meanwhile finds
+   * the claim; the read-only GET carries no key.
    */
   private async dispatch(request: AcpGuardedRequest): Promise<AcpResponse> {
     const store = this.idempotency;
@@ -324,10 +310,8 @@ export class AcpProtocolAdapter implements HttpProtocolAdapter {
           retryAfterSeconds: ACP_IN_FLIGHT_RETRY_AFTER_SECONDS,
         };
       case 'unresolved':
-        // Not "try again": an earlier attempt reached the merchant and nobody
-        // learned its outcome. Re-running it could order twice, and replaying
-        // it would invent an answer nobody gave. It may already have
-        // succeeded, and only the merchant's records can say.
+        // Neither re-run nor replayed: an earlier attempt reached the merchant
+        // and its outcome is unknown (see the idempotency store)
         return asResponse(
           acpFailure(
             409,
@@ -355,37 +339,28 @@ export class AcpProtocolAdapter implements HttpProtocolAdapter {
     try {
       outcome = await this.runCheckout(request, operationKey(scope));
     } catch (err) {
-      // A throw here is a bug in this adapter, not a merchant verdict, and it
-      // says nothing about how far the request had got. The merchant may have
-      // been called, so the claim is kept.
+      // An adapter bug, not a merchant verdict; the merchant may have been
+      // called, so the claim is kept
       store.markUnresolved(scope);
       throw err;
     }
 
-    // A 2xx or 4xx is the answer to this request and every retry of it: the
-    // merchant stated an outcome, even a refusing one, so it is cached.
+    // A 2xx or 4xx is an outcome, even a refusal, and answers every retry
     if (outcome.response.status < 500) {
       store.complete(scope, outcome.response);
     } else if (outcome.reached === 'no') {
-      // Proven never to have left the gateway, so the key is freed and the
-      // caller can retry cleanly once the deployment is fixed.
+      // Proven never to have left the gateway, so the key is freed for a retry
       store.release(scope);
     } else {
-      // A timeout, a merchant 5xx, or a reply we could not read. None of them
-      // say the merchant did nothing, and freeing the key here is how one
-      // checkout becomes two orders.
+      // A timeout, a merchant status ACP cannot relay or a non-ACP reply: the
+      // merchant may have acted, and freeing the key could turn one checkout
+      // into two orders
       store.markUnresolved(scope);
     }
     return outcome.response;
   }
 
-  /**
-   * One accepted request, one `pipeline.execute()`.
-   *
-   * Nothing here prices a resource, inspects a payment proof or calls a
-   * merchant backend: the adapter builds a canonical request and reads back
-   * what the pipeline decided.
-   */
+  // One accepted request, one `pipeline.execute()`
   private async runCheckout(
     request: AcpGuardedRequest,
     idempotencyKey?: string,
@@ -414,10 +389,9 @@ export class AcpProtocolAdapter implements HttpProtocolAdapter {
     try {
       const outcome = await context.pipeline.execute(canonical);
       if (outcome.kind === 'payment-required') {
-        // ACP has no wire representation for a gateway payment challenge, and
-        // config refuses a paid checkout resource - so reaching this is a
-        // broken deployment, not something the caller can act on. Nothing about
-        // the challenge is disclosed.
+        // Config refuses a paid checkout resource and ACP cannot carry a
+        // gateway challenge, so this is a broken deployment. Nothing about the
+        // challenge is disclosed.
         context.logger.error(
           { resourceId: resource.id, requestId: canonical.requestId },
           'acp adapter: mapped checkout resource returned payment-required - it must be priced free',
@@ -433,16 +407,15 @@ export class AcpProtocolAdapter implements HttpProtocolAdapter {
       }
       const mapped = toAcpResponse(request.route.operation, outcome as DeliveredOutcome);
       if (mapped.logDetail !== undefined) {
-        // The merchant answered, but not with ACP. Everything needed to fix it
-        // goes to the log; the caller gets the safe refusal in `response`.
+        // The merchant answered, but not with ACP: the details go to the log,
+        // the caller gets the refusal in `response`
         context.logger.error(
           { resourceId: resource.id, requestId: canonical.requestId, ...mapped.logDetail },
           'acp adapter: refusing to forward a non-conformant merchant response',
         );
       }
-      // The pipeline delivered, so the merchant ran the operation - including
-      // where its answer was not ACP and is being refused. The order may well
-      // exist, and the key must not be freed for a retry.
+      // Delivered, so the merchant ran the operation even if its answer is
+      // refused as non-ACP; the order may exist, so the key is not freed
       return { response: mapped.response, reached: 'yes' };
     } catch (err) {
       const error = toCommerceError(err);
@@ -451,7 +424,7 @@ export class AcpProtocolAdapter implements HttpProtocolAdapter {
           resourceId: resource.id,
           requestId: canonical.requestId,
           reached: reachedFor(error.code),
-          err: error.toInfo(),
+          err: toLogInfo(error),
         },
         'acp adapter: checkout execution failed',
       );
@@ -462,10 +435,7 @@ export class AcpProtocolAdapter implements HttpProtocolAdapter {
     }
   }
 
-  /**
-   * Protocol-owned headers only. A merchant backend's own headers are never
-   * proxied onto an ACP response.
-   */
+  // Protocol-owned headers only; a merchant backend's headers are never proxied
   private responseHeaders(
     request: AcpGuardedRequest,
     response?: AcpResponse,
@@ -484,9 +454,8 @@ export class AcpProtocolAdapter implements HttpProtocolAdapter {
   }
 
   private fail(res: ServerResponse, err: unknown, message: string): void {
-    // Nothing from `err` reaches the client: stack, exception name and any
-    // upstream detail stay in the log.
-    this.context?.logger.error({ err: toCommerceError(err).toInfo() }, message);
+    // Nothing from `err` reaches the client
+    this.context?.logger.error({ err: toLogInfo(err) }, message);
     writeAcpFailure(
       res,
       acpFailure(500, 'processing_error', 'internal_error', 'Internal server error.'),

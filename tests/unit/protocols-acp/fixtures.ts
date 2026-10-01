@@ -1,7 +1,6 @@
-/** Shared ACP adapter fixtures: the five mapped resources and a spied context. */
+// Shared ACP adapter fixtures: the five mapped resources and a spied context
 import { readFileSync } from 'node:fs';
 import { vi } from 'vitest';
-import { createResourceRegistry } from '../../../src/core/execution/index.js';
 import type {
   CanonicalRequest,
   Clock,
@@ -14,10 +13,11 @@ import type {
   Logger,
   ProtocolAdapterContext,
   ResourceRegistry,
-} from '../../../src/core/index.js';
-import type { AcpAdapterOptions } from '../../../src/protocols/acp/adapter.js';
-import type { AcpCheckoutOperation } from '../../../src/protocols/acp/constants.js';
-import { ACP_SUCCESS_STATUS } from '../../../src/protocols/acp/response-mapping.js';
+} from '../../../src/core';
+import { createResourceRegistry } from '../../../src/core/execution';
+import type { AcpAdapterOptions } from '../../../src/protocols/acp/adapter';
+import type { AcpCheckoutOperation } from '../../../src/protocols/acp/constants';
+import { ACP_SUCCESS_STATUS } from '../../../src/protocols/acp/response-mapping';
 
 export const TOKEN = 'acp-secret-token';
 export const MOUNT = '/acp';
@@ -30,7 +30,7 @@ export const ACP_OPERATIONS: Readonly<Record<AcpCheckoutOperation, string>> = {
   cancelCheckoutSession: 'acp_checkout_cancel',
 };
 
-/** Free, acp-exposed, unpaid - the shape config enforces for a mapped resource. */
+// Free, acp-exposed, unpaid - the shape config enforces for a mapped resource
 function checkoutResource(id: string): CommerceResource {
   return {
     id,
@@ -82,7 +82,7 @@ export function sessionDocument(overrides: Record<string, unknown> = {}): Record
   return { ...ACP_EXAMPLES['get_checkout_session_response'], ...overrides };
 }
 
-/** A delivered outcome carrying `body` as the merchant backend's document. */
+/** A delivered outcome carrying `body` as the merchant backend's document */
 export function delivered(body: unknown, backendStatus = 200): ExecutionOutcome {
   return {
     kind: 'delivered',
@@ -95,7 +95,7 @@ export function delivered(body: unknown, backendStatus = 200): ExecutionOutcome 
   };
 }
 
-/** What a conformant merchant backend returns for `operation`. */
+/** What a conformant merchant backend returns for `operation` */
 export function deliveredFor(operation: AcpCheckoutOperation): ExecutionOutcome {
   const body =
     operation === 'completeCheckoutSession'
@@ -158,7 +158,7 @@ export function adapterOptions(overrides: Partial<AcpAdapterOptions> = {}): AcpA
   };
 }
 
-/** The one canonical request the pipeline was handed. */
+/** The one canonical request the pipeline was handed */
 export function firstRequest(execute: { mock: { calls: unknown[][] } }): CanonicalRequest {
   const request = execute.mock.calls[0]?.[0];
   if (request === undefined) throw new Error('pipeline was never called');

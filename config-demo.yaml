@@ -1,20 +1,21 @@
 # ---------------------------------------------------------------------------
-# Agent Commerce Gateway — working configuration
+# Agent Commerce Gateway - demo configuration
 #
-# This file is COMMITTED deliberately: it is the config `docker compose up`
-# uses, so the documented quickstart runs with no copy-and-edit step.
+# `docker compose up` uses this file directly; the quickstart needs no copy.
 #
-# Every placeholder has a `${VAR:-default}` fallback that points at the local
-# demo stack, so the same file works three ways:
-# - inside docker compose, where the service env overrides each value;
-# - on the host after `npm run chain:start && npm run chain:deploy`;
-# - for `npm run agent-commerce -- validate` with no environment at all.
+# Most placeholders fall back to the local demo stack. X402_ASSET and
+# X402_FACILITATOR_PRIVATE_KEY have no fallback; they come from the chain
+# deployment manifest (.deploy/local.json):
+# - in docker compose, docker/gateway-entrypoint.sh exports them;
+# - `npm run agent-commerce -- validate` and `doctor` read the manifest on the
+#   host after `npm run chain:deploy`;
+# - a gateway started on the host needs both exported.
 #
-# For your own deployment, edit it or regenerate with:
-# npm run agent-commerce -- init
+# For your own deployment, edit it or generate a new one with:
+#   npm run agent-commerce -- init
 #
-# `${VAR}` placeholders resolve from the environment at load time. Unresolved
-# placeholders fail startup and are never printed.
+# `${VAR}` placeholders resolve from the environment at load time. An
+# unresolved one fails startup, and config errors never print a resolved value.
 # ---------------------------------------------------------------------------
 
 version: 1
@@ -26,12 +27,12 @@ merchant:
 
 server:
   port: ${GATEWAY_PORT:-8080}
-  # 0.0.0.0 inside the container; docker-compose publishes to 127.0.0.1 only.
+  # 0.0.0.0 inside the container; docker-compose publishes to 127.0.0.1 only
   host: 0.0.0.0
 
-  # Operator routes (/api/receipts, /api/events, /api/events/stream) expose the
-  # merchant's commerce ledger. They require this token and return 404 when it
-  # is unset — a missing control must not read as an absent restriction.
+  # Operator routes (/api/receipts, /api/events) expose the merchant's
+  # commerce ledger. They require this token and return 404 when it is unset,
+  # so a missing token never reads as "no restriction".
   adminToken: ${ADMIN_TOKEN:-local-demo-admin-token}
 
   # Explicit allowlist; empty means no browser may read any route. Agent
@@ -52,7 +53,7 @@ protocols:
     mountPath: /mcp
 
 resources:
-  # --- free resource: proves the gateway fronts an existing API -------------
+  # --- free resource: exposes a merchant API endpoint -----------------------
   weather_basic:
     name: Basic Weather
     description: Current basic weather for a city. Free.
@@ -73,7 +74,7 @@ resources:
       type: free
     expose: [http, mcp]
 
-  # --- paid resource: proves x402 enforcement -------------------------------
+  # --- paid resource: requires x402 settlement ------------------------------
   market_report:
     name: Premium Market Report
     description: Latest premium market analysis. Paid resource.
@@ -102,13 +103,13 @@ payments:
     assetName: ${X402_ASSET_NAME:-MockUSDC}
     assetVersion: ${X402_ASSET_VERSION:-2}
     assetDecimals: ${X402_ASSET_DECIMALS:-6}
-    # Merchant-controlled settlement destination.
-    # This is NEVER a gateway-owned wallet — see docs/security.md.
+    # Settlement destination. Set this to an address the merchant controls;
+    # see docs/security.md.
     payTo: ${MERCHANT_WALLET:-0x70997970C51812dc3A010C7d01b50e0d17dc79C8}
-    # Seconds a payment challenge stays valid.
+    # Seconds a payment challenge stays valid
     maxTimeoutSeconds: 120
-    # Local facilitator used only on the deterministic dev chain. In production
-    # point `facilitator.url` at an external facilitator instead.
+    # In-process facilitator for the local dev chain. In production use
+    # `mode: remote` with the facilitator's `url` instead.
     facilitator:
       mode: local
       signerPrivateKey: ${X402_FACILITATOR_PRIVATE_KEY}

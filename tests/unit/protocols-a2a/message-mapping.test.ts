@@ -1,13 +1,12 @@
 /**
  * The invocation envelope: what the adapter accepts, and what it refuses.
  *
- * Terminology, deliberately: a rejected `resource` names an *unknown canonical
- * resource*, never an "unknown skill" — A2A skills are discovery descriptors,
- * not dispatch identifiers, and resolution happens in the pipeline anyway.
+ * A rejected `resource` is an unknown canonical resource, never an "unknown
+ * skill": A2A skills are discovery descriptors, not dispatch identifiers.
  */
 import { describe, expect, it } from 'vitest';
-import { isCommerceError, PAYMENT_INPUT_FIELD } from '../../../src/core/index.js';
-import { parseInvocation } from '../../../src/protocols/a2a/message-mapping.js';
+import { isCommerceError, PAYMENT_INPUT_FIELD } from '../../../src/core';
+import { parseInvocation } from '../../../src/protocols/a2a/message-mapping';
 
 function envelope(data: unknown, overrides: Record<string, unknown> = {}): unknown {
   return {
@@ -30,7 +29,7 @@ function expectRejected(params: unknown, code: 'INPUT_INVALID' | 'PROTOCOL_UNSUP
   }
 }
 
-describe('parseInvocation — accepted envelope', () => {
+describe('parseInvocation: accepted envelope', () => {
   it('maps a valid resource envelope to a resource id and input', () => {
     expect(
       parseInvocation(envelope({ resource: 'market_report', input: { symbol: 'ETH' } })),
@@ -70,7 +69,7 @@ describe('parseInvocation — accepted envelope', () => {
   });
 });
 
-describe('parseInvocation — malformed envelopes', () => {
+describe('parseInvocation: malformed envelopes', () => {
   it.each([
     ['not an object', 42],
     ['no message', {}],
@@ -116,7 +115,7 @@ describe('parseInvocation — malformed envelopes', () => {
   });
 });
 
-describe('parseInvocation — legal A2A this adapter does not serve', () => {
+describe('parseInvocation: legal A2A this adapter does not serve', () => {
   it('rejects a file part', () => {
     const params = {
       message: { role: 'ROLE_USER', parts: [{ file: { uri: 'https://example.com/a.pdf' } }] },
@@ -193,12 +192,11 @@ describe('parseInvocation — legal A2A this adapter does not serve', () => {
 });
 
 /**
- * Part shapes the official SDK actually produces. A2A v1 flattened the v0.3
- * `file` object into a content oneof, so these are what a conformant client
- * sends — checked here rather than only in the SDK conformance suite, where a
- * failure would be one layer removed from the rule it breaks.
+ * Part shapes the official SDK produces. A2A v1 flattened the v0.3 `file`
+ * object into a content oneof, so these are what a conformant client sends,
+ * checked here as well as in the SDK conformance suite.
  */
-describe('parseInvocation — A2A v1 part spellings', () => {
+describe('parseInvocation: A2A v1 part spellings', () => {
   it.each([
     ['inline bytes', { raw: 'QUFBQQ==', filename: 'a.bin', mediaType: 'application/octet-stream' }],
     ['a url part', { url: 'https://example.com/a.pdf', mediaType: 'application/pdf' }],

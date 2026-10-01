@@ -1,54 +1,31 @@
 /**
  * MCP protocol adapter.
  *
- * One MCP tool per canonical resource exposed via `exposedVia: ['mcp']`.
- * Every `tools/call` builds a `CanonicalRequest` and goes through
- * `context.pipeline.execute()` — this file never calls a merchant backend and
- * never inspects a payment object, it only surfaces what the pipeline
- * returns.
+ * One MCP tool per mcp-exposed canonical resource. Every `tools/call` builds a
+ * `CanonicalRequest` and goes through `context.pipeline.execute()`; this file
+ * never calls a merchant backend and never inspects a payment object.
  *
- * Transport: Streamable HTTP, **stateless** mode (no `sessionIdGenerator`,
- * i.e. session id generation left undefined). A fresh low-level `Server` +
- * `StreamableHTTPServerTransport` pair is created per HTTP request and torn
- * down when the response closes —
- * this is the pattern @modelcontextprotocol/sdk@1.30.0's own
- * `examples/server/simpleStatelessStreamableHttp.js` uses, and it avoids
- * holding cross-request session state the gateway has no lifecycle hook for.
+ * Transport: Streamable HTTP in stateless mode (no `sessionIdGenerator`). A
+ * fresh low-level `Server` and `StreamableHTTPServerTransport` pair is created
+ * per HTTP request and torn down when the response closes, the pattern of the
+ * SDK's `examples/server/simpleStatelessStreamableHttp.js`, so no session
+ * state outlives a request.
  *
- * Tool registration uses the low-level `Server` (`setRequestHandler` for
- * `ListToolsRequestSchema` / `CallToolRequestSchema`) rather than the
- * higher-level `McpServer.registerTool`. `McpServer.registerTool`'s
- * `inputSchema` only accepts a Zod schema or a raw Zod shape
- * (`server/zod-compat.d.ts`: `AnySchema = z3.ZodTypeAny | z4.$ZodType`) — it
- * does not accept a raw JSON Schema object. The canonical
- * `CommerceResource.inputSchema` is already JSON Schema, and the MCP wire
- * format for `Tool.inputSchema` *is* JSON Schema, so building `Tool` objects
- * directly (via the low-level `Server`) carries it through verbatim with no
- * lossy JSON-Schema-to-Zod conversion. `Server` is marked `@deprecated` in
- * favour of `McpServer`'s ergonomics, but remains fully supported — its
- * documented use is exactly this kind of advanced, non-Zod case.
+ * Tools are registered on the low-level `Server`, not through
+ * `McpServer.registerTool`, whose `inputSchema` accepts only a Zod schema or
+ * shape. `CommerceResource.inputSchema` and the MCP wire `Tool.inputSchema`
+ * are both JSON Schema, so building `Tool` objects directly carries the schema
+ * through with no lossy conversion. The SDK marks `Server` `@deprecated` but
+ * still documents it for advanced cases such as this one.
  *
- * Origin/Host validation (DNS-rebinding protection): deliberately NOT done
- * here. `StreamableHTTPServerTransport` is constructed with no
- * `allowedHosts`/`allowedOrigins`/`enableDnsRebindingProtection` — all three
- * are `@deprecated` in the pinned SDK's own
- * `webStandardStreamableHttp.d.ts`, in favour of exactly the fix applied
- * here: an allowlist enforced by the *host* before a request ever reaches an
- * adapter. `src/gateway`'s `onRequest` hook is that enforcement point —
- * it covers `/mcp` and the HTTP routes together, so there is one allowlist
- * for the whole gateway instead of one per adapter. This adapter has no
- * config surface to build a second one from: `McpAdapterOptions` is frozen
- * (docs/contracts.md) to `{ mountPath?, serverName?, serverVersion? }`, and
- * the only signal available without a contract change —
- * `context.publicBaseUrl` — is one string that may not match what a
- * reverse-proxied deployment's `Host`/`Origin` headers actually carry. A
- * second, narrower allowlist built from it would not add coverage the
- * gateway's hook doesn't already provide; it would only add a second place
- * that can reject legitimate traffic the gateway just allowed, for a
- * deprecated code path upstream is steering consumers away from. Revisit
- * this if the adapter is ever meant to be mounted somewhere other than this
- * gateway. See `descriptor.unsupported` — this reliance on the host is
- * recorded there too, not just here, so `doctor`/`.well-known` surface it.
+ * Host and Origin validation (DNS-rebinding protection) is not done here. The
+ * SDK deprecates the transport's `allowedHosts`, `allowedOrigins` and
+ * `enableDnsRebindingProtection` in favor of validation by the host. The
+ * gateway's server-wide `onRequest` hook checks every request, `/mcp`
+ * included, and `McpAdapterOptions` offers nothing to build a second
+ * allowlist from. Mounted outside this gateway, the adapter has no such
+ * protection, which is why `MCP_UNSUPPORTED`, published at
+ * `/.well-known/agent-commerce`, lists `dns-rebinding-protection`.
  */
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
@@ -70,22 +47,20 @@ import {
   type HttpProtocolAdapter,
   type ProtocolAdapterContext,
   toCommerceError,
-} from '../../core/index.js';
-import { buildDescriptor, PACKAGE_VERSION } from './descriptor.js';
-import { errorResult, mapOutcome } from './result-mapping.js';
-import {
-  buildInputSchema,
-  buildToolDescription,
-  isValidToolName,
-  MCP_TOOL_NAME_PATTERN,
-} from './tool-mapping.js';
+} from '../../core';
+import { toLogInfo } from '../../core/errors';
+import { PACKAGE_VERSION } from '../../version';
+import { MCP_TOOL_NAME_PATTERN } from './constants';
+import { buildDescriptor } from './descriptor';
+import { errorResult, mapOutcome } from './result-mapping';
+import { buildInputSchema, buildToolDescription, isValidToolName } from './tool-mapping';
 
 export interface McpAdapterOptions {
-  /** Path prefix the gateway mounts this adapter at. Default '/mcp'. */
+  /** Path prefix the gateway mounts this adapter at. Default '/mcp' */
   readonly mountPath?: string;
-  /** MCP `Implementation.name` reported during initialize. */
+  /** MCP `Implementation.name` reported during initialize */
   readonly serverName?: string;
-  /** MCP `Implementation.version` reported during initialize. Default: this package's version. */
+  /** MCP `Implementation.version` reported during initialize. Default: this package's version */
   readonly serverVersion?: string;
 }
 
@@ -103,50 +78,24 @@ const DEFAULT_MOUNT_PATH = '/mcp';
 const DEFAULT_SERVER_NAME = 'agent-commerce';
 
 /**
- * The pinned MCP SDK's Streamable HTTP transport
- * accepts a JSON-RPC **batch** (a bare array in the POST body) and dispatches
- * every element to this adapter's `tools/call` handler in one synchronous
- * `for` loop with no `await` between iterations and no cap on the array's
- * length (`webStandardStreamableHttp.js`'s `handlePostRequest`, via
- * `shared/protocol.js`'s `_onrequest`, which fires the handler and returns
- * without waiting for it to settle). Nothing between the transport and this
- * adapter enforces stateless mode's own precondition that `tools/call`
- * requires no prior `initialize` — so one POST, no handshake, N `tools/call`
- * messages, is a legal request that becomes N concurrent
- * `context.pipeline.execute()` calls, each of which may end in a live
- * `fetch()` to the merchant's backend. 8 keeps a handful of genuinely
- * concurrent tool calls (the common case for an agent working a multi-step
- * task) from ever queuing, while still bounding the worst case to a small,
- * fixed number of simultaneous outbound connections regardless of how large
- * a batch a caller sends. The worst case measured without it was 5000
- * concurrent backend calls from a single request.
+ * The SDK's transport accepts a JSON-RPC batch of any length and dispatches
+ * every element to the `tools/call` handler without waiting for any to
+ * settle, and stateless mode needs no `initialize` first. One POST can
+ * therefore start N concurrent `pipeline.execute()` calls, each possibly a
+ * live fetch to the merchant. 8 lets an agent's usual handful of concurrent
+ * calls run without queuing.
  */
 const MAX_CONCURRENT_TOOL_CALLS = 8;
 
 /**
- * The semaphore above bounds concurrency but not
- * queue depth — `acquireToolCallSlot` pushed one resolver per waiting call
- * onto `toolCallWaiters` with no ceiling, so an oversized batch (thousands
- * of `tools/call` messages, still well under the gateway's own 1 MB body
- * cap) queued in full and then *ran* in full, including the ~30 seconds
- * after the client had already disconnected. 64 is 8x
- * MAX_CONCURRENT_TOOL_CALLS: enough that a legitimate short burst from one
- * agent never gets rejected (the measured honest case tops out at a
- * handful of concurrent calls), while capping the adapter's total
- * exposure — in flight plus queued — to a small, fixed number of real
- * `pipeline.execute()` calls no matter how large a batch a caller sends.
- * Calls beyond the queue fail fast with no backend call at all, rather
- * than piling up behind it.
- *
- * Scope note: this cap is per `McpProtocolAdapter` instance.
- * The gateway's own SSE-subscriber cap is per gateway instance. Both
- * happen to be one-per-process today, so the two read the same in
- * practice — but they are not the same scope, and that stops being true
- * the moment either one is ever instantiated more than once per process.
+ * Bounds the queue behind the semaphore, per adapter instance. Without it an
+ * oversized batch would queue in full and then run in full. 64 is 8x
+ * MAX_CONCURRENT_TOOL_CALLS, room for a legitimate burst; calls beyond it fail
+ * fast with GATEWAY_BUSY and reach no backend.
  */
 const MAX_QUEUED_TOOL_CALLS = 64;
 
-export class McpProtocolAdapter implements HttpProtocolAdapter {
+class McpProtocolAdapter implements HttpProtocolAdapter {
   readonly name = 'mcp' as const;
   readonly mountPath: string;
   readonly descriptor: AdapterDescriptor;
@@ -161,13 +110,9 @@ export class McpProtocolAdapter implements HttpProtocolAdapter {
   private skipped: readonly SkippedResource[] = [];
   private readonly activeTransports = new Set<StreamableHTTPServerTransport>();
 
-  // Counting semaphore bounding concurrent `context.pipeline.execute()`
-  // calls. Lives on the adapter instance (one per gateway mount, for the
-  // process lifetime), not per-request, so the cap holds across concurrent
-  // `/mcp` requests too — not just within one oversized batch. A request
-  // only ever waits here once MAX_CONCURRENT_TOOL_CALLS executions are
-  // already in flight adapter-wide, which is the throttle working as
-  // intended, not two unrelated single-call requests blocking each other.
+  // Counting semaphore on `pipeline.execute()`. It lives on the adapter, not
+  // the request, so the cap holds across concurrent `/mcp` requests as well
+  // as within one batch.
   private inFlightToolCalls = 0;
   private readonly toolCallWaiters: Array<() => void> = [];
 
@@ -187,7 +132,7 @@ export class McpProtocolAdapter implements HttpProtocolAdapter {
       resources = context.resources.listExposedVia('mcp');
     } catch (err) {
       context.logger.error(
-        { adapter: 'mcp', err: toCommerceError(err).toInfo() },
+        { adapter: 'mcp', err: toLogInfo(err) },
         'mcp adapter: failed to list mcp-exposed resources',
       );
       resources = [];
@@ -259,19 +204,14 @@ export class McpProtocolAdapter implements HttpProtocolAdapter {
         return;
       }
 
-      // one AbortController per HTTP request, aborted
-      // from the same `res` 'close' handler that already tears down the
-      // transport/server pair. `handleToolCall` checks this after acquiring
-      // its concurrency slot — never mid-`pipeline.execute()`, since a call
-      // that already reached settlement must be allowed to finish (aborting
-      // there is worse than finishing: the buyer may already be charged).
+      // Aborted when the response closes. `handleToolCall` checks it only
+      // before `pipeline.execute()`: a call that may already have settled
+      // must finish, or the buyer is charged for nothing.
       const abortController = new AbortController();
       const server = this.buildServer(abortController.signal);
-      // Stateless mode: omitting `sessionIdGenerator` (rather than setting it
-      // to `undefined`) is required under `exactOptionalPropertyTypes`, and
-      // has identical runtime behaviour — see
-      // dist/esm/server/webStandardStreamableHttp.js: session handling is
-      // gated on `!this.sessionIdGenerator`, true either way.
+      // Stateless: `sessionIdGenerator` is omitted rather than set to
+      // `undefined`, as `exactOptionalPropertyTypes` requires; the SDK treats
+      // both the same
       const transport = new StreamableHTTPServerTransport();
       this.activeTransports.add(transport);
 
@@ -283,16 +223,14 @@ export class McpProtocolAdapter implements HttpProtocolAdapter {
       };
       res.once('close', cleanup);
 
-      // `StreamableHTTPServerTransport implements Transport` per the SDK's
-      // own declaration; the cast works around its `onclose`/`onerror`
-      // accessors being typed `T | undefined` where `Transport` declares a
-      // bare optional `T`, which only conflicts under this project's
-      // `exactOptionalPropertyTypes`.
+      // The transport implements `Transport`; the cast only bridges its
+      // `onclose`/`onerror` typed `T | undefined`, which conflicts with a bare
+      // optional `T` under `exactOptionalPropertyTypes`
       await server.connect(transport as Transport);
       await transport.handleRequest(req, res);
     } catch (err) {
       this.context?.logger.error(
-        { adapter: 'mcp', err: toCommerceError(err).toInfo() },
+        { adapter: 'mcp', err: toLogInfo(err) },
         'mcp adapter: request handling failed',
       );
       this.writeJsonRpcError(res, 500, 'Internal server error.');
@@ -301,25 +239,17 @@ export class McpProtocolAdapter implements HttpProtocolAdapter {
 
   async health(): Promise<AdapterHealth> {
     const checkedAt = this.context?.clock.nowIso() ?? new Date().toISOString();
-    try {
-      if (!this.started || !this.context) {
-        return { status: 'fail', detail: 'MCP adapter has not been started.', checkedAt };
-      }
-      const toolCount = this.tools.length;
-      if (this.skipped.length > 0) {
-        const detail = `${toolCount} tool(s) registered; ${this.skipped.length} resource(s) skipped: ${this.skipped
-          .map((s) => `${s.id} (${s.reason})`)
-          .join('; ')}`;
-        return { status: 'warn', detail, checkedAt };
-      }
-      return { status: 'pass', detail: `${toolCount} tool(s) registered.`, checkedAt };
-    } catch (err) {
-      return {
-        status: 'fail',
-        detail: `mcp adapter health check failed: ${toCommerceError(err).message}`,
-        checkedAt,
-      };
+    if (!this.started || !this.context) {
+      return { status: 'fail', detail: 'MCP adapter has not been started.', checkedAt };
     }
+    const toolCount = this.tools.length;
+    if (this.skipped.length > 0) {
+      const detail = `${toolCount} tool(s) registered; ${this.skipped.length} resource(s) skipped: ${this.skipped
+        .map((s) => `${s.id} (${s.reason})`)
+        .join('; ')}`;
+      return { status: 'warn', detail, checkedAt };
+    }
+    return { status: 'pass', detail: `${toolCount} tool(s) registered.`, checkedAt };
   }
 
   async stop(): Promise<void> {
@@ -331,7 +261,7 @@ export class McpProtocolAdapter implements HttpProtocolAdapter {
         try {
           await transport.close();
         } catch {
-          // best-effort cleanup — stop() must be idempotent and never throw.
+          // Best effort: stop() must be idempotent and never throw
         }
       }),
     );
@@ -368,12 +298,9 @@ export class McpProtocolAdapter implements HttpProtocolAdapter {
       return errorResult(new CommerceError('INTERNAL_ERROR', 'MCP adapter is not running.'));
     }
     try {
-      // Defence in depth: `tools/list` only ever advertises mcp-exposed,
-      // legal-name resources, but a client can still send `tools/call` for
-      // any name. Gate here too (core also enforces exposedVia in the
-      // pipeline) — do not rely on core alone. Message stays identical to a
-      // genuinely unknown id so we never reveal that a resource exists but
-      // is scoped to another protocol.
+      // `tools/list` advertises only mcp-exposed resources, but a client can
+      // call any name. The answer is the one an unknown id gets, so it never
+      // reveals a resource scoped to another protocol.
       const resource = this.toolsByResourceId.get(resourceId);
       if (!resource) {
         return errorResult(
@@ -397,23 +324,13 @@ export class McpProtocolAdapter implements HttpProtocolAdapter {
       };
       await this.acquireToolCallSlot(signal);
       try {
-        // the only cancellation point. A call queued
-        // behind a full semaphore, whose caller has since disconnected,
-        // must not start a fresh pipeline.execute() (and possibly a live
-        // merchant-backend fetch) — that is the "runs for 30s after the
-        // client left" bug. Checked here and nowhere else: once execute()
-        // is called it may reach settle(), and an in-flight payment must be
-        // allowed to finish rather than be abandoned mid-flight.
+        // The last cancellation point: a queued call whose caller has left
+        // must not start a pipeline run, while a started one may reach
+        // settle() and must finish
         if (signal.aborted) {
-          // deliberately *not* GATEWAY_BUSY. That code
-          // means "transient, back off and retry" — true for the queue-full
-          // case below, false here: there is no caller left to retry, so
-          // telling one to would be meaningless. PROTOCOL_UNSUPPORTED is the
-          // least dishonest fit among the frozen codes (non-retryable, which
-          // is the one property that matters for a response nobody reads),
-          // not a precise description of "the caller went away" — none of
-          // the frozen codes names that condition. Left flagged as a known
-          // gap rather than reused past what it's honestly for.
+          // No error code names "the caller left". PROTOCOL_UNSUPPORTED is the
+          // closest non-retryable one; GATEWAY_BUSY would invite a retry
+          // nobody is left to make.
           return errorResult(
             new CommerceError(
               'PROTOCOL_UNSUPPORTED',
@@ -424,75 +341,57 @@ export class McpProtocolAdapter implements HttpProtocolAdapter {
         const outcome = await context.pipeline.execute(request);
         return mapOutcome(outcome);
       } finally {
-        // Always release, even if execute() throws — a stranded permit
-        // would shrink MAX_CONCURRENT_TOOL_CALLS by one forever and
-        // eventually deadlock the adapter, which is worse.
+        // Always released: a stranded permit shrinks the cap for good and
+        // eventually deadlocks the adapter
         this.releaseToolCallSlot();
       }
     } catch (err) {
-      return errorResult(toCommerceError(err));
+      const error = toCommerceError(err);
+      context.logger.warn(
+        { adapter: 'mcp', resourceId, err: toLogInfo(error) },
+        'mcp adapter: execution failed',
+      );
+      return errorResult(error);
     }
   }
 
   /**
-   * Blocks until fewer than MAX_CONCURRENT_TOOL_CALLS executions are in
-   * flight, or throws if the queue behind that gate is already full or the
-   * caller disconnected while waiting. Throwing
-   * here never leaks a permit: `inFlightToolCalls` is only incremented on
-   * the success path below, after every rejection point.
+   * Takes a permit, or queues for one when MAX_CONCURRENT_TOOL_CALLS are in
+   * flight. Throws when the queue is full or the caller disconnected while
+   * queued; a throw never leaks a permit.
    */
   private async acquireToolCallSlot(signal: AbortSignal): Promise<void> {
+    if (this.inFlightToolCalls < MAX_CONCURRENT_TOOL_CALLS) {
+      this.inFlightToolCalls++;
+      return;
+    }
     if (this.toolCallWaiters.length >= MAX_QUEUED_TOOL_CALLS) {
-      // GATEWAY_BUSY, not PROTOCOL_UNSUPPORTED. This
-      // is load shedding, which is transient by definition — the caller
-      // should back off and retry, matching the message below. Before
-      // GATEWAY_BUSY existed this threw PROTOCOL_UNSUPPORTED (HTTP 501,
-      // `retryable: false`), so the envelope told an agent framework keyed
-      // on the machine-readable flag that a momentary throttle was a
-      // permanent capability gap — contradicting this exact message.
+      // Load shedding is transient, so GATEWAY_BUSY tells the caller to back
+      // off and retry
       throw new CommerceError(
         'GATEWAY_BUSY',
         'Too many tool calls already queued on this adapter; retry later.',
       );
     }
-    // `while`, not `if`. A wake-up only means a slot
-    // was *freed*, not that this waiter is now entitled to it regardless of
-    // what else has happened since — re-check the same condition the loop
-    // waited on rather than assume one wake-up means one free slot forever.
-    // (Currently that assumption would also happen to hold, since
-    // `releaseToolCallSlot` decrements before waking the next waiter and JS
-    // has no thread to race it — but that is a scheduling fact about this
-    // file, not something `if` states, and it is exactly the kind of thing
-    // a later refactor breaks silently. `while` doesn't depend on it.)
-    while (this.inFlightToolCalls >= MAX_CONCURRENT_TOOL_CALLS) {
-      await new Promise<void>((resolve) => this.toolCallWaiters.push(resolve));
-      if (signal.aborted) {
-        // This waiter is declining the slot that was just freed for it —
-        // pass it straight to the next waiter in line instead of stranding
-        // everyone behind it. Without this, a disconnect partway through a
-        // deep queue leaves every later waiter's promise waiting on a
-        // wake-up call that only its own dedicated release() would have
-        // sent — and that release never comes, because this waiter never
-        // takes the slot that would have produced it.
-        this.toolCallWaiters.shift()?.();
-        // PROTOCOL_UNSUPPORTED, not GATEWAY_BUSY —
-        // same reasoning as the other disconnect check above. Non-retryable
-        // is correct here (nobody is listening to retry); "unsupported" is
-        // not a precise name for "the caller left", it's just the least
-        // dishonest fit among the frozen codes.
-        throw new CommerceError('PROTOCOL_UNSUPPORTED', 'Client disconnected while queued.');
-      }
+    // Resolved by releaseToolCallSlot, which hands its permit straight to the
+    // oldest waiter, so a call arriving later cannot take it first
+    await new Promise<void>((resolve) => this.toolCallWaiters.push(resolve));
+    if (signal.aborted) {
+      // This waiter now holds a permit it will not use; pass it on
+      this.releaseToolCallSlot();
+      // Non-retryable, for the same reason as the check in handleToolCall
+      throw new CommerceError('PROTOCOL_UNSUPPORTED', 'Client disconnected while queued.');
     }
-    this.inFlightToolCalls++;
   }
 
   private releaseToolCallSlot(): void {
-    this.inFlightToolCalls--;
-    // Wake the oldest waiter, if any; it will re-increment once it resumes.
-    this.toolCallWaiters.shift()?.();
+    const next = this.toolCallWaiters.shift();
+    // Handing the permit over leaves the in-flight count unchanged
+    if (next !== undefined) next();
+    else this.inFlightToolCalls--;
   }
 }
 
 export function createMcpAdapter(options?: McpAdapterOptions): HttpProtocolAdapter {
-  return new McpProtocolAdapter(options ?? {});
+  return new McpProtocolAdapter(options);
 }

@@ -1,21 +1,17 @@
-import { describe, expect, it } from 'vitest';
-import { loadLocalChainManifest } from '../src/chain-manifest.js';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { describe, expect, it, vi } from 'vitest';
+import { loadLocalChainManifest } from '../src/chain-manifest';
+
+// The reader has its own tests (tests/unit/payments-x402/manifest.test.ts);
+// this checks only which root the demo passes it
+vi.mock('../../../src/payments/x402/testing', () => ({
+  readLocalChainManifest: (root: string) => root,
+}));
 
 describe('loadLocalChainManifest', () => {
-  it("throws a clear, actionable error when.deploy/local.json does not exist (repo's current state pre chain:deploy)", () => {
-    // This test only asserts the negative path: it does not assume the local
-    // chain has been deployed. If a real manifest exists (e.g. this suite
-    // runs after `npm run chain:deploy`), the positive path is exercised
-    // end-to-end by the demo-agent's actual documented quickstart instead —
-    // see the report's QUICKSTART section.
-    try {
-      const manifest = loadLocalChainManifest();
-      // If a manifest genuinely exists, just sanity-check its shape.
-      expect(manifest.chainId).toBeTypeOf('number');
-      expect(manifest.rpcUrl).toBeTypeOf('string');
-    } catch (err) {
-      expect(err).toBeInstanceOf(Error);
-      expect((err as Error).message).toMatch(/chain:deploy/);
-    }
+  it('reads from the repository root, not the working directory', () => {
+    const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+    expect(loadLocalChainManifest()).toBe(repoRoot);
   });
 });

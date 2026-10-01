@@ -1,21 +1,16 @@
 /**
- * Regression tests for an information-disclosure leak found in review
- * adversarial review (payments reviewing protocols).
- *
- * `toCommerceError` used to copy an arbitrary thrown Error's `message` into
- * the CommerceError. Because `message` is serialised by `toInfo()` and
- * `toErrorEnvelope()` and returned to clients over both HTTP and MCP, any
- * unexpected exception leaked internal detail verbatim.
- *
- * These tests own that boundary, alongside errors/**.
+ * `toCommerceError` must not copy an arbitrary Error's `message` into the
+ * CommerceError: `message` reaches clients through `toInfo()` and
+ * `toErrorEnvelope()`, and an unexpected exception can carry internal detail
  */
 import { describe, expect, it } from 'vitest';
-import { toErrorEnvelope } from '../../../../src/core/domain/wire.js';
+import { toErrorEnvelope } from '../../../../src/core/domain/wire';
 import {
   CommerceError,
   isCommerceError,
   toCommerceError,
-} from '../../../../src/core/errors/index.js';
+  toLogInfo,
+} from '../../../../src/core/errors';
 
 const SECRET =
   'connect ECONNREFUSED 10.20.30.40:5432 (internal-billing-db.corp.internal) user=svc_billing';
@@ -29,7 +24,7 @@ describe('toCommerceError does not leak internal error detail to clients', () =>
     expect(error.code).toBe('INTERNAL_ERROR');
   });
 
-  it('keeps the original on `cause` so logs and diagnostics lose nothing', () => {
+  it('keeps the original on `cause`', () => {
     const original = new Error(SECRET);
     const error = toCommerceError(original);
     expect(error.cause).toBe(original);
@@ -42,15 +37,15 @@ describe('toCommerceError does not leak internal error detail to clients', () =>
     expect(JSON.stringify(info)).not.toContain('svc_billing');
   });
 
-  it('does not leak through toErrorEnvelope() — the shape that reaches the wire', () => {
+  it('does not leak through toErrorEnvelope(), the shape that reaches the wire', () => {
     const envelope = toErrorEnvelope(toCommerceError(new Error(SECRET)));
-    const serialised = JSON.stringify(envelope);
-    expect(serialised).not.toContain('internal-billing-db');
-    expect(serialised).not.toContain('10.20.30.40');
-    expect(serialised).not.toContain('svc_billing');
+    const serialized = JSON.stringify(envelope);
+    expect(serialized).not.toContain('internal-billing-db');
+    expect(serialized).not.toContain('10.20.30.40');
+    expect(serialized).not.toContain('svc_billing');
   });
 
-  it('never serialises `cause`, even though it holds the sensitive value', () => {
+  it('never serializes `cause`, even though it holds the sensitive value', () => {
     const error = toCommerceError(new Error(SECRET));
     expect(JSON.stringify(toErrorEnvelope(error))).not.toContain(SECRET);
     expect(JSON.stringify(error.toInfo())).not.toContain(SECRET);
@@ -63,7 +58,7 @@ describe('toCommerceError does not leak internal error detail to clients', () =>
     expect(error.httpStatus).toBe(502);
   });
 
-  it('passes an existing CommerceError through untouched — its message was authored by us', () => {
+  it('passes an existing CommerceError through untouched, since we wrote its message', () => {
     const original = new CommerceError('INPUT_INVALID', 'field "city" is required');
     const error = toCommerceError(original);
     expect(error).toBe(original);
@@ -76,5 +71,32 @@ describe('toCommerceError does not leak internal error detail to clients', () =>
       expect(isCommerceError(error)).toBe(true);
       expect(JSON.stringify(error.toInfo())).not.toContain('internal-billing-db');
     }
+  });
+});
+
+describe('toLogInfo gives operators the cause without its credentials', () => {
+  it('adds the cause chain and cuts each URL to its scheme and host', () => {
+    const socket = new Error('connect ECONNREFUSED https://svc:pw@rpc.example:8545/v2/KEY?token=Q');
+    const transport = new TypeError('fetch failed', { cause: socket });
+    const info = toLogInfo(
+      new CommerceError('BACKEND_ERROR', 'Backend request failed', { cause: transport }),
+    );
+    expect(info.code).toBe('BACKEND_ERROR');
+    expect(info.cause).toEqual([
+      'TypeError: fetch failed',
+      'Error: connect ECONNREFUSED https://rpc.example:8545',
+    ]);
+  });
+
+  it('logs the original of a non-commerce throw, which the message hides', () => {
+    expect(toLogInfo(new Error(SECRET)).cause).toEqual([`Error: ${SECRET}`]);
+  });
+
+  it('omits `cause` when there is none, and stops on a cyclic chain', () => {
+    expect(toLogInfo(new CommerceError('INPUT_INVALID', 'bad input'))).not.toHaveProperty('cause');
+    const first = new Error('first');
+    const second = new Error('second', { cause: first });
+    Object.assign(first, { cause: second });
+    expect(toLogInfo(second).cause).toHaveLength(5);
   });
 });

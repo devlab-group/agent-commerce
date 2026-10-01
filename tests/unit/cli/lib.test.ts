@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { type FetchLike, fetchJson } from '../../../src/cli/lib/http.js';
-import { createCapturingIo, processIo } from '../../../src/cli/lib/io.js';
-import { maskMiddle } from '../../../src/cli/lib/mask.js';
-import { readVersionReport } from '../../../src/cli/lib/versions.js';
-import { createFakeFetch, jsonResponse } from './fixtures.js';
+import { type FetchLike, fetchJson } from '../../../src/cli/lib/http';
+import { processIo } from '../../../src/cli/lib/io';
+import { maskMiddle } from '../../../src/cli/lib/mask';
+import { readVersionReport } from '../../../src/cli/lib/versions';
+import { createFakeFetch, jsonResponse } from './fixtures';
 
 describe('maskMiddle', () => {
   it('masks the middle of a long value, keeping a prefix and suffix', () => {
@@ -11,10 +11,8 @@ describe('maskMiddle', () => {
   });
 
   it('masks a short value entirely rather than printing it (observation)', () => {
-    // This assertion used to demand the opposite. `maskMiddle` promises never
-    // to print a full value; returning short inputs whole contradicted that.
-    // Harmless for the 42-character addresses it is used on today, and a trap
-    // for the next caller who reaches for it with a short secret.
+    // `maskMiddle` never prints a full value, so a short secret passed to it
+    // does not leak
     expect(maskMiddle('short')).toBe('…');
     expect(maskMiddle('')).toBe('');
   });
@@ -57,6 +55,16 @@ describe('fetchJson', () => {
     expect(result.error).toBe('unknown fetch error');
   });
 
+  it('gives up once the timeout passes', async () => {
+    const fetchImpl = ((_url: string, init?: RequestInit) =>
+      new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(init.signal?.reason));
+      })) as FetchLike;
+    const result = await fetchJson(fetchImpl, 'http://x/slow', 10);
+    expect(result).toMatchObject({ ok: false, status: 0 });
+    expect(result.error).toMatch(/timeout/i);
+  });
+
   it('tolerates a non-JSON body without throwing', async () => {
     const fetchImpl = createFakeFetch({
       'http://x/text': () => new Response('not json', { status: 200 }),
@@ -81,19 +89,6 @@ describe('readVersionReport', () => {
 });
 
 describe('io', () => {
-  it('createCapturingIo collects lines instead of writing to real streams', () => {
-    const io = createCapturingIo();
-    io.stdout('hello');
-    io.stderr('oops');
-    expect(io.out).toEqual(['hello']);
-    expect(io.err).toEqual(['oops']);
-  });
-
-  it('processIo is the real stdout/stderr-backed implementation', () => {
-    expect(typeof processIo.stdout).toBe('function');
-    expect(typeof processIo.stderr).toBe('function');
-  });
-
   it('processIo actually writes a newline-terminated line to stdout/stderr', () => {
     const stdoutChunks: string[] = [];
     const stderrChunks: string[] = [];

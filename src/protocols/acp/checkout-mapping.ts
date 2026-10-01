@@ -1,19 +1,17 @@
 /**
  * ACP checkout operation -> canonical request.
  *
- * Each operation maps to exactly one configured resource and one deterministic
- * input envelope, matching `ACP_OPERATION_INPUT_KEYS`: `path` carries
- * `checkout_session_id`, `body` carries the validated ACP document.
+ * Each operation maps to one configured resource and one deterministic input
+ * envelope: the keys `ACP_OPERATION_INPUT_KEYS` lists, plus any key in
+ * `ACP_OPERATION_OPTIONAL_INPUT_KEYS` the caller supplied.
  *
- * What is deliberately absent: any synthesis of a payment field. ACP
- * `payment_data` on completion is the merchant's own purchase payment and
- * stays inside `body` as ordinary business input. Turning it into a
- * `PaymentSubmission` would stack a gateway payment on top of the merchant's
- * one, for a single call.
+ * No payment field is synthesized. ACP `payment_data` on completion is the
+ * merchant's own purchase payment and stays inside `body` as business input;
+ * a `PaymentSubmission` built from it would charge a gateway payment on top.
  */
-import type { CanonicalRequest } from '../../core/index.js';
-import { ACP_OPERATION_INPUT_KEYS } from './constants.js';
-import type { AcpGuardedRequest } from './request-guards.js';
+import type { CanonicalRequest } from '../../core';
+import { ACP_OPERATION_INPUT_KEYS, ACP_OPERATION_OPTIONAL_INPUT_KEYS } from './constants';
+import type { AcpGuardedRequest } from './request-guards';
 
 export interface AcpCanonicalRequestOptions {
   readonly request: AcpGuardedRequest;
@@ -42,6 +40,7 @@ export function toCanonicalRequest(options: AcpCanonicalRequestOptions): Canonic
 
 function canonicalInput(request: AcpGuardedRequest): Record<string, unknown> {
   const keys = ACP_OPERATION_INPUT_KEYS[request.route.operation];
+  const optionalKeys = ACP_OPERATION_OPTIONAL_INPUT_KEYS[request.route.operation] ?? [];
   const input: Record<string, unknown> = {};
 
   if (keys.includes('path') && request.route.sessionId !== undefined) {
@@ -49,10 +48,7 @@ function canonicalInput(request: AcpGuardedRequest): Record<string, unknown> {
   }
   if (keys.includes('body')) {
     input['body'] = request.body;
-  } else if (request.route.acceptsBody && Object.keys(request.body).length > 0) {
-    // Cancel: the pinned schema requires no body, so resources are not asked to
-    // declare one - but a caller that did send `intent_trace` meant it, and
-    // silently dropping it would lose the only thing the request carried.
+  } else if (optionalKeys.includes('body') && Object.keys(request.body).length > 0) {
     input['body'] = request.body;
   }
   return input;

@@ -3,11 +3,11 @@
  * cannot be made to send most of these, and using an SDK server helper to
  * generate the expected answers would test the SDK against itself.
  *
- * The rule under test is the split — a malformed or unsupported A2A request is
- * a JSON-RPC error; a commerce outcome never is.
+ * The rule under test: a malformed or unsupported A2A request is a JSON-RPC
+ * error, and a commerce outcome never is.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { type RunningGateway, startConformanceGateway } from './support/gateway.js';
+import { type RunningGateway, startConformanceGateway } from './support/gateway';
 
 let running: RunningGateway;
 
@@ -45,12 +45,12 @@ function message(parts: unknown[], overrides: Record<string, unknown> = {}): unk
 
 describe('JSON-RPC framing errors', () => {
   it.each([
-    ['malformed JSON', '{"jsonrpc": "2.0", "id"', -32700],
-    ['a jsonrpc version other than 2.0', { jsonrpc: '1.0', id: 1, method: 'SendMessage' }, -32600],
-    ['a missing method', { jsonrpc: '2.0', id: 1 }, -32600],
-    ['a non-object request', '"SendMessage"', -32600],
-    ['invalid params', { jsonrpc: '2.0', id: 1, method: 'SendMessage', params: 'nope' }, -32602],
-  ])('answers %s with %i', async (_label, payload, code) => {
+    ['malformed JSON', -32700, '{"jsonrpc": "2.0", "id"'],
+    ['a jsonrpc version other than 2.0', -32600, { jsonrpc: '1.0', id: 1, method: 'SendMessage' }],
+    ['a missing method', -32600, { jsonrpc: '2.0', id: 1 }],
+    ['a non-object request', -32600, '"SendMessage"'],
+    ['invalid params', -32602, { jsonrpc: '2.0', id: 1, method: 'SendMessage', params: 'nope' }],
+  ])('answers %s with %i', async (_label, code, payload) => {
     const { status, body } = await post(payload);
 
     expect(status).toBe(200);
@@ -84,6 +84,16 @@ describe('method routing', () => {
     const { body } = await post({ jsonrpc: '2.0', id: 1, method: 'Frobnicate', params: {} });
     expect(body.error?.code).toBe(-32601);
   });
+
+  it('echoes a string or number id and answers any other id with null', async () => {
+    const echoed = async (id: unknown) =>
+      (await post({ jsonrpc: '2.0', id, method: 'Frobnicate', params: {} })).body.id;
+
+    expect(await echoed('call-7')).toBe('call-7');
+    expect(await echoed(7)).toBe(7);
+    expect(await echoed({ injected: true })).toBeNull();
+    expect(await echoed(['call-7'])).toBeNull();
+  });
 });
 
 describe('invocation envelope refusals', () => {
@@ -116,7 +126,7 @@ describe('invocation envelope refusals', () => {
     expect(body.error?.code).toBe(-32004);
   });
 
-  it('refuses task continuation, which it cannot honour', async () => {
+  it('refuses task continuation, which it cannot honor', async () => {
     const { body } = await post(
       sendMessage(message([{ data: { resource: 'weather_basic' } }], { taskId: 'task-1' })),
     );

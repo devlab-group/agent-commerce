@@ -1,12 +1,12 @@
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   LOCAL_CHAIN_MANIFEST_PATH,
   type LocalChainManifest,
   readLocalChainManifest,
-} from '../../../src/payments/x402/local-chain/manifest.js';
+} from '../../../src/payments/x402/local-chain/manifest';
 
 const VALID_MANIFEST: LocalChainManifest = {
   chainId: 84532,
@@ -64,7 +64,7 @@ describe('readLocalChainManifest', () => {
   it('throws when the manifest is not an object', () => {
     const cwd = tmpCwd();
     writeManifest(cwd, '[]');
-    expect(() => readLocalChainManifest(cwd)).toThrow(/JSON object/);
+    expect(() => readLocalChainManifest(cwd)).toThrow(/Expected object/);
   });
 
   it('throws when chainId is missing or the wrong type', () => {
@@ -134,11 +134,13 @@ describe('readLocalChainManifest', () => {
   });
 
   it('defaults to process.cwd() when no cwd is given', () => {
-    // Just prove it does not throw a TypeError for the missing argument;
-    // whether it finds a real manifest depends on the invoking shell's cwd,
-    // which we don't control here, so only assert it throws the "missing"
-    // error shape (both possible outcomes go through readLocalChainManifest's
-    // own error paths, never a raw TypeError).
-    expect(() => readLocalChainManifest()).not.toThrow(TypeError);
+    const cwd = tmpCwd();
+    writeManifest(cwd, { ...VALID_MANIFEST, buyerInitialBalance: '42.00' });
+    const spy = vi.spyOn(process, 'cwd').mockReturnValue(cwd);
+    try {
+      expect(readLocalChainManifest().buyerInitialBalance).toBe('42.00');
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

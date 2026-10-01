@@ -1,13 +1,12 @@
 # ---------------------------------------------------------------------------
 # Example: acp-checkout
 #
-# The Agentic Commerce Protocol (ACP) checkout service, stable snapshot
-# 2026-04-17 — experimental. Five ACP operations, each mapped to one canonical
-# resource that fronts the merchant's own checkout API.
+# Experimental ACP checkout adapter using the 2026-04-17 snapshot.
+# Five operations map to merchant-backed resources.
 #
 # Every `${VAR:-default}` falls back to the local demo stack's own defaults, so
 # this file validates standalone with no environment at all:
-# npm run agent-commerce -- validate --config examples/acp-checkout/config.yaml
+#   npm run agent-commerce -- validate --config examples/acp-checkout/config.yaml
 # ---------------------------------------------------------------------------
 
 version: 1
@@ -27,7 +26,7 @@ storage:
     path: ${RECEIPT_STORE_PATH:-./data/receipts.sqlite}
 
 protocols:
-  # Off: this gateway serves ACP, not generic HTTP resource routes.
+  # Off: this gateway serves ACP, not generic HTTP resource routes
   http:
     enabled: false
   mcp:
@@ -37,15 +36,15 @@ protocols:
     enabled: true
     mountPath: /acp
     auth:
-      # Bearer is the only scheme in this release, and every checkout route
-      # requires it. Discovery stays public.
+      # Bearer is the only supported scheme, and every checkout route requires
+      # it. Discovery stays public.
       type: bearer
       token: ${ACP_BEARER_TOKEN:-local-development-acp-token}
     idempotency:
       # Its own database: ACP checkout replay has nothing to do with x402
-      # payment replay, and the two must not share a table.
+      # payment replay, and the two must not share a table
       path: ${ACP_IDEMPOTENCY_PATH:-./data/acp-idempotency.sqlite}
-      # ACP's retry window. 24 is both the default and the floor.
+      # ACP's retry window. 24 is both the default and the floor
       retentionHours: 24
     checkout:
       # All five operations, each on its own resource. A partially mapped

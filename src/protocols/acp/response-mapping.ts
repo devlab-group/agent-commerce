@@ -1,29 +1,25 @@
 /**
- * Execution outcome -> ACP response.
- *
- * Two rules run everything here. A successful checkout answer must be a
- * document the pinned snapshot accepts, on the status ACP fixes for that route
- * - a merchant backend is not automatically ACP-conformant, and forwarding
- * whatever it returned would publish its shape as ours. And a failure tells the
- * caller what went wrong in ACP's vocabulary and nothing else: no merchant
- * response body, no stack, no internal path, no database error.
+ * Execution outcome -> ACP response, under two rules. A successful answer must
+ * be a document the pinned snapshot accepts, on the status ACP fixes for the
+ * route, because a merchant backend is not automatically ACP-conformant. A
+ * failure is described in ACP's vocabulary only: no merchant response body,
+ * stack, internal path or database error.
  */
-import type { CommerceError, DeliveredOutcome } from '../../core/index.js';
-import type { AcpCheckoutOperation } from './constants.js';
-import { type AcpFailure, acpFailure } from './errors.js';
-import { type AcpDefinition, validateAcpDocument } from './validation.js';
+import type { CommerceError, DeliveredOutcome } from '../../core';
+import type { AcpCheckoutOperation } from './constants';
+import { type AcpFailure, acpFailure } from './errors';
+import { type AcpDefinition, validateAcpDocument } from './validation';
 
-/** One ACP answer, as a value: it may have to be stored before it is written. */
+/** One ACP answer, as a value: it may have to be stored before it is written */
 export interface AcpResponse {
   readonly status: number;
   readonly body: unknown;
-  /** True when this answer came from the idempotency store rather than work done now. */
+  /** True when this answer came from the idempotency store rather than work done now */
   readonly replayed?: boolean;
   /**
-   * Seconds to put in `Retry-After`, set only where retrying is the right
-   * move. Opt-in rather than derived from the status: two of the 409s this
-   * adapter returns must *not* invite a retry, so a shared status is a poor
-   * proxy for advice to the caller.
+   * Seconds for `Retry-After`, set only where a retry is the right move. Not
+   * derived from the status: two of the 409s this adapter returns must not
+   * invite a retry.
    */
   readonly retryAfterSeconds?: number;
 }
@@ -42,9 +38,9 @@ export const ACP_SUCCESS_STATUS: Readonly<Record<AcpCheckoutOperation, number>> 
 };
 
 /**
- * A mapped response, plus whatever the operator needs in the log to understand
- * a refusal. `logDetail` never reaches the client - that is the whole point of
- * carrying it separately from `response`.
+ * A mapped response, plus what the operator needs in the log to understand a
+ * refusal. `logDetail` is kept apart from `response` so it never reaches the
+ * client.
  */
 export interface AcpMappedResponse {
   readonly response: AcpResponse;
@@ -78,9 +74,8 @@ export function toAcpResponse(
   const definition = responseDefinition(operation, outcome.body);
   const failure = validateAcpDocument(definition, outcome.body);
   if (failure !== undefined) {
-    // The backend document is not ACP. It must not be forwarded, and the
-    // caller learns nothing about its shape - the pointer is into the
-    // *merchant's* document, which is ours to fix, not theirs.
+    // Not ACP, so not forwarded, and the caller learns nothing of its shape:
+    // the pointer is into the merchant's document, ours to fix, not theirs
     return {
       response: asResponse(PROCESSING_ERROR),
       logDetail: {
@@ -97,14 +92,11 @@ export function toAcpResponse(
 }
 
 /**
- * Completion is the one route with two shapes.
- *
- * A completed session must carry its order - that is the `CheckoutSessionWithOrder`
- * definition, and `Order` requires an id. But a completion attempt that ends in
- * a declined payment or an out-of-stock line item legitimately answers 200 with
- * an ordinary session and no order (both are examples in the snapshot), so
- * demanding an order on every completion would refuse valid merchant answers.
- * The session's own `status` is what decides which contract applies.
+ * Completion is the one route with two shapes, chosen by the session's own
+ * `status`. A completed session must carry its order
+ * (`CheckoutSessionWithOrder`, where `Order` requires an id), but a completion
+ * that ends in a declined payment or an out-of-stock item answers 200 with an
+ * ordinary session and no order, as the snapshot's own examples show.
  */
 function responseDefinition(operation: AcpCheckoutOperation, body: unknown): AcpDefinition {
   if (operation !== 'completeCheckoutSession') return 'checkoutSession';
@@ -113,11 +105,9 @@ function responseDefinition(operation: AcpCheckoutOperation, body: unknown): Acp
 }
 
 /**
- * Every failure the pipeline can raise, in ACP's vocabulary.
- *
- * Only the error *code* and, for a backend failure, the backend's *status*
- * cross this boundary. Both are ours to state; the merchant's response body is
- * not, and the gateway already withholds it.
+ * Every failure the pipeline can raise, in ACP's vocabulary. Only the error
+ * code and, for a backend failure, the backend's status cross this boundary,
+ * never the merchant's response body.
  */
 export function mapCommerceErrorToAcp(
   error: CommerceError,
@@ -125,9 +115,8 @@ export function mapCommerceErrorToAcp(
 ): AcpFailure {
   switch (error.code) {
     case 'INPUT_INVALID':
-      // The ACP schema accepted the document, so this is the *resource's* input
-      // contract rejecting it: a configuration mismatch the caller cannot fix,
-      // reported without naming the resource's internal field names.
+      // The ACP schema accepted the document, so the resource's own input
+      // schema rejected it: reported without naming its internal fields
       return acpFailure(
         400,
         'invalid_request',
@@ -159,12 +148,10 @@ export function mapCommerceErrorToAcp(
 }
 
 /**
- * A merchant status worth relaying, or a 502.
- *
- * Only statuses that mean the same thing to an ACP client are passed through.
- * A merchant 401 or 403, in particular, is not: relaying it would tell the
- * agent its own bearer token failed, when what failed is the gateway's
- * credential with the backend.
+ * A merchant status worth relaying, or a 502. Only statuses that mean the same
+ * to an ACP client pass through. A merchant 401 or 403 does not: it would tell
+ * the agent its own bearer token failed, when the gateway's backend credential
+ * did.
  */
 function fromBackendStatus(error: CommerceError, operation: AcpCheckoutOperation): AcpFailure {
   const status = error.details?.['status'];

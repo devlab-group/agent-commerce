@@ -5,15 +5,12 @@ on:
     branches: [master]
   pull_request:
   workflow_dispatch:
-  # Callable, so `release.yml` can gate publishing on the *same* job
-  # definitions rather than a second copy that drifts. `needs:` cannot reach
-  # across workflows; a reusable workflow is how one workflow waits on another.
+  # Release calls these same jobs before publishing. `needs` cannot depend on
+  # jobs in a separate workflow.
   workflow_call:
 
-# Least privilege. Without this the workflow token takes the repository
-# default (often write-all), and `actions/checkout` writes it into
-# `.git/config`, where every subsequent step — including third-party install
-# scripts run by `npm ci` — can read it. Nothing here needs write access.
+# These jobs need read access only. Each checkout also disables persisted
+# credentials so later steps cannot read the workflow token from `.git/config`.
 permissions:
   contents: read
 
@@ -23,14 +20,13 @@ concurrency:
 
 env:
   NODE_VERSION: '22'
-  # pinned rather than tracking `nightly`. This is the same
-  # release as the digest pinned in docker/chain.Dockerfile, so CI and the demo
-  # stack compile the contracts with one toolchain.
+  # Keep this version in sync with the Foundry image digest in
+  # docker/chain.Dockerfile. A floating `nightly` would change test inputs.
   FOUNDRY_VERSION: 'v1.7.1'
 
 jobs:
   quality:
-    name: Lint & typecheck
+    name: Lint and typecheck
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -41,14 +37,13 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
       - run: npm ci
-      # The frozen-contract guard the project guide relies on. Without this step the
-      # public contract could drift on any PR with nothing to catch it.
+      # Compare exported public types with the checked-in contract baseline.
       - run: npm run check:contract
       - run: npm run lint
       - run: npm run typecheck
 
   test:
-    name: Unit & integration tests
+    name: Unit and integration tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -58,13 +53,10 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
-      # tests/unit/payments-x402/local-chain.test.ts spawns a real ephemeral
-      # Anvil — it is a unit test of the deploy engine, not of a mock. Without
-      # Foundry here the whole file errors with ENOENT.
+      # The local-chain tests start Anvil. Without Foundry they skip locally
+      # but fail in CI.
       - uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09 # v1.9.1
         with:
-          # Pinned: the default is `nightly`, a mutable input to a suite this
-          # project calls deterministic.
           version: ${{ env.FOUNDRY_VERSION }}
       - run: npm ci
       - run: npm run test:coverage
@@ -84,8 +76,6 @@ jobs:
           persist-credentials: false
       - uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09 # v1.9.1
         with:
-          # Pinned: the default is `nightly`, a mutable input to a suite this
-          # project calls deterministic.
           version: ${{ env.FOUNDRY_VERSION }}
       - run: forge build
         working-directory: contracts
@@ -105,12 +95,10 @@ jobs:
           cache: npm
       - uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09 # v1.9.1
         with:
-          # Pinned: the default is `nightly`, a mutable input to a suite this
-          # project calls deterministic.
           version: ${{ env.FOUNDRY_VERSION }}
       - run: npm ci
-      # No public RPC, no public chain state, no hosted LLM, no hosted
-      # facilitator: the suite boots its own Anvil, MockUSDC and services.
+      # These tests start local Anvil, deploy MockUSDC and run local services;
+      # they do not need a public RPC or hosted facilitator.
       - run: npm run test:e2e
 
   package:
@@ -125,41 +113,29 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
       - run: npm ci
-      # The published artifact is the project's only public surface. A
-      # placeholder org in the provenance fields means npm's repository link
-      # and "report a vulnerability" path resolve to a namespace anyone can
-      # register — a cheap way to intercept disclosure for a payments project.
-      # Assert the provenance fields point at the real repository. Stated
-      # positively rather than as a placeholder blocklist: a blocklist only
-      # catches the placeholder spelling someone thought of, and this check is
-      # what stops npm's "report a vulnerability" link resolving to a
-      # namespace an attacker can register.
+      # Check repository, bug-report and homepage URLs before packaging so
+      # npm's vulnerability-report link points to this repository.
       - name: Verify package provenance metadata
         run: node scripts/check-package-metadata.mjs
 
       - run: npm run build
-      # The published artifact is built by a different path than everything
-      # else, so it can break while the rest of the suite stays green.
+      # Exercise the built CLI separately from tests that run source files.
       - run: npm run test:cli:dist
       - run: npx vitest run tests/unit/cli/packaging.test.ts
-      # Prove the tarball installs and runs with no repository present.
-      #
-      # Two shapes, because the default one is the one that regresses silently:
-      # 1. bare — no optional peers. The binary and `createGateway` must
-      # work. A stray `import 'viem'` in either (esbuild emits one
-      # for an external whose bindings tree-shook away) makes the
-      # published CLI refuse to start, and no in-repo test sees it
-      # because the peers are always installed here.
-      # 2. peers — the subpaths resolve and compose with the main entry.
-      - name: Clean consumer install — bare, no optional peers
+      # Install the tarball outside the repository. First check the CLI and
+      # `createGateway` without optional peers. A stray `viem` import can break
+      # startup even when in-repo tests pass because peers are installed here.
+      # Then install peers and check that the subpaths work with the main entry.
+      - name: Install package without optional peers
         run: |
           TARBALL="$(npm pack --silent | tail -1)"
           mkdir -p "$RUNNER_TEMP/bare" && cd "$RUNNER_TEMP/bare"
           npm init -y >/dev/null
           npm install "$GITHUB_WORKSPACE/$TARBALL"
-          for peer in @x402/core @x402/evm viem @modelcontextprotocol/sdk; do
+          # Read peers from the manifest so newly declared peers are checked
+          for peer in $(node -p "Object.keys(require('$GITHUB_WORKSPACE/package.json').peerDependencies).join(' ')"); do
             if [ -d "node_modules/$peer" ]; then
-              echo "optional peer $peer was installed by default — the split is not working"
+              echo "optional peer $peer was installed by default, so the split is not working"
               exit 1
             fi
           done
@@ -168,7 +144,7 @@ jobs:
           npx agent-commerce version | grep -q '@modelcontextprotocol/sdk'
           npx agent-commerce init --yes
           npx agent-commerce validate
-          # The main entry must compose and serve with zero peers present.
+          # The main entry must compose and serve without optional peers
           node --input-type=module -e "
             import { createGateway, loadConfig, receipts } from '@devlab.group/agent-commerce';
             const loaded = await loadConfig({ path: 'config.yaml' });
@@ -183,10 +159,10 @@ jobs:
             const health = await fetch(url + '/health');
             if (!health.ok) throw new Error('GET /health -> ' + health.status);
             await gateway.close();
-            console.log('bare install ok — gateway composed, served and closed');
+            console.log('bare install ok: gateway composed, served and closed');
           "
 
-      - name: Clean consumer install — with optional peers
+      - name: Install package with optional peers
         run: |
           cd "$RUNNER_TEMP/bare"
           npm install @modelcontextprotocol/sdk@1.30.0 @x402/core@2.23.0 @x402/evm@2.23.0 viem@2.55.18
@@ -209,16 +185,16 @@ jobs:
             });
             if (!tools.ok) throw new Error('tools/list -> ' + tools.status);
             await gateway.close();
-            // One CommerceError class across the subpath seam: separate bundles
-            // would each carry their own and this would be false.
+            // Subpaths must share CommerceError with the main entry; separate
+            // bundled copies would fail the instanceof check.
             let caught;
             try { x402({ asset: 'nope', payTo: '0x0', network: 'eip155:84532' }); } catch (e) { caught = e; }
             if (!(caught instanceof CommerceError)) throw new Error('CommerceError identity broken across subpaths');
-            console.log('subpath install ok — mcp + x402 compose with the main entry');
+            console.log('subpath install ok: mcp + x402 compose with the main entry');
           "
 
   build:
-    name: Build
+    name: Build and quickstart test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -230,5 +206,20 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
-      - name: Docker images build
-        run: docker compose build
+      # Run the README quickstart without installing Foundry on the runner.
+      # Docker starts the local chain; chain-deploy uses the committed MockUSDC
+      # artifact. `doctor` and the demo agent check the running stack.
+      - name: Run README quickstart
+        run: |
+          # Match the runner's UID/GID so chain-deploy can write the host-mounted
+          # .deploy/local.json manifest
+          export DOCKER_UID="$(id -u)" DOCKER_GID="$(id -g)"
+          docker compose up -d --build
+          npm run agent-commerce -- doctor --config config-demo.yaml
+          npm run demo:agent
+      - name: Compose logs on failure
+        if: failure()
+        run: docker compose logs
+      - name: Tear down
+        if: always()
+        run: docker compose down -v

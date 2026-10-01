@@ -2,13 +2,13 @@
  * A real, listening gateway for the SDK to talk to.
  *
  * The official client uses global `fetch` against a URL, so unlike the
- * `inject()`-based integration tests this suite needs a socket. Everything
- * below the adapter is the real thing — gateway, pipeline, A2A adapter — with
- * the merchant backend and the receipt store faked, since neither is what the
- * protocol conformance of this endpoint depends on.
+ * `inject()`-based integration tests this suite needs a socket. The gateway,
+ * pipeline and A2A adapter are real; the merchant backend, payment provider
+ * and receipt store are faked, since the endpoint's conformance does not
+ * depend on them.
  */
 import { createServer } from 'node:net';
-import type { GatewayConfig } from '../../../../src/config/index.js';
+import type { GatewayConfig } from '../../../../src/config';
 import type {
   AdapterDescriptor,
   BackendExecutor,
@@ -22,9 +22,10 @@ import type {
   PaymentSettlementContext,
   PaymentVerificationContext,
   ReceiptStore,
-} from '../../../../src/core/index.js';
-import { createGateway, type GatewayInstance } from '../../../../src/gateway/index.js';
-import { createA2aAdapter } from '../../../../src/protocols/a2a/index.js';
+} from '../../../../src/core';
+import { CommerceError } from '../../../../src/core';
+import { createGateway, type GatewayInstance } from '../../../../src/gateway';
+import { createA2aAdapter } from '../../../../src/protocols/a2a';
 
 const descriptor: AdapterDescriptor = {
   name: 'fake-store',
@@ -90,10 +91,10 @@ function createFakeStore(): ReceiptStore {
   };
 }
 
-/** Fixed merchant response, so an assertion about the artifact is about the artifact. */
+/** Fixed merchant response, so an assertion about the artifact is about the artifact */
 export const MERCHANT_BODY = { city: 'Berlin', forecast: 'sunny', celsius: 21 };
 
-/** The only proof the fake provider accepts. */
+/** The only proof the fake provider accepts */
 export const VALID_PROOF = 'valid-proof';
 
 /**
@@ -122,11 +123,12 @@ const paymentDescriptor: AdapterDescriptor = {
 };
 
 /**
- * Verification and settlement live here, not in the adapter — the whole point
- * of the assertions in the paid suite is that the A2A code never decides
- * whether a proof is good. `unverifiable` models a provider that cannot reach
- * its facilitator: a throw, never a rejection, so the payer is not blamed for
- * our outage.
+ * Verification and settlement live here, not in the adapter: the paid suite
+ * asserts that the A2A code never decides whether a proof is good.
+ * `'unverifiable-proof'` models a provider that cannot reach its facilitator:
+ * like the x402 provider, it throws `PAYMENT_PROVIDER_UNAVAILABLE` instead of
+ * rejecting, so the payer is not blamed for our outage. A bare `Error` would
+ * reach the payer as `PAYMENT_INVALID`.
  */
 function fakeProvider(): PaymentProvider & { settleCalls: () => number } {
   let settleCalls = 0;
@@ -147,7 +149,7 @@ function fakeProvider(): PaymentProvider & { settleCalls: () => number } {
     }),
     verify: async (ctx: PaymentVerificationContext): Promise<PaymentResult> => {
       if (ctx.submission.payload === 'unverifiable-proof') {
-        throw new Error('facilitator unreachable');
+        throw new CommerceError('PAYMENT_PROVIDER_UNAVAILABLE', 'Facilitator unreachable.');
       }
       return ctx.submission.payload === VALID_PROOF
         ? {
@@ -239,20 +241,19 @@ function config(publicBaseUrl: string): GatewayConfig {
 
 export interface RunningGateway {
   readonly gateway: GatewayInstance;
-  /** Origin the SDK discovers the card from. */
+  /** Origin the SDK discovers the card from */
   readonly url: string;
-  /** Merchant backend calls so far. */
+  /** Merchant backend calls so far */
   backendCalls(): number;
-  /** Successful settlements so far. */
+  /** Successful settlements so far */
   settleCalls(): number;
   close(): Promise<void>;
 }
 
 /**
  * A port nothing else holds. The card's `supportedInterfaces[].url` is built
- * from `publicBaseUrl` at adapter start — before `listen()` returns — and the
- * SDK POSTs to whatever that URL says, so the address has to be known up
- * front. Binding to 0 and reading it back afterwards would be too late.
+ * from `publicBaseUrl` at adapter start, before `listen()` returns, and the
+ * SDK POSTs to that URL, so the address must be known up front.
  */
 async function freePort(): Promise<number> {
   const server = createServer();
@@ -277,9 +278,8 @@ export async function startConformanceGateway(): Promise<RunningGateway> {
     config: gatewayConfig,
     store: createFakeStore(),
     paymentProviders: [provider],
-    // Mirrors src/gateway/main.ts's composition exactly: a conformance suite
-    // that wired the adapter differently from production would certify a
-    // deployment nobody runs.
+    // Built as src/gateway/main.ts builds it, so the suite certifies the
+    // adapter production runs
     protocolAdapters: [
       createA2aAdapter({
         mountPath: gatewayConfig.protocols.a2a.mountPath,

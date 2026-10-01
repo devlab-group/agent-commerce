@@ -1,58 +1,52 @@
 /**
- * Gateway-defined wire envelopes.
+ * Gateway-defined wire envelopes and carriers. FROZEN CONTRACT.
  *
- * FROZEN CONTRACT. These are the *only* representations of "payment required"
- * and "error" that leave the gateway, whichever protocol carries them. The HTTP
- * routes, the MCP adapter and the demo buyer agent all use these helpers so the
- * three can never drift apart.
+ * The HTTP routes and the MCP and A2A adapters build their "payment required"
+ * and "error" bodies with these helpers, so those surfaces send the same
+ * shapes. The ACP adapter maps errors to ACP's own error format instead.
  */
 
-import { CommerceError, type CommerceErrorCode } from '../errors/index.js';
-import type { AuthorizationRequirement, AuthorizationSubmission } from './authorization.js';
-import type { DecimalAmount, IsoTimestamp, PaymentMethodName } from './common.js';
-import type { PaymentSubmission } from './payment.js';
-import type { DeliveredOutcome, PaymentRequiredOutcome } from './request.js';
-import type { CommerceResource } from './resource.js';
+import { CommerceError, type CommerceErrorCode } from '../errors';
+import { isRecord } from '../is-record';
+import type { AuthorizationRequirement, AuthorizationSubmission } from './authorization';
+import type { DecimalAmount, IsoTimestamp, PaymentMethodName } from './common';
+import type { PaymentSubmission } from './payment';
+import type { DeliveredOutcome, PaymentRequiredOutcome } from './request';
+import type { CommerceResource } from './resource';
 
 /**
- * Reserved input property carrying a payment proof on protocols that have no
- * header channel (MCP tool calls). Over HTTP the `PAYMENT-SIGNATURE` header is
- * used.
+ * Reserved input property carrying a payment proof on protocols with no header
+ * channel (MCP tool calls, A2A message data). HTTP uses a header instead.
  */
 export const PAYMENT_INPUT_FIELD = '_payment';
 
 /**
- * HTTP request header carrying the payment proof.
+ * HTTP request header carrying an x402 payment proof. MPP proofs use
+ * `Authorization: Payment ...` instead.
  *
- * x402 v2 header names, lowercased because that is how Node presents incoming
- * headers. v1's `X-PAYMENT` / `X-PAYMENT-RESPONSE` pair is not accepted: this
- * gateway speaks one protocol version, and quietly honouring both would mean
- * two verification paths for the same money.
+ * The x402 v2 header names, lowercased as Node presents incoming headers. v1's
+ * `X-PAYMENT` / `X-PAYMENT-RESPONSE` pair is not accepted: honoring both
+ * versions would mean two verification paths for the same money.
  */
 export const PAYMENT_HEADER = 'payment-signature';
 
-/** HTTP response header carrying the settlement result. */
+/** HTTP response header carrying the settlement result */
 export const PAYMENT_RESPONSE_HEADER = 'payment-response';
 
 /**
- * Reserved input property carrying an authorization proof, the authorization
- * counterpart of {@link PAYMENT_INPUT_FIELD}.
+ * Reserved input property carrying an authorization proof, the counterpart of
+ * {@link PAYMENT_INPUT_FIELD}.
  *
- * Unlike `_payment`, which is a bare string, this one carries an object:
- * `{ method, payload }`. There is exactly one payment rail per resource, so a
- * payment proof's method can be inferred from the resource; an authorization
- * proof cannot lean on that, and guessing the method of a security control is
- * not a thing to do implicitly.
+ * `_payment` is a bare string whose method is taken from the resource's first
+ * payment method. This field is a `{ method, payload }` object, because the
+ * method of a security control should be stated, not inferred.
  */
 export const AUTHORIZATION_INPUT_FIELD = '_authorization';
 
 /**
- * Every input property name the gateway claims for itself.
- *
- * One list, read by the config loader (which rejects a resource declaring any
- * of them), by the protocol adapters that lift them out of client input, and
- * by the pipeline that strips them again as defence in depth. Those three
- * agree by construction instead of by three copies of two strings.
+ * Every input property name the gateway claims for itself. The config loader
+ * rejects a resource declaring one, protocol adapters lift them out of client
+ * input, and the pipeline strips them again as defense in depth.
  */
 export const RESERVED_INPUT_FIELDS: readonly string[] = [
   PAYMENT_INPUT_FIELD,
@@ -60,48 +54,41 @@ export const RESERVED_INPUT_FIELDS: readonly string[] = [
 ];
 
 /**
- * HTTP request header carrying the authorization proof, base64url-encoded
- * JSON of the same `{ method, payload }` envelope the reserved input field
- * carries.
+ * HTTP request header carrying the authorization proof: base64url-encoded JSON
+ * of the same `{ method, payload }` object the reserved input field carries.
  *
- * This is an Agent Commerce transport carrier, not a header defined by any
- * authorization specification, so it is namespaced rather than borrowing
- * `Authorization`, which already means something else on every one of these
- * routes.
+ * An Agent Commerce carrier, not a header from any authorization
+ * specification. It is namespaced rather than reusing `Authorization`, which
+ * already carries other credentials, including MPP payment proofs.
  */
 export const AUTHORIZATION_HEADER = 'agent-authorization';
 
 /**
  * Hard cap on the encoded `Agent-Authorization` header.
  *
- * Node's own limit is ~16 KiB across *all* request headers, so an
- * authorization near that size would start evicting everything else and fail
- * as an unreadable transport error rather than a legible one. Capping well
- * below it means an oversized proof gets a deterministic
- * AUTHORIZATION_INVALID naming the limit.
+ * Node's default limit is 16 KiB across all request headers, and a request over
+ * it is refused before the gateway sees it. Capping well below that gives an
+ * oversized proof a deterministic `AUTHORIZATION_INVALID` naming the limit.
  */
 export const MAX_AUTHORIZATION_HEADER_BYTES = 8192;
 
 /**
- * HTTP response header carrying the base64 payment challenge on a 402.
+ * HTTP response header carrying the base64 x402 challenge on a 402.
  *
- * The 402 body still carries {@link PaymentRequiredEnvelope} — richer, and the
- * only channel MCP has — but an x402 v2 client reads the challenge from this
- * header and ignores the body, so both are sent.
+ * The body still carries the richer {@link PaymentRequiredEnvelope}, the only
+ * channel MCP has, but an x402 v2 client reads the challenge from this header
+ * and ignores the body, so both are sent.
  */
 export const PAYMENT_REQUIRED_HEADER = 'payment-required';
 
 /**
  * Key under which a protocol adapter attaches a {@link DeliverySummary} to its
- * result metadata — MCP's `CallToolResult._meta`, and anywhere else a protocol
- * offers an out-of-band metadata channel.
+ * result metadata: MCP's `CallToolResult._meta` and the A2A task artifact's
+ * metadata.
  *
- * Frozen deliberately. The bug this whole mechanism exists to fix was two
- * surfaces disagreeing about what a payer gets back; a key name enforced only
- * by one side's tests would reintroduce exactly that drift. Producer and
- * consumer both import this constant.
- *
- * Follows MCP's `<namespace>/<name>` convention for `_meta` keys.
+ * Part of the frozen contract because producer and consumer must agree on it;
+ * both import this constant. Follows MCP's `<namespace>/<name>` convention for
+ * `_meta` keys.
  */
 export const DELIVERY_SUMMARY_META_KEY = 'agent-commerce/delivery';
 
@@ -120,24 +107,21 @@ export interface PaymentRequiredEnvelope {
     readonly network?: string;
     readonly asset?: string;
     readonly expiresAt?: IsoTimestamp;
-    /** Provider-native requirement objects, passed through verbatim. */
+    /** Provider-native requirement objects, passed through verbatim */
     readonly accepts: readonly Readonly<Record<string, unknown>>[];
     /**
-     * The provider's own challenge document, verbatim — see
-     * {@link PaymentChallenge.envelope}. Present for providers that have one;
-     * a buyer's protocol client can hand this straight to its SDK.
+     * The provider's own challenge document, verbatim (see
+     * {@link PaymentChallenge.envelope}). Present for providers that have one;
+     * a buyer's protocol client can hand it straight to its SDK.
      */
     readonly envelope?: Readonly<Record<string, unknown>>;
   };
   /**
-   * Present only when the resource requires an authorization proof as well.
-   *
-   * Additive: a client that does not understand the field sees exactly the
-   * envelope it saw before. A client that does learns, before it spends
-   * anything, that paying alone will not get the resource delivered.
-   *
-   * This advertises a requirement; it does not issue anything. The proof is
-   * obtained from the merchant's own approval flow, outside the gateway.
+   * Present only when the resource also requires an authorization proof, so a
+   * client learns before it spends anything that paying alone will not get the
+   * resource delivered. A client that ignores the field sees the plain
+   * envelope. The proof comes from the merchant's own approval flow, outside
+   * the gateway.
    */
   readonly authorization?: {
     readonly required: readonly AuthorizationRequirement[];
@@ -155,17 +139,10 @@ export interface ErrorEnvelope {
 }
 
 /**
- * What a buyer learns about their own completed purchase.
- *
- * A payer is entitled to the record of their own transaction — the request it
- * belonged to, whether it settled, and the settlement reference they can check
- * on-chain. They are NOT entitled to the merchant's ledger, which is why
- * `/api/receipts` is an operator route behind `server.adminToken`.
- *
- * Before this existed the two surfaces disagreed: HTTP callers received a
- * settlement summary in the payment-response header while MCP callers received
- * nothing, so an MCP buyer's only route to their own receipt was the merchant's
- * ledger. Both surfaces now emit this same shape.
+ * What a buyer learns about their own completed purchase: the request, whether
+ * it settled, and the settlement reference they can check on-chain. The
+ * merchant's ledger is not theirs to read, which is why `/api/receipts` is an
+ * operator route behind `server.adminToken`.
  */
 export interface DeliverySummary {
   readonly requestId: string;
@@ -176,13 +153,13 @@ export interface DeliverySummary {
     readonly status: 'verified' | 'settled' | 'rejected';
     readonly amount: DecimalAmount;
     readonly currency: string;
-    /** Settlement reference, e.g. an on-chain transaction hash. */
+    /** Settlement reference, e.g. an on-chain transaction hash */
     readonly externalReference?: string;
     readonly network?: string;
   };
 }
 
-/** Build the payer-facing summary of a delivered outcome. */
+/** Build the payer-facing summary of a delivered outcome */
 export function toDeliverySummary(outcome: DeliveredOutcome): DeliverySummary {
   const p = outcome.payment;
   return {
@@ -257,14 +234,13 @@ export function isPaymentRequiredEnvelope(value: unknown): value is PaymentRequi
 }
 
 /**
- * Parses the `{ method, payload }` authorization envelope, whichever carrier
- * brought it.
+ * Parses the `{ method, payload }` authorization object, whichever carrier
+ * brought it. Absent returns `undefined`; malformed throws
+ * `AUTHORIZATION_INVALID`.
  *
- * Absent is `undefined`. Present but malformed throws, rather than being
- * dropped the way an unusable `_payment` is. A dropped payment leaves the
- * buyer holding a 402 they can act on. A silently dropped authorization would
- * come back as "not authorized" for a proof the client believes it sent, with
- * no way to tell a rejected mandate from a typo in the envelope around it.
+ * An unusable `_payment` is dropped, which leaves the buyer a 402 to act on. A
+ * dropped authorization would instead come back as "not authorized", with no
+ * way to tell a rejected mandate from a typo in the object around it.
  */
 export function parseAuthorizationSubmission(
   value: unknown,
@@ -278,17 +254,15 @@ export function parseAuthorizationSubmission(
     });
   };
 
-  if (typeof value !== 'object' || Array.isArray(value)) {
-    fail(`expected an object with "method" and "payload", got ${typeof value}`);
+  if (!isRecord(value)) {
+    return fail(`expected an object with "method" and "payload", got ${typeof value}`);
   }
-  const record = value as Record<string, unknown>;
-  const method = record['method'];
-  const payload = record['payload'];
+  const method = value['method'];
+  const payload = value['payload'];
 
-  // 'ap2' is the only method in this release. Compared against the literal
-  // rather than a registry: a second method means a second verifier, and that
-  // is a deliberate addition, not a string that should start working because
-  // a client sent it.
+  // Compared against the literal rather than a registry: a second method needs
+  // a second verifier, a deliberate addition rather than a string that starts
+  // working because a client sent it
   if (method !== 'ap2') {
     fail(`unsupported method ${typeof method === 'string' ? `"${method}"` : typeof method}`);
   }
@@ -300,11 +274,9 @@ export function parseAuthorizationSubmission(
 }
 
 /**
- * Decodes the base64url-JSON `Agent-Authorization` header.
- *
- * The size check runs on the encoded value before any decoding, so an
- * oversized header costs a length comparison rather than a base64 decode and
- * a JSON parse of whatever a caller chose to send.
+ * Decodes the base64url JSON `Agent-Authorization` header. The size check runs
+ * on the encoded value, so an oversized header costs a length comparison rather
+ * than a decode and a JSON parse.
  */
 export function parseAuthorizationHeader(
   raw: string | readonly string[] | undefined,
@@ -328,22 +300,22 @@ export function parseAuthorizationHeader(
     decoded = JSON.parse(Buffer.from(value, 'base64url').toString('utf8'));
   } catch {
     // Nothing from the exception is repeated back: a JSON parse error quotes
-    // the input it choked on, which here is whatever the caller sent.
+    // the input it choked on, which here is whatever the caller sent
     fail('header is not base64url-encoded JSON');
   }
   return parseAuthorizationSubmission(decoded, requestId);
 }
 
 /**
- * Splits raw client input into resource input plus the reserved fields the
- * gateway claims, for every protocol that carries them in the input object
- * (MCP tool arguments, A2A message data). HTTP carries both in headers and
- * uses the two parse helpers directly.
+ * Splits raw client input into resource input plus the reserved fields, for
+ * protocols that carry them in the input object (MCP tool arguments, A2A
+ * message data). HTTP carries both in headers.
  *
- * A payment proof is labelled with the resource's first method. `createGateway`
- * puts provider-backed methods first so the label matches pipeline selection;
- * custom registries must preserve that ordering. Without a method, the proof is
- * dropped and the pipeline receives an unpaid request.
+ * A payment proof is labeled with the resource's first payment method.
+ * `createGateway` puts provider-backed methods first so the label matches the
+ * pipeline's selection; a custom registry must keep that order. A resource with
+ * no payment method gets no payment proof, so the request reaches the pipeline
+ * unpaid.
  */
 export function extractReservedInputFields(
   rawInput: Record<string, unknown>,

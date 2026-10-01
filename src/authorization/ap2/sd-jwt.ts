@@ -10,14 +10,12 @@
  */
 import { decodeSdJwt, getClaims, splitSdJwt } from '@sd-jwt/core';
 import { type JWTVerifyOptions, jwtVerify } from 'jose';
-import type { Clock } from '../../core/index.js';
-import {
-  AP2_CHECKOUT_MANDATE_VCT,
-  AP2_DIGEST_ALGORITHM,
-  AP2_SIGNING_ALGORITHM,
-} from './constants.js';
-import { type Ap2ErrorContext, ap2Rejected } from './errors.js';
-import type { TrustStore } from './trust.js';
+import type { Clock } from '../../core';
+import { isRecord } from '../../core/is-record';
+import { AP2_CHECKOUT_MANDATE_VCT, AP2_DIGEST_ALGORITHM, AP2_SIGNING_ALGORITHM } from './constants';
+import { type Ap2ErrorContext, ap2Rejected } from './errors';
+import { sha256 } from './sha256';
+import type { TrustStore } from './trust';
 
 export interface VerifiedMandate {
   readonly issuer: string;
@@ -28,7 +26,7 @@ export interface VerifiedMandate {
    *
    * This, not the presentation string, is the stable identity of a mandate:
    * disclosing or withholding an optional claim rewrites the presentation and
-   * leaves the signed token untouched. Replay defence keys on a digest of it.
+   * leaves the signed token untouched. Replay defense keys on a digest of it.
    */
   readonly signedToken: string;
 }
@@ -37,18 +35,11 @@ export interface VerifiedMandate {
  * `@sd-jwt/core` passes the algorithm it read from `_sd_alg`, so this is also
  * where a presentation declaring anything but sha-256 is refused
  */
-async function hasher(data: string | ArrayBuffer, algorithm: string): Promise<Uint8Array> {
+function hasher(data: string | ArrayBuffer, algorithm: string): Uint8Array {
   if (algorithm.toLowerCase() !== AP2_DIGEST_ALGORITHM) {
-    throw new Error(`unsupported digest algorithm ${algorithm}`);
+    throw ap2Rejected('malformed_presentation');
   }
-  const bytes = typeof data === 'string' ? new TextEncoder().encode(data) : new Uint8Array(data);
-  return new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
-}
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
+  return sha256(typeof data === 'string' ? data : new Uint8Array(data));
 }
 
 /**
@@ -65,7 +56,7 @@ export async function verifyMandate(
   let encodedJws: string;
   try {
     // Covers a malformed base JWT, a disclosure that will not decode, a
-    // duplicate digest, and an `_sd_alg` this release does not implement
+    // duplicate digest, and an `_sd_alg` other than sha-256
     decoded = await decodeSdJwt(presentation, hasher);
     encodedJws = splitSdJwt(presentation).jwt;
   } catch (cause) {
@@ -79,28 +70,27 @@ export async function verifyMandate(
     throw ap2Rejected('unsupported_mandate_type', context);
   }
 
-  const rawPayload = asRecord(decoded.jwt.payload);
-  const header = asRecord(decoded.jwt.header);
-  if (rawPayload === undefined || header === undefined) {
+  const rawPayload = decoded.jwt.payload;
+  const header = decoded.jwt.header;
+  if (!isRecord(rawPayload) || !isRecord(header)) {
     throw ap2Rejected('malformed_presentation', context);
   }
 
   const { issuer, key } = await deps.trust.resolve(rawPayload['iss'], header['kid'], context);
 
   const options: JWTVerifyOptions = {
-    // Redundant today (the key is EC, so jose already refuses `alg: none` and
-    // a forged HMAC) and kept for the day this resolves a key set instead of
-    // one key, where the header would get to pick
+    // Redundant with one resolved EC key, which already refuses `alg: none` and
+    // a forged HMAC. It stops the header picking the algorithm if a key set is
+    // ever resolved instead.
     algorithms: [AP2_SIGNING_ALGORITHM],
-    // Also redundant, and for the same reason: the key was resolved *from*
-    // `iss` against the configured allowlist, so nothing reaching here can
-    // carry a different one. It backstops a future resolver that matches on
-    // something else. `audience` below is not redundant - `aud` is the
-    // presenter's claim, checked against what the operator configured.
+    // Also redundant, since the key was resolved *from* `iss`, and kept as a
+    // backstop for a resolver that matches on something else. `audience` is
+    // not redundant: `aud` is the presenter's claim, checked against the
+    // configured value.
     issuer: issuer.issuer,
     audience: issuer.audience,
     clockTolerance: deps.clockSkewSeconds,
-    // Injected clock, not jose's `Date.now()`, so expiry tests are tests
+    // Injected clock, not jose's `Date.now()`, so expiry is testable
     currentDate: deps.clock.now(),
   };
 

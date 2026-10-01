@@ -1,17 +1,17 @@
 import { createElement, type ReactElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { EventFeed } from '../src/components/EventFeed.js';
-import { ReceiptList } from '../src/components/ReceiptList.js';
-import { ResourceList } from '../src/components/ResourceList.js';
-import { StatusPanel } from '../src/components/StatusPanel.js';
+import { EventFeed } from '../src/components/EventFeed';
+import { ReceiptList } from '../src/components/ReceiptList';
+import { ResourceList } from '../src/components/ResourceList';
+import { StatusPanel } from '../src/components/StatusPanel';
 import type {
   AdapterDescriptor,
   AdapterWithHealth,
   CommerceEvent,
   CommerceReceipt,
   PublicResource,
-} from '../src/lib/types.js';
+} from '../src/lib/types';
 
 function render<P extends object>(component: (props: P) => ReactElement | null, props: P): string {
   return renderToStaticMarkup(createElement(component, props));
@@ -69,19 +69,26 @@ describe('StatusPanel', () => {
     capabilities: ['receipts'],
     status: 'stable',
   };
+  const off = { enabled: false, mountPath: '/x' };
+  const baseDoc = {
+    gateway: { implementationVersion: '0.1.0', supportedSpec: 'agent-commerce/v1.0.0' },
+    merchant: { id: 'demo', name: 'Demo Merchant', publicBaseUrl: 'http://localhost:8080' },
+    protocols: {
+      http: { enabled: true },
+      mcp: { enabled: true, mountPath: '/mcp' },
+      a2a: off,
+      acp: off,
+    },
+    paymentProviders: [],
+    authorizationProviders: [],
+    store: storeDescriptor,
+  };
 
   it('renders an adapter row with its status and spec', () => {
     const html = render(StatusPanel, {
       wellKnown: {
-        gateway: {
-          implementationVersion: '0.1.0',
-          supportedSpec: 'agent-commerce/v1.0.0',
-        },
-        merchant: { id: 'demo', name: 'Demo Merchant', publicBaseUrl: 'http://localhost:8080' },
-        protocols: { http: { enabled: true }, mcp: { enabled: true, mountPath: '/mcp' } },
+        ...baseDoc,
         adapters: [adapter],
-        paymentProviders: [],
-        store: storeDescriptor,
         payments: {},
       },
     });
@@ -93,33 +100,19 @@ describe('StatusPanel', () => {
   it('shows an "unsupported" capability honestly, not a green tick', () => {
     const html = render(StatusPanel, {
       wellKnown: {
-        gateway: {
-          implementationVersion: '0.1.0',
-          supportedSpec: 'agent-commerce/v1.0.0',
-        },
-        merchant: { id: 'demo', name: 'Demo Merchant', publicBaseUrl: 'http://localhost:8080' },
-        protocols: { http: { enabled: true }, mcp: { enabled: true, mountPath: '/mcp' } },
+        ...baseDoc,
         adapters: [{ ...adapter, unsupported: ['resources/subscribe'] }],
-        paymentProviders: [],
-        store: storeDescriptor,
         payments: {},
       },
     });
-    expect(html).toContain('resources/subscribe');
+    expect(html).toContain('<td class="unsupported">resources/subscribe</td>');
   });
 
   it('shows the x402 settlement destination and network when enabled', () => {
     const html = render(StatusPanel, {
       wellKnown: {
-        gateway: {
-          implementationVersion: '0.1.0',
-          supportedSpec: 'agent-commerce/v1.0.0',
-        },
-        merchant: { id: 'demo', name: 'Demo Merchant', publicBaseUrl: 'http://localhost:8080' },
-        protocols: { http: { enabled: true }, mcp: { enabled: true, mountPath: '/mcp' } },
+        ...baseDoc,
         adapters: [],
-        paymentProviders: [],
-        store: storeDescriptor,
         payments: {
           x402: {
             enabled: true,
@@ -138,20 +131,36 @@ describe('StatusPanel', () => {
     });
     expect(html).toContain('eip155:84532');
     expect(html).toContain('0x70997970C51812dc3A010C7d01b50e0d17dc79C8');
+    // Config accepts a local facilitator off the dev chain too, so the label
+    // says where it runs, not which chain it is on
+    expect(html).toContain('in-process');
+    expect(html).not.toContain('dev chain');
+  });
+
+  it('lists authorization providers with the other descriptors', () => {
+    const html = render(StatusPanel, {
+      wellKnown: {
+        ...baseDoc,
+        adapters: [],
+        authorizationProviders: [
+          {
+            ...storeDescriptor,
+            name: 'ap2-mandate',
+            kind: 'authorization',
+            status: 'experimental',
+          },
+        ],
+        payments: {},
+      },
+    });
+    expect(html).toContain('ap2-mandate');
   });
 
   it('renders an honest message when x402 is not enabled', () => {
     const html = render(StatusPanel, {
       wellKnown: {
-        gateway: {
-          implementationVersion: '0.1.0',
-          supportedSpec: 'agent-commerce/v1.0.0',
-        },
-        merchant: { id: 'demo', name: 'Demo Merchant', publicBaseUrl: 'http://localhost:8080' },
-        protocols: { http: { enabled: true }, mcp: { enabled: false, mountPath: '/mcp' } },
+        ...baseDoc,
         adapters: [],
-        paymentProviders: [],
-        store: storeDescriptor,
         payments: {},
       },
     });
@@ -169,42 +178,32 @@ describe('EventFeed', () => {
   };
 
   it('renders the event type, request id and resource', () => {
-    const html = render(EventFeed, { events: [event], status: 'live' });
+    const html = render(EventFeed, { events: [event] });
     expect(html).toContain('resource.delivered');
+    expect(html).toContain('<td>req_abcdefgh…</td>');
     expect(html).toContain('market_report');
-    expect(html).toContain('Live');
   });
 
   it('caps the number of rendered rows at maxRows', () => {
     const events = Array.from({ length: 10 }, (_, i) => ({ ...event, id: `e${i}` }));
-    const html = render(EventFeed, { events, status: 'live', maxRows: 3 });
+    const html = render(EventFeed, { events, maxRows: 3 });
     const rowCount = (html.match(/<tr[ >]/g) ?? []).length - 1; // subtract the thead row
     expect(rowCount).toBe(3);
   });
 
-  it('highlights the row matching highlightRequestId', () => {
+  it('highlights only the row matching highlightRequestId', () => {
     const html = render(EventFeed, {
-      events: [event],
-      status: 'live',
+      events: [event, { ...event, id: 'e2', requestId: 'req_other' }],
       highlightRequestId: event.requestId,
     });
-    expect(html).toMatch(/class="highlight[ "]/);
+    expect(html.match(/class="highlight[ "]/g)).toHaveLength(1);
   });
 
-  it('renders each stream status distinctly', () => {
-    for (const status of ['connecting', 'live', 'reconnecting', 'polling'] as const) {
-      const html = render(EventFeed, { events: [], status });
-      expect(html).toContain('<span');
-    }
-  });
-
-  // Polling is the intended authenticated path whenever an admin token is
-  // configured (SSE cannot carry it), not just a degraded fallback — the label must not claim the
-  // stream is "down" when it may simply be working exactly as designed.
-  it('does not describe "polling" status as the stream being down', () => {
-    const html = render(EventFeed, { events: [], status: 'polling' });
+  // The feed only polls, so the label must not suggest a broken stream
+  it('labels the feed as polled', () => {
+    const html = render(EventFeed, { events: [] });
     expect(html).toContain('Polling');
-    expect(html).not.toMatch(/stream down/i);
+    expect(html).not.toMatch(/stream down|reconnecting/i);
   });
 });
 
@@ -238,17 +237,17 @@ describe('ReceiptList', () => {
     expect(html).toContain('Free');
   });
 
-  it('highlights the row matching highlightRequestId, visually correlating with the event feed', () => {
+  it('highlights only the row matching highlightRequestId, visually correlating with the event feed', () => {
     const html = render(ReceiptList, {
-      receipts: [receipt],
+      receipts: [receipt, { ...receipt, id: 'r2', requestId: 'req_other' }],
       highlightRequestId: receipt.requestId,
     });
-    expect(html).toMatch(/class="highlight[ "]/);
+    expect(html.match(/class="highlight[ "]/g)).toHaveLength(1);
   });
 
-  // A settled payment with a non-2xx backendStatus is the one row an operator
-  // must be able to spot — there are no refunds, so seeing it is the only
-  // remedy. Without this, it renders identically to a successful delivery.
+  // A settled payment with a non-2xx backendStatus is the row an operator must
+  // spot: the gateway issues no refunds, so nothing resolves it unless an
+  // operator notices
   describe('paid-but-undelivered visibility', () => {
     it('renders a settled+500 receipt as not delivered and highlights it for attention', () => {
       const undelivered: CommerceReceipt = { ...receipt, backendStatus: 500 };
@@ -257,10 +256,10 @@ describe('ReceiptList', () => {
       expect(html).toMatch(/class="[^"]*\battention\b[^"]*"/);
     });
 
-    it('renders "not delivered (no response)" when backendStatus is 0', () => {
+    it('renders "not delivered (no status)" when backendStatus is 0', () => {
       const noResponse: CommerceReceipt = { ...receipt, backendStatus: 0 };
       const html = render(ReceiptList, { receipts: [noResponse] });
-      expect(html).toContain('not delivered (no response)');
+      expect(html).toContain('not delivered (no status)');
       expect(html).toMatch(/class="[^"]*\battention\b[^"]*"/);
     });
 
@@ -271,14 +270,14 @@ describe('ReceiptList', () => {
       expect(html).not.toMatch(/class="[^"]*\battention\b[^"]*"/);
     });
 
-    it('renders a free (no payment), 200 receipt normally — not flagged, delivered', () => {
+    it('renders a free (no payment), 200 receipt as delivered and not flagged', () => {
       const { payment: _payment, ...freeReceipt } = receipt;
       const html = render(ReceiptList, { receipts: [freeReceipt] }); // backendStatus: 200
       expect(html).toContain('delivered');
       expect(html).not.toMatch(/class="[^"]*\battention\b[^"]*"/);
     });
 
-    it('does NOT flag a free receipt for attention even when its backend failed — only a settled payment does', () => {
+    it('does NOT flag a free receipt for attention even when its backend failed; only a settled payment is flagged', () => {
       const { payment: _payment, ...freeReceipt } = receipt;
       const freeFailed: CommerceReceipt = { ...freeReceipt, backendStatus: 500 };
       const html = render(ReceiptList, { receipts: [freeFailed] });

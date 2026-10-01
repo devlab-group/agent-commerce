@@ -3,29 +3,27 @@
  *
  * `supportedSpec` is the A2A specification revision (`1.0.0`), never the
  * negotiation version (`1.0`) and never this package's version. Status is
- * `experimental` and stays that way until the unsupported list below shrinks
- * on purpose rather than by omission.
+ * `experimental` while the adapter lacks the features in the unsupported list
+ * below; an entry leaves that list only when its feature is implemented.
  */
-import type { AdapterDescriptor } from '../../core/index.js';
-import { A2A_SPEC_VERSION, A2A_UNSUPPORTED_METHODS } from './constants.js';
+import type { AdapterDescriptor } from '../../core';
+import { A2A_SPEC_VERSION, A2A_UNSUPPORTED_METHODS } from './constants';
 
-/** What this adapter actually implements. */
-export const A2A_CAPABILITIES: readonly string[] = ['agent-card', 'jsonrpc', 'SendMessage'];
+// What this adapter implements
+const A2A_CAPABILITIES: readonly string[] = ['agent-card', 'jsonrpc', 'SendMessage'];
 
 /**
- * Everything an A2A client may reasonably expect and will not get here.
- * Complete on purpose: a short list reads as "mostly compatible", which is
- * exactly the blanket claim alpha honesty forbids. `doctor` and
- * `/.well-known/agent-commerce` surface this verbatim.
+ * Major A2A features this adapter does not implement, served on
+ * `/.well-known/agent-commerce` and printed by `doctor`, so no client assumes
+ * full protocol support
  */
 export const A2A_UNSUPPORTED: readonly string[] = [
-  // Methods, named as the protocol names them. Same list the transport
-  // rejects by name, so the descriptor cannot promise less than it refuses.
+  // Methods, as the protocol names them; the transport refuses the same list
   ...A2A_UNSUPPORTED_METHODS,
-  // Transports other than the one binding served.
+  // Transports other than the one binding served
   'HTTP+JSON/REST binding',
   'gRPC binding',
-  // Behaviours.
+  // Behaviors
   'SSE',
   'long-running task persistence',
   'task resumption',

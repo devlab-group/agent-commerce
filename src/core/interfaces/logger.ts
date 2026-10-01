@@ -1,9 +1,9 @@
 /**
- * Minimal structural logger interface.
+ * Minimal structural logger. Core does not depend on pino; the gateway injects
+ * a pino instance that satisfies this shape.
  *
- * Core must not depend on pino directly; the gateway injects a pino instance
- * that satisfies this shape. Never log secrets: private keys, seed phrases,
- * Authorization headers or payment authorisation payloads.
+ * Never log secrets: private keys, seed phrases, Authorization headers or
+ * payment authorization payloads.
  */
 export interface Logger {
   debug(obj: Record<string, unknown>, msg?: string): void;
@@ -13,7 +13,7 @@ export interface Logger {
   child(bindings: Record<string, unknown>): Logger;
 }
 
-/** A logger that discards everything. Useful in unit tests. */
+/** A logger that discards everything */
 export const NOOP_LOGGER: Logger = {
   debug: () => {},
   info: () => {},

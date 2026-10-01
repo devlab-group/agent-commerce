@@ -1,18 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
 pragma solidity ^0.8.24;
 
-/// @title MockUSDC — EIP-3009 test token for the Agent Commerce local demo chain.
+/// @title MockUSDC - EIP-3009 test token for the Agent Commerce local demo chain
 /// @notice THIS IS A TEST TOKEN. It has an unrestricted `mint` function and must never be
-/// deployed anywhere but the deterministic local Anvil chain. Do not fund any address that
-/// holds real value with this contract's address.
+/// deployed anywhere but the local Anvil chain.
 ///
-/// Implements a minimal ERC-20 plus EIP-3009 `transferWithAuthorization`, matching the
-/// subset of Circle's FiatTokenV2 ABI that the pinned x402 SDK expects — the core and evm
-/// packages at 2.23.0, protocol v2. Their scoped npm names are spelled out nowhere in this
-/// comment on purpose: solc reads a word starting with "at" in a doc comment as a NatSpec
-/// tag and refuses to compile the file. Both
-/// the `(v,r,s)` EOA-signature overload and the `(bytes signature)` overload, because the SDK
-/// selects between them by signature length.
+/// A minimal ERC-20 plus EIP-3009 `transferWithAuthorization`, matching the subset of
+/// Circle's FiatTokenV2 ABI that the pinned x402 SDK (core and evm packages 2.23.0,
+/// protocol v2) calls. It has both the `(v,r,s)` overload and the `(bytes signature)` one,
+/// because the SDK picks between them by signature length.
+///
+/// The SDK's scoped npm names are not written out: solc reads a word that starts with an
+/// at sign in a doc comment as a NatSpec tag and refuses to compile.
 contract MockUSDC {
     // --- ERC-20 metadata -----------------------------------------------------------------
 
@@ -22,8 +21,8 @@ contract MockUSDC {
 
     // --- EIP-712 domain --------------------------------------------------------------------
 
-    /// @dev EIP-712 domain version. Distinct from `decimals` — this is the token contract's
-    /// signing-domain version, matching x402's `requirements.extra.version`.
+    /// @dev EIP-712 signing-domain version, matching x402's `requirements.extra.version`.
+    /// Unrelated to `decimals`.
     string public constant version = "2";
 
     bytes32 private constant _EIP712_DOMAIN_TYPEHASH =
@@ -69,15 +68,12 @@ contract MockUSDC {
 
     // --- signature malleability ------------------------------------------------------------
 
-    /// @dev secp256k1n / 2 — the OpenZeppelin ECDSA.sol bound. `ecrecover` accepts both `s`
-    /// and `n - s` for the same message (the "other" valid signature for that message,
-    /// producing the same address), so a token that checks nothing here lets an authorization
-    /// be resubmitted with an equally-valid, differently-encoded signature. This mock imitates
-    /// Circle's FiatTokenV2 ABI (see the contract-level docs above) — FiatTokenV2 rejects
-    /// high-`s` signatures, so this mock must too, or "works on the local demo" would not
-    /// prove anything about the real token it stands in for. There is no exploit against
-    /// *this* project today (replay is keyed on `(from, nonce)`, not the signature, per
-    /// docs/contracts.md), but divergence from the imitated ABI is itself the bug.
+    /// @dev secp256k1n / 2, the OpenZeppelin ECDSA.sol bound. `ecrecover` accepts both `s`
+    /// and `n - s` for the same message and signer, so an unchecked token accepts a second,
+    /// differently encoded signature for one authorization. FiatTokenV2 rejects high-`s`
+    /// signatures, and a mock that did not would prove nothing about the token it stands in
+    /// for. Replay protection does not depend on the encoding: this token marks
+    /// `(from, nonce)` used, and the gateway's replay key is (chainId, asset, from, nonce).
     uint256 private constant _SECP256K1N_HALF =
         0x7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF5D576E7357A4501DDFE92F46681B20A0;
 
@@ -91,7 +87,7 @@ contract MockUSDC {
 
     // --- ERC-20 --------------------------------------------------------------------------
 
-    /// @notice Unrestricted mint. TEST TOKEN ONLY — never deploy this to a network with real value.
+    /// @notice Unrestricted mint. TEST TOKEN ONLY: never deploy this to a network with real value
     function mint(address to, uint256 amount) external {
         if (to == address(0)) revert ZeroAddress();
         totalSupply += amount;
@@ -137,9 +133,8 @@ contract MockUSDC {
 
     // --- EIP-712 ---------------------------------------------------------------------------
 
-    /// @notice Per-call domain separator, recomputed from the live chain id so the contract
-    /// works correctly regardless of which chain it is deployed to (no constructor-cached
-    /// domain separator that would go stale under `--chain-id`).
+    /// @notice Recomputed from the live chain id on every call rather than cached at
+    /// construction, so it always matches the chain the token runs on
     function DOMAIN_SEPARATOR() public view returns (bytes32) {
         return
             keccak256(
@@ -155,7 +150,7 @@ contract MockUSDC {
 
     // --- EIP-3009 --------------------------------------------------------------------------
 
-    /// @notice EOA-signature overload — the path the demo / x402 SDK uses for local accounts.
+    /// @notice EOA-signature overload, the path the demo and the x402 SDK use for local accounts
     function transferWithAuthorization(
         address from,
         address to,
@@ -181,9 +176,8 @@ contract MockUSDC {
         _executeAuthorization(from, to, value, validAfter, validBefore, nonce);
     }
 
-    /// @notice Smart-wallet / arbitrary-signature overload. Only plain ECDSA (65-byte)
-    /// signatures are supported by this test token — ERC-1271 contract signatures are out of
-    /// scope for the alpha demo, which uses EOA buyer keys exclusively.
+    /// @notice Bytes-signature overload. Only 65-byte ECDSA signatures are accepted: ERC-1271
+    /// contract signatures are out of scope, because the demo buyer keys are all EOAs.
     function transferWithAuthorization(
         address from,
         address to,

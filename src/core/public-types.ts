@@ -1,17 +1,12 @@
 /**
- * ============================================================================
- * FROZEN PUBLIC CONTRACT — frozen at v0.1.0-alpha
- * ============================================================================
- *
- * Every cross-package type and interface in the project is re-exported here.
- * This barrel is frozen. Everything reachable from it is public API that
- * consumers code against, so a change to any of it is a breaking change and
- * needs the decision record updated to match.
+ * FROZEN PUBLIC CONTRACT since v0.1.0-alpha (freeze record:
+ * docs/contracts.md). The canonical domain model, errors and injection
+ * interfaces are re-exported here. Changes to this public API require contract
+ * review; `npm run check:contract` compares the resolved types with a committed
+ * baseline.
  *
  * Do not redeclare these shapes locally. If something is missing, add it here
  * rather than creating a parallel type.
- *
- * See docs/contracts.md for the freeze record.
  */
 
 export type {
@@ -22,7 +17,7 @@ export type {
   AuthorizationSubmission,
   AuthorizationVerification,
   AuthorizationVerificationContext,
-} from './domain/authorization.js';
+} from './domain/authorization';
 // --- canonical domain ------------------------------------------------------
 export type {
   AdapterDescriptor,
@@ -33,10 +28,10 @@ export type {
   JsonSchema,
   PaymentMethodName,
   ProtocolName,
-} from './domain/common.js';
-export { PAYMENT_METHOD_NAMES, PROTOCOL_NAMES } from './domain/common.js';
-export type { CommerceEvent, CommerceEventType, EventSink } from './domain/event.js';
-export { COMMERCE_EVENT_TYPES } from './domain/event.js';
+} from './domain/common';
+export { PAYMENT_METHOD_NAMES, PROTOCOL_NAMES } from './domain/common';
+export type { CommerceEvent, CommerceEventType, EventSink } from './domain/event';
+export { COMMERCE_EVENT_TYPES } from './domain/event';
 
 export type {
   PaymentChallenge,
@@ -47,29 +42,29 @@ export type {
   PaymentSettlementContext,
   PaymentSubmission,
   PaymentVerificationContext,
-} from './domain/payment.js';
+} from './domain/payment';
 
-export type { CommerceReceipt, PaymentAttempt } from './domain/receipt.js';
+export type { CommerceReceipt, PaymentAttempt } from './domain/receipt';
 export type {
   CanonicalRequest,
   DeliveredOutcome,
   ExecutionOutcome,
   ExecutionPipeline,
   PaymentRequiredOutcome,
-} from './domain/request.js';
+} from './domain/request';
 export type {
   BackendHandler,
   BackendMethod,
   CommerceResource,
   Pricing,
   ResourceRegistry,
-} from './domain/resource.js';
-export { DEFAULT_BACKEND_TIMEOUT_MS } from './domain/resource.js';
+} from './domain/resource';
+export { DEFAULT_BACKEND_TIMEOUT_MS } from './domain/resource';
 export type {
   DeliverySummary,
   ErrorEnvelope,
   PaymentRequiredEnvelope,
-} from './domain/wire.js';
+} from './domain/wire';
 export {
   AUTHORIZATION_HEADER,
   AUTHORIZATION_INPUT_FIELD,
@@ -87,10 +82,10 @@ export {
   toDeliverySummary,
   toErrorEnvelope,
   toPaymentRequiredEnvelope,
-} from './domain/wire.js';
+} from './domain/wire';
 
 // --- errors ----------------------------------------------------------------
-export type { CommerceErrorCode, CommerceErrorInfo, CommerceErrorOptions } from './errors/index.js';
+export type { CommerceErrorCode, CommerceErrorInfo, CommerceErrorOptions } from './errors';
 export {
   COMMERCE_ERROR_CODES,
   COMMERCE_ERROR_HTTP_STATUS,
@@ -98,24 +93,24 @@ export {
   isCommerceError,
   RETRYABLE_ERROR_CODES,
   toCommerceError,
-} from './errors/index.js';
+} from './errors';
 
 // --- injection boundaries --------------------------------------------------
-export type { BackendExecutor, BackendRequest, BackendResponse } from './interfaces/backend.js';
-export type { Logger } from './interfaces/logger.js';
-export { NOOP_LOGGER } from './interfaces/logger.js';
+export type { BackendExecutor, BackendRequest, BackendResponse } from './interfaces/backend';
+export type { Logger } from './interfaces/logger';
+export { NOOP_LOGGER } from './interfaces/logger';
 export type {
   AdapterHttpRoute,
   HttpProtocolAdapter,
   ProtocolAdapter,
   ProtocolAdapterContext,
-} from './interfaces/protocol-adapter.js';
-export { isHttpProtocolAdapter } from './interfaces/protocol-adapter.js';
-export type { Clock, IdGenerator } from './interfaces/runtime.js';
-export { systemClock } from './interfaces/runtime.js';
+} from './interfaces/protocol-adapter';
+export { isHttpProtocolAdapter } from './interfaces/protocol-adapter';
+export type { Clock, IdGenerator } from './interfaces/runtime';
+export { systemClock } from './interfaces/runtime';
 export type {
   ListOptions,
   PaymentAttemptReservation,
   PaymentAttemptUpdate,
   ReceiptStore,
-} from './interfaces/store.js';
+} from './interfaces/store';

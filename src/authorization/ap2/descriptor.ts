@@ -4,14 +4,14 @@
  * Imports nothing but core types and the pins, so `doctor` can report AP2
  * without pulling `jose` or `@sd-jwt/core` into the CLI bundle.
  */
-import type { AdapterDescriptor } from '../../core/index.js';
+import type { AdapterDescriptor } from '../../core';
 import {
   AP2_CHECKOUT_MANDATE_VCT,
   AP2_CHECKOUT_PROFILE,
   AP2_DIGEST_ALGORITHM,
   AP2_SIGNING_ALGORITHM,
   AP2_SPEC_VERSION,
-} from './constants.js';
+} from './constants';
 
 /** What this provider actually verifies */
 export const AP2_CAPABILITIES: readonly string[] = [
@@ -28,13 +28,12 @@ export const AP2_CAPABILITIES: readonly string[] = [
 ];
 
 /**
- * Everything an AP2 client may reasonably expect and will not get here.
- * Complete on purpose: a short list reads as "mostly compatible", which is the
- * blanket claim alpha honesty forbids.
+ * Major AP2 features this provider does not support, published in its
+ * descriptor and printed by `doctor`, so no client assumes full protocol
+ * support
  */
 export const AP2_UNSUPPORTED: readonly string[] = [
-  // Mandate kinds. Open mandates carry spending constraints nothing here
-  // evaluates, so accepting one would tell a buyer their limits were checked.
+  // Mandate kinds. Open mandates are refused: see AP2_CHECKOUT_MANDATE_VCT
   'autonomous mode',
   'open checkout mandates (mandate.checkout.open.1)',
   'intent mandates',

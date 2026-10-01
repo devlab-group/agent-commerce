@@ -1,6 +1,6 @@
-/** Default `IdGenerator` used when the caller does not inject one. */
+// Default `IdGenerator`, used when the caller injects none
 import { randomUUID } from 'node:crypto';
-import type { IdGenerator } from '../core/index.js';
+import type { IdGenerator } from '../core';
 
 export function createDefaultIdGenerator(): IdGenerator {
   return {

@@ -1,28 +1,24 @@
 /**
- * Deploys MockUSDC to the local deterministic chain, mints the demo buyer's
- * starting balance, ensures the demo accounts have gas, and writes
- * `.deploy/local.json` — the manifest every other package reads instead of
- * hard-coding an address (see docs/contracts.md).
+ * `npm run chain:deploy`: deploys MockUSDC to the local chain, gives the demo
+ * accounts gas, mints the buyer's starting balance and writes
+ * `.deploy/local.json`. The chain work lives in
+ * `src/payments/x402/local-chain/deploy-engine.ts`.
  *
- * Idempotent: if a manifest already exists and its asset address still has
- * code on the currently-running chain (i.e. anvil was not restarted since
- * the last deploy), the existing deployment is reused — the buyer balance is
- * topped up to the target if needed, nothing is redeployed or double-minted.
- *
- * The heavy lifting (viem calls) lives in
- * `src/payments/x402/local-chain/deploy-engine.ts`; this file is a
- * thin CLI wrapper because `scripts/chain` has no `node_modules` of its own
- * (see the comment in that module for why).
+ * Idempotent: while the manifest's asset still has code on the running chain,
+ * the deployment is reused and the buyer is only topped up to the target.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { DEV_KEY_LABEL } from '../../src/payments/x402/local-chain/accounts.js';
+import { DEV_KEY_LABEL } from '../../src/payments/x402/local-chain/accounts';
 import {
   assertNoUnknownDeployment,
   deployLocalChain,
   describeWellKnownAccounts,
-} from '../../src/payments/x402/local-chain/deploy-engine.js';
-import { LOCAL_CHAIN_MANIFEST_PATH, type LocalChainManifest } from './manifest.js';
+} from '../../src/payments/x402/local-chain/deploy-engine';
+import {
+  LOCAL_CHAIN_MANIFEST_PATH,
+  type LocalChainManifest,
+} from '../../src/payments/x402/local-chain/manifest';
 
 const DEFAULT_BUYER_INITIAL_BALANCE = '100.00';
 
@@ -35,11 +31,7 @@ async function main(): Promise<void> {
 
   const existingAsset = readExistingAssetAddress(manifestPath);
 
-  // Refuse an ambiguous silent double-deploy: if this run has no known
-  // deployment (e.g. its own manifest is missing/stale) but the facilitator
-  // key has already transacted on this chain, someone else likely deployed
-  // here already (e.g. `docker compose up`'s chain-deploy service) — see
-  // assertNoUnknownDeployment's doc comment in deploy-engine.ts.
+  // Refuses a silent second deployment when another deployer used this chain
   await assertNoUnknownDeployment(rpcUrl, existingAsset);
 
   console.log(`Deploying to ${rpcUrl}...`);
@@ -54,11 +46,8 @@ async function main(): Promise<void> {
   const manifest: LocalChainManifest = {
     chainId: result.chainId,
     rpcUrl: result.rpcUrl,
-    // Distinct from rpcUrl only inside Docker, where rpcUrl is the
-    // container-internal address (e.g. "http://anvil:8545") and HOST_RPC_URL
-    // is set to the host-reachable published port. A bare host deploy has no
-    // HOST_RPC_URL set, so this legitimately equals rpcUrl — they really are
-    // the same endpoint there.
+    // Differs from rpcUrl only inside Docker, where HOST_RPC_URL names the
+    // published port and rpcUrl the container address ("http://anvil:8545")
     hostRpcUrl: process.env['HOST_RPC_URL'] ?? result.rpcUrl,
     asset: result.asset,
     assetName: result.assetName,
@@ -85,11 +74,10 @@ async function main(): Promise<void> {
   try {
     writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
   } catch (err) {
-    // The chain is already deployed by this point; the only thing that failed
-    // is recording where. Under docker compose that is almost always a uid
-    // mismatch — the container runs as `user: ${DOCKER_UID:-1000}` while the
-    // checkout belongs to whoever cloned it — and a raw EACCES stack trace
-    // sends people looking at the chain instead of at their uid.
+    // The chain is deployed; only recording it failed. Under docker compose an
+    // EACCES is almost always a uid mismatch between the container user
+    // (`DOCKER_UID`, 1000 by default) and the checkout's owner, so the error
+    // says that instead of leaving a raw EACCES that points at the chain.
     if ((err as NodeJS.ErrnoException).code === 'EACCES') {
       throw new Error(
         `Cannot write the deployment manifest to ${manifestPath}: permission denied.\n` +

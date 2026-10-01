@@ -1,31 +1,43 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { parseConfig } from '../../../src/config/schema.js';
+import { parseConfig } from '../../../src/config/schema';
 import {
-  compileJsonSchema,
-  validateBackendRequestShape,
-} from '../../../src/core/execution/index.js';
-import {
+  type CommerceError,
   isCommerceError,
   PAYMENT_METHOD_NAMES,
   RESERVED_INPUT_FIELDS,
-} from '../../../src/core/index.js';
-import { validRawConfig } from './fixtures.js';
+} from '../../../src/core';
+import { compileJsonSchema, validateBackendRequestShape } from '../../../src/core/execution';
+import { validRawConfig } from './fixtures';
 
-function expectConfigInvalid(fn: () => unknown): void {
-  expect(fn).toThrowError();
+// Asserts CONFIG_INVALID at `path`: `details.path` for a business rule, the
+// first issue's path for a shape error. A bare "it threw" also passes when an
+// unrelated defect earlier in the fixture fails first.
+function expectConfigInvalid(
+  fn: () => unknown,
+  path: string,
+  message?: string | RegExp,
+): CommerceError {
+  let thrown: unknown;
   try {
     fn();
-    expect.unreachable();
   } catch (error) {
-    expect(isCommerceError(error)).toBe(true);
-    if (isCommerceError(error)) {
-      expect(error.code).toBe('CONFIG_INVALID');
-    }
+    thrown = error;
   }
+  if (!isCommerceError(thrown)) {
+    return expect.unreachable(`expected CONFIG_INVALID, got ${String(thrown)}`);
+  }
+  expect(thrown.code).toBe('CONFIG_INVALID');
+  const issues = thrown.details?.['issues'];
+  const actual = Array.isArray(issues)
+    ? (issues[0] as { path?: unknown } | undefined)?.path
+    : thrown.details?.['path'];
+  expect(actual, thrown.message).toBe(path);
+  if (message !== undefined) expect(thrown.message).toMatch(message);
+  return thrown;
 }
 
 describe('parseConfig', () => {
-  it('accepts a valid config and normalises resources to a canonical array', () => {
+  it('accepts a valid config and normalizes resources to a canonical array', () => {
     const config = parseConfig(validRawConfig(), {});
     expect(config.version).toBe(1);
     expect(config.merchant.id).toBe('demo-store');
@@ -50,52 +62,75 @@ describe('parseConfig', () => {
 
   it('rejects an unknown top-level key with a clear path', () => {
     const raw = { ...validRawConfig(), unknownTopLevelField: true };
-    expectConfigInvalid(() => parseConfig(raw, {}));
-    try {
-      parseConfig(raw, {});
-    } catch (error) {
-      if (isCommerceError(error)) {
-        expect(error.message).toContain('$');
-        expect(JSON.stringify(error.details)).toContain('unrecognized_keys');
-      }
-    }
+    expectConfigInvalid(() => parseConfig(raw, {}), '$', /unknownTopLevelField/);
   });
 
-  it('rejects an unknown nested key with a clear path', () => {
+  // A misspelled optional key would otherwise load as if absent: `authorisation:`
+  // on a resource would drop its mandate requirement without a word
+  it.each([
+    'merchant',
+    'server',
+    'storage.receipts',
+    'protocols.mcp',
+    'resources.market_report',
+    'resources.market_report.backend',
+    'resources.market_report.pricing',
+    'payments',
+    'payments.x402',
+    'payments.x402.facilitator',
+  ])('rejects an unknown key under %s, naming the block', (where) => {
     const raw = validRawConfig();
-    (raw['merchant'] as Record<string, unknown>)['extra'] = 'nope';
-    expectConfigInvalid(() => parseConfig(raw, {}));
-    try {
-      parseConfig(raw, {});
-    } catch (error) {
-      if (isCommerceError(error)) {
-        expect(error.message).toContain('merchant');
-      }
-    }
+    let node: unknown = raw;
+    for (const key of where.split('.')) node = (node as Record<string, unknown>)[key];
+    (node as Record<string, unknown>)['unexpectedKey'] = true;
+    expectConfigInvalid(() => parseConfig(raw, {}), where, /unexpectedKey/);
   });
 
   it('rejects a config missing a required field', () => {
     const raw = validRawConfig();
     delete (raw['merchant'] as Record<string, unknown>)['id'];
-    expectConfigInvalid(() => parseConfig(raw, {}));
+    expectConfigInvalid(() => parseConfig(raw, {}), 'merchant.id');
   });
 
   it('rejects an unsupported config version with a clear message', () => {
     const raw = { ...validRawConfig(), version: 2 };
-    expectConfigInvalid(() => parseConfig(raw, {}));
-    try {
-      parseConfig(raw, {});
-    } catch (error) {
-      if (isCommerceError(error)) {
-        expect(error.message.toLowerCase()).toContain('unsupported config version');
-      }
+    expectConfigInvalid(() => parseConfig(raw, {}), 'version', /Unsupported config version "2"/);
+  });
+
+  it('rejects a quoted version "1" with the version message, not a generic zod one', () => {
+    const raw = { ...validRawConfig(), version: '1' };
+    expect(() => parseConfig(raw, {})).toThrowError(
+      /Unsupported config version "1".*written as a number without quotes/,
+    );
+  });
+
+  it('rejects a backend header that fetch would refuse, naming the key but not the value', () => {
+    for (const headers of [{ 'x-api-key': 'secret\ntoken' }, { 'bad name': 'x' }]) {
+      const raw = validRawConfig();
+      const resources = raw['resources'] as Record<string, Record<string, unknown>>;
+      const [resource] = Object.values(resources);
+      (resource?.['backend'] as Record<string, unknown>)['headers'] = headers;
+      const [key] = Object.keys(headers);
+      const error = expectConfigInvalid(
+        () => parseConfig(raw, {}),
+        `resources.weather_basic.backend.headers.${key}`,
+        `backend header "${key}"`,
+      );
+      expect(JSON.stringify(error.toInfo())).not.toContain('secret');
     }
+  });
+
+  it('accepts a backend header value with trailing whitespace, which fetch trims', () => {
+    const raw = validRawConfig();
+    const [resource] = Object.values(raw['resources'] as Record<string, Record<string, unknown>>);
+    (resource?.['backend'] as Record<string, unknown>)['headers'] = { 'x-api-key': 'token\n' };
+    expect(() => parseConfig(raw, {})).not.toThrow();
   });
 
   it('rejects a config missing the version field entirely', () => {
     const raw = validRawConfig();
     delete raw['version'];
-    expectConfigInvalid(() => parseConfig(raw, {}));
+    expectConfigInvalid(() => parseConfig(raw, {}), 'version', /missing required field "version"/);
   });
 
   it('rejects pricing.type "dynamic" with an explicit not-supported message', () => {
@@ -106,66 +141,51 @@ describe('parseConfig', () => {
       pricing: { type: 'dynamic', resolver: 'some-resolver' },
       expose: ['http'],
     };
-    expectConfigInvalid(() => parseConfig(raw, {}));
-    try {
-      parseConfig(raw, {});
-    } catch (error) {
-      if (isCommerceError(error)) {
-        expect(error.message).toContain('not supported in this release');
-      }
-    }
+    expectConfigInvalid(
+      () => parseConfig(raw, {}),
+      'resources.dynamic_res.pricing.type',
+      'not supported in this release',
+    );
   });
 
-  it('rejects malformed pricing.amount values that pass a bare string schema but fail every purchase', () => {
-    const malformed = ['0,01', '$0.01', '1e-2', '-1'];
-    for (const amount of malformed) {
+  it.each(['0,01', '$0.01', '1e-2', '-1'])(
+    'rejects the malformed pricing.amount %s, which a bare string schema passes and every purchase fails',
+    (amount) => {
       const raw = validRawConfig();
       (
         raw['resources'] as { market_report: { pricing: Record<string, unknown> } }
       ).market_report.pricing['amount'] = amount;
-      expectConfigInvalid(() => parseConfig(raw, {}));
-      try {
-        parseConfig(raw, {});
-      } catch (error) {
-        if (isCommerceError(error)) {
-          expect(error.message, `expected "${amount}" to be rejected`).toContain(
-            'plain positive decimal',
-          );
-        }
-      }
-    }
-  });
+      expectConfigInvalid(
+        () => parseConfig(raw, {}),
+        'resources.market_report.pricing.amount',
+        'plain positive decimal',
+      );
+    },
+  );
 
   it('rejects pricing.amount "0" explicitly, pointing at pricing: { type: free }', () => {
     const raw = validRawConfig();
     (
       raw['resources'] as { market_report: { pricing: Record<string, unknown> } }
     ).market_report.pricing['amount'] = '0';
-    expectConfigInvalid(() => parseConfig(raw, {}));
-    try {
-      parseConfig(raw, {});
-    } catch (error) {
-      if (isCommerceError(error)) {
-        expect(error.message).toContain('cannot cost zero');
-        expect(error.message).toContain('type: free');
-      }
-    }
+    expectConfigInvalid(
+      () => parseConfig(raw, {}),
+      'resources.market_report.pricing.amount',
+      /cannot cost zero.*type: free/,
+    );
   });
 
   it('rejects pricing.amount with more fractional digits than the asset can represent', () => {
     const raw = validRawConfig();
-    // assetDecimals in validRawConfig() is 6.
+    // assetDecimals in validRawConfig() is 6
     (
       raw['resources'] as { market_report: { pricing: Record<string, unknown> } }
     ).market_report.pricing['amount'] = '0.0000001';
-    expectConfigInvalid(() => parseConfig(raw, {}));
-    try {
-      parseConfig(raw, {});
-    } catch (error) {
-      if (isCommerceError(error)) {
-        expect(error.message).toContain('more precision');
-      }
-    }
+    expectConfigInvalid(
+      () => parseConfig(raw, {}),
+      'resources.market_report.pricing.amount',
+      'more precision',
+    );
   });
 
   it("accepts a pricing.amount using exactly the asset's decimal precision (control)", () => {
@@ -195,35 +215,32 @@ describe('parseConfig', () => {
       return raw;
     }
 
-    /**
-     * Every other defence around `{param}` guards the path position, and in the
-     * host position all of them fail open at once: `new URL('http://{host}/api')`
-     * parses so the URL check passes; the runtime containment check is skipped
-     * because its literal prefix (`http://`) does not itself parse as a URL; and
-     * `encodeURIComponent` does not escape dots, so a hostname survives whole.
-     * Caller input would then choose which host the gateway calls - the cloud
-     * metadata service, an internal address, anything.
-     */
+    // A parameter in the host would let caller input choose which host the
+    // gateway calls (see validatePathParametersDeclared). In a host suffix the
+    // text before the brace still parses as an origin, so only the check that
+    // the prefix ends in `origin/` refuses it.
     it.each([
       ['the whole host', 'http://{host}/api'],
       ['a host prefix', 'http://{tenant}.api.internal/v1'],
       ['host and port', 'http://{host}:8080/api'],
+      ['a host suffix', 'http://api{host}.internal/v1'],
     ])('refuses a parameter that spans %s', (_label, url) => {
-      expectConfigInvalid(() => parseConfig(withBackendUrl(url), {}));
-      try {
-        parseConfig(withBackendUrl(url), {});
-      } catch (error) {
-        if (isCommerceError(error)) {
-          expect(error.message).toContain('before the end of the host');
-        }
-      }
+      expectConfigInvalid(
+        () => parseConfig(withBackendUrl(url), {}),
+        'resources.templated.backend.url',
+        'before the end of the host',
+      );
     });
 
     it('refuses a parameter in the scheme, via the absolute-URL check', () => {
-      // Refused one check earlier: `{scheme}://…` parses with protocol
-      // `{scheme}:`, which is neither http nor https. Same outcome, different
-      // message, and asserted separately so a change to either is visible.
-      expectConfigInvalid(() => parseConfig(withBackendUrl('{scheme}://backend.local/api'), {}));
+      // Refused before the host check: `{scheme}://...` does not parse as a
+      // URL at all. Asserted separately so a change to either check is
+      // visible.
+      expectConfigInvalid(
+        () => parseConfig(withBackendUrl('{scheme}://backend.local/api'), {}),
+        'resources.templated.backend.url',
+        'must be an absolute http:// or https:// URL',
+      );
     });
 
     it.each([
@@ -233,16 +250,38 @@ describe('parseConfig', () => {
     ])('still accepts a parameter in %s', (_label, url) => {
       expect(() => parseConfig(withBackendUrl(url), {})).not.toThrow();
     });
+
+    // A key substituted into the URL must not reach validate, doctor or
+    // startup output, so a refused URL is never quoted
+    it.each([
+      [
+        'a parameter in the host',
+        'http://{host}.api.internal/v1?key=${BACKEND_KEY}',
+        'before the end of the host',
+      ],
+      ['no scheme', 'backend.internal/v1?key=${BACKEND_KEY}', 'invalid backend.url'],
+    ])('never quotes a refused backend.url with %s', (_label, url, message) => {
+      const error = expectConfigInvalid(
+        () => parseConfig(withBackendUrl(url), { BACKEND_KEY: 'BACKEND-KEY-IN-URL' }),
+        'resources.templated.backend.url',
+        message,
+      );
+      expect(JSON.stringify(error.toInfo())).not.toContain('BACKEND-KEY-IN-URL');
+    });
+
+    it('control: the key is substituted into a backend.url that loads', () => {
+      const config = parseConfig(withBackendUrl('http://backend.local/{host}?key=${BACKEND_KEY}'), {
+        BACKEND_KEY: 'BACKEND-KEY-IN-URL',
+      });
+      expect(config.resources.find((r) => r.id === 'templated')?.handler).toMatchObject({
+        url: 'http://backend.local/{host}?key=BACKEND-KEY-IN-URL',
+      });
+    });
   });
 
   describe('closed-schema stamping', () => {
-    /**
-     * The stamper's third drift from the validator, after `required` and tuple
-     * `items`. `additionalProperties: {schema}` is the idiomatic "map of typed
-     * objects" shape and the validator applies that subschema recursively - so
-     * without recursion here, every node beneath it stayed open and unknown
-     * keys reached the merchant's backend.
-     */
+    // The validator applies an `additionalProperties` subschema recursively,
+    // so config must close the nodes beneath it too
     it('closes objects nested under an additionalProperties subschema', () => {
       const raw = validRawConfig();
       const resources = raw['resources'] as Record<string, Record<string, unknown>>;
@@ -294,10 +333,26 @@ describe('parseConfig', () => {
       try {
         parseConfig(raw, {});
       } catch (error) {
-        return isCommerceError(error) ? error.message : String(error);
+        if (isCommerceError(error) && error.code === 'CONFIG_INVALID') return error.message;
+        throw error;
       }
       throw new Error('expected parseConfig to reject this configuration');
     }
+
+    // A mainnet config that loads; tests that spread it change one field
+    const MAINNET = {
+      network: 'eip155:8453',
+      asset: BASE_USDC,
+      assetName: 'USD Coin',
+      assetVersion: '2',
+      payTo: MERCHANT,
+      allowMainnet: true,
+      facilitator: {
+        mode: 'remote',
+        url: 'https://facilitator.example.com',
+        auth: { type: 'bearer', token: 'secret-token' },
+      },
+    };
 
     it('accepts a remote facilitator on a testnet', () => {
       const config = parseConfig(
@@ -307,8 +362,8 @@ describe('parseConfig', () => {
         }),
         {},
       );
-      // Absent auth is normalised to an explicit "no credential", so nothing
-      // downstream has to decide what `undefined` meant.
+      // Absent auth is normalized to an explicit "no credential", so nothing
+      // downstream has to decide what `undefined` meant
       expect(config.payments.x402?.facilitator).toEqual({
         mode: 'remote',
         url: 'https://facilitator.example.com',
@@ -343,9 +398,8 @@ describe('parseConfig', () => {
     });
 
     it('rejects a mainnet served by the in-process facilitator', () => {
-      // The local facilitator signs with a key this process holds - a hot
-      // wallet inside the resource server, which is the arrangement this
-      // project exists to avoid.
+      // The local facilitator signs with a key this process holds: a hot
+      // wallet inside the resource server
       const message = messageFor(
         withX402({ network: 'eip155:8453', asset: BASE_USDC, payTo: MERCHANT, allowMainnet: true }),
       );
@@ -381,12 +435,12 @@ describe('parseConfig', () => {
       };
       const message = messageFor(withX402(unauthenticated));
       expect(message).toContain('allowUnauthenticatedFacilitator');
-      // The origin, so an operator can see *which* counterparty they are being
-      // asked about - but never the path, which can carry a tenant or a key.
+      // The origin names the counterparty; the path is withheld because it can
+      // carry a tenant or a key
       expect(message).toContain('https://facilitator.example.com');
       expect(message).not.toContain('/v2/x402');
 
-      // Accepting it explicitly is allowed. It is a real choice, not a bug.
+      // Accepting it explicitly is allowed
       const config = parseConfig(
         withX402({ ...unauthenticated, allowUnauthenticatedFacilitator: true }),
         {},
@@ -395,8 +449,8 @@ describe('parseConfig', () => {
     });
 
     it('does not let allowUnauthenticatedFacilitator stand in for allowMainnet', () => {
-      // Two different decisions: "I meant to use real money" and "I accept
-      // this counterparty". Neither implies the other.
+      // Two separate decisions: "I meant to use real money" and "I accept this
+      // counterparty". Neither implies the other.
       const message = messageFor(
         withX402({
           network: 'eip155:8453',
@@ -410,8 +464,8 @@ describe('parseConfig', () => {
       expect(message).toContain('allowMainnet');
     });
 
-    it('needs no acknowledgement for an unauthenticated facilitator below mainnet', () => {
-      // The public testnet facilitator takes no credential and never will.
+    it('needs no acknowledgment for an unauthenticated facilitator below mainnet', () => {
+      // The public testnet facilitator takes no credential
       expect(() =>
         parseConfig(
           withX402({
@@ -434,9 +488,8 @@ describe('parseConfig', () => {
     });
 
     it('allows a plain-HTTP facilitator on a private host below mainnet', () => {
-      // A dot-free host is a compose/k8s service name - the traffic never
-      // leaves the deployment, so requiring TLS there would only block the
-      // normal self-hosted arrangement.
+      // A dot-free host is a compose or k8s service name whose traffic stays
+      // inside the deployment, so TLS is not required below mainnet
       expect(() =>
         parseConfig(
           withX402({
@@ -449,8 +502,7 @@ describe('parseConfig', () => {
     });
 
     it('rejects a well-known development payTo on a non-local deployment', () => {
-      // The fixture's payTo is Anvil account #1 - fine locally, catastrophic
-      // anywhere the money is real, because its private key is public.
+      // The fixture's payTo is Anvil account #1, whose private key is public
       const message = messageFor(
         withX402({ facilitator: { mode: 'remote', url: 'https://facilitator.example.com' } }),
       );
@@ -459,8 +511,8 @@ describe('parseConfig', () => {
 
     it('rejects a mainnet assetName that is not the EIP-712 domain the token reports', () => {
       // Base mainnet USDC reports "USD Coin"; Base Sepolia's reports "USDC".
-      // The name is signed into the buyer's domain, so the obvious-looking
-      // value gets every payment refused *after* they signed.
+      // The name is part of the signed EIP-712 domain, so a wrong one would get
+      // every payment refused after the buyer signed. Refused at load instead.
       const message = messageFor(
         withX402({
           network: 'eip155:8453',
@@ -480,24 +532,36 @@ describe('parseConfig', () => {
     });
 
     it('accepts the EIP-712 domain the mainnet token actually reports', () => {
-      expect(() =>
-        parseConfig(
-          withX402({
-            network: 'eip155:8453',
-            asset: BASE_USDC,
-            assetName: 'USD Coin',
-            assetVersion: '2',
-            payTo: MERCHANT,
-            allowMainnet: true,
-            facilitator: {
-              mode: 'remote',
-              url: 'https://facilitator.example.com',
-              auth: { type: 'bearer', token: 'secret-token' },
-            },
-          }),
-          {},
-        ),
-      ).not.toThrow();
+      expect(parseConfig(withX402(MAINNET), {}).payments.x402).toMatchObject({
+        assetName: 'USD Coin',
+        assetVersion: '2',
+      });
+    });
+
+    it.each([
+      [
+        'an assetVersion the token does not report',
+        { assetVersion: '1' },
+        'payments.x402.assetVersion',
+      ],
+      [
+        'a well-known Anvil payTo',
+        { payTo: '0x70997970C51812dc3A010C7d01b50e0d17dc79C8' },
+        'payments.x402.payTo',
+      ],
+    ])('rejects a mainnet config with %s', (_label, change, path) => {
+      expectConfigInvalid(() => parseConfig(withX402({ ...MAINNET, ...change }), {}), path);
+    });
+
+    it('reads a templated allowMainnet as a boolean, so "false" is no opt-in', () => {
+      const raw = withX402({ ...MAINNET, allowMainnet: '${ALLOW_X402_MAINNET}' });
+      expectConfigInvalid(
+        () => parseConfig(raw, { ALLOW_X402_MAINNET: 'false' }),
+        'payments.x402.allowMainnet',
+      );
+      expect(parseConfig(raw, { ALLOW_X402_MAINNET: 'true' }).payments.x402?.allowMainnet).toBe(
+        true,
+      );
     });
 
     it('rejects a mainnet asset that is not the canonical USDC', () => {
@@ -530,8 +594,7 @@ describe('parseConfig', () => {
     });
 
     it('rejects plain HTTP on a mainnet even to a private host', () => {
-      // Below mainnet a dot-free host is a compose service name and the
-      // traffic never leaves the deployment. On mainnet nothing earns that.
+      // The private-host exception applies below mainnet only
       const message = messageFor(
         withX402({
           network: 'eip155:8453',
@@ -586,17 +649,19 @@ describe('parseConfig', () => {
     });
 
     it('rejects an auth type nobody implements, rather than sending nothing', () => {
-      const message = messageFor(
-        withX402({
-          payTo: MERCHANT,
-          facilitator: {
-            mode: 'remote',
-            url: 'https://facilitator.example.com',
-            auth: { type: 'hmac', secret: 's' },
-          },
-        }),
+      const raw = withX402({
+        payTo: MERCHANT,
+        facilitator: {
+          mode: 'remote',
+          url: 'https://facilitator.example.com',
+          auth: { type: 'hmac', secret: 's' },
+        },
+      });
+      expectConfigInvalid(
+        () => parseConfig(raw, {}),
+        'payments.x402.facilitator.auth.type',
+        /'none' \| 'bearer' \| 'cdp'/,
       );
-      expect(message).toContain('payments.x402.facilitator');
     });
 
     it('rejects an empty bearer token rather than sending it', () => {
@@ -608,7 +673,7 @@ describe('parseConfig', () => {
           auth: { type: 'bearer', token: '${FACILITATOR_TOKEN:- }' },
         },
       });
-      expect(messageFor(raw)).toContain('empty');
+      expect(messageFor(raw)).toContain('token is empty');
     });
   });
 
@@ -619,15 +684,11 @@ describe('parseConfig', () => {
       (
         raw['resources'] as { weather_basic: { input: { properties: Record<string, unknown> } } }
       ).weather_basic.input.properties[reserved] = { type: 'string' };
-      expectConfigInvalid(() => parseConfig(raw, {}));
-      try {
-        parseConfig(raw, {});
-      } catch (error) {
-        if (isCommerceError(error)) {
-          expect(error.message).toContain(reserved);
-          expect(error.message).toContain('reserved');
-        }
-      }
+      expectConfigInvalid(
+        () => parseConfig(raw, {}),
+        `resources.weather_basic.input.properties.${reserved}`,
+        `input property "${reserved}", which is reserved`,
+      );
     },
   );
 
@@ -639,14 +700,11 @@ describe('parseConfig', () => {
       pricing: { type: 'fixed', amount: '1.00', currency: 'USDC' },
       expose: ['http'],
     };
-    expectConfigInvalid(() => parseConfig(raw, {}));
-    try {
-      parseConfig(raw, {});
-    } catch (error) {
-      if (isCommerceError(error)) {
-        expect(error.message).toContain('broken');
-      }
-    }
+    expectConfigInvalid(
+      () => parseConfig(raw, {}),
+      'resources.broken.payments',
+      'declares no "payments"',
+    );
   });
 
   it('rejects an mcp-exposed resource whose id is not a legal MCP tool name', () => {
@@ -654,14 +712,11 @@ describe('parseConfig', () => {
     const resources = raw['resources'] as Record<string, unknown>;
     resources['weather/basic bad id'] = resources['weather_basic'];
     delete resources['weather_basic'];
-    expectConfigInvalid(() => parseConfig(raw, {}));
-    try {
-      parseConfig(raw, {});
-    } catch (error) {
-      if (isCommerceError(error)) {
-        expect(error.message).toContain('legal MCP tool name');
-      }
-    }
+    expectConfigInvalid(
+      () => parseConfig(raw, {}),
+      'resources.weather/basic bad id',
+      'legal MCP tool name',
+    );
   });
 
   it('accepts an mcp-exposed resource id using only the allowed tool-name characters', () => {
@@ -678,14 +733,11 @@ describe('parseConfig', () => {
     (
       raw['resources'] as { weather_basic: { backend: Record<string, unknown> } }
     ).weather_basic.backend['url'] = 'ftp://backend.local/x';
-    expectConfigInvalid(() => parseConfig(raw, {}));
-    try {
-      parseConfig(raw, {});
-    } catch (error) {
-      if (isCommerceError(error)) {
-        expect(error.message).toContain('http');
-      }
-    }
+    expectConfigInvalid(
+      () => parseConfig(raw, {}),
+      'resources.weather_basic.backend.url',
+      'scheme "ftp:"',
+    );
   });
 
   it('rejects a malformed backend.url', () => {
@@ -693,28 +745,28 @@ describe('parseConfig', () => {
     (
       raw['resources'] as { weather_basic: { backend: Record<string, unknown> } }
     ).weather_basic.backend['url'] = 'not a url at all';
-    expectConfigInvalid(() => parseConfig(raw, {}));
+    expectConfigInvalid(
+      () => parseConfig(raw, {}),
+      'resources.weather_basic.backend.url',
+      'invalid backend.url',
+    );
   });
 
-  it('rejects a paid, {param}-templated resource whose input: is missing entirely - the caller could never supply it, so every call would settle payment and never reach the backend', () => {
+  it('rejects a paid, {param}-templated resource whose input: is missing entirely - the caller could never supply it, so every call would be refused', () => {
     const raw = validRawConfig();
     const resources = raw['resources'] as Record<string, Record<string, unknown>>;
     const weather = resources['weather_basic'] as Record<string, unknown>;
     delete weather['input'];
     weather['pricing'] = { type: 'fixed', amount: '0.01', currency: 'USDC' };
     weather['payments'] = ['x402'];
-    expectConfigInvalid(() => parseConfig(raw, {}));
-    try {
-      parseConfig(raw, {});
-    } catch (error) {
-      if (isCommerceError(error)) {
-        expect(error.message).toContain('{city}');
-        expect(error.message).toContain('not declared');
-      }
-    }
+    expectConfigInvalid(
+      () => parseConfig(raw, {}),
+      'resources.weather_basic.backend.url',
+      '"{city}" which is not declared',
+    );
   });
 
-  it('rejects the same resource when {city} is declared but not required (optional) - a caller that omits it hits the identical bug', () => {
+  it('rejects the same resource when {city} is declared but not required - a call that omits it would be refused', () => {
     const raw = validRawConfig();
     const resources = raw['resources'] as Record<string, Record<string, unknown>>;
     const weather = resources['weather_basic'] as Record<string, unknown>;
@@ -722,32 +774,27 @@ describe('parseConfig', () => {
       type: 'object',
       properties: { city: { type: 'string' } },
       additionalProperties: false,
-      // no `required` - this is the trap: declared, but still unenforceable.
+      // Declared but not required, so a caller can omit it
     };
     weather['pricing'] = { type: 'fixed', amount: '0.01', currency: 'USDC' };
     weather['payments'] = ['x402'];
-    expectConfigInvalid(() => parseConfig(raw, {}));
-    try {
-      parseConfig(raw, {});
-    } catch (error) {
-      if (isCommerceError(error)) {
-        expect(error.message).toContain('{city}');
-        expect(error.message).toContain('required');
-      }
-    }
+    expectConfigInvalid(
+      () => parseConfig(raw, {}),
+      'resources.weather_basic.backend.url',
+      /"\{city\}" declared .* not listed in its "required"/,
+    );
   });
 
   it.each([
-    ['a wildcard', '*'],
-    ['a trailing slash', 'http://localhost:5173/'],
+    ['a wildcard', '*', 'wildcard'],
+    ['a trailing slash', 'http://localhost:5173/', 'must not end with "/"'],
   ])(
     'rejects an allowedOrigins entry with %s - it is matched literally and would never match',
-    (_label, origin) => {
-      // Fail-closed (a lockout, not a bypass) but silent, and a lockout with
-      // no explanation is what an operator "fixes" by disabling the check.
+    (_label, origin, message) => {
+      // A silent lockout, which an operator might "fix" by disabling the check
       const raw = validRawConfig();
       (raw['server'] as Record<string, unknown>)['allowedOrigins'] = [origin];
-      expectConfigInvalid(() => parseConfig(raw, {}));
+      expectConfigInvalid(() => parseConfig(raw, {}), 'server.allowedOrigins.0', message);
     },
   );
 
@@ -765,13 +812,11 @@ describe('parseConfig', () => {
     ['hex notation', '0x50'],
     ['exponent notation', '1e3'],
   ])('rejects server.port given as %s - Number() would coerce it silently', (_label, port) => {
-    // `Number('')` is 0: finite, integral, and inside port's deliberate
-    // `min: 0` ("let the OS pick"). So `port: ${PORT:-}` validated PASS, the
-    // gateway bound a random port, and `doctor` then derived
-    // `http://127.0.0.1:0` and reported the running gateway unreachable.
+    // `Number('')` is 0, a valid port ("let the OS pick"), so an empty
+    // `${PORT:-}` would bind a random port
     const raw = validRawConfig();
     (raw['server'] as Record<string, unknown>)['port'] = port;
-    expectConfigInvalid(() => parseConfig(raw, {}));
+    expectConfigInvalid(() => parseConfig(raw, {}), 'server.port', 'decimal digits');
   });
 
   it('control: decimal digits, as a string or a number, still work - including 0 meaning "let the OS pick"', () => {
@@ -783,12 +828,8 @@ describe('parseConfig', () => {
   });
 
   it('stamps additionalProperties:false on a node that declares only "required" - core treats it as an object, so config must too', () => {
-    // The two definitions of "this is an object schema" were one keyword
-    // apart: config looked at type/properties, core at properties/required.
-    // `input: { required: ['q'] }` was an object to the validator and not to
-    // the stamper, so it normalised to exactly {"required":["q"]} and every
-    // unknown caller key was forwarded verbatim to the merchant's backend -
-    // while docs/security.md promised closed-by-default at every level.
+    // Config and the validator share isObjectSchemaNode, so a `required`-only
+    // node is closed rather than forwarding unknown keys to the backend
     const raw = validRawConfig();
     const resources = raw['resources'] as Record<string, Record<string, unknown>>;
     const weather = resources['weather_basic'] as Record<string, unknown>;
@@ -811,18 +852,14 @@ describe('parseConfig', () => {
     const weather = resources['weather_basic'] as Record<string, unknown>;
     (weather['backend'] as Record<string, unknown>)['url'] = 'http://localhost:3000/api/weather';
     weather['input'] = { required: ['q'] };
-    expectConfigInvalid(() => parseConfig(raw, {}));
-    try {
-      parseConfig(raw, {});
-    } catch (error) {
-      if (isCommerceError(error)) {
-        expect(error.message).toContain('"q"');
-        expect(error.message).toContain('no input can ever satisfy');
-      }
-    }
+    expectConfigInvalid(
+      () => parseConfig(raw, {}),
+      'resources.weather_basic.input',
+      /"q" in "required".*no input can ever satisfy/,
+    );
   });
 
-  it('control: an explicit additionalProperties:true is left open - the operator opted in', () => {
+  it('control: a required name may go undeclared when additionalProperties:true leaves it reachable', () => {
     const raw = validRawConfig();
     const resources = raw['resources'] as Record<string, Record<string, unknown>>;
     const weather = resources['weather_basic'] as Record<string, unknown>;
@@ -836,28 +873,21 @@ describe('parseConfig', () => {
     ).toBe(true);
   });
 
-  it('rejects a paid resource whose {param} uses a kebab name - it matched no grammar, so the gate saw zero parameters and passed', () => {
-    // The regression that reopened the earlier money bug through the character
-    // class rather than through the check. `{report-id}` is ordinary REST.
-    // Under `[a-zA-Z0-9_]+` it matched nothing: the gate found no parameters
-    // and returned early, `applyPathTemplate` substituted nothing, and the
-    // backend received `/report/%7Breport-id%7D`. Every call: buyer charged
-    // on-chain, nothing delivered, replay key burned.
+  it('rejects a paid resource whose kebab {param} is not declared in its input', () => {
+    // `{report-id}` is ordinary REST. If the grammar missed it, the check would
+    // see no parameter and the backend would receive `/report/%7Breport-id%7D`
+    // after every payment.
     const raw = validRawConfig();
     const resources = raw['resources'] as Record<string, Record<string, unknown>>;
     const report = resources['market_report'] as Record<string, unknown>;
     (report['backend'] as Record<string, unknown>)['url'] =
       'http://localhost:3000/api/report/{report-id}';
     delete report['input'];
-    expectConfigInvalid(() => parseConfig(raw, {}));
-    try {
-      parseConfig(raw, {});
-    } catch (error) {
-      if (isCommerceError(error)) {
-        expect(error.message).toContain('{report-id}');
-        expect(error.message).toContain('not declared');
-      }
-    }
+    expectConfigInvalid(
+      () => parseConfig(raw, {}),
+      'resources.market_report.backend.url',
+      '"{report-id}" which is not declared',
+    );
   });
 
   it.each([
@@ -872,14 +902,11 @@ describe('parseConfig', () => {
       const resources = raw['resources'] as Record<string, Record<string, unknown>>;
       const report = resources['market_report'] as Record<string, unknown>;
       (report['backend'] as Record<string, unknown>)['url'] = url;
-      expectConfigInvalid(() => parseConfig(raw, {}));
-      try {
-        parseConfig(raw, {});
-      } catch (error) {
-        if (isCommerceError(error)) {
-          expect(error.message).toContain('not a valid path parameter');
-        }
-      }
+      expectConfigInvalid(
+        () => parseConfig(raw, {}),
+        'resources.market_report.backend.url',
+        'not a valid path parameter',
+      );
     },
   );
 
@@ -918,8 +945,8 @@ describe('parseConfig', () => {
     const raw = validRawConfig();
     const resources = raw['resources'] as Record<string, Record<string, unknown>>;
     const weather = resources['weather_basic'] as Record<string, unknown>;
-    // fixtures.ts's weather_basic already declares `required: [city]` - only
-    // switch it to paid, which is the shape the money bug actually needs.
+    // fixtures.ts's weather_basic already declares `required: [city]`; only
+    // make it paid
     weather['pricing'] = { type: 'fixed', amount: '0.01', currency: 'USDC' };
     weather['payments'] = ['x402'];
     const config = parseConfig(raw, {});
@@ -942,7 +969,11 @@ describe('parseConfig', () => {
     (raw['resources'] as { market_report: { payments: string[] } }).market_report.payments = [
       'mpp',
     ];
-    expectConfigInvalid(() => parseConfig(raw, {}));
+    expectConfigInvalid(
+      () => parseConfig(raw, {}),
+      'resources.market_report.payments',
+      'none of which is configured and enabled',
+    );
   });
 
   it('accepts a resource naming a rail with no provider as long as one named rail is enabled', () => {
@@ -958,64 +989,39 @@ describe('parseConfig', () => {
     ]);
   });
 
-  it('names every supported rail when rejecting an unknown one', () => {
+  it('rejects an unsupported payment method, naming it and every supported rail', () => {
     const raw = validRawConfig();
     (raw['resources'] as { market_report: { payments: string[] } }).market_report.payments = [
       'stripe',
     ];
-    try {
-      parseConfig(raw, {});
-      expect.unreachable();
-    } catch (error) {
-      if (!isCommerceError(error)) throw error;
-      for (const name of PAYMENT_METHOD_NAMES) expect(error.message).toContain(name);
-    }
-  });
-
-  it('rejects a resource naming an unsupported payment method', () => {
-    const raw = validRawConfig();
-    (raw['resources'] as { market_report: { payments: string[] } }).market_report.payments = [
-      'stripe',
-    ];
-    expectConfigInvalid(() => parseConfig(raw, {}));
-    try {
-      parseConfig(raw, {});
-    } catch (error) {
-      if (isCommerceError(error)) {
-        expect(error.message).toContain('stripe');
-      }
-    }
+    const error = expectConfigInvalid(
+      () => parseConfig(raw, {}),
+      'resources.market_report.payments',
+      'unsupported payment method "stripe"',
+    );
+    for (const name of PAYMENT_METHOD_NAMES) expect(error.message).toContain(name);
   });
 
   it('rejects a value below the minimum bound (maxTimeoutSeconds)', () => {
     const raw = validRawConfig();
     (raw['payments'] as { x402: Record<string, unknown> }).x402['maxTimeoutSeconds'] = 0;
-    expectConfigInvalid(() => parseConfig(raw, {}));
+    expectConfigInvalid(() => parseConfig(raw, {}), 'payments.x402.maxTimeoutSeconds', '>= 1');
   });
 
   it('rejects a value above the maximum bound (assetDecimals)', () => {
     const raw = validRawConfig();
     (raw['payments'] as { x402: Record<string, unknown> }).x402['assetDecimals'] = 100;
-    expectConfigInvalid(() => parseConfig(raw, {}));
-  });
-
-  it('rejects a resource naming a payment method that is not configured', () => {
-    const raw = validRawConfig();
-    delete (raw['payments'] as Record<string, unknown>)['x402'];
-    expectConfigInvalid(() => parseConfig(raw, {}));
+    expectConfigInvalid(() => parseConfig(raw, {}), 'payments.x402.assetDecimals', '<= 36');
   });
 
   it('rejects a paid resource when payments.x402.enabled is false', () => {
     const raw = validRawConfig();
     (raw['payments'] as { x402: Record<string, unknown> }).x402['enabled'] = false;
-    expectConfigInvalid(() => parseConfig(raw, {}));
-    try {
-      parseConfig(raw, {});
-    } catch (error) {
-      if (isCommerceError(error)) {
-        expect(error.message).toContain('x402');
-      }
-    }
+    expectConfigInvalid(
+      () => parseConfig(raw, {}),
+      'resources.market_report.payments',
+      '"x402", none of which is configured and enabled',
+    );
   });
 
   it('rejects an expose value outside the supported protocols, mentioning UCP is planned', () => {
@@ -1024,15 +1030,11 @@ describe('parseConfig', () => {
       'http',
       'ucp',
     ];
-    expectConfigInvalid(() => parseConfig(raw, {}));
-    try {
-      parseConfig(raw, {});
-    } catch (error) {
-      if (isCommerceError(error)) {
-        expect(error.message).toContain('UCP');
-        expect(error.message).toContain('planned');
-      }
-    }
+    expectConfigInvalid(
+      () => parseConfig(raw, {}),
+      'resources.weather_basic.expose',
+      /unsupported protocol "ucp" \(UCP is planned/,
+    );
   });
 
   it('rejects an unknown expose value that is not ucp too, without the UCP hint', () => {
@@ -1041,60 +1043,47 @@ describe('parseConfig', () => {
       'http',
       'grpc',
     ];
-    expectConfigInvalid(() => parseConfig(raw, {}));
-    try {
-      parseConfig(raw, {});
-    } catch (error) {
-      if (isCommerceError(error)) {
-        expect(error.message).not.toContain('UCP');
-      }
-    }
+    const error = expectConfigInvalid(
+      () => parseConfig(raw, {}),
+      'resources.weather_basic.expose',
+      'unsupported protocol "grpc"',
+    );
+    expect(error.message).not.toContain('UCP');
   });
 
-  it('rejects an expose:[mcp] resource when protocols.mcp.enabled is false', () => {
-    const raw = validRawConfig();
-    (raw['protocols'] as { mcp: Record<string, unknown> }).mcp['enabled'] = false;
-    expectConfigInvalid(() => parseConfig(raw, {}));
-    try {
-      parseConfig(raw, {});
-    } catch (error) {
-      if (isCommerceError(error)) {
-        expect(error.message).toContain('mcp');
-      }
-    }
-  });
+  it.each(['mcp', 'http'])(
+    'rejects an expose:[%s] resource when that protocol is disabled',
+    (protocol) => {
+      const raw = validRawConfig();
+      ((raw['protocols'] as Record<string, unknown>)[protocol] as Record<string, unknown>)[
+        'enabled'
+      ] = false;
+      expectConfigInvalid(
+        () => parseConfig(raw, {}),
+        'resources.weather_basic.expose',
+        `protocols.${protocol}.enabled is false`,
+      );
+    },
+  );
 
-  it('rejects an expose:[http] resource when protocols.http.enabled is false', () => {
+  it.each([
+    ['payTo', 'not-an-address', 'not a plausible address'],
+    ['payTo', '0x0000000000000000000000000000000000000000', 'zero address'],
+    ['asset', '0xshort', 'not a plausible address'],
+    // The guardrails repeat the payTo check but not this one
+    ['asset', '0x0000000000000000000000000000000000000000', 'must not be the zero address'],
+  ])('rejects payments.x402.%s set to %s', (field, value, message) => {
     const raw = validRawConfig();
-    (raw['protocols'] as { http: Record<string, unknown> }).http['enabled'] = false;
-    expectConfigInvalid(() => parseConfig(raw, {}));
-  });
-
-  it('rejects an invalid (not 0x + 40 hex) payTo', () => {
-    const raw = validRawConfig();
-    (raw['payments'] as { x402: Record<string, unknown> }).x402['payTo'] = 'not-an-address';
-    expectConfigInvalid(() => parseConfig(raw, {}));
-  });
-
-  it('rejects the zero address as payTo', () => {
-    const raw = validRawConfig();
-    (raw['payments'] as { x402: Record<string, unknown> }).x402['payTo'] =
-      '0x0000000000000000000000000000000000000000';
-    expectConfigInvalid(() => parseConfig(raw, {}));
-  });
-
-  it('rejects an invalid asset address', () => {
-    const raw = validRawConfig();
-    (raw['payments'] as { x402: Record<string, unknown> }).x402['asset'] = '0xshort';
-    expectConfigInvalid(() => parseConfig(raw, {}));
+    (raw['payments'] as { x402: Record<string, unknown> }).x402[field] = value;
+    expectConfigInvalid(() => parseConfig(raw, {}), `payments.x402.${field}`, message);
   });
 
   it('accepts a lowercase or uppercase address (checksum-insensitive)', () => {
-    const raw = validRawConfig();
-    (raw['payments'] as { x402: Record<string, unknown> }).x402['payTo'] =
-      '0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
-    const config = parseConfig(raw, {});
-    expect(config.payments.x402?.payTo).toBe('0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA');
+    for (const payTo of [`0x${'a'.repeat(40)}`, `0x${'A'.repeat(40)}`]) {
+      const raw = validRawConfig();
+      (raw['payments'] as { x402: Record<string, unknown> }).x402['payTo'] = payTo;
+      expect(parseConfig(raw, {}).payments.x402?.payTo).toBe(payTo);
+    }
   });
 
   describe('unsupported schema keyword warning', () => {
@@ -1153,17 +1142,14 @@ describe('parseConfig', () => {
       properties: { city: { type: 'string' } },
       required: ['city'],
     };
-    expectConfigInvalid(() => parseConfig(raw, {}));
-    try {
-      parseConfig(raw, {});
-    } catch (error) {
-      if (isCommerceError(error)) {
-        expect(error.message).toContain('does not include "object"');
-      }
-    }
+    expectConfigInvalid(
+      () => parseConfig(raw, {}),
+      'resources.market_report.input',
+      'does not include "object"',
+    );
   });
 
-  it('control: properties/required with NO type at all still loads - the validator treats that as an object schema now', () => {
+  it('control: properties/required with NO type at all still loads - the validator treats that as an object schema', () => {
     const raw = validRawConfig();
     (
       raw['resources'] as { market_report: { input: Record<string, unknown> } }
@@ -1224,8 +1210,8 @@ describe('parseConfig', () => {
         filter: {
           type: 'object',
           properties: { anything: { type: 'string' } },
-          // no additionalProperties here - this is the bug: the root gets
-          // closed, this level did not.
+          // No additionalProperties: config must close this level as well as
+          // the root
         },
       },
       additionalProperties: false,
@@ -1273,13 +1259,6 @@ describe('parseConfig', () => {
     });
   });
 
-  it('coerces numeric fields supplied as strings (post env-substitution)', () => {
-    const raw = validRawConfig();
-    (raw['server'] as Record<string, unknown>)['port'] = '9090';
-    const config = parseConfig(raw, {});
-    expect(config.server.port).toBe(9090);
-  });
-
   it('defaults server.allowedOrigins to [] and leaves adminToken unset', () => {
     const config = parseConfig(validRawConfig(), {});
     expect(config.server.allowedOrigins).toEqual([]);
@@ -1305,25 +1284,27 @@ describe('parseConfig', () => {
   it('rejects a non-integer port', () => {
     const raw = validRawConfig();
     (raw['server'] as Record<string, unknown>)['port'] = 8080.5;
-    expectConfigInvalid(() => parseConfig(raw, {}));
+    expectConfigInvalid(() => parseConfig(raw, {}), 'server.port', 'must be an integer');
   });
 
   it('rejects a port out of range', () => {
     const raw = validRawConfig();
     (raw['server'] as Record<string, unknown>)['port'] = 70000;
-    expectConfigInvalid(() => parseConfig(raw, {}));
+    expectConfigInvalid(() => parseConfig(raw, {}), 'server.port', '<= 65535');
   });
 
   it('rejects a garbage boolean string', () => {
     const raw = validRawConfig();
     (raw['protocols'] as { http: Record<string, unknown> }).http['enabled'] = 'maybe';
-    expectConfigInvalid(() => parseConfig(raw, {}));
+    expectConfigInvalid(() => parseConfig(raw, {}), 'protocols.http.enabled', 'must be a boolean');
   });
 
-  it('rejects a non-object config root', () => {
-    expectConfigInvalid(() => parseConfig('not-an-object', {}));
-    expectConfigInvalid(() => parseConfig(null, {}));
-    expectConfigInvalid(() => parseConfig([1, 2, 3], {}));
+  it.each([
+    ['a string', 'not-an-object'],
+    ['null', null],
+    ['an array', [1, 2, 3]],
+  ])('rejects %s as the config root', (_label, root) => {
+    expectConfigInvalid(() => parseConfig(root, {}), '$', 'root must be a mapping');
   });
 
   it('resolves ${VAR} placeholders from the provided env', () => {
@@ -1336,52 +1317,26 @@ describe('parseConfig', () => {
   it('throws CONFIG_INVALID naming the variable when ${VAR} is unresolved', () => {
     const raw = validRawConfig();
     (raw['merchant'] as Record<string, unknown>)['publicBaseUrl'] = '${GATEWAY_PUBLIC_BASE_URL}';
-    expectConfigInvalid(() => parseConfig(raw, {}));
-    try {
-      parseConfig(raw, {});
-    } catch (error) {
-      if (isCommerceError(error)) {
-        expect(error.message).toContain('GATEWAY_PUBLIC_BASE_URL');
-      }
-    }
+    expectConfigInvalid(
+      () => parseConfig(raw, {}),
+      '$.merchant.publicBaseUrl',
+      'Unresolved environment variable "${GATEWAY_PUBLIC_BASE_URL}"',
+    );
   });
 
-  it('resolves ${VAR:-default} to the default when VAR is unset', () => {
-    const raw = validRawConfig();
-    (raw['merchant'] as Record<string, unknown>)['publicBaseUrl'] =
-      '${GATEWAY_PUBLIC_BASE_URL:-http://localhost:8080}';
-    const config = parseConfig(raw, {});
-    expect(config.merchant.publicBaseUrl).toBe('http://localhost:8080');
-  });
-
-  it('${VAR:-default} prefers the env value when set', () => {
-    const raw = validRawConfig();
-    (raw['merchant'] as Record<string, unknown>)['publicBaseUrl'] =
-      '${GATEWAY_PUBLIC_BASE_URL:-http://localhost:8080}';
-    const config = parseConfig(raw, { GATEWAY_PUBLIC_BASE_URL: 'http://from-env.test' });
-    expect(config.merchant.publicBaseUrl).toBe('http://from-env.test');
-  });
-
-  it('never prints the resolved value of a secret in an error message for an unrelated failure', () => {
-    const raw = validRawConfig();
+  it('never prints a resolved secret in the error for an unrelated failure', () => {
     const secret = 'super-secret-facilitator-key-0xDEADBEEF';
-    (raw['payments'] as { x402: Record<string, unknown> }).x402['signerPrivateKey'] = undefined;
-    (raw['payments'] as { x402: { facilitator: Record<string, unknown> } }).x402.facilitator = {
-      mode: 'local',
-      signerPrivateKey: secret,
-    };
-    // Trigger an unrelated failure (bad payTo) while a secret is present elsewhere in config.
-    (raw['payments'] as { x402: Record<string, unknown> }).x402['payTo'] = 'not-an-address';
+    const raw = validRawConfig();
+    const x402 = (raw['payments'] as { x402: Record<string, unknown> }).x402;
+    x402['facilitator'] = { mode: 'local', signerPrivateKey: '${SIGNER_KEY}' };
+    const env = { SIGNER_KEY: secret };
+    // Control: the secret resolves into the loaded config
+    const facilitator = parseConfig(raw, env).payments.x402?.facilitator;
+    expect(facilitator?.mode === 'local' && facilitator.signerPrivateKey).toBe(secret);
 
-    try {
-      parseConfig(raw, {});
-      expect.unreachable();
-    } catch (error) {
-      if (isCommerceError(error)) {
-        expect(error.message).not.toContain(secret);
-        expect(JSON.stringify(error.details)).not.toContain(secret);
-      }
-    }
+    x402['payTo'] = 'not-an-address';
+    const error = expectConfigInvalid(() => parseConfig(raw, env), 'payments.x402.payTo');
+    expect(JSON.stringify(error.toInfo())).not.toContain(secret);
   });
 });
 
@@ -1392,33 +1347,31 @@ describe('protocols.mcp.mountPath', () => {
     return raw;
   }
 
-  // A bad mount only fails inside Fastify's route registration, deferred to
-  // server.ready(), which takes the whole gateway down with an opaque FST_ERR_*
-  // instead of degrading the one adapter. These must be CONFIG_INVALID at load.
+  // Fastify would fail these at server.ready(), taking the whole gateway down
+  // with an opaque FST_ERR_*. They must be CONFIG_INVALID at load.
   it.each([
-    ['no leading slash', 'mcp'],
-    ['a Fastify parameter', '/mcp/:id'],
-    ['a Fastify wildcard', '/mcp/*'],
-    ['a query marker', '/mcp?x=1'],
-    ['whitespace', '/mcp path'],
-    ['a trailing newline', '/mcp\n'],
-    ['a route the gateway serves', '/health'],
-    ['another route the gateway serves', '/api/receipts'],
-    ['a prefix of a gateway route', '/api'],
-    ['the root path, which is a prefix of everything', '/'],
-  ])('rejects %s', (_label, mountPath) => {
-    expectConfigInvalid(() => parseConfig(withMountPath(mountPath), {}));
+    ['no leading slash', 'mcp', 'must start with "/"'],
+    ['a Fastify parameter', '/mcp/:id', 'must not contain'],
+    ['a Fastify wildcard', '/mcp/*', 'must not contain'],
+    ['a query marker', '/mcp?x=1', 'must not contain'],
+    ['whitespace', '/mcp path', 'must not contain'],
+    ['a trailing newline', '/mcp\n', 'must not contain'],
+    ['a route the gateway serves', '/health', 'must not collide'],
+    ['another route the gateway serves', '/api/receipts', 'must not collide'],
+    ['a prefix of a gateway route', '/api', 'must not collide'],
+    ['the root path, which is a prefix of everything', '/', 'must not collide'],
+  ])('rejects %s', (_label, mountPath, message) => {
+    expectConfigInvalid(
+      () => parseConfig(withMountPath(mountPath), {}),
+      'protocols.mcp.mountPath',
+      message,
+    );
   });
 
-  it('names the offending field in the error', () => {
-    try {
-      parseConfig(withMountPath('/health'), {});
-      expect.unreachable();
-    } catch (error) {
-      if (isCommerceError(error)) {
-        expect(error.message).toContain('mountPath');
-      }
-    }
+  it('names the offending field in the error message', () => {
+    expect(() => parseConfig(withMountPath('/health'), {})).toThrowError(
+      'Configuration invalid at "protocols.mcp.mountPath"',
+    );
   });
 
   it('control: an ordinary mount path still validates', () => {
@@ -1456,27 +1409,39 @@ describe('protocols.a2a', () => {
   });
 
   it.each([
-    ['no leading slash', 'a2a'],
-    ['a Fastify parameter', '/a2a/:id'],
-    ['whitespace', '/a2a path'],
-    ['a route the gateway serves', '/health'],
-  ])('rejects a malformed mount: %s', (_label, mountPath) => {
-    expectConfigInvalid(() => parseConfig(withA2a({ enabled: true, mountPath }), {}));
+    ['no leading slash', 'a2a', 'must start with "/"'],
+    ['a Fastify parameter', '/a2a/:id', 'must not contain'],
+    ['whitespace', '/a2a path', 'must not contain'],
+    ['a route the gateway serves', '/health', 'must not collide'],
+  ])('rejects a malformed mount: %s', (_label, mountPath, message) => {
+    expectConfigInvalid(
+      () => parseConfig(withA2a({ enabled: true, mountPath }), {}),
+      'protocols.a2a.mountPath',
+      message,
+    );
   });
 
-  // The card path is fixed by the A2A spec and served by the adapter itself.
+  // The card path is fixed by the A2A spec and served by the adapter itself
   it.each([
     ['the agent card path itself', '/.well-known/agent-card.json'],
     ['a prefix of it', '/.well-known'],
   ])('rejects %s as a configurable mount', (_label, mountPath) => {
-    expectConfigInvalid(() => parseConfig(withA2a({ enabled: true, mountPath }), {}));
+    expectConfigInvalid(
+      () => parseConfig(withA2a({ enabled: true, mountPath }), {}),
+      'protocols.a2a.mountPath',
+      'must not collide',
+    );
     const raw = validRawConfig();
     (raw['protocols'] as { mcp: Record<string, unknown> }).mcp['mountPath'] = mountPath;
-    expectConfigInvalid(() => parseConfig(raw, {}));
+    expectConfigInvalid(() => parseConfig(raw, {}), 'protocols.mcp.mountPath', 'must not collide');
   });
 
   it('rejects an unknown key inside the block', () => {
-    expectConfigInvalid(() => parseConfig(withA2a({ enabled: true, streaming: true }), {}));
+    expectConfigInvalid(
+      () => parseConfig(withA2a({ enabled: true, streaming: true }), {}),
+      'protocols.a2a',
+      /streaming/,
+    );
   });
 
   it('accepts expose: [a2a] when enabled', () => {
@@ -1495,22 +1460,28 @@ describe('protocols.a2a', () => {
   it('rejects expose: [a2a] when protocols.a2a.enabled is false', () => {
     const raw = withA2a({ enabled: false });
     (raw['resources'] as { weather_basic: { expose: string[] } }).weather_basic.expose = ['a2a'];
-    expectConfigInvalid(() => parseConfig(raw, {}));
-    try {
-      parseConfig(raw, {});
-    } catch (error) {
-      if (isCommerceError(error)) expect(error.message).toContain('a2a');
-    }
+    expectConfigInvalid(
+      () => parseConfig(raw, {}),
+      'resources.weather_basic.expose',
+      'protocols.a2a.enabled is false',
+    );
   });
 
   // Each mount registers a `${mountPath}/*` wildcard, so an overlap means one
-  // adapter answers for the other.
+  // adapter answers for the other. The mcp mount moves under `/agents` so that
+  // a prefix of it is not also a prefix of a reserved gateway route.
   it.each([
-    ['an identical mount', '/mcp'],
-    ['a mount nested under the mcp one', '/mcp/a2a'],
-    ['a mount the mcp one nests under', '/'],
+    ['an identical mount', '/agents/mcp'],
+    ['a mount nested under the mcp one', '/agents/mcp/a2a'],
+    ['a mount the mcp one nests under', '/agents'],
   ])('rejects %s while mcp is enabled', (_label, mountPath) => {
-    expectConfigInvalid(() => parseConfig(withA2a({ enabled: true, mountPath }), {}));
+    const raw = withA2a({ enabled: true, mountPath });
+    (raw['protocols'] as { mcp: Record<string, unknown> }).mcp['mountPath'] = '/agents/mcp';
+    expectConfigInvalid(
+      () => parseConfig(raw, {}),
+      'protocols.mcp.mountPath',
+      'collides with protocols.a2a.mountPath',
+    );
   });
 
   it('allows a colliding mount while a2a is disabled, since nothing is mounted', () => {
@@ -1528,13 +1499,18 @@ describe('protocols.acp', () => {
     cancelCheckoutSession: 'acp_checkout_cancel',
   } as const;
 
-  /** A resource shaped like the canonical envelope the adapter sends. */
-  function checkoutResource(keys: readonly ('path' | 'body')[]): Record<string, unknown> {
+  // A resource shaped like the canonical envelope the adapter sends. `optional`
+  // keys are declared but not required, as a cancel's `body` must be.
+  function checkoutResource(
+    keys: readonly ('path' | 'body')[],
+    optional: readonly 'body'[] = [],
+  ): Record<string, unknown> {
+    const declared = [...keys, ...optional];
     return {
       name: 'ACP checkout operation',
       input: {
         type: 'object',
-        properties: Object.fromEntries(keys.map((key) => [key, { type: 'object' }])),
+        properties: Object.fromEntries(declared.map((key) => [key, { type: 'object' }])),
         required: [...keys],
         additionalProperties: false,
       },
@@ -1542,14 +1518,14 @@ describe('protocols.acp', () => {
         type: 'http',
         method: 'POST',
         url: 'http://localhost:3000/checkout',
-        inputBindings: Object.fromEntries(keys.map((key) => [key, key])),
+        inputBindings: Object.fromEntries(declared.map((key) => [key, key])),
       },
       pricing: { type: 'free' },
       expose: ['acp'],
     };
   }
 
-  /** `validRawConfig` plus the five mapped ACP resources and an enabled block. */
+  // `validRawConfig` plus the five mapped ACP resources and an enabled block
   function withAcp(
     acp: Record<string, unknown> | undefined,
     resourceOverrides: Record<string, unknown> = {},
@@ -1564,7 +1540,7 @@ describe('protocols.acp', () => {
       acp_checkout_update: checkoutResource(['path', 'body']),
       acp_checkout_get: checkoutResource(['path']),
       acp_checkout_complete: checkoutResource(['path', 'body']),
-      acp_checkout_cancel: checkoutResource(['path']),
+      acp_checkout_cancel: checkoutResource(['path'], ['body']),
       ...resourceOverrides,
     });
     return raw;
@@ -1586,7 +1562,7 @@ describe('protocols.acp', () => {
     expect(parseConfig(raw, {}).protocols.acp).toEqual({ enabled: false, mountPath: '/acp' });
   });
 
-  it('normalises an enabled block, defaulting the mount and the retention window', () => {
+  it('normalizes an enabled block, defaulting the mount and the retention window', () => {
     const config = parseConfig(withAcp(enabledAcp()), {});
     expect(config.protocols.acp).toEqual({
       enabled: true,
@@ -1603,12 +1579,22 @@ describe('protocols.acp', () => {
   });
 
   it.each([
-    ['an identical mount', '/mcp'],
-    ['a mount nested under the mcp one', '/mcp/acp'],
-    ['the acp well-known path', '/.well-known/acp.json'],
-    ['a prefix of the acp well-known path', '/.well-known'],
-  ])('rejects %s', (_label, mountPath) => {
-    expectConfigInvalid(() => parseConfig(withAcp(enabledAcp({ mountPath })), {}));
+    ['an identical mount', '/mcp', 'protocols.mcp.mountPath', 'collides with protocols.acp'],
+    ['a mount nested under the mcp one', '/mcp/acp', 'protocols.mcp.mountPath', 'collides with'],
+    [
+      'the acp well-known path',
+      '/.well-known/acp.json',
+      'protocols.acp.mountPath',
+      'must not collide',
+    ],
+    [
+      'a prefix of the acp well-known path',
+      '/.well-known',
+      'protocols.acp.mountPath',
+      'must not collide',
+    ],
+  ])('rejects %s', (_label, mountPath, path, message) => {
+    expectConfigInvalid(() => parseConfig(withAcp(enabledAcp({ mountPath })), {}), path, message);
   });
 
   it('allows a colliding mount while acp is disabled, since nothing is mounted', () => {
@@ -1618,25 +1604,28 @@ describe('protocols.acp', () => {
   });
 
   it.each([
-    ['no auth block', { auth: undefined }],
-    ['a scheme other than bearer', { auth: { type: 'none' } }],
-    ['an empty token', { auth: { type: 'bearer', token: '' } }],
-    ['no idempotency block', { idempotency: undefined }],
-    ['an empty idempotency path', { idempotency: { path: '' } }],
-  ])('rejects an enabled block with %s', (_label, overrides) => {
+    ['no auth block', { auth: undefined }, 'protocols.acp.auth'],
+    ['a scheme other than bearer', { auth: { type: 'none' } }, 'protocols.acp.auth.type'],
+    ['an empty token', { auth: { type: 'bearer', token: '' } }, 'protocols.acp.auth.token'],
+    ['no idempotency block', { idempotency: undefined }, 'protocols.acp.idempotency'],
+    ['an empty idempotency path', { idempotency: { path: '' } }, 'protocols.acp.idempotency.path'],
+  ])('rejects an enabled block with %s', (_label, overrides, path) => {
     const acp = enabledAcp();
     for (const [key, value] of Object.entries(overrides)) {
       if (value === undefined) delete acp[key];
       else acp[key] = value;
     }
-    expectConfigInvalid(() => parseConfig(withAcp(acp), {}));
+    expectConfigInvalid(() => parseConfig(withAcp(acp), {}), path);
   });
 
-  // 24 hours is ACP's retry window: a shorter retention would let a replayed
-  // key past an expired record and run a checkout side effect twice.
+  // 24 hours is ACP's retry window (see ACP_RETENTION_HOURS)
   it('rejects a retention window below 24 hours', () => {
     const acp = enabledAcp({ idempotency: { path: './acp.sqlite', retentionHours: 23 } });
-    expectConfigInvalid(() => parseConfig(withAcp(acp), {}));
+    expectConfigInvalid(
+      () => parseConfig(withAcp(acp), {}),
+      'protocols.acp.idempotency.retentionHours',
+      '>= 24',
+    );
   });
 
   it('accepts a longer retention window, including as an env-substituted string', () => {
@@ -1650,77 +1639,135 @@ describe('protocols.acp', () => {
   });
 
   it('rejects an unknown key inside the block', () => {
-    expectConfigInvalid(() => parseConfig(withAcp(enabledAcp({ webhooks: true })), {}));
+    expectConfigInvalid(
+      () => parseConfig(withAcp(enabledAcp({ webhooks: true })), {}),
+      'protocols.acp',
+      /webhooks/,
+    );
   });
 
   it('rejects a partially mapped checkout lifecycle', () => {
     const operations: Record<string, string> = { ...OPERATIONS };
     delete operations['cancelCheckoutSession'];
     const acp = enabledAcp({ checkout: { operations } });
-    expectConfigInvalid(() => parseConfig(withAcp(acp), {}));
+    expectConfigInvalid(
+      () => parseConfig(withAcp(acp), {}),
+      'protocols.acp.checkout.operations.cancelCheckoutSession',
+      'all five checkout operations must be mapped',
+    );
   });
 
   it('rejects an unknown operation id', () => {
     const acp = enabledAcp({
       checkout: { operations: { ...OPERATIONS, refundCheckoutSession: 'acp_checkout_create' } },
     });
-    expectConfigInvalid(() => parseConfig(withAcp(acp), {}));
+    expectConfigInvalid(
+      () => parseConfig(withAcp(acp), {}),
+      'protocols.acp.checkout.operations.refundCheckoutSession',
+      'unknown ACP checkout operation',
+    );
   });
 
   it('rejects one resource mapped to two operations', () => {
     const acp = enabledAcp({
       checkout: { operations: { ...OPERATIONS, getCheckoutSession: 'acp_checkout_create' } },
     });
-    expectConfigInvalid(() => parseConfig(withAcp(acp), {}));
+    expectConfigInvalid(
+      () => parseConfig(withAcp(acp), {}),
+      'protocols.acp.checkout.operations.getCheckoutSession',
+      'already mapped to "createCheckoutSession"',
+    );
   });
 
   it('rejects a mapping naming a resource that does not exist', () => {
     const acp = enabledAcp({
       checkout: { operations: { ...OPERATIONS, getCheckoutSession: 'nope' } },
     });
-    expectConfigInvalid(() => parseConfig(withAcp(acp), {}));
+    expectConfigInvalid(
+      () => parseConfig(withAcp(acp), {}),
+      'protocols.acp.checkout.operations.getCheckoutSession',
+      'not defined under "resources"',
+    );
   });
 
   it('rejects a mapped resource that does not expose acp', () => {
     const resource = checkoutResource(['path']);
     resource['expose'] = ['http'];
-    expectConfigInvalid(() =>
-      parseConfig(withAcp(enabledAcp(), { acp_checkout_get: resource }), {}),
+    expectConfigInvalid(
+      () => parseConfig(withAcp(enabledAcp(), { acp_checkout_get: resource }), {}),
+      'protocols.acp.checkout.operations.getCheckoutSession',
+      'does not list "acp" in its expose',
     );
   });
 
-  // ACP checkout carries its own purchase payment; charging for the invocation
-  // too would stack two unrelated payment layers on one call.
-  it('rejects a mapped resource that is paid', () => {
+  // ACP checkout carries its own purchase payment, so the invocation is free
+  it.each([
+    ['priced', { type: 'fixed', amount: '0.01', currency: 'USDC' }],
+    ['free but naming a rail', { type: 'free' }],
+  ])('rejects a mapped resource that is %s', (_label, pricing) => {
     const resource = checkoutResource(['path']);
-    resource['pricing'] = { type: 'fixed', amount: '0.01', currency: 'USDC' };
+    resource['pricing'] = pricing;
     resource['payments'] = ['x402'];
-    expectConfigInvalid(() =>
-      parseConfig(withAcp(enabledAcp(), { acp_checkout_get: resource }), {}),
+    expectConfigInvalid(
+      () => parseConfig(withAcp(enabledAcp(), { acp_checkout_get: resource }), {}),
+      'protocols.acp.checkout.operations.getCheckoutSession',
+      'must use pricing.type "free" with no "payments"',
     );
   });
 
   it('rejects a mapped resource whose input schema forbids a key ACP always sends', () => {
-    const resource = checkoutResource(['path']);
-    (resource['input'] as { properties: Record<string, unknown> }).properties = {};
-    (resource['input'] as { required: string[] }).required = [];
-    expectConfigInvalid(() =>
-      parseConfig(withAcp(enabledAcp(), { acp_checkout_get: resource }), {}),
+    // No bindings: a binding to the undeclared `path` would be refused first
+    const resource = checkoutResource([]);
+    delete (resource['backend'] as Record<string, unknown>)['inputBindings'];
+    expectConfigInvalid(
+      () => parseConfig(withAcp(enabledAcp(), { acp_checkout_get: resource }), {}),
+      'protocols.acp.checkout.operations.getCheckoutSession',
+      'additionalProperties: false without declaring "path"',
     );
   });
 
-  it('rejects a mapped resource requiring input the operation never sends', () => {
-    // Cancel sends no body: the pinned ACP schema does not require one.
+  it('rejects a mapped resource requiring input the operation does not always send', () => {
+    // A bare cancel sends no body: the pinned ACP schema does not require one
     const resource = checkoutResource(['path', 'body']);
-    expectConfigInvalid(() =>
-      parseConfig(withAcp(enabledAcp(), { acp_checkout_cancel: resource }), {}),
+    expectConfigInvalid(
+      () => parseConfig(withAcp(enabledAcp(), { acp_checkout_cancel: resource }), {}),
+      'protocols.acp.checkout.operations.cancelCheckoutSession',
+      'requires "body"',
     );
+  });
+
+  it('rejects a closed cancel schema that does not declare the optional body', () => {
+    // It would pass a bare cancel and refuse every cancel carrying `intent_trace`
+    const resource = checkoutResource(['path']);
+    expectConfigInvalid(
+      () => parseConfig(withAcp(enabledAcp(), { acp_checkout_cancel: resource }), {}),
+      'protocols.acp.checkout.operations.cancelCheckoutSession',
+      'without declaring "body"',
+    );
+  });
+
+  it('accepts a cancel schema that leaves the body open or declares it optional', () => {
+    const open = checkoutResource(['path']);
+    (open['input'] as { additionalProperties: boolean }).additionalProperties = true;
+    expect(() =>
+      parseConfig(withAcp(enabledAcp(), { acp_checkout_cancel: open }), {}),
+    ).not.toThrow();
+    expect(() =>
+      parseConfig(
+        withAcp(enabledAcp(), { acp_checkout_cancel: checkoutResource(['path'], ['body']) }),
+        {},
+      ),
+    ).not.toThrow();
   });
 
   it('rejects expose: [acp] when protocols.acp.enabled is false', () => {
     const raw = validRawConfig();
     (raw['resources'] as { weather_basic: { expose: string[] } }).weather_basic.expose = ['acp'];
-    expectConfigInvalid(() => parseConfig(raw, {}));
+    expectConfigInvalid(
+      () => parseConfig(raw, {}),
+      'resources.weather_basic.expose',
+      'protocols.acp.enabled is false',
+    );
   });
 
   it('keeps optional discovery metadata only when configured', () => {
@@ -1743,7 +1790,7 @@ describe('protocols.acp', () => {
 });
 
 describe('parseConfig backend.inputBindings', () => {
-  /** A config whose one resource is an OpenAPI-shaped path + query + body POST. */
+  // A config whose one resource is an OpenAPI-shaped path + query + body POST
   function bindingConfig(
     overrides: {
       readonly bindings?: unknown;
@@ -1787,7 +1834,7 @@ describe('parseConfig backend.inputBindings', () => {
 
   const bindings = { path: 'path', query: 'query', body: 'body' };
 
-  it('parses the block and normalises it onto the canonical handler', () => {
+  it('parses the block and normalizes it onto the canonical handler', () => {
     const config = parseConfig(bindingConfig({ bindings }), {});
     const resource = config.resources.find((r) => r.id === 'create_order');
     expect(resource?.handler.inputBindings).toEqual(bindings);
@@ -1806,141 +1853,176 @@ describe('parseConfig backend.inputBindings', () => {
     expect(Object.keys(resource?.handler.inputBindings ?? {})).toEqual(['path']);
   });
 
+  const BINDINGS_PATH = 'resources.create_order.backend.inputBindings';
+
   it('rejects an unknown binding location (typo)', () => {
-    expectConfigInvalid(() =>
-      parseConfig(bindingConfig({ bindings: { ...bindings, bodyy: 'body' } }), {}),
+    expectConfigInvalid(
+      () => parseConfig(bindingConfig({ bindings: { ...bindings, bodyy: 'body' } }), {}),
+      BINDINGS_PATH,
+      /bodyy/,
     );
   });
 
   it('rejects an empty binding block', () => {
-    expectConfigInvalid(() => parseConfig(bindingConfig({ bindings: {} }), {}));
+    expectConfigInvalid(
+      () => parseConfig(bindingConfig({ bindings: {} }), {}),
+      BINDINGS_PATH,
+      'empty backend.inputBindings',
+    );
   });
 
   it('rejects a binding to a property the input schema never declares', () => {
-    expectConfigInvalid(() =>
-      parseConfig(bindingConfig({ bindings: { ...bindings, query: 'filters' } }), {}),
+    expectConfigInvalid(
+      () => parseConfig(bindingConfig({ bindings: { ...bindings, query: 'filters' } }), {}),
+      BINDINGS_PATH,
+      'input property "filters", which the input schema does not declare',
     );
   });
 
   it('rejects a path or query binding pointing at a non-object schema', () => {
-    expectConfigInvalid(() =>
-      parseConfig(
-        bindingConfig({
-          bindings,
-          input: {
-            type: 'object',
-            properties: {
-              path: { type: 'object', properties: { userId: { type: 'string' } } },
-              query: { type: 'string' },
-              body: { type: 'object' },
+    expectConfigInvalid(
+      () =>
+        parseConfig(
+          bindingConfig({
+            bindings,
+            input: {
+              type: 'object',
+              properties: {
+                path: {
+                  type: 'object',
+                  properties: { userId: { type: 'string' } },
+                  required: ['userId'],
+                },
+                query: { type: 'string' },
+                body: { type: 'object' },
+              },
+              required: ['path'],
             },
-            required: ['path'],
-          },
-        }),
-        {},
-      ),
+          }),
+          {},
+        ),
+      BINDINGS_PATH,
+      'input property "query", which is not an object schema',
     );
   });
 
   it('rejects two locations bound to the same input property', () => {
-    expectConfigInvalid(() =>
-      parseConfig(bindingConfig({ bindings: { path: 'path', query: 'path' } }), {}),
+    expectConfigInvalid(
+      () => parseConfig(bindingConfig({ bindings: { path: 'path', query: 'path' } }), {}),
+      BINDINGS_PATH,
+      'binds both "path" and "query"',
     );
   });
 
   it.each(RESERVED_INPUT_FIELDS)('rejects a binding to the reserved "%s" input field', (field) => {
-    expectConfigInvalid(() =>
-      parseConfig(bindingConfig({ bindings: { ...bindings, body: field } }), {}),
+    expectConfigInvalid(
+      () => parseConfig(bindingConfig({ bindings: { ...bindings, body: field } }), {}),
+      BINDINGS_PATH,
+      `"${field}", which is reserved`,
     );
   });
 
   it('rejects a body binding on a method that sends no body', () => {
-    expectConfigInvalid(() =>
-      parseConfig(
-        bindingConfig({
-          bindings,
-          method: 'GET',
-          url: 'http://localhost:3000/users/{userId}',
-        }),
-        {},
-      ),
+    expectConfigInvalid(
+      () =>
+        parseConfig(
+          bindingConfig({
+            bindings,
+            method: 'GET',
+            url: 'http://localhost:3000/users/{userId}',
+          }),
+          {},
+        ),
+      BINDINGS_PATH,
+      'binds a request body on a GET',
     );
   });
 
   it('rejects explicit bindings that omit "path" while backend.url is templated', () => {
-    expectConfigInvalid(() =>
-      parseConfig(bindingConfig({ bindings: { query: 'query', body: 'body' } }), {}),
+    expectConfigInvalid(
+      () => parseConfig(bindingConfig({ bindings: { query: 'query', body: 'body' } }), {}),
+      BINDINGS_PATH,
+      'no "path" binding',
     );
   });
 
   it('rejects a path group that is not itself required', () => {
-    expectConfigInvalid(() =>
-      parseConfig(
-        bindingConfig({
-          bindings,
-          input: {
-            type: 'object',
-            properties: {
-              path: {
-                type: 'object',
-                properties: { userId: { type: 'string' } },
-                required: ['userId'],
+    expectConfigInvalid(
+      () =>
+        parseConfig(
+          bindingConfig({
+            bindings,
+            input: {
+              type: 'object',
+              properties: {
+                path: {
+                  type: 'object',
+                  properties: { userId: { type: 'string' } },
+                  required: ['userId'],
+                },
+                query: { type: 'object' },
+                body: { type: 'object' },
               },
-              query: { type: 'object' },
-              body: { type: 'object' },
+              required: [],
             },
-            required: [],
-          },
-        }),
-        {},
-      ),
+          }),
+          {},
+        ),
+      BINDINGS_PATH,
+      'binds path parameters to input property "path" without listing it',
     );
   });
 
   it('rejects a {param} that is not declared inside the bound path group', () => {
-    expectConfigInvalid(() =>
-      parseConfig(
-        bindingConfig({
-          bindings,
-          // userId declared at the top level, not under the path group - the
-          // pre-bindings shape, which explicit mode no longer reads from.
-          input: {
-            type: 'object',
-            properties: {
-              userId: { type: 'string' },
-              path: { type: 'object', properties: {}, required: [] },
-              query: { type: 'object' },
-              body: { type: 'object' },
+    expectConfigInvalid(
+      () =>
+        parseConfig(
+          bindingConfig({
+            bindings,
+            // userId at the top level; with bindings, path parameters are read
+            // only from the path group
+            input: {
+              type: 'object',
+              properties: {
+                userId: { type: 'string' },
+                path: { type: 'object', properties: {}, required: [] },
+                query: { type: 'object' },
+                body: { type: 'object' },
+              },
+              required: ['path', 'userId'],
             },
-            required: ['path', 'userId'],
-          },
-        }),
-        {},
-      ),
+          }),
+          {},
+        ),
+      'resources.create_order.backend.url',
+      '"{userId}" which is not declared in input.properties.path',
     );
   });
 
   it('rejects a nested {param} that is declared but not required', () => {
-    expectConfigInvalid(() =>
-      parseConfig(
-        bindingConfig({
-          bindings,
-          input: {
-            type: 'object',
-            properties: {
-              path: { type: 'object', properties: { userId: { type: 'string' } }, required: [] },
-              query: { type: 'object' },
-              body: { type: 'object' },
+    expectConfigInvalid(
+      () =>
+        parseConfig(
+          bindingConfig({
+            bindings,
+            input: {
+              type: 'object',
+              properties: {
+                path: { type: 'object', properties: { userId: { type: 'string' } }, required: [] },
+                query: { type: 'object' },
+                body: { type: 'object' },
+              },
+              required: ['path'],
             },
-            required: ['path'],
-          },
-        }),
-        {},
-      ),
+          }),
+          {},
+        ),
+      'resources.create_order.backend.url',
+      '"{userId}" declared in input.properties.path but not listed in its "required"',
     );
   });
 
-  it('accepts the normalised handler as input to the pre-payment shape check', () => {
+  it('accepts the normalized handler as input to the pre-payment shape check', () => {
     const config = parseConfig(bindingConfig({ bindings }), {});
     const resource = config.resources.find((r) => r.id === 'create_order');
     expect(resource).toBeDefined();
@@ -1981,18 +2063,6 @@ describe('payments.mpp', () => {
     return raw;
   }
 
-  function refusal(raw: Record<string, unknown>): { path?: unknown; message: string } {
-    try {
-      parseConfig(raw, {});
-    } catch (error) {
-      if (isCommerceError(error) && error.code === 'CONFIG_INVALID') {
-        return { path: error.details?.['path'], message: error.message };
-      }
-      throw error;
-    }
-    return expect.unreachable();
-  }
-
   it('loads an MPP-only deployment without any x402 block', () => {
     const config = parseConfig(mppConfig({ challengeTtlSeconds: '120' }), {});
     expect(config.payments.x402).toBeUndefined();
@@ -2005,13 +2075,18 @@ describe('payments.mpp', () => {
   });
 
   it('refuses a resource whose only rail is a disabled MPP block', () => {
-    expect(refusal(mppConfig({ enabled: false })).path).toBe('resources.market_report.payments');
+    expectConfigInvalid(
+      () => parseConfig(mppConfig({ enabled: false }), {}),
+      'resources.market_report.payments',
+    );
   });
 
   it('refuses a challenge secret with length below 32 without echoing it', () => {
-    const { path, message } = refusal(mppConfig({ challengeSecret: 'short-secret' }));
-    expect(path).toBe('payments.mpp.challengeSecret');
-    expect(message).not.toContain('short-secret');
+    const error = expectConfigInvalid(
+      () => parseConfig(mppConfig({ challengeSecret: 'short-secret' }), {}),
+      'payments.mpp.challengeSecret',
+    );
+    expect(JSON.stringify(error.toInfo())).not.toContain('short-secret');
   });
 
   it.each([
@@ -2029,15 +2104,22 @@ describe('payments.mpp', () => {
       'payments.mpp.facilitator.url',
     ],
   ])('refuses %s, naming the MPP field', (_label, mpp, path) => {
-    expect(refusal(mppConfig(mpp)).path).toBe(path);
+    expectConfigInvalid(() => parseConfig(mppConfig(mpp), {}), path);
   });
 
   it('refuses an unknown key in the MPP block', () => {
-    expectConfigInvalid(() => parseConfig(mppConfig({ currency: 'EUR' }), {}));
+    expectConfigInvalid(
+      () => parseConfig(mppConfig({ currency: 'EUR' }), {}),
+      'payments.mpp',
+      /currency/,
+    );
   });
 
   it('refuses an unsupported MPP network', () => {
-    expect(refusal(mppConfig({ network: 'eip155:1' })).path).toBe('payments.mpp.network');
+    expectConfigInvalid(
+      () => parseConfig(mppConfig({ network: 'eip155:1' }), {}),
+      'payments.mpp.network',
+    );
   });
 
   describe('on Base mainnet', () => {
@@ -2081,7 +2163,7 @@ describe('payments.mpp', () => {
     ])('refuses %s', (_label, change, path) => {
       const mpp = { ...MAINNET, ...change };
       if (mpp.allowMainnet === undefined) delete (mpp as Record<string, unknown>)['allowMainnet'];
-      expect(refusal(mppConfig(mpp)).path).toBe(path);
+      expectConfigInvalid(() => parseConfig(mppConfig(mpp), {}), path);
     });
   });
 
@@ -2093,7 +2175,7 @@ describe('payments.mpp', () => {
       amount: '0.01',
       currency: 'EUR',
     };
-    expect(refusal(raw).path).toBe('resources.market_report.pricing.currency');
+    expectConfigInvalid(() => parseConfig(raw, {}), 'resources.market_report.pricing.currency');
   });
 
   it('refuses an MPP price with more precision than USDC has', () => {
@@ -2104,6 +2186,6 @@ describe('payments.mpp', () => {
       amount: '0.0000001',
       currency: 'USDC',
     };
-    expect(refusal(raw).path).toBe('resources.market_report.pricing.amount');
+    expectConfigInvalid(() => parseConfig(raw, {}), 'resources.market_report.pricing.amount');
   });
 });

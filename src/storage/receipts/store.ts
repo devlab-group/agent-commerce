@@ -1,8 +1,6 @@
 /**
- * SQLite implementation of the frozen ReceiptStore interface.
- *
- * Thin repository layer — no ORM. Every write goes through a prepared
- * statement; the only thing that varies between calls is parameters.
+ * SQLite implementation of the frozen ReceiptStore interface: a thin layer
+ * over statements prepared once at open, with no ORM
  */
 import { randomUUID } from 'node:crypto';
 import { accessSync, constants as fsConstants } from 'node:fs';
@@ -23,9 +21,9 @@ import {
   type ReceiptStore,
   systemClock,
   toCommerceError,
-} from '../../core/index.js';
-import { PACKAGE_VERSION } from '../../version.js';
-import { openSqliteDatabase } from '../sqlite.js';
+} from '../../core';
+import { PACKAGE_VERSION } from '../../version';
+import { openSqliteDatabase } from '../sqlite';
 import {
   type EventRow,
   eventToRow,
@@ -35,30 +33,27 @@ import {
   rowToEvent,
   rowToPaymentAttempt,
   rowToReceipt,
-} from './rows.js';
-import { migrate, SCHEMA_VERSION } from './schema.js';
+} from './rows';
+import { migrate, SCHEMA_VERSION } from './schema';
 
 const DEFAULT_LIST_LIMIT = 50;
 /**
- * Hard ceiling on every list query, applied here rather than only at the
- * gateway route, so every caller (HTTP, CLI, a future adapter) is covered.
- * SQLite treats a negative `LIMIT` as "no limit" —
- * confirmed `{ limit: -1 }` returns the entire table.
+ * Ceiling on every list query, enforced in the store so every caller is
+ * covered, not only the HTTP route. SQLite reads a negative `LIMIT` as no
+ * limit, so `{ limit: -1 }` would otherwise return the whole table.
  */
 const MAX_LIST_LIMIT = 500;
 
-/**
- * Clamps to a whole number in [1, MAX_LIST_LIMIT], defaulting when absent OR
- * non-finite (NaN/Infinity) — a store-level invariant that must hold
- * regardless of whether the current caller already filters those out.
- */
+// Clamps to a whole number in [1, MAX_LIST_LIMIT]. An absent or non-finite
+// limit (NaN, Infinity) takes the default, whether or not the caller filtered
+// it first.
 function clampListLimit(limit: number | undefined): number {
   const base = limit !== undefined && Number.isFinite(limit) ? limit : DEFAULT_LIST_LIMIT;
   return Math.min(Math.max(Math.trunc(base), 1), MAX_LIST_LIMIT);
 }
 
 export interface SqliteReceiptStoreOptions {
-  /** File path, or ':memory:' for tests. Parent directory is created if missing. */
+  /** File path, or ':memory:' for tests. Parent directory is created if missing */
   readonly path: string;
   readonly logger?: Logger;
   readonly clock?: Clock;
@@ -85,9 +80,8 @@ export function createSqliteReceiptStore(options: SqliteReceiptStoreOptions): Re
   const path = options.path;
   const isFileBacked = path !== ':memory:';
 
-  // Opening and hardening the file is shared with the ACP idempotency store -
-  // see src/storage/sqlite.ts. Two copies of that logic is how one of them
-  // ends up shipping a world-readable database.
+  // Shared with the ACP idempotency and AP2 replay stores, so the permission
+  // hardening has one definition
   const db = openSqliteDatabase({ path, label: 'Receipt database', logger });
   migrate(db);
 
@@ -105,11 +99,9 @@ export function createSqliteReceiptStore(options: SqliteReceiptStoreOptions): Re
   const countReceiptsStmt = db.prepare<[], { count: number }>(
     'SELECT COUNT(*) AS count FROM receipts',
   );
-  // backend_status is INTEGER NOT NULL (schema.ts) so NOT BETWEEN never has
-  // a NULL row to silently miss; 0 (backend never responded at all) and
-  // every non-2xx status both count as undelivered, matching the dashboard's
-  // deliveryResult() (ReceiptList.tsx) — the two views must not disagree
-  // about what "delivered" means, which is the confusion.
+  // backend_status is NOT NULL, so NOT BETWEEN cannot skip a row. 0 (no status
+  // known) and every non-2xx status count as undelivered, the same rule as the
+  // dashboard's deliveryResult() in ReceiptList.tsx.
   const countUndeliveredReceiptsStmt = db.prepare<[], { count: number }>(
     'SELECT COUNT(*) AS count FROM receipts WHERE backend_status NOT BETWEEN 200 AND 299',
   );
@@ -125,21 +117,16 @@ export function createSqliteReceiptStore(options: SqliteReceiptStoreOptions): Re
     'SELECT * FROM events WHERE request_id = ? ORDER BY at DESC, seq DESC LIMIT ?',
   );
 
-  const insertPaymentAttemptStmt = db.prepare(
+  const insertPaymentAttemptStmt = db.prepare<Record<string, unknown>, PaymentAttemptRow>(
     `INSERT INTO payment_attempts (id, request_id, resource_id, provider, replay_key, status, amount, currency, payer, payee, external_reference, rejection_reason, created_at, updated_at)
-     VALUES (@id, @request_id, @resource_id, @provider, @replay_key, @status, @amount, @currency, @payer, @payee, @external_reference, @rejection_reason, @created_at, @updated_at)`,
+     VALUES (@id, @request_id, @resource_id, @provider, @replay_key, @status, @amount, @currency, @payer, @payee, @external_reference, @rejection_reason, @created_at, @updated_at)
+     RETURNING *`,
   );
-  const getPaymentAttemptByIdStmt = db.prepare<[string], PaymentAttemptRow>(
-    'SELECT * FROM payment_attempts WHERE id = ?',
-  );
-  // COALESCE: an omitted field (bound as NULL — see updatePaymentAttempt)
-  // means "leave the existing value alone", not "clear it". Without this, a
-  // second update that doesn't re-supply external_reference/rejection_reason
-  // erases it — exactly the field that carries the on-chain tx hash for a
-  // settlement-uncertain attempt, the one record proving the buyer's funds
-  // may have moved. There is no current caller that needs to clear an
-  // already-set value; if one appears, it needs an explicit sentinel rather
-  // than overloading `undefined` to mean two different things again.
+  // COALESCE: an omitted field (bound as NULL by updatePaymentAttempt) keeps
+  // its stored value. A status-only update must not erase external_reference,
+  // which holds the tx hash of a settlement-uncertain attempt: the record that
+  // the buyer's funds may have moved. Clearing a value would need an explicit
+  // sentinel, not `undefined`.
   const updatePaymentAttemptStmt = db.prepare(
     `UPDATE payment_attempts SET status = @status,
        external_reference = COALESCE(@external_reference, external_reference),
@@ -167,10 +154,8 @@ export function createSqliteReceiptStore(options: SqliteReceiptStoreOptions): Re
 
   const store: ReceiptStore = {
     async init(): Promise<void> {
-      // Schema setup already happened synchronously above (better-sqlite3 is
-      // sync). This re-check makes init() a meaningful, idempotent gate for
-      // callers that treat it as the lifecycle hook that must succeed before
-      // any other method is used.
+      // Migration already ran synchronously at construction. This check keeps
+      // init() a real, idempotent gate for callers that await it first.
       const version = db.pragma('user_version', { simple: true }) as number;
       if (version !== SCHEMA_VERSION) {
         throw new CommerceError(
@@ -198,8 +183,10 @@ export function createSqliteReceiptStore(options: SqliteReceiptStoreOptions): Re
     async reservePaymentAttempt(reservation: PaymentAttemptReservation): Promise<PaymentAttempt> {
       const now = clock.nowIso();
       const id = ids.next('attempt');
+      let row: PaymentAttemptRow;
       try {
-        insertPaymentAttemptStmt.run({
+        // RETURNING on a successful insert always yields the inserted row
+        row = insertPaymentAttemptStmt.get({
           id,
           request_id: reservation.requestId,
           resource_id: reservation.resourceId,
@@ -214,23 +201,16 @@ export function createSqliteReceiptStore(options: SqliteReceiptStoreOptions): Re
           rejection_reason: null,
           created_at: now,
           updated_at: now,
-        });
+        }) as PaymentAttemptRow;
       } catch (err) {
         if (isUniqueConstraintOn(err, 'payment_attempts.replay_key')) {
           throw new CommerceError(
             'PAYMENT_REPLAYED',
-            `Payment authorisation has already been used (replayKey=${reservation.replayKey})`,
+            `Payment authorization has already been used (replayKey=${reservation.replayKey})`,
             { requestId: reservation.requestId, resourceId: reservation.resourceId },
           );
         }
         throw toCommerceError(err, 'STORAGE_ERROR', 'Failed to reserve payment attempt');
-      }
-      const row = getPaymentAttemptByIdStmt.get(id);
-      if (row === undefined) {
-        throw new CommerceError(
-          'STORAGE_ERROR',
-          'Payment attempt vanished immediately after insert',
-        );
       }
       return rowToPaymentAttempt(row);
     },
@@ -277,12 +257,12 @@ export function createSqliteReceiptStore(options: SqliteReceiptStoreOptions): Re
       return rows.map(rowToReceipt);
     },
 
-    /** Exact total, ignoring the listReceipts clamp — see the interface doc for why this exists. */
+    // Exact total, not bounded by the listReceipts clamp (see ReceiptStore.countReceipts)
     async countReceipts(): Promise<number> {
       return countReceiptsStmt.get()?.count ?? 0;
     },
 
-    /** Exact count of non-2xx receipts — see the interface doc for why this exists. */
+    // Exact count of non-2xx receipts (see ReceiptStore.countUndeliveredReceipts)
     async countUndeliveredReceipts(): Promise<number> {
       return countUndeliveredReceiptsStmt.get()?.count ?? 0;
     },
@@ -308,13 +288,10 @@ export function createSqliteReceiptStore(options: SqliteReceiptStoreOptions): Re
     descriptor,
 
     async health(): Promise<AdapterHealth> {
-      // Same discipline: a client-visible field is authored from a
-      // fixed vocabulary, never inherited from a caught error's `.message`.
-      // `accessSync` on a real deployment throws e.g.
-      // "EACCES: permission denied, access '/workspace/data/receipts.sqlite'"
-      // — an absolute host path that must never reach the unauthenticated
-      // `/ready` response). The raw message still goes
-      // to the injected logger, so nothing is lost for diagnosis.
+      // `detail` comes from a fixed vocabulary, never from a caught error: an
+      // accessSync error carries an absolute host path, e.g. "EACCES:
+      // permission denied, access '/workspace/data/receipts.sqlite'". The raw
+      // message goes to the logger at warn.
       const startedAt = clock.monotonicMs();
       if (closed) {
         return { status: 'fail', detail: 'store-unavailable', checkedAt: clock.nowIso() };

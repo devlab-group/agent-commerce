@@ -6,31 +6,21 @@
  * endpoint, not how to call a skill. The invocation envelope is the adapter's
  * concern.
  */
-import type { CommerceResource } from '../../core/index.js';
-import { A2A_JSON_MEDIA_TYPE, A2A_PROTOCOL_BINDING, A2A_PROTOCOL_VERSION } from './constants.js';
-import type { A2aAgentCard, A2aAgentSkill } from './types.js';
+import type { CommerceResource } from '../../core';
+import { joinUrl } from '../http';
+import { A2A_JSON_MEDIA_TYPE, A2A_PROTOCOL_BINDING, A2A_PROTOCOL_VERSION } from './constants';
+import type { A2aAgentCard, A2aAgentSkill } from './types';
 
 export interface AgentCardOptions {
   readonly name: string;
   readonly description: string;
-  /** Version of this gateway build, not of the protocol. */
+  /** Version of this gateway build, not of the protocol */
   readonly version: string;
-  /** Externally reachable gateway base URL, from configuration. */
+  /** Externally reachable gateway base URL, from configuration */
   readonly publicBaseUrl: string;
-  /** Gateway path the JSON-RPC endpoint is mounted at. */
+  /** Gateway path the JSON-RPC endpoint is mounted at */
   readonly mountPath: string;
   readonly resources: readonly CommerceResource[];
-}
-
-/**
- * A base URL may or may not carry a trailing slash and a mount always starts
- * with one; concatenating them naively yields `https://host//a2a`, which is a
- * different path to every router that sees it.
- */
-export function endpointUrl(publicBaseUrl: string, mountPath: string): string {
-  const base = publicBaseUrl.replace(/\/+$/, '');
-  const path = mountPath.startsWith('/') ? mountPath : `/${mountPath}`;
-  return `${base}${path.replace(/\/+$/, '')}`;
 }
 
 /**
@@ -53,7 +43,7 @@ function skillDescription(resource: CommerceResource): string {
   return base;
 }
 
-export function buildAgentSkill(resource: CommerceResource): A2aAgentSkill {
+function buildAgentSkill(resource: CommerceResource): A2aAgentSkill {
   return {
     id: resource.id,
     name: resource.name,
@@ -71,7 +61,7 @@ export function buildAgentCard(options: AgentCardOptions): A2aAgentCard {
     version: options.version,
     supportedInterfaces: [
       {
-        url: endpointUrl(options.publicBaseUrl, options.mountPath),
+        url: joinUrl(options.publicBaseUrl, options.mountPath),
         protocolBinding: A2A_PROTOCOL_BINDING,
         protocolVersion: A2A_PROTOCOL_VERSION,
       },

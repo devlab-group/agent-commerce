@@ -1,15 +1,14 @@
 /**
- * Merchant-side helper: mint the checkout JWT a Checkout Mandate binds.
+ * Merchant-side helper: mints the checkout JWT a Checkout Mandate binds.
  *
- * The gateway only verifies. This is what a merchant runs in their own
- * process, with their own key, to produce the document the buyer approves. It
- * never calls the gateway and the gateway never calls it - the mirror of
+ * A merchant runs it in their own process, with their own key, to produce the
+ * document the buyer approves; the gateway never calls it. It mirrors
  * `createPaymentProof`, which a buyer runs to produce a payment proof.
  *
- * It exists for `input_hash`, an RFC 8785 digest. A signer reaching for a
- * sorted-key `JSON.stringify` agrees on most inputs and disagrees on floats
- * and non-ASCII keys, and the mandate is then refused with a reason that does
- * not say which field disagreed.
+ * It exists mainly for `input_hash`, an RFC 8785 digest. A serializer that
+ * only sorts keys, as many non-JavaScript JSON libraries do, can disagree with
+ * it on floats and non-ASCII keys, and the mandate is then refused with a
+ * reason that does not name the field.
  */
 import { importPKCS8, type JWK, SignJWT } from 'jose';
 import {
@@ -17,12 +16,12 @@ import {
   AP2_JWK_CURVE,
   AP2_KEY_TYPE,
   AP2_SIGNING_ALGORITHM,
-} from './constants.js';
-import { computeInputHash } from './profile.js';
+} from './constants';
+import { computeInputHash } from './profile';
 
 /**
  * A private ES256 key: either a private JWK (the pair of the public one in the
- * gateway's `checkoutIssuers`) or a PKCS#8 PEM, as `openssl` emits it.
+ * gateway's `checkoutIssuers`) or a PKCS#8 PEM, as `openssl` emits it
  */
 export type Ap2SigningKey = Readonly<Record<string, unknown>> | string;
 
@@ -38,13 +37,13 @@ export interface CreateCheckoutJwtOptions {
   readonly resourceId: string;
   /**
    * The resource input this purchase is for, exactly as the buyer will send
-   * it: no reserved fields, no request id, no transport metadata.
+   * it: no reserved fields, no request id, no transport metadata
    */
   readonly input: unknown;
 
   /**
    * Decimal string, never a number, and compared as a string: `0.10` and `0.1`
-   * are different mandates. Take it from your own catalogue rather than from
+   * are different mandates. Take it from your own catalog rather than from
    * whatever the agent asked for.
    */
   readonly amount: string;
@@ -61,7 +60,7 @@ export interface CreateCheckoutJwtOptions {
   readonly network?: string;
   readonly asset?: string;
 
-  /** Defaults to a random UUID. Recorded on the receipt and used for replay defence */
+  /** Defaults to a random UUID. Recorded on the receipt and used for replay defense */
   readonly jwtId?: string;
   /** Defaults to 900: a human approval sits inside this window */
   readonly expiresInSeconds?: number;
@@ -87,7 +86,7 @@ function describe(value: unknown): string {
 /**
  * Every rejection here is a mistake that would otherwise surface as an opaque
  * verification failure much later: the public half of the pair, the wrong key
- * type, or a PEM that is not PKCS#8.
+ * type, or a PEM that is not PKCS#8
  */
 async function resolveKey(
   key: Ap2SigningKey,
@@ -118,7 +117,7 @@ async function resolveKey(
 
 /**
  * Returns the compact JWT to hand to the agent, which wraps it in the Checkout
- * Mandate the buyer signs.
+ * Mandate the buyer signs
  */
 export async function createCheckoutJwt(options: CreateCheckoutJwtOptions): Promise<string> {
   const kid = requireText(options.kid, 'kid');
@@ -145,7 +144,7 @@ export async function createCheckoutJwt(options: CreateCheckoutJwtOptions): Prom
   const agentCommerce: Record<string, string> = {
     profile: AP2_CHECKOUT_PROFILE,
     resource_id: resourceId,
-    input_hash: await computeInputHash(options.input),
+    input_hash: computeInputHash(options.input),
     amount,
     currency,
     payment_method: paymentMethod,

@@ -1,16 +1,17 @@
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { parseConfig } from '../../../src/config/schema.js';
-import { validateBackendRequestShape } from '../../../src/core/execution/index.js';
+import { parseConfig } from '../../../src/config/schema';
+import { validateBackendRequestShape } from '../../../src/core/execution';
 import {
   discoverOperations,
   type LoadedOpenApiDocument,
   loadOpenApiDocument,
   mapRequest,
+  type OpenApiOperationCandidate,
   type RequestMapping,
-} from '../../../src/openapi/index.js';
-import { validRawConfig } from '../config/fixtures.js';
+} from '../../../src/openapi';
+import { validRawConfig } from '../config/fixtures';
 
 const fixture = (name: string): string =>
   join(fileURLToPath(new URL('./fixtures/', import.meta.url)), name);
@@ -39,6 +40,20 @@ function properties(id: string): Record<string, Record<string, unknown>> {
 }
 
 const codes = (id: string): string[] => mapping(id).diagnostics.map((d) => d.code);
+
+// A GET candidate built directly, for shapes no fixture operation has
+function candidate(path: string, parameters: unknown[]): OpenApiOperationCandidate {
+  return {
+    resourceId: 'x',
+    method: 'GET',
+    path,
+    backendUrl: `https://api.example.com${path}`,
+    name: 'x',
+    tags: [],
+    parameters,
+    security: [],
+  };
+}
 
 describe('mapRequest', () => {
   it('maps path + query + body into namespaced groups with bindings', () => {
@@ -77,11 +92,11 @@ describe('mapRequest', () => {
 
   it('inherits path-item parameters and lets the operation override by name + in', () => {
     const path = properties('createOrder')['path'];
-    // The path item declares "from the path item"; the operation wins.
+    // The path item declares "from the path item"; the operation wins
     expect(path).toMatchObject({
       properties: { userId: { description: 'overridden by the operation' } },
     });
-    // "trace" comes only from the path item and still survives the merge.
+    // "trace" comes only from the path item and still survives the merge
     expect(properties('createOrder')['query']?.['properties']).toHaveProperty('trace');
   });
 
@@ -116,7 +131,7 @@ describe('mapRequest', () => {
     if (!result.supported) return;
     expect(result.inputBindings).toEqual({ body: 'body' });
     expect(result.contentType).toBe('application/vnd.acme.report+json');
-    // An optional body does not make the group required.
+    // An optional body does not make the group required
     expect(result.inputSchema['required']).toBeUndefined();
   });
 
@@ -161,7 +176,7 @@ describe('mapRequest', () => {
     expect(result.diagnostics.map((d) => d.message).join(' ')).toContain('X-Trace');
     expect(result.diagnostics.map((d) => d.message).join(' ')).toContain('session');
     // A required Authorization header is operator configuration, not an input:
-    // the operation is imported rather than skipped.
+    // the operation is imported rather than skipped
     expect(result.diagnostics.map((d) => d.message).join(' ')).not.toContain('Authorization');
   });
 
@@ -177,10 +192,21 @@ describe('mapRequest', () => {
     expect(result.diagnostics[0]?.message).toContain('not a primitive');
   });
 
+  it('names an unusable parameter schema in a readable sentence', () => {
+    const [candidate] = discoverOperations(loaded).operations;
+    if (candidate === undefined) throw new Error('fixture has no operations');
+    const result = mapRequest(loaded, {
+      ...candidate,
+      parameters: [{ name: 'q', in: 'query', schema: { oneOf: [{ type: 'string' }] } }],
+    });
+    const message = result.diagnostics.map((d) => d.message).join(' ');
+    expect(message).toContain('Omitted optional query parameter "q": it has an unusable schema:');
+  });
+
   it('skips an operation whose {param} is never declared as a path parameter', () => {
     // The OpenAPI validator rejects this document shape, so the candidate is
     // built directly: the check exists because a `{param}` nothing can supply
-    // makes every call unservable - and a paid one settles first.
+    // makes every call unservable
     const result = mapRequest(loaded, {
       resourceId: 'legacy',
       method: 'GET',
@@ -193,6 +219,44 @@ describe('mapRequest', () => {
     });
     expect(result.supported).toBe(false);
     expect(result.diagnostics.map((d) => d.code)).toContain('undeclared-path-parameter');
+  });
+
+  it('keeps a path and a query parameter of the same name apart', () => {
+    const result = mapRequest(
+      loaded,
+      candidate('/items/{id}', [
+        { name: 'id', in: 'path', required: true, schema: { type: 'string' } },
+        { name: 'id', in: 'query', required: true, schema: { type: 'integer' } },
+      ]),
+    );
+    expect(result.supported && result.inputSchema['properties']).toMatchObject({
+      path: { properties: { id: { type: 'string' } }, required: ['id'] },
+      query: { properties: { id: { type: 'integer' } }, required: ['id'] },
+    });
+  });
+
+  it.each([
+    ['an unknown location', { name: 'raw', in: 'querystring', schema: { type: 'string' } }],
+    ['no type, so any JSON value could arrive', { name: 'mode', in: 'query', schema: {} }],
+    // Assigned as a key it would replace the group's prototype and vanish
+    ['the name __proto__', { name: '__proto__', in: 'query', schema: { type: 'string' } }],
+  ])('skips an operation whose required parameter has %s', (_label, parameter) => {
+    const result = mapRequest(loaded, candidate('/x', [{ ...parameter, required: true }]));
+    expect(result.supported).toBe(false);
+    expect(result.diagnostics.map((d) => d.code)).toEqual(['unsupported-required-parameter']);
+  });
+
+  it('skips a required body whose media type only looks like JSON', () => {
+    const result = mapRequest(loaded, {
+      ...candidate('/x', []),
+      method: 'POST',
+      requestBody: {
+        required: true,
+        content: { 'application/x-ndjson': { schema: {} }, 'application/json-seq': { schema: {} } },
+      },
+    });
+    expect(result.supported).toBe(false);
+    expect(result.diagnostics.map((d) => d.code)).toEqual(['unsupported-request-body']);
   });
 
   it('skips a path parameter using a style the executor cannot produce', () => {

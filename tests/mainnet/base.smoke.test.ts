@@ -1,19 +1,18 @@
 /**
  * Base mainnet smoke test. **This spends real money.**
  *
- * Never part of `npm test`, `npm run test:e2e` or `npm run test:testnet`, and
- * never triggered by a push or a pull request. It runs only when a human sets
- * `ALLOW_X402_MAINNET=true` *and* supplies a funded buyer key, a merchant
- * address and facilitator credentials — four separate deliberate acts.
+ * Only `npm run test:mainnet` runs it, never CI. It needs
+ * `ALLOW_X402_MAINNET=true`, a funded buyer key, a merchant address and a
+ * facilitator URL; a facilitator credential is optional.
  *
- * What it proves, in the order the exit criteria ask for it:
+ * What it proves, in order:
  *
- *   the mainnet guard refuses an incomplete config
- *   -> authentication reaches the facilitator
+ *   the mainnet guard refuses a config without `allowMainnet`
+ *   -> the deployment reports itself as live mainnet
  *   -> a real payment settles on Base
  *   -> the receipt records the settlement reference
  *   -> the resource is delivered exactly once
- *   -> the same authorisation presented again is refused
+ *   -> the same authorization presented again is refused
  *   -> no credential appears in anything logged
  *
  * The proof is on-chain balances and a transaction receipt read back from the
@@ -22,38 +21,40 @@
 
 import { privateKeyToAccount } from 'viem/accounts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { GatewayConfig } from '../../src/config/index.js';
-import { parseConfig } from '../../src/config/index.js';
+import type { GatewayConfig } from '../../src/config';
+import { parseConfig } from '../../src/config';
 import {
   isCommerceError,
   type Logger,
   PAYMENT_RESPONSE_HEADER,
   type ReceiptStore,
-} from '../../src/core/index.js';
-import { createGateway, type GatewayInstance } from '../../src/gateway/index.js';
-import { createPaymentProof, createX402PaymentProvider } from '../../src/payments/x402/index.js';
-import { createSqliteReceiptStore } from '../../src/storage/receipts/index.js';
+} from '../../src/core';
+import { createGateway, type GatewayInstance } from '../../src/gateway';
+import { createPaymentProof, createX402PaymentProvider } from '../../src/payments/x402';
+import { createSqliteReceiptStore } from '../../src/storage/receipts';
 import {
   assertBalanceDelta,
   assertTransactionSucceeded,
   type BalanceSnapshot,
   readBalances,
-} from '../fixtures/x402/settlement.js';
+  waitForBalances,
+} from '../fixtures/x402/settlement';
 
 const ALLOWED = process.env['ALLOW_X402_MAINNET'] === 'true';
 const BUYER_KEY = process.env['X402_MAINNET_BUYER_PRIVATE_KEY'];
 const MERCHANT = process.env['X402_MAINNET_MERCHANT_ADDRESS'];
-// Any public endpoint will rate-limit a polling loop; `mainnet.base.org` did,
-// mid-run, and reported a settled payment as a failure. Use a dedicated one.
+// The default public endpoint may rate-limit the polling loop and make a
+// settled payment read as a failure, so point X402_MAINNET_RPC_URL at a
+// dedicated endpoint
 const RPC_URL = process.env['X402_MAINNET_RPC_URL'] ?? 'https://base.drpc.org';
 const FACILITATOR_URL = process.env['X402_FACILITATOR_URL'];
 const CDP_API_KEY_ID = process.env['CDP_API_KEY_ID'];
 const CDP_API_KEY_SECRET = process.env['CDP_API_KEY_SECRET'];
 const BEARER = process.env['X402_FACILITATOR_TOKEN'];
-/** Deliberately tiny. Every run of this file moves this much real USDC. */
+// Tiny on purpose: every run moves this much real USDC
 const AMOUNT = process.env['X402_MAINNET_AMOUNT'] ?? '0.01';
 
-/** USDC on Base. The only asset a mainnet config is allowed to name. */
+// USDC on Base, the only asset a mainnet config may name
 const USDC = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913' as const;
 const NETWORK = 'eip155:8453';
 const RESOURCE_ID = 'mainnet_report';
@@ -63,14 +64,13 @@ const missing = [
   BUYER_KEY ? undefined : 'X402_MAINNET_BUYER_PRIVATE_KEY',
   MERCHANT ? undefined : 'X402_MAINNET_MERCHANT_ADDRESS',
   FACILITATOR_URL ? undefined : 'X402_FACILITATOR_URL',
-  // No credential requirement: a facilitator may legitimately take none, and
-  // `allowUnauthenticatedFacilitator` is how that is accepted.
+  // No credential: a facilitator may take none, which
+  // `allowUnauthenticatedFacilitator` acknowledges
 ].filter((name): name is string => name !== undefined);
 
 if (missing.length > 0) {
-  // eslint-disable-next-line no-console
   console.log(
-    `[mainnet] skipped — needs ${missing.join(', ')}. This suite spends REAL FUNDS; see examples/base-mainnet/README.md.`,
+    `[mainnet] skipped - needs ${missing.join(', ')}. This suite spends REAL FUNDS; see examples/base-mainnet/README.md.`,
   );
 }
 
@@ -115,7 +115,7 @@ function rawConfig(overrides: { allowMainnet?: boolean } = {}): Record<string, u
         payTo: MERCHANT,
         maxTimeoutSeconds: 600,
         ...(overrides.allowMainnet === false ? {} : { allowMainnet: true }),
-        // Only meaningful when no credential is configured; harmless otherwise.
+        // Matters only when no credential is configured
         allowUnauthenticatedFacilitator: true,
         facilitator: { mode: 'remote', url: FACILITATOR_URL, auth: authBlock() },
       },
@@ -125,53 +125,22 @@ function rawConfig(overrides: { allowMainnet?: boolean } = {}): Record<string, u
 
 const describeOrSkip = missing.length === 0 ? describe : describe.skip;
 
-describeOrSkip('Base mainnet — real funds', () => {
+describeOrSkip('Base mainnet - real funds', () => {
   let gateway: GatewayInstance;
   let store: ReceiptStore;
   let buyer: `0x${string}`;
-  /** Everything the gateway logged, for the credential-leak assertion. */
+  // Everything the gateway logged, for the credential-leak assertion
   const logged: string[] = [];
 
-  function balances(): Promise<BalanceSnapshot> {
-    return readBalances({
-      rpcUrl: RPC_URL,
-      asset: USDC,
-      buyer,
-      merchant: MERCHANT as `0x${string}`,
-    });
-  }
+  const balanceQuery = () => ({
+    rpcUrl: RPC_URL,
+    asset: USDC,
+    buyer,
+    merchant: MERCHANT as `0x${string}`,
+  });
 
-  /**
-   * Independent RPC nodes do not give read-your-writes: the facilitator
-   * confirms against its node and returns while ours is still a block behind.
-   * The expected delta stays exact; only the waiting is tolerant.
-   *
-   * Read errors inside the window are tolerated too, and that is not
-   * laxity — a public RPC rate-limiting the poll is not evidence about the
-   * payment. Failing there once reported a settlement that had plainly
-   * happened as a failure. If the deadline passes the last snapshot is
-   * returned and the exact-delta assertion fails on real numbers, or the
-   * underlying error surfaces if nothing was ever read.
-   */
-  async function waitForBalances(
-    predicate: (snapshot: BalanceSnapshot) => boolean,
-    timeoutMs = 180_000,
-  ): Promise<BalanceSnapshot> {
-    const deadline = Date.now() + timeoutMs;
-    let snapshot: BalanceSnapshot | undefined;
-    let lastError: unknown;
-    while (Date.now() < deadline) {
-      try {
-        snapshot = await balances();
-        lastError = undefined;
-        if (predicate(snapshot)) return snapshot;
-      } catch (err) {
-        lastError = err;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 6_000));
-    }
-    if (snapshot) return snapshot;
-    throw lastError ?? new Error('no balance snapshot was ever read');
+  function balances(): Promise<BalanceSnapshot> {
+    return readBalances(balanceQuery());
   }
 
   beforeAll(async () => {
@@ -185,7 +154,7 @@ describeOrSkip('Base mainnet — real funds', () => {
     await store.init();
 
     // Captures everything the gateway and provider log, so the last assertion
-    // can prove no credential reached any of it.
+    // can prove no credential reached it
     const capture = (line: unknown, ...rest: unknown[]): void => {
       logged.push(JSON.stringify([line, ...rest]));
     };
@@ -221,8 +190,8 @@ describeOrSkip('Base mainnet — real funds', () => {
         }),
       ],
       protocolAdapters: [],
-      // Stubbed on purpose: this suite asks whether real money moved, and the
-      // HTTP backend path is covered by the deterministic local E2E.
+      // Stubbed: this suite asks whether real money moved, and the local E2E
+      // suites cover the HTTP backend path
       backend: {
         call: async () => ({
           status: 200,
@@ -239,9 +208,8 @@ describeOrSkip('Base mainnet — real funds', () => {
   });
 
   it('refuses a mainnet config that has not opted in', () => {
-    // The guard is the reason this file can exist at all. If it ever stops
-    // firing, every other assertion here is being made about a deployment that
-    // could have been created by accident.
+    // If this guard stops firing, a mainnet deployment could be created by
+    // accident
     try {
       parseConfig(rawConfig({ allowMainnet: false }), process.env);
       expect.unreachable('a mainnet config without allowMainnet must be refused');
@@ -261,11 +229,11 @@ describeOrSkip('Base mainnet — real funds', () => {
     expect(x402.facilitator).toEqual({ mode: 'remote' });
   }, 60_000);
 
-  it('settles real USDC on Base, delivers once, and refuses the same authorisation twice', async () => {
+  it('settles real USDC on Base, delivers once, and refuses the same authorization twice', async () => {
     const before = await balances();
     expect(
       before.buyer,
-      `buyer ${buyer} holds no USDC on Base — this suite cannot run without real funds`,
+      `buyer ${buyer} holds no USDC on Base - this suite cannot run without real funds`,
     ).toBeGreaterThan(0n);
 
     const challenge = await gateway.server.inject({
@@ -281,7 +249,6 @@ describeOrSkip('Base mainnet — real funds', () => {
 
     const proof = await createPaymentProof({
       buyerPrivateKey: BUYER_KEY as `0x${string}`,
-      rpcUrl: RPC_URL,
       accepts,
     });
 
@@ -302,20 +269,26 @@ describeOrSkip('Base mainnet — real funds', () => {
     expect(settlement.success).toBe(true);
     expect(settlement.network).toBe(NETWORK);
 
-    // The chain, not the HTTP status.
-    const after = await waitForBalances((snapshot) => snapshot.buyer < before.buyer);
+    // The chain, not the HTTP status
+    const after = await waitForBalances(
+      balanceQuery(),
+      (snapshot) => snapshot.buyer < before.buyer,
+      180_000,
+    );
     assertBalanceDelta(before, after, amountBaseUnits);
     await assertTransactionSucceeded(RPC_URL, settlement.transaction);
 
-    // The receipt records where to find it, and that delivery happened.
+    // The receipt records where to find the settlement
     const receipts = await store.listReceipts();
     const settled = receipts.find((r) => r.payment?.externalReference === settlement.transaction);
     expect(settled, 'no receipt carries the settlement transaction').toBeDefined();
     expect(settled?.payment?.status).toBe('settled');
-    expect(settled?.deliveredAt).toBeDefined();
+    // A 2xx backend status is what marks the receipt delivered
+    expect(settled?.backendStatus).toBeGreaterThanOrEqual(200);
+    expect(settled?.backendStatus).toBeLessThan(300);
 
-    // Delivered exactly once: the same authorisation presented again is
-    // refused, and no second transfer follows it.
+    // Delivered exactly once: the same authorization presented again is
+    // refused, and no second transfer follows it
     const replay = await gateway.server.inject({
       method: 'POST',
       url: `/api/resources/${RESOURCE_ID}/invoke`,
@@ -332,9 +305,8 @@ describeOrSkip('Base mainnet — real funds', () => {
       ),
     ).toHaveLength(1);
 
-    // eslint-disable-next-line no-console
     console.log(
-      `[mainnet] settled ${accepts['amount']} base units to ${MERCHANT} — ` +
+      `[mainnet] settled ${accepts['amount']} base units to ${MERCHANT} - ` +
         `https://basescan.org/tx/${settlement.transaction}`,
     );
   }, 600_000);

@@ -3,10 +3,8 @@
  *
  * Drives `createMcpAdapter()` through a real MCP `Client` over the real
  * Streamable HTTP transport (a throwaway `node:http` server wrapping
- * `handleHttp`) — never by calling internal adapter functions directly.
- * Uses a fake `ExecutionPipeline` and a fake `ResourceRegistry` built from
- * canonical `CommerceResource` fixtures; no dependency on gateway, config or
- * payment-x402.
+ * `handleHttp`), never through internal adapter functions. The pipeline and
+ * resource registry are fakes built from canonical `CommerceResource` fixtures.
  *
  * Run with: npx vitest run tests/conformance/mcp
  */
@@ -14,7 +12,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { type CallToolResult, LATEST_PROTOCOL_VERSION } from '@modelcontextprotocol/sdk/types.js';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   type CanonicalRequest,
   COMMERCE_ERROR_HTTP_STATUS,
@@ -23,10 +21,9 @@ import {
   DELIVERY_SUMMARY_META_KEY,
   type ExecutionOutcome,
   type HttpProtocolAdapter,
-  toErrorEnvelope,
-} from '../../../src/core/index.js';
-import { createMcpAdapter } from '../../../src/protocols/mcp/index.js';
-import { createFakeContext, type FakeExecutionPipeline } from './fakes.js';
+} from '../../../src/core';
+import { createMcpAdapter } from '../../../src/protocols/mcp';
+import { createFakeContext, type FakeExecutionPipeline } from './fakes';
 import {
   DYNAMIC_PRICED_RESOURCE,
   FREE_ECHO_RESOURCE,
@@ -35,9 +32,9 @@ import {
   NO_SCHEMA_RESOURCE,
   PAID_NO_METHOD_RESOURCE,
   PAID_WEATHER_RESOURCE,
-} from './fixtures.js';
-import { EXPECTED_MCP_PROTOCOL_REVISION } from './protocol-revision.fixture.js';
-import { type RunningAdapterServer, startAdapterServer } from './support.js';
+} from './fixtures';
+import { EXPECTED_MCP_PROTOCOL_REVISION } from './protocol-revision.fixture';
+import { type RunningAdapterServer, startAdapterServer } from './support';
 
 interface Harness {
   readonly adapter: HttpProtocolAdapter;
@@ -59,9 +56,8 @@ async function setup(
   const server = await startAdapterServer(adapter);
   const client = new Client({ name: 'conformance-client', version: '0.0.0-test' });
   const transport = new StreamableHTTPClientTransport(new URL(`${server.url}${adapter.mountPath}`));
-  // Same exactOptionalPropertyTypes vs. SDK accessor-typing mismatch as the
-  // server side (see src/protocols/mcp/adapter.ts) — the SDK's own
-  // class declaration asserts `implements Transport`.
+  // The same exactOptionalPropertyTypes mismatch with the SDK's accessor typing
+  // as on the server side (see src/protocols/mcp/adapter.ts)
   await client.connect(transport as Transport);
 
   const harness: Harness = { adapter, pipeline, server, client, transport };
@@ -82,7 +78,7 @@ afterEach(async () => {
 /**
  * `Client.callTool`'s declared return type is a union that also covers
  * task-based tool execution (`{ toolResult,... }`); none of these fixtures
- * register a task-based tool, so the runtime shape is always `CallToolResult`.
+ * register a task-based tool, so the runtime shape is always `CallToolResult`
  */
 async function callTool(
   client: Client,
@@ -111,11 +107,12 @@ describe('mcp adapter: descriptor and support matrix', () => {
     expect(adapter.descriptor.kind).toBe('protocol');
     expect(adapter.descriptor.status).toBe('stable');
     expect(adapter.descriptor.capabilities).toEqual(['tools/list', 'tools/call']);
+    // The adapter leaves Host and Origin checks to the gateway, so a deployment
+    // mounting it elsewhere must be told it has none
     expect(adapter.descriptor.unsupported ?? []).toEqual(
-      expect.arrayContaining(['resources', 'prompts', 'sampling']),
+      expect.arrayContaining(['resources', 'prompts', 'sampling', 'dns-rebinding-protection']),
     );
-    // Cross-check against the fixture that records the exact negotiated
-    // revision, and against the SDK constant itself — all three must agree.
+    // The negotiated revision, the fixture and the SDK constant must all agree
     expect(adapter.descriptor.supportedSpec).toBe(LATEST_PROTOCOL_VERSION);
     expect(adapter.descriptor.supportedSpec).toBe(EXPECTED_MCP_PROTOCOL_REVISION);
   });
@@ -245,7 +242,7 @@ describe('mcp adapter: invocation', () => {
     expect(sc.code).toBe('RESOURCE_NOT_FOUND');
   });
 
-  it('gates tools/call on exposedVia: a resource exposed only via http is absent from tools/list AND rejected by tools/call (defence in depth against a crafted call)', async () => {
+  it('hides an http-only resource from tools/list and refuses a crafted tools/call for it', async () => {
     const h = await setup([FREE_ECHO_RESOURCE, HTTP_ONLY_RESOURCE]);
     h.pipeline.handler = () => {
       throw new Error('must not be called for a resource not exposed via mcp');
@@ -260,7 +257,7 @@ describe('mcp adapter: invocation', () => {
     expect(result.isError).toBe(true);
     const sc = structured(result);
     expect(sc.code).toBe('RESOURCE_NOT_FOUND');
-    // Must not reveal that the resource exists but is scoped to another protocol.
+    // Must not reveal that the resource exists but is scoped to another protocol
     expect(JSON.stringify(sc).toLowerCase()).not.toContain('http');
   });
 
@@ -388,12 +385,12 @@ describe('mcp adapter: invocation', () => {
       arguments: { city: 'Berlin', _payment: 'base64-x402-proof' },
     });
 
-    // Merchant payload is exactly what it was before this feature existed.
+    // The merchant payload is untouched
     expect(result.isError).toBeFalsy();
     expect(result.structuredContent).toEqual({ forecast: 'sunny' });
     expect(firstText(result)).toBe(JSON.stringify({ forecast: 'sunny' }));
 
-    // Out-of-band delivery summary lives in _meta, built only from toDeliverySummary.
+    // The delivery summary rides out of band in _meta, built only by toDeliverySummary
     const meta = result._meta as Record<string, unknown> | undefined;
     expect(meta).toBeDefined();
     const summary = meta?.[DELIVERY_SUMMARY_META_KEY] as Record<string, unknown>;
@@ -444,7 +441,7 @@ describe('mcp adapter: invocation', () => {
       receiptId: 'receipt-free-meta',
       deliveredAt: '2026-07-12T00:00:00.000Z',
     });
-    // Free resource: no payment block at all, not an empty object.
+    // Free resource: no payment block at all, not an empty object
     expect(summary).not.toHaveProperty('payment');
   });
 
@@ -466,16 +463,16 @@ describe('mcp adapter: invocation', () => {
       durationMs: 1,
     });
 
-    // paymentMethods: ['x402'] -> forwarded as method: 'x402'.
+    // paymentMethods: ['x402'] -> forwarded as method: 'x402'
     await callTool(h.client, {
       name: 'get-weather',
       arguments: { city: 'Berlin', _payment: 'proof-a' },
     });
     expect(h.pipeline.lastRequest?.payment).toEqual({ method: 'x402', payload: 'proof-a' });
 
-    // paymentMethods: [] -> no method to derive, so the proof is dropped
-    // (not forwarded under an invented rail) while input stripping still
-    // happens and the pipeline still runs — it decides what happens next.
+    // paymentMethods: [] -> no method to derive, so the proof is dropped rather
+    // than forwarded under an invented rail; the field is still stripped and the
+    // pipeline still decides what happens next
     await callTool(h.client, {
       name: 'no-method-paid',
       arguments: { q: 'x', _payment: 'proof-b' },
@@ -570,7 +567,7 @@ describe('mcp adapter: invocation', () => {
     },
   );
 
-  it('maps a non-CommerceError thrown by the pipeline to INTERNAL_ERROR with no internal detail leaked, in.message or.stack', async () => {
+  it('maps a non-CommerceError thrown by the pipeline to INTERNAL_ERROR, leaking neither its message nor its stack', async () => {
     const h = await setup([FREE_ECHO_RESOURCE]);
     const SECRET = 'connect ECONNREFUSED 10.20.30.40:5432 (internal-billing-db.corp.internal)';
     const raw = new Error(SECRET);
@@ -586,10 +583,8 @@ describe('mcp adapter: invocation', () => {
     expect(sc.code).toBe('INTERNAL_ERROR');
     expect(sc).not.toHaveProperty('stack');
 
-    // Check the *entire* serialised result — structuredContent AND every
-    // content[].text — not just structuredContent, and with the secret in
-    //.message (not just.stack): a fix that only strips.stack would still
-    // leak an untrusted.message straight through and pass a narrower check.
+    // Checks the whole serialized result, content[].text included, with the
+    // secret in `.message`: stripping only `.stack` would still leak the message
     const fullResult = JSON.stringify(result);
     expect(fullResult).not.toContain(SECRET);
     expect(fullResult).not.toContain('/very/secret/path/file.ts');
@@ -624,12 +619,8 @@ describe('mcp adapter: invocation', () => {
 });
 
 describe('mcp adapter: batch fan-out', () => {
-  /**
-   * Must match `MAX_CONCURRENT_TOOL_CALLS` / `MAX_QUEUED_TOOL_CALLS` in
-   * `src/protocols/mcp/adapter.ts`. Not imported — neither constant
-   * is part of this package's public surface — so keep these in sync by
-   * hand if either cap ever changes.
-   */
+  // Must match MAX_CONCURRENT_TOOL_CALLS and MAX_QUEUED_TOOL_CALLS in
+  // src/protocols/mcp/adapter.ts, which does not export them
   const EXPECTED_CONCURRENCY_CAP = 8;
   const EXPECTED_QUEUE_CAP = 64;
   const EXPECTED_TOTAL_ADMITTED = EXPECTED_CONCURRENCY_CAP + EXPECTED_QUEUE_CAP;
@@ -666,12 +657,9 @@ describe('mcp adapter: batch fan-out', () => {
     messages: unknown[],
     signal?: AbortSignal,
   ): Promise<Response> {
-    // A raw JSON-RPC batch, sent directly with `fetch` rather than through
-    // the SDK `Client` — the `Client` never builds a batch itself, but the
-    // wire format is a plain array and the transport accepts it from any
-    // caller (this is exactly the shape measured: one POST, no prior
-    // `initialize`, because this adapter runs the transport in stateless
-    // mode — see the adapter's module doc).
+    // A raw JSON-RPC batch sent with `fetch`: the SDK `Client` never builds one,
+    // but the transport accepts a plain array from any caller, with no prior
+    // `initialize` in stateless mode
     return fetch(`${h.server.url}${h.adapter.mountPath}`, {
       method: 'POST',
       headers: {
@@ -692,9 +680,8 @@ describe('mcp adapter: batch fan-out', () => {
     h.pipeline.handler = async (request) => {
       inFlight++;
       peak = Math.max(peak, inFlight);
-      // Long enough relative to scheduling overhead that genuinely
-      // concurrent executions overlap and get counted, short enough that
-      // the (now-bounded) admitted set doesn't make the test slow.
+      // Long enough for concurrent executions to overlap and be counted, short
+      // enough that the admitted set does not slow the test
       await new Promise((resolve) => setTimeout(resolve, 5));
       inFlight--;
       return deliveredOutcome(request);
@@ -702,51 +689,40 @@ describe('mcp adapter: batch fan-out', () => {
 
     const res = await postBatch(h, rawBatch('echo', BATCH_SIZE));
     expect(res.status).toBe(200);
-    await res.text(); // drain the SSE stream fully — resolves once every response is sent
+    await res.text(); // drain the SSE stream; resolves once every response is sent
 
-    // the queue itself is now bounded, so of 1000 requested calls
-    // only cap+queue (72) ever reach the pipeline — the rest are rejected
-    // immediately, without ever touching pipeline.execute(). Pre-fix this
-    // was 1000 (every queued call eventually ran, unbounded).
+    // Of 1000 requested calls only cap + queue (72) reach the pipeline; the
+    // rest are rejected at once without touching pipeline.execute()
     expect(h.pipeline.requests.length).toBe(EXPECTED_TOTAL_ADMITTED);
-    // (unchanged by this round): still true that none of
-    // those 72 ever ran more than EXPECTED_CONCURRENCY_CAP at once.
+    // No more than EXPECTED_CONCURRENCY_CAP of those 72 ever ran at once
     expect(peak).toBeGreaterThan(1); // sanity: this test can detect real concurrency
     expect(peak).toBeLessThanOrEqual(EXPECTED_CONCURRENCY_CAP);
   });
 
   it('stops starting new pipeline.execute() calls once the client disconnects, instead of finishing a large batch in the background', async () => {
     const h = await setup([FREE_ECHO_RESOURCE]);
-    // Slow enough that, pre-fix, a client that disconnects early would
-    // still find its whole admitted batch still grinding away well after
-    // — mirrors the measured "aborted at 400ms, 3000 of 3000 done 5s
-    // later" case, scaled down for test speed.
+    // Slow enough that an admitted batch would still be running well after an
+    // early disconnect if queued calls ignored it
     h.pipeline.handler = async (request) => {
       await new Promise((resolve) => setTimeout(resolve, 40));
       return deliveredOutcome(request);
     };
 
     const controller = new AbortController();
-    // Large enough to fill concurrency + queue with plenty to spare, so
-    // whether the abort lands slightly early or late relative to dispatch,
-    // there is always more admitted work than could have finished by the
-    // time we check.
+    // Fills concurrency and queue with room to spare, so however the abort
+    // lands relative to dispatch, more work is admitted than could finish
     const fetchPromise = postBatch(h, rawBatch('echo', 300), controller.signal).catch(
-      () => undefined, // aborting rejects the client's own fetch; only server-side behaviour matters here
+      () => undefined, // aborting rejects the client's own fetch; only server-side behavior matters here
     );
 
-    // Let dispatch happen (it is synchronous once the request lands — see
-    // the adapter's module doc on the transport's onmessage loop) and a
-    // handful of calls actually start, then disconnect long before the
-    // batch could possibly finish.
+    // Let the synchronous dispatch land and a few calls start, then disconnect
+    // long before the batch could finish
     await new Promise((resolve) => setTimeout(resolve, 15));
     controller.abort();
     await fetchPromise;
 
-    // Two settle-checks with a gap: pre-fix, the count keeps climbing
-    // through this whole window (every queued call eventually runs, abort
-    // or not). Post-fix it must plateau almost immediately once whatever
-    // was already in flight at disconnect time finishes.
+    // Two checks with a gap: the count must plateau once the calls already in
+    // flight at disconnect finish, not keep climbing as queued calls start
     await new Promise((resolve) => setTimeout(resolve, 300));
     const first = h.pipeline.requests.length;
     await new Promise((resolve) => setTimeout(resolve, 300));
@@ -756,84 +732,41 @@ describe('mcp adapter: batch fan-out', () => {
     expect(second).toBeLessThan(300); // and nowhere near the full batch
   });
 
-  it('does not head-of-line-block an honest single call behind a large queued batch', async () => {
+  it('the queue-full rejection carries a wire envelope that is retryable (GATEWAY_BUSY, HTTP 503)', async () => {
     const h = await setup([FREE_ECHO_RESOURCE]);
-    // Near-instant, matching the shape of the concurrency probes this came
-    // from — the point of this test is queueing behaviour, not backend
-    // latency.
-    h.pipeline.handler = async (request) => deliveredOutcome(request);
-
-    // Large enough to saturate concurrency + queue.
-    void postBatch(h, rawBatch('echo', 1000)).then((r) => r.text());
-
-    const start = Date.now();
-    const honest = await callTool(h.client, { name: 'echo', arguments: { message: 'honest' } });
-    const elapsedMs = Date.now() - start;
-
-    // Bounded admission means an honest caller is never stuck waiting for
-    // attacker traffic to drain — it either gets a slot promptly or is
-    // rejected immediately because the queue is already full (see
-    // `GATEWAY_BUSY` in the adapter). Either outcome is fast; "eventually,
-    // slowly, after everyone ahead of it" is exactly what a bounded queue
-    // exists to rule out. Generous bound for test-machine jitter — the
-    // equivalent case measured 10-15ms.
-    expect(elapsedMs).toBeLessThan(1000);
-    expect(honest.isError === true || honest.structuredContent !== undefined).toBe(true);
-  });
-
-  it('the queue-full rejection carries a wire envelope that is honestly retryable (GATEWAY_BUSY, HTTP 503)', async () => {
-    const h = await setup([FREE_ECHO_RESOURCE]);
-    // Slow enough that the saturating batch is still fully queued (none of
-    // it has had a chance to drain) by the time the honest call below is
-    // dispatched — makes the queue-full rejection deterministic rather than
-    // a race against a fast-draining handler.
+    // Every admitted call is held until the end, so the saturating batch is
+    // still queued when the honest call below arrives
+    let releaseHeldCalls = (): void => {};
+    const held = new Promise<void>((resolve) => {
+      releaseHeldCalls = resolve;
+    });
     h.pipeline.handler = async (request) => {
-      await new Promise((resolve) => setTimeout(resolve, 200));
+      await held;
       return deliveredOutcome(request);
     };
 
-    // Saturate concurrency (8) + queue (64) = 72 with plenty to spare.
-    void postBatch(h, rawBatch('echo', 500)).then((r) => r.text());
-    await new Promise((resolve) => setTimeout(resolve, 15)); // let the synchronous dispatch land first
+    // Saturate concurrency (8) + queue (64) = 72 with plenty to spare
+    const batch = postBatch(h, rawBatch('echo', 500)).then((r) => r.text());
+    // The transport dispatches a whole batch before any call reaches the
+    // pipeline, so a full concurrency slot means a full queue
+    await vi.waitFor(() => expect(h.pipeline.requests).toHaveLength(EXPECTED_CONCURRENCY_CAP), {
+      timeout: 5000,
+    });
 
-    // This call is on its own connection (the harness's `h.client`), so —
-    // unlike a disconnected caller — its result is fully observable. The
-    // adapter-wide queue being full rejects it the same way it would reject
-    // the 429th message of one giant batch.
+    // On its own connection (the harness's `h.client`), so its result is
+    // observable; the full adapter-wide queue rejects it as it would any message
+    // of one giant batch past the first 72
     const rejected = await callTool(h.client, { name: 'echo', arguments: { message: 'honest' } });
+    releaseHeldCalls();
+    await batch;
 
     expect(rejected.isError).toBe(true);
-    // Assert on the envelope a client actually receives (`structuredContent`,
-    // built by `toErrorEnvelope`) — not just the thrown code — because the
-    // whole bug this closes is the wire representation contradicting the
-    // prose ("retry later" next to `retryable: false`).
+    // Checks the envelope a client receives (`structuredContent`, built by
+    // `toErrorEnvelope`), whose `retryable` must agree with "retry later"
     const envelope = rejected.structuredContent as { code: string; retryable: boolean };
     expect(envelope.code).toBe('GATEWAY_BUSY');
     expect(envelope.retryable).toBe(true);
     expect(COMMERCE_ERROR_HTTP_STATUS[envelope.code as CommerceErrorCode]).toBe(503);
-  });
-
-  it('the disconnect rejection stays honestly non-retryable, and uses a different code than the queue-full rejection', () => {
-    // The disconnected-caller path (src/protocols/mcp/adapter.ts,
-    // both `signal.aborted` checks in handleToolCall/acquireToolCallSlot)
-    // is not observable end-to-end the way the queue-full path above is:
-    // its whole premise is that nobody is left listening on that
-    // connection, so there is no wire response a test client could ever
-    // read back. The "stops starting new pipeline.execute() calls once the
-    // client disconnects" test above already proves that code path runs
-    // (admitted-call count stops growing after abort); this test proves the
-    // other half — that the exact code it throws is honestly non-retryable
-    // — by constructing the identical envelope the adapter would produce.
-    // Message text must match `adapter.ts`'s disconnect throw sites by hand.
-    const envelope = toErrorEnvelope(
-      new CommerceError('PROTOCOL_UNSUPPORTED', 'Client disconnected while queued.'),
-    );
-    expect(envelope.retryable).toBe(false);
-    expect(COMMERCE_ERROR_HTTP_STATUS[envelope.code]).not.toBe(503);
-    // The two rejection paths must never collapse onto the same code — that
-    // is exactly the bug closed (a transient throttle and "caller is
-    // gone" are different conditions with different retry semantics).
-    expect(envelope.code).not.toBe('GATEWAY_BUSY');
   });
 });
 
@@ -847,18 +780,41 @@ describe('mcp adapter: transport and lifecycle', () => {
     expect(body.error.message.toLowerCase()).toContain('method not allowed');
   });
 
-  it('reports 503 for handleHttp before start() and pass health after start()', async () => {
+  it('answers 503 before start() and after stop(), and reports health to match', async () => {
     const adapter = createMcpAdapter();
-    const before = await adapter.health();
-    expect(before.status).toBe('fail');
+    const { context, pipeline } = createFakeContext({ resources: [FREE_ECHO_RESOURCE] });
+    const server = await startAdapterServer(adapter);
+    const callEcho = () =>
+      fetch(`${server.url}${adapter.mountPath}`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          accept: 'application/json, text/event-stream',
+        },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'tools/call',
+          params: { name: 'echo', arguments: { message: 'hi' } },
+        }),
+      });
 
-    const { context } = createFakeContext({ resources: [FREE_ECHO_RESOURCE] });
-    await adapter.start(context);
-    const after = await adapter.health();
-    expect(after.status).toBe('pass');
-    expect(after.detail).toContain('1 tool');
+    try {
+      expect((await adapter.health()).status).toBe('fail');
+      expect((await callEcho()).status).toBe(503);
 
-    await adapter.stop();
+      await adapter.start(context);
+      const after = await adapter.health();
+      expect(after.status).toBe('pass');
+      expect(after.detail).toContain('1 tool');
+
+      await adapter.stop();
+      expect((await adapter.health()).status).toBe('fail');
+      expect((await callEcho()).status).toBe(503);
+      expect(pipeline.requests).toHaveLength(0);
+    } finally {
+      await server.close();
+    }
   });
 
   it('stop() is idempotent and never throws', async () => {

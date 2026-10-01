@@ -4,8 +4,7 @@
  */
 
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import type { GatewayConfig } from '../config/index.js';
-import type { EventBus } from '../core/execution/index.js';
+import type { GatewayConfig } from '../config';
 import {
   AUTHORIZATION_HEADER,
   type AuthorizationProvider,
@@ -25,15 +24,13 @@ import {
   toCommerceError,
   toErrorEnvelope,
   toPaymentRequiredEnvelope,
-} from '../core/index.js';
-import { buildOperatorTokenHook } from './access-control.js';
-import type { AdapterRuntime } from './adapters.js';
-import { toPublicResource } from './public-resource.js';
-import { createReadinessProbe } from './readiness.js';
-import { buildWellKnownDocument } from './well-known.js';
-
-const SSE_HEARTBEAT_MS = 15_000;
-const MAX_SSE_SUBSCRIBERS = 32;
+} from '../core';
+import { isRecord } from '../core/is-record';
+import { buildOperatorTokenHook } from './access-control';
+import type { AdapterRuntime } from './adapters';
+import { toPublicResource } from './public-resource';
+import { createReadinessProbe } from './readiness';
+import { buildWellKnownDocument } from './well-known';
 
 export interface RegisterRoutesOptions {
   readonly server: FastifyInstance;
@@ -43,7 +40,6 @@ export interface RegisterRoutesOptions {
   readonly store: ReceiptStore;
   readonly paymentProviders: readonly PaymentProvider[];
   readonly authorizationProviders: readonly AuthorizationProvider[];
-  readonly eventBus: EventBus;
   readonly clock: Clock;
   readonly adapterRuntimes: readonly AdapterRuntime[];
   readonly logger: Logger;
@@ -52,10 +48,8 @@ export interface RegisterRoutesOptions {
 export function registerRoutes(options: RegisterRoutesOptions): void {
   const { server } = options;
 
-  // memoised + single-flight — see readiness.ts's own doc comment.
-  // `options.adapterRuntimes` is mutated in place (pushed into) after
-  // adapters start, so capturing the reference here is fine — the probe
-  // always reads whatever it currently holds.
+  // `adapterRuntimes` is filled in place once adapters start, so the probe
+  // reads the live list
   const readinessProbe = createReadinessProbe({
     store: options.store,
     adapterRuntimes: options.adapterRuntimes,
@@ -79,8 +73,7 @@ export function registerRoutes(options: RegisterRoutesOptions): void {
       paymentProviders: options.paymentProviders,
       authorizationProviders: options.authorizationProviders,
       store: options.store,
-      adapterRuntimes: options.adapterRuntimes,
-      clock: options.clock,
+      adapters: await readinessProbe.adapterHealth(),
     }),
   );
 
@@ -92,110 +85,36 @@ export function registerRoutes(options: RegisterRoutesOptions): void {
     await handleInvoke(request, reply, options);
   });
 
-  // The admin-token gate is a per-route hook on each of these three
-  // route definitions (not the global onRequest hook) — see
-  // access-control.ts's file header for why. Fastify only invokes it once
-  // routing has matched this exact route, so there is no percent-encoded
-  // path string left for an attacker to disagree with the router about.
-  const receiptsTokenHook = buildOperatorTokenHook(options.config.server.adminToken);
-  const eventsTokenHook = buildOperatorTokenHook(options.config.server.adminToken);
-  const eventsStreamTokenHook = buildOperatorTokenHook(options.config.server.adminToken);
+  // The admin token gate is per route, not global; access-control.ts says why
+  const tokenHook = buildOperatorTokenHook(options.config.server.adminToken);
 
-  server.get('/api/receipts', { onRequest: receiptsTokenHook }, async (request, reply) => {
+  server.get(
+    '/api/receipts',
+    { onRequest: tokenHook },
+    ledgerHandler('receipts', (list) => options.store.listReceipts(list)),
+  );
+  server.get(
+    '/api/events',
+    { onRequest: tokenHook },
+    ledgerHandler('events', (list) => options.store.listEvents(list)),
+  );
+}
+
+// `GET /api/receipts` and `GET /api/events`: one page of a ledger
+function ledgerHandler<K extends string>(
+  key: K,
+  list: (options: { limit?: number }) => Promise<unknown>,
+): (request: FastifyRequest, reply: FastifyReply) => Promise<Record<K, unknown> | undefined> {
+  return async (request, reply) => {
     try {
       const limit = parseLimit((request.query as Record<string, unknown>)['limit']);
-      return { receipts: await options.store.listReceipts(limit !== undefined ? { limit } : {}) };
+      return { [key]: await list(limit !== undefined ? { limit } : {}) } as Record<K, unknown>;
     } catch (error) {
       const commerceError = toCommerceError(error);
       reply.status(commerceError.httpStatus).send(toErrorEnvelope(commerceError));
       return undefined;
     }
-  });
-
-  server.get('/api/events', { onRequest: eventsTokenHook }, async (request, reply) => {
-    try {
-      const limit = parseLimit((request.query as Record<string, unknown>)['limit']);
-      return { events: await options.store.listEvents(limit !== undefined ? { limit } : {}) };
-    } catch (error) {
-      const commerceError = toCommerceError(error);
-      reply.status(commerceError.httpStatus).send(toErrorEnvelope(commerceError));
-      return undefined;
-    }
-  });
-
-  let activeSseSubscribers = 0;
-
-  server.get('/api/events/stream', { onRequest: eventsStreamTokenHook }, (request, reply) => {
-    // cap concurrent subscribers — the token hook above already
-    // rejects an unauthenticated client before this handler runs; this cap
-    // is about an *authenticated* client that never reads, which would
-    // otherwise let Node buffer indefinitely, N times over.
-    if (activeSseSubscribers >= MAX_SSE_SUBSCRIBERS) {
-      reply.status(503).send({
-        status: 'error',
-        code: 'UNAVAILABLE',
-        message: 'Too many event-stream subscribers',
-      });
-      return;
-    }
-    reply.raw.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      Connection: 'keep-alive',
-    });
-    // Increment only after writeHead succeeds: if it threw, cleanup() below
-    // was never registered, and incrementing first would leak the slot
-    // permanently (after MAX_SSE_SUBSCRIBERS such leaks, the route is dead).
-    activeSseSubscribers += 1;
-    reply.raw.write(': connected\n\n');
-
-    // Backpressure: write() returning false means the socket buffer
-    // is full. Drop frames — not queue them — until 'drain'; an SSE feed is
-    // "latest state", not a guaranteed-delivery log, and queuing unboundedly
-    // is the exact memory-growth problem this is meant to avoid.
-    let writable = true;
-    reply.raw.on('drain', () => {
-      writable = true;
-    });
-
-    // no `event:` line — the dashboard's EventSource only listens for
-    // the default `message` type, and a named event never reaches onmessage
-    // (onopen still fires, so the client reports "live" over a frozen feed).
-    // `data:` already carries `type` in the serialised payload.
-    //
-    // queueMicrotask decouples fan-out from the caller: EventBus#emit() is
-    // awaited inside the execution pipeline, so writing synchronously here
-    // would add a slow SSE reader's latency to the payment path.
-    const unsubscribe = options.eventBus.subscribe((event) => {
-      queueMicrotask(() => {
-        if (!writable) return;
-        writable = reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
-      });
-    });
-
-    const heartbeat = setInterval(() => {
-      if (!writable) return;
-      writable = reply.raw.write(': heartbeat\n\n');
-    }, SSE_HEARTBEAT_MS);
-    heartbeat.unref();
-
-    // Guards against a double-decrement if both 'close' and 'error' fire for
-    // the same connection (never actually observed — 40 connect/destroy
-    // cycles could not trigger it — but the guard is one line and removes
-    // the question).
-    let cleanedUp = false;
-    const cleanup = (): void => {
-      if (cleanedUp) return;
-      cleanedUp = true;
-      clearInterval(heartbeat);
-      unsubscribe();
-      activeSseSubscribers -= 1;
-    };
-    request.raw.on('close', cleanup);
-    reply.raw.on('error', cleanup);
-
-    reply.hijack();
-  });
+  };
 }
 
 async function handleInvoke(
@@ -207,7 +126,7 @@ async function handleInvoke(
 
   try {
     const resource = options.resources.get(resourceId);
-    if (!resource || !resource.exposedVia.includes('http')) {
+    if (!resource?.exposedVia.includes('http')) {
       throw new CommerceError('RESOURCE_NOT_FOUND', `Resource "${resourceId}" was not found`, {
         requestId: request.id,
         resourceId,
@@ -226,7 +145,7 @@ async function handleInvoke(
 
     // Its own header rather than a reserved body field: HTTP already carries
     // the payment proof out of band, and an authorization inside the body
-    // would have to survive every backend input-binding mode intact.
+    // would have to survive every backend input-binding mode intact
     const authorization = parseAuthorizationHeader(
       request.headers[AUTHORIZATION_HEADER],
       request.id,
@@ -250,10 +169,8 @@ async function handleInvoke(
         const challenge = envelope.payment.envelope?.['wwwAuthenticate'];
         if (typeof challenge === 'string') reply.header('www-authenticate', challenge);
       } else if (envelope.payment.envelope !== undefined) {
-        // x402 v2 clients read the challenge from this header and never look
-        // at the body. The body is still sent — it is richer, and it is the
-        // only channel the MCP surface has — but the header is what makes an
-        // off-the-shelf client able to pay.
+        // x402 v2 clients read the challenge from this header and ignore the
+        // body, which still carries the full envelope
         reply.header(PAYMENT_REQUIRED_HEADER, encodeHeaderDocument(envelope.payment.envelope));
       }
       // A challenge is per-request (fresh nonce window, fresh expiry). Caching
@@ -273,10 +190,9 @@ async function handleInvoke(
     reply.status(outcome.backendStatus).send(outcome.body);
   } catch (error) {
     const commerceError = toCommerceError(error);
-    // a backend failure after successful settlement carries the
-    // settlement summary on details.payment (pipeline.ts) — set the same
-    // header the success path sets, so the buyer isn't told strictly less
-    // about their own payment on the error path than on the happy path.
+    // A backend failure after settlement carries the payment summary in
+    // details.payment. Send the success path's headers so the buyer still
+    // learns what they paid.
     const settledPayment = errorPaymentSummary(commerceError);
     if (settledPayment !== undefined) {
       reply.header(PAYMENT_RESPONSE_HEADER, encodePaymentSummary(settledPayment));
@@ -318,7 +234,7 @@ interface PaymentSummary {
   readonly currency: string;
   readonly network?: string;
   readonly externalReference?: string;
-  // Serialised MPP `Payment-Receipt`, when the provider issued one
+  // Serialized MPP `Payment-Receipt`, when the provider issued one
   readonly receipt?: string;
 }
 
@@ -326,9 +242,8 @@ function errorPaymentSummary(
   error: ReturnType<typeof toCommerceError>,
 ): PaymentSummary | undefined {
   const payment = error.details?.['payment'];
-  if (typeof payment !== 'object' || payment === null) return undefined;
-  const rec = payment as Record<string, unknown>;
-  const { status, provider, amount, currency, network, externalReference, receipt } = rec;
+  if (!isRecord(payment)) return undefined;
+  const { status, provider, amount, currency, network, externalReference, receipt } = payment;
   if (
     typeof status !== 'string' ||
     typeof provider !== 'string' ||
@@ -350,22 +265,17 @@ function errorPaymentSummary(
 
 /**
  * Base64 of a JSON document, the encoding every x402 v2 payment header uses.
- *
- * Hand-rolled rather than imported from the x402 SDK on purpose: this module
- * is reachable from the package's main entry point, which must import zero
- * optional peers, and it is two lines.
+ * Not imported from the x402 SDK: this module is reachable from the main
+ * entry point, which must import no optional peer.
  */
 function encodeHeaderDocument(document: unknown): string {
   return Buffer.from(JSON.stringify(document), 'utf8').toString('base64');
 }
 
 /**
- * The settlement result, in the shape an x402 v2 client decodes from
- * `PAYMENT-RESPONSE` (`SettleResponse`), mapped from the canonical
- * {@link PaymentResult} the pipeline produced.
- *
- * `provider`, `amount` and `currency` are ours and are additive: a v2 client
- * reads the fields it knows and ignores the rest.
+ * The settlement result in the `SettleResponse` shape an x402 v2 client
+ * decodes from `PAYMENT-RESPONSE`. `status`, `provider`, `amount`, `currency`
+ * and `externalReference` are ours; a v2 client ignores fields it does not know.
  */
 function encodePaymentSummary(payment: PaymentSummary): string {
   return encodeHeaderDocument({
@@ -382,9 +292,9 @@ function encodePaymentSummary(payment: PaymentSummary): string {
   });
 }
 
-/** Undefined = no limit given / unparseable (caller applies its own default). A
- * parseable but non-positive value (SQLite treats a negative LIMIT as
- * unbounded) is a caller error, not silently "no limit". */
+// Undefined when absent or unparseable, so the store applies its default. A
+// parseable value below 1 is INPUT_INVALID, because SQLite reads a negative
+// LIMIT as unbounded.
 function parseLimit(value: unknown): number | undefined {
   if (Array.isArray(value)) return parseLimit(value[0]);
   let n: number | undefined;

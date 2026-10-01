@@ -4,7 +4,6 @@
  * tests/integration/a2a-over-gateway.test.ts.
  */
 import { describe, expect, it } from 'vitest';
-import { createResourceRegistry } from '../../../src/core/execution/index.js';
 import type {
   Clock,
   CommerceResource,
@@ -14,10 +13,12 @@ import type {
   Logger,
   ProtocolAdapterContext,
   ResourceRegistry,
-} from '../../../src/core/index.js';
-import { buildAgentCard, endpointUrl } from '../../../src/protocols/a2a/agent-card.js';
-import { createA2aAdapter } from '../../../src/protocols/a2a/index.js';
-import type { A2aAgentCard } from '../../../src/protocols/a2a/types.js';
+} from '../../../src/core';
+import { createResourceRegistry } from '../../../src/core/execution';
+import { createA2aAdapter } from '../../../src/protocols/a2a';
+import { buildAgentCard } from '../../../src/protocols/a2a/agent-card';
+import type { A2aAgentCard } from '../../../src/protocols/a2a/types';
+import { joinUrl } from '../../../src/protocols/http';
 
 const NOOP_LOGGER: Logger = {
   debug: () => {},
@@ -83,7 +84,7 @@ async function cardFrom(
   return JSON.parse(res.body) as A2aAgentCard;
 }
 
-/** Drives the fixed route's handler with a minimal fake req/res pair. */
+// Drives the fixed route's handler with a minimal fake req/res pair
 async function callCardRoute(
   adapter: ReturnType<typeof createA2aAdapter>,
   method = 'GET',
@@ -186,7 +187,7 @@ describe('A2A agent card', () => {
     ['https://gateway.example.com', '/a2a/', 'https://gateway.example.com/a2a'],
     ['https://gateway.example.com//', '/a2a', 'https://gateway.example.com/a2a'],
   ])('joins %s + %s without a doubled slash', (base, mount, expected) => {
-    expect(endpointUrl(base, mount)).toBe(expected);
+    expect(joinUrl(base, mount)).toBe(expected);
   });
 
   it('builds an empty skill list rather than failing when nothing is exposed', () => {
@@ -209,9 +210,20 @@ describe('A2A adapter lifecycle', () => {
     expect(descriptor.supportedSpec).toBe('1.0.0');
     expect(descriptor.status).toBe('experimental');
     expect(descriptor.capabilities).toEqual(['agent-card', 'jsonrpc', 'SendMessage']);
-    expect(descriptor.unsupported).toContain('SendStreamingMessage');
-    expect(descriptor.unsupported).toContain('GetTask');
-    expect(descriptor.unsupported).toContain('gRPC binding');
+    // Every A2A feature the project scope leaves out is named, so no client
+    // reads the descriptor as full protocol support
+    expect(descriptor.unsupported).toEqual(
+      expect.arrayContaining([
+        'SendStreamingMessage',
+        'GetTask',
+        'long-running task persistence',
+        'push notifications',
+        'multi-turn conversational continuation',
+        'HTTP+JSON/REST binding',
+        'gRPC binding',
+        'A2A authentication schemes',
+      ]),
+    );
   });
 
   it('fails health before start and passes after, counting skills', async () => {

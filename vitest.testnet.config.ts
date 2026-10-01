@@ -1,20 +1,15 @@
 import { defineConfig } from 'vitest/config';
 
 /**
- * Public-network smoke suite. Separate from `vitest.config.ts` and
- * `vitest.e2e.config.ts` on purpose: both of those must never touch a public
- * RPC, a public chain or a hosted facilitator, and this one does all three.
+ * Base Sepolia smoke suite. It uses a public RPC, a public chain and a hosted
+ * facilitator, which `vitest.config.ts` and `vitest.e2e.config.ts` must never
+ * touch, and spends testnet funds. It is never part of `npm run verify` and
+ * skips itself without credentials. Run `npm run test:testnet` from the machine
+ * that holds the wallet.
  *
- * It spends real testnet funds, so it is never part of `npm run verify` and
- * skips itself when its credentials are absent. Run it with
- * `npm run test:testnet`, from a machine that holds the wallet.
- *
- * There is no CI workflow for it, deliberately: a workflow means a funded key
- * in repository secrets, triggerable by anyone with write access. The key
- * stays with a human.
- *
- * Timeouts are generous because a public chain's block time and a hosted
- * facilitator's queue are not ours to control.
+ * There is no CI workflow for it: a workflow means a funded key in repository
+ * secrets that anyone with write access could spend. Timeouts are generous
+ * because block times and facilitator queues are outside our control.
  */
 export default defineConfig({
   test: {

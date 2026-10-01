@@ -4,25 +4,26 @@
  * `CommerceError.message` reaches the client, and a mandate carries the
  * buyer's purchase and often personal data, so messages are fixed phrases from
  * the list below. The machine-readable code goes in `details.reason` and the
- * original exception on `cause`, which is never serialised.
+ * original exception on `cause`, which is never serialized.
  *
  * Three codes: AUTHORIZATION_INVALID when the buyer's mandate is bad,
  * AUTHORIZATION_REPLAYED when it is good but spent, and
  * AUTHORIZATION_PROVIDER_UNAVAILABLE when our verifier never reached a
  * verdict. Blaming the buyer for our outage refuses a good mandate.
  */
-import { CommerceError } from '../../core/index.js';
+import { CommerceError } from '../../core';
 
 /**
  * Coarse on purpose: a client learns roughly where its mandate was refused,
- * not which check failed. Finer detail is an oracle for probing trust policy.
+ * not which check failed. Finer detail is an oracle for probing trust policy,
+ * so a mandate signed with a disallowed algorithm reports `invalid_signature`
+ * and one declaring a digest other than sha-256 `malformed_presentation`.
  */
 export const AP2_REJECTION_REASONS = [
   'malformed_presentation',
   'untrusted_issuer',
   'unknown_key',
   'invalid_signature',
-  'unsupported_algorithm',
   'invalid_claims',
   'expired',
   'wrong_audience',
@@ -38,7 +39,6 @@ const MESSAGES: Readonly<Record<Ap2RejectionReason, string>> = {
   untrusted_issuer: 'The mandate was issued by a party this merchant does not trust.',
   unknown_key: 'The mandate names a signing key this merchant does not trust.',
   invalid_signature: 'The mandate signature did not verify.',
-  unsupported_algorithm: 'The mandate uses a signature or digest algorithm that is not accepted.',
   invalid_claims: 'The mandate is missing required claims or they are malformed.',
   expired: 'The mandate is expired or not yet valid.',
   wrong_audience: 'The mandate is addressed to a different audience.',
@@ -68,7 +68,7 @@ export function ap2Rejected(
 
 /**
  * The mandate verified but has already been presented. A separate code from
- * a bad mandate: nothing is wrong with this proof except that it is spent
+ * a bad mandate: nothing is wrong with this mandate except that it is spent.
  */
 export function ap2Replayed(state: string, context: Ap2ErrorContext = {}): CommerceError {
   return new CommerceError(

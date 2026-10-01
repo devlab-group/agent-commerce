@@ -5,7 +5,7 @@ import {
   fetchResources,
   fetchWellKnown,
   UnauthorizedError,
-} from '../src/lib/api.js';
+} from '../src/lib/api';
 
 describe('api fetch wrappers', () => {
   const originalFetch = globalThis.fetch;
@@ -51,9 +51,8 @@ describe('api fetch wrappers', () => {
     await expect(fetchResources('http://gw')).rejects.toThrow(/HTTP 503/);
   });
 
-  ///api/receipts and /api/events sit behind the
-  // gateway's admin token. A 401 must surface as an actionable, distinct
-  // error rather than a bare "HTTP 401" the UI would just render verbatim.
+  // /api/receipts and /api/events require the admin token. A 401 becomes a
+  // distinct, actionable error instead of a bare "HTTP 401".
   it('fetchReceipts throws UnauthorizedError with an actionable message on 401', async () => {
     globalThis.fetch = vi.fn(async () => new Response('nope', { status: 401 })) as typeof fetch;
     const err = await fetchReceipts('http://gw').catch((e: unknown) => e);

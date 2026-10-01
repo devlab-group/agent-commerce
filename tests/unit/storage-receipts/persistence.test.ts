@@ -3,17 +3,17 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { Logger } from '../../../src/core/index.js';
-import { createSqliteReceiptStore } from '../../../src/storage/receipts/index.js';
-import { migrate } from '../../../src/storage/receipts/schema.js';
-import { makeReceipt } from './helpers.js';
+import type { Logger } from '../../../src/core';
+import { createSqliteReceiptStore } from '../../../src/storage/receipts';
+import { migrate } from '../../../src/storage/receipts/schema';
+import { makeReceipt } from './helpers';
 
 interface CapturedWarning {
   readonly obj: Record<string, unknown>;
   readonly msg: string | undefined;
 }
 
-/** Captures warn() calls so a test can assert the raw detail went to the logger, not the caller. */
+// Captures warn() calls so a test can assert the raw detail went to the logger, not the caller
 function createCapturingLogger(): Logger & { readonly warnings: readonly CapturedWarning[] } {
   const warnings: CapturedWarning[] = [];
   const logger: Logger = {
@@ -39,7 +39,7 @@ describe('schema lifecycle', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('initialises a fresh schema on a brand-new file', async () => {
+  it('initializes a fresh schema on a brand-new file', async () => {
     const path = join(dir, 'receipts.db');
     expect(existsSync(path)).toBe(false);
 
@@ -76,6 +76,28 @@ describe('schema lifecycle', () => {
     await second.close();
   });
 
+  it('reads a receipt written before the authorization column existed', async () => {
+    // Build a v1 file: the current schema minus the column migration 2 adds
+    const path = join(dir, 'receipts.db');
+    const v1 = new Database(path);
+    migrate(v1);
+    v1.exec('ALTER TABLE receipts DROP COLUMN authorization_json');
+    v1.pragma('user_version = 1');
+    v1.prepare(
+      `INSERT INTO receipts (id, request_id, resource_id, delivered_at, backend_status)
+       VALUES ('r_legacy', 'req_legacy', 'resource.report', '2026-01-01T00:00:00.000Z', 200)`,
+    ).run();
+    v1.close();
+
+    const store = createSqliteReceiptStore({ path });
+    await store.init();
+    const fetched = await store.getReceipt('r_legacy');
+    expect(fetched?.requestId).toBe('req_legacy');
+    expect(fetched?.authorization).toBeUndefined();
+    expect((await store.health()).status).toBe('pass');
+    await store.close();
+  });
+
   it('supports:memory: for tests', async () => {
     const store = createSqliteReceiptStore({ path: ':memory:' });
     await store.init();
@@ -86,9 +108,8 @@ describe('schema lifecycle', () => {
 
   it('reports FAIL health when the on-disk schema version is ahead of what this build knows', async () => {
     const path = join(dir, 'stale.db');
-    // Simulate a file already migrated by a *newer* build: real tables exist
-    // (so statement preparation still succeeds) but user_version is bumped
-    // past what this build's migrations produce.
+    // A file migrated by a newer build: the tables exist, so statements still
+    // prepare, but user_version is past this build's last migration
     const raw = new Database(path);
     migrate(raw);
     raw.pragma('user_version = 99');
@@ -97,9 +118,10 @@ describe('schema lifecycle', () => {
     const store = createSqliteReceiptStore({ path });
     const health = await store.health();
     expect(health.status).toBe('fail');
-    // The detail is a fixed vocabulary token, never a sentence built from
-    // caught internals.
+    // A fixed vocabulary token, never text built from a caught error
     expect(health.detail).toBe('store-schema-mismatch');
+    // Startup awaits init(), so the gateway refuses to run on this file
+    await expect(store.init()).rejects.toMatchObject({ code: 'STORAGE_ERROR' });
     await store.close();
   });
 
@@ -109,26 +131,23 @@ describe('schema lifecycle', () => {
     const store = createSqliteReceiptStore({ path, logger });
     await store.init();
 
-    // Simulate permissions changing under a live connection (e.g. a host
-    // mount going read-only) rather than re-opening, since better-sqlite3
-    // refuses to open a brand-new connection against a non-writable file at
-    // all — that path never reaches health()'s catch block.
+    // Permissions change under a live connection (a host mount going
+    // read-only, say). Re-opening would not reach health(): opening a store
+    // over an unwritable file already throws in openSqliteDatabase.
     chmodSync(path, 0o444);
 
     const health = await store.health();
 
     expect(health.status).toBe('fail');
     expect(health.detail).toBe('store-unwritable');
-    // The absolute path / raw OS error text must never appear in the detail
-    // returned to an unauthenticated caller.
+    // Neither the absolute path nor the raw OS error reaches the detail
     expect(health.detail).not.toContain(path);
     expect(health.detail).not.toMatch(/EACCES|permission denied/i);
-    //...but it must not be silently lost either — it goes to the logger.
+    // The raw error goes to the logger instead
     expect(logger.warnings.length).toBeGreaterThan(0);
     expect(String(logger.warnings[0]?.obj['err'])).toMatch(/EACCES|permission denied/i);
 
-    // Restore write access before closing: better-sqlite3's WAL checkpoint
-    // on close needs it, and that is not what this test is about.
+    // The WAL checkpoint on close needs write access
     chmodSync(path, 0o644);
     await store.close();
   });
@@ -161,11 +180,8 @@ describe('an unwritable database fails at startup, not on the first payment', ()
   const posix = process.platform !== 'win32' && process.getuid?.() !== 0;
 
   it.runIf(posix)('refuses to construct a store over a read-only database file', () => {
-    // `new Database(path)` opens a file it cannot write; SQLite only complains
-    // on the first write, which on a paid resource lands after the payment
-    // attempt reservation and surfaces as an opaque STORAGE_ERROR per request.
-    // Observed for real: switching the demo containers to a non-root user left
-    // an existing named volume root-owned.
+    // Without the startup check every paid request fails its reservation with
+    // STORAGE_ERROR instead (see openSqliteDatabase)
     const dir = mkdtempSync(join(tmpdir(), 'oac-ro-'));
     const dbPath = join(dir, 'receipts.sqlite');
     createSqliteReceiptStore({ path: dbPath }).close();
@@ -177,21 +193,22 @@ describe('an unwritable database fails at startup, not on the first payment', ()
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it.runIf(posix)('control: a writable database still opens', () => {
+  it.runIf(posix)('control: a writable database still opens', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'oac-rw-'));
     const dbPath = join(dir, 'receipts.sqlite');
+    createSqliteReceiptStore({ path: dbPath }).close();
+
     const store = createSqliteReceiptStore({ path: dbPath });
-    expect(() => store.saveReceipt(makeReceipt())).not.toThrow();
-    store.close();
+    await store.saveReceipt(makeReceipt({ id: 'r_writable' }));
+    expect((await store.getReceipt('r_writable'))?.id).toBe('r_writable');
+    await store.close();
     rmSync(dir, { recursive: true, force: true });
   });
 });
 
 describe('file permissions', () => {
-  // The ledger holds payer/payee addresses, amounts, settlement transaction
-  // hashes and replay keys. `new Database(path)` opens with `0666 & ~umask`,
-  // which on a normal host is 0644 — readable by every other local user.
-  // Skipped on platforms without POSIX modes rather than asserting nonsense.
+  // SQLite would create these at 0644 (less the umask), readable by every
+  // other local user. Skipped on platforms without POSIX modes.
   const posix = process.platform !== 'win32';
 
   it.runIf(posix)('creates the database and its WAL sidecars owner-only', () => {
@@ -203,13 +220,37 @@ describe('file permissions', () => {
     const mode = (p: string): number => statSync(p).mode & 0o777;
     expect(mode(join(dir, 'nested'))).toBe(0o700);
     const files = readdirSync(join(dir, 'nested'));
-    // The -wal and -shm sidecars only exist once WAL mode is on; they carry
-    // the same rows as the database and must not be looser than it.
-    expect(files).toContain('receipts.sqlite');
+    // The -wal and -shm sidecars carry the same rows as the database
+    expect(files.sort()).toEqual(['receipts.sqlite', 'receipts.sqlite-shm', 'receipts.sqlite-wal']);
     for (const file of files) {
       expect(mode(join(dir, 'nested', file))).toBe(0o600);
     }
     store.close();
     rmSync(dir, { recursive: true, force: true });
   });
+
+  it.runIf(posix)(
+    'narrows an existing world-readable database and its sidecars to owner-only',
+    () => {
+      // A ledger left by an older build, or copied in by hand, may be 0644. The
+      // pre-create step does not change the mode of a file that already exists.
+      const dir = mkdtempSync(join(tmpdir(), 'oac-narrow-'));
+      const dbPath = join(dir, 'receipts.sqlite');
+      const legacy = new Database(dbPath);
+      migrate(legacy);
+      legacy.close();
+      chmodSync(dbPath, 0o644);
+
+      const store = createSqliteReceiptStore({ path: dbPath });
+      store.saveReceipt(makeReceipt());
+
+      const files = readdirSync(dir).sort();
+      expect(files).toEqual(['receipts.sqlite', 'receipts.sqlite-shm', 'receipts.sqlite-wal']);
+      for (const file of files) {
+        expect(statSync(join(dir, file)).mode & 0o777, file).toBe(0o600);
+      }
+      store.close();
+      rmSync(dir, { recursive: true, force: true });
+    },
+  );
 });

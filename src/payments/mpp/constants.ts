@@ -63,7 +63,5 @@ export function isMppNetwork(value: string): value is MppNetwork {
   return (MPP_NETWORKS as readonly string[]).includes(value);
 }
 
-/**
- * Compact descriptor value naming the core draft, intent and method
- */
+/** Compact descriptor value naming the core draft, intent and method */
 export const MPP_SUPPORTED_SPEC = `mpp/${MPP_SPEC_DRAFTS.core} intent=${MPP_PROFILE.intent} method=${MPP_PROFILE.method}`;

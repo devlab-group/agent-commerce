@@ -1,15 +1,17 @@
 /**
- * The single execution path every protocol adapter converges on.
+ * The single execution path every protocol adapter converges on. The order is a
+ * security boundary; do not reorder:
  *
- * Order is a security boundary — do not reorder:
- * 1. resolve resource RESOURCE_NOT_FOUND
- * 2. strip reserved input fields, validate input INPUT_INVALID
+ * 1. resolve resource (RESOURCE_NOT_FOUND)
+ * 2. strip reserved input fields, validate input and the backend request shape
+ *    (INPUT_INVALID, or BACKEND_ERROR for an illegal configured header)
  * 3. resolve price
- * 4. free -> straight to backend
- * 5. paid -> pick provider -> createRequirement -> (challenge | verify ->
- * authorize/reserve -> reserve replay key -> settle -> consume/release the
- * authorization), fail closed at every step
- * 6. call backend BACKEND_TIMEOUT / BACKEND_ERROR
+ * 4. free: straight to the backend
+ * 5. paid: pick provider, createRequirement, then either return the challenge
+ *    or verify, reserve the authorization, reserve the replay key, settle, and
+ *    consume, release or mark uncertain the authorization. Fail closed at every
+ *    step
+ * 6. call backend (BACKEND_TIMEOUT / BACKEND_ERROR)
  * 7. persist receipt, emit events, return outcome
  */
 
@@ -17,26 +19,27 @@ import type {
   AuthorizationProvider,
   AuthorizationRecord,
   AuthorizationVerification,
-} from '../domain/authorization.js';
-import type { AuthorizationMethodName, PaymentMethodName } from '../domain/common.js';
-import type { CommerceEvent, EventSink } from '../domain/event.js';
-import type { PaymentProvider, PaymentRequirement, PaymentResult } from '../domain/payment.js';
-import type { CommerceReceipt } from '../domain/receipt.js';
-import type { CanonicalRequest, ExecutionOutcome, ExecutionPipeline } from '../domain/request.js';
-import type { CommerceResource, ResourceRegistry } from '../domain/resource.js';
-import { RESERVED_INPUT_FIELDS } from '../domain/wire.js';
-import { CommerceError, isCommerceError, toCommerceError } from '../errors/index.js';
-import type { BackendExecutor, BackendResponse } from '../interfaces/backend.js';
-import type { Logger } from '../interfaces/logger.js';
-import type { Clock, IdGenerator } from '../interfaces/runtime.js';
-import type { ReceiptStore } from '../interfaces/store.js';
-import { validateBackendRequestShape } from './backend-http.js';
-import { compileJsonSchema, type Validator } from './validation.js';
+} from '../domain/authorization';
+import type { AuthorizationMethodName, PaymentMethodName } from '../domain/common';
+import type { CommerceEvent, EventSink } from '../domain/event';
+import type { PaymentProvider, PaymentRequirement, PaymentResult } from '../domain/payment';
+import type { CommerceReceipt } from '../domain/receipt';
+import type { CanonicalRequest, ExecutionOutcome, ExecutionPipeline } from '../domain/request';
+import type { CommerceResource, ResourceRegistry } from '../domain/resource';
+import { RESERVED_INPUT_FIELDS } from '../domain/wire';
+import { CommerceError, describeError, isCommerceError, toCommerceError } from '../errors';
+import type { BackendExecutor, BackendResponse } from '../interfaces/backend';
+import type { Logger } from '../interfaces/logger';
+import type { Clock, IdGenerator } from '../interfaces/runtime';
+import type { ReceiptStore } from '../interfaces/store';
+import { isRecord } from '../is-record';
+import { validateBackendRequestShape } from './backend-http';
+import { compileJsonSchema, type Validator } from './validation';
 
 export interface CreateExecutionPipelineOptions {
   readonly resources: ResourceRegistry;
   readonly paymentProviders: readonly PaymentProvider[];
-  /** Empty by default, so a deployment configuring none is unchanged */
+  /** Defaults to none */
   readonly authorizationProviders?: readonly AuthorizationProvider[];
   readonly store: ReceiptStore;
   readonly backend: BackendExecutor;
@@ -46,10 +49,8 @@ export interface CreateExecutionPipelineOptions {
   readonly ids: IdGenerator;
 }
 
-/**
- * A reservation held across settlement, plus the summary the receipt keeps.
- * `finalize` is the only way it ends, so no path can leave one open.
- */
+// A reservation held across settlement, plus the summary the receipt keeps.
+// `finalize` ends it.
 interface AuthorizationHold {
   readonly record: AuthorizationRecord;
   finalize(action: 'consume' | 'release' | 'markUncertain'): Promise<void>;
@@ -98,11 +99,9 @@ export function createExecutionPipeline(
     return { id: options.ids.next('evt'), at: options.clock.nowIso(), ...partial };
   }
 
-  /**
-   * Verify and reserve what the resource requires, or undefined if it requires
-   * none. Runs after payment verification, which has no side effect: a bad
-   * payment proof must not burn a reservation.
-   */
+  // Verify and reserve what the resource requires, or undefined if it requires
+  // none. Runs after payment verification, which has no side effect, so a bad
+  // payment proof cannot burn a reservation.
   async function authorizeAndReserve(
     request: CanonicalRequest,
     resource: CommerceResource,
@@ -198,8 +197,8 @@ export function createExecutionPipeline(
         try {
           await provider[action](verification.reservationId, context);
         } catch (error) {
-          // Any failure leaves the row reserved, which is still unspendable.
-          // Not worth replacing the outcome the caller is about to see.
+          // A failure leaves the reservation reserved, which is still
+          // unspendable, so the caller's outcome stands
           options.logger.error(
             { err: describeError(error), requestId: request.requestId, action },
             'Authorization finalization failed; the reservation stays reserved',
@@ -214,11 +213,9 @@ export function createExecutionPipeline(
 
     // 1. resolve resource
     const resource = options.resources.get(request.resourceId);
-    // Same code, same message as a genuine miss: `expose` is an admin scoping
-    // decision enforced on the one execution path every adapter shares — a
-    // caller on a protocol the resource isn't exposed via must not be able to
-    // distinguish "doesn't exist" from "exists but not for you".
-    if (!resource || !resource.exposedVia.includes(request.protocol)) {
+    // Same code and message as an unknown id: a caller on a protocol the
+    // resource is not exposed via must not learn that it exists
+    if (!resource?.exposedVia.includes(request.protocol)) {
       throw new CommerceError(
         'RESOURCE_NOT_FOUND',
         `Resource "${request.resourceId}" was not found`,
@@ -254,14 +251,8 @@ export function createExecutionPipeline(
     }
     const validInput = validation.value;
 
-    // validate the backend request shape (path-traversal, query-param
-    // collision) here — before price resolution, so a resource that fails
-    // this check never reaches payment. Both checks are pure functions of
-    // (handler.url, input); doing them at pipeline step 6 (inside the actual
-    // backend call) meant a bad value like `{ city: "" }` against a paid,
-    // path-templated resource settled the buyer's payment and then never
-    // called the backend at all — payment without delivery. call() keeps its
-    // own copy of these checks as defence in depth.
+    // Before pricing, so a request the backend cannot receive fails before
+    // payment (see validateBackendRequestShape)
     validateBackendRequestShape(resource.handler, validInput, {
       requestId: request.requestId,
       resourceId: resource.id,
@@ -269,7 +260,7 @@ export function createExecutionPipeline(
 
     // 3. resolve price
     if (resource.pricing.type === 'dynamic') {
-      // Config validation rejects this before the gateway starts; this is defence-in-depth.
+      // Config validation rejects this at load; this is defense in depth
       throw new CommerceError(
         'CONFIG_INVALID',
         `Resource "${resource.id}" uses unsupported dynamic pricing`,
@@ -280,9 +271,8 @@ export function createExecutionPipeline(
       );
     }
 
-    // Authorization gates settlement, so requiring one on a free resource
-    // means nothing would ever read the proof. Config refuses it at load; the
-    // execution path must not be the one that serves it unchecked.
+    // Authorization gates settlement, so on a free resource nothing would read
+    // the proof. Config refuses this at load; this is defense in depth.
     if (resource.pricing.type !== 'fixed' && (resource.authorization?.required.length ?? 0) > 0) {
       throw new CommerceError(
         'CONFIG_INVALID',
@@ -371,12 +361,9 @@ export function createExecutionPipeline(
           submission: payment,
         });
       } catch (error) {
-        // Any typed CommerceError the provider throws is rethrown as-is (a
-        // provider can legitimately fail with STORAGE_ERROR, etc. — flattening
-        // every code to PAYMENT_INVALID would hide the real cause and the
-        // real, possibly-retryable HTTP status). Only a genuinely untyped
-        // throw is mapped, with a fixed client-facing message — never the
-        // raw error's own message.
+        // A typed CommerceError is rethrown as is, keeping its code and its
+        // possibly retryable status. Only an untyped throw is mapped, with a
+        // fixed client-facing message.
         const mapped = isCommerceError(error)
           ? error
           : new CommerceError('PAYMENT_INVALID', 'Payment verification failed', {
@@ -462,13 +449,9 @@ export function createExecutionPipeline(
           ...(verification.payee !== undefined ? { payee: verification.payee } : {}),
         });
       } catch (error) {
-        // The store contract only promises PAYMENT_REPLAYED for an actual
-        // duplicate replayKey (already a CommerceError with that code, so
-        // isCommerceError below preserves it as-is). Anything else — a disk-
-        // full error, a dropped connection — is a storage failure, not a
-        // replay, and must not be mislabelled as one: telling a buyer
-        // "duplicate payment" for a transient outage is actively false, and
-        // poisons any alerting keyed on replay counts.
+        // A duplicate replayKey arrives as PAYMENT_REPLAYED and is kept. Any
+        // other failure (a full disk, a dropped connection) is STORAGE_ERROR,
+        // never a replay.
         const mapped = toCommerceError(
           error,
           'STORAGE_ERROR',
@@ -510,20 +493,14 @@ export function createExecutionPipeline(
           verification,
         });
       } catch (error) {
-        // A verdict arrives as a *returned* PaymentResult, settled or
-        // rejected. A throw means no verdict was obtained, and no throw on
-        // this rail can say whether the transfer happened: a facilitator can
-        // accept a settlement, broadcast it, then lose the response to a
-        // timeout, a reset or a proxy 502. "No transaction hash" is not
-        // evidence of "no transfer", only evidence that we never heard one.
-        // So every throw out of settle() is uncertain: the attempt is
-        // recorded unresolved and the authorization hold is kept, because a
-        // released mandate is spendable again with a fresh payment
-        // authorization against a charge that may already have landed. Only
-        // a returned `rejected` below - the facilitator's own statement that
-        // nothing moved - releases it. The resource is not delivered either
-        // way: only what gets *recorded* changes, never the fail-closed
-        // outcome.
+        // A verdict arrives as a returned PaymentResult; a throw means none. A
+        // facilitator can broadcast a settlement and then lose the response, so
+        // a missing transaction hash is no evidence that nothing moved. Every
+        // throw is recorded as settlement-uncertain and the authorization is
+        // marked uncertain, not released: a released mandate could be spent
+        // again against a charge that may have landed. Of the settlement
+        // outcomes, only a returned result other than `settled` releases it.
+        // Nothing is delivered either way.
         const txHash = settlementTxHash(error);
         await hold?.finalize('markUncertain');
         await safePersist(
@@ -551,17 +528,12 @@ export function createExecutionPipeline(
             },
           }),
         );
-        // The merchant's record now tells the truth (above); the buyer must
-        // too - they are the party whose funds may have moved, and the
-        // client-visible error is their only way to find out. Code stays
-        // PAYMENT_SETTLEMENT_FAILED, not the retryable
-        // PAYMENT_PROVIDER_UNAVAILABLE: a retry would reuse the
-        // already-reserved replay key, and paying again is the one thing an
-        // unresolved settlement must never invite. The correlation id is the
-        // envelope's requestId; the transaction hash, when there is one, is
-        // safe to disclose, being the buyer's own payment and public
-        // on-chain the moment it lands. Nothing else from the underlying
-        // error travels.
+        // The buyer must learn the outcome is unknown, since their funds may
+        // have moved. Not the retryable PAYMENT_PROVIDER_UNAVAILABLE: a retry
+        // would hit the reserved replay key, and an unresolved settlement must
+        // never invite paying again. Of the underlying error only the
+        // transaction hash travels: the buyer's own payment, public on-chain
+        // once it lands.
         throw new CommerceError('PAYMENT_SETTLEMENT_FAILED', 'Settlement could not be confirmed', {
           requestId: request.requestId,
           resourceId: resource.id,
@@ -660,16 +632,9 @@ export function createExecutionPipeline(
       );
 
       if (paymentResult !== undefined) {
-        // Settlement already succeeded (verify -> reserve -> settle all
-        // completed) before the backend call failed, so the
-        // uncertain-settlement rule ("the merchant's record now tells the
-        // truth; the buyer must too") applies to this far more common
-        // *certain*-loss branch as well, not only to the uncertain-RPC-timeout
-        // one 100 lines above. A backend 500 is more likely than an RPC
-        // confirmation timeout, so disclosing strictly *less* here than there
-        // would be backwards. The tx hash is
-        // safe to disclose: it is the buyer's own payment, public
-        // on-chain the moment it lands.
+        // The payment settled and the backend then failed. Record an
+        // undelivered receipt for the merchant and tell the buyer what they
+        // paid, including the settlement reference.
         const failedReceipt: CommerceReceipt = {
           id: options.ids.next('receipt'),
           requestId: request.requestId,
@@ -772,29 +737,25 @@ export function createExecutionPipeline(
   return { execute };
 }
 
-/** The HTTP status the backend actually returned, when known (backend-http.ts
- * attaches it as `details.status` for a non-2xx response). 0 means "no
- * response was received at all" (timeout/transport failure) — distinct from
- * any real HTTP status. */
+// The status the backend returned, which backend-http.ts puts on
+// `details.status` for a non-2xx or redirect response. 0 means no status is
+// known, as after a timeout, a transport failure or an unreadable or oversized
+// body.
 function backendErrorStatus(error: CommerceError): number {
   const status = error.details?.['status'];
   return typeof status === 'number' ? status : 0;
 }
 
 // The broadcast transaction hash a provider attached to a settlement throw,
-// when it knows one. Absent far more often than not: the response that would
-// have carried it is usually the thing that went missing
+// when it knows one
 function settlementTxHash(error: unknown): string | undefined {
   const hash = isCommerceError(error) ? error.details?.['transactionHash'] : undefined;
   return typeof hash === 'string' ? hash : undefined;
 }
 
-/**
- * The provider for each method a resource requires, in the resource's order.
- *
- * Config refuses an unconfigured method at load. Missing it here would mean
- * serving the resource with no authorization at all, so it is checked again.
- */
+// The provider for each method a resource requires, in the resource's order.
+// Config refuses a method that is not enabled at load; it is checked again
+// because missing it here would serve the resource with no authorization.
 function resolveAuthorizationProviders(
   providers: readonly AuthorizationProvider[],
   resource: CommerceResource,
@@ -815,7 +776,7 @@ function resolveAuthorizationProviders(
 }
 
 // A rejected proof leaves this request's challenge unused. Returning it lets a
-// client pay again without another round trip for a fresh one
+// client pay again without another round trip for a fresh one.
 function retryChallenge(requirement: PaymentRequirement): { details?: Record<string, unknown> } {
   const envelope = requirement.challenge.envelope;
   return envelope === undefined ? {} : { details: { challenge: envelope } };
@@ -832,28 +793,18 @@ function pickProvider(
   return undefined;
 }
 
-const RESERVED_INPUT_KEYS = new Set([...RESERVED_INPUT_FIELDS, '__proto__']);
+const RESERVED_INPUT_KEYS: readonly string[] = [...RESERVED_INPUT_FIELDS, '__proto__'];
 
 function stripReservedFields(input: unknown): unknown {
-  if (typeof input !== 'object' || input === null || Array.isArray(input)) return input;
-  const record = input as Record<string, unknown>;
-  // Object.hasOwn: `in` would also match inherited names and strip things
-  // that were never actually present on this input.
-  const hasReserved = [...RESERVED_INPUT_KEYS].some((key) => Object.hasOwn(record, key));
-  if (!hasReserved) return input;
+  if (!isRecord(input)) return input;
+  // Object.hasOwn, not `in`, which also matches inherited names
+  if (!RESERVED_INPUT_KEYS.some((key) => Object.hasOwn(input, key))) return input;
   const rest: Record<string, unknown> = {};
-  for (const key of Object.keys(record)) {
-    // "__proto__" is dropped, not just excluded from the reserved-field
-    // check: `rest[key] = record[key]` for key === "__proto__" would invoke
-    // the inherited setter and reassign rest's own prototype instead of
-    // creating a data property (belt-and-braces — validation.ts's
-    // Object.hasOwn fix is the primary control).
-    if (!RESERVED_INPUT_KEYS.has(key)) rest[key] = record[key];
+  for (const key of Object.keys(input)) {
+    // "__proto__" is dropped too: assigning it would call the inherited setter
+    // and replace `rest`'s prototype instead of creating a data property.
+    // validation.ts's own-property lookups are the primary control.
+    if (!RESERVED_INPUT_KEYS.includes(key)) rest[key] = input[key];
   }
   return rest;
-}
-
-function describeError(error: unknown): { message: string; name?: string } {
-  if (error instanceof Error) return { message: error.message, name: error.name };
-  return { message: String(error) };
 }

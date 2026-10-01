@@ -7,7 +7,7 @@
  * written out per adapter.
  */
 import { describe, expect, it } from 'vitest';
-import type { CommerceResource, PaymentRequiredOutcome } from '../../../../src/core/index.js';
+import type { CommerceResource, PaymentRequiredOutcome } from '../../../../src/core';
 import {
   AUTHORIZATION_INPUT_FIELD,
   type CommerceError,
@@ -19,7 +19,7 @@ import {
   parseAuthorizationSubmission,
   RESERVED_INPUT_FIELDS,
   toPaymentRequiredEnvelope,
-} from '../../../../src/core/index.js';
+} from '../../../../src/core';
 
 const PROOF = 'eyJhbGciOiJFUzI1NiJ9.mandate~disclosure~';
 
@@ -68,7 +68,7 @@ describe('parseAuthorizationSubmission', () => {
 
   it('preserves the payload byte for byte', () => {
     // Providers hash this string to derive a replay identity, so any
-    // normalisation here would give the same proof two identities.
+    // normalization here would give the same proof two identities
     const awkward = ' a~b.c \n';
     expect(parseAuthorizationSubmission({ method: 'ap2', payload: awkward })?.payload).toBe(
       awkward,
@@ -97,7 +97,7 @@ describe('parseAuthorizationSubmission', () => {
 
   it('never reports an authorization failure as a payment failure', () => {
     // The distinction is the point of the feature: a buyer whose mandate is
-    // malformed has not paid wrongly, and must not be told to pay again.
+    // malformed has not paid wrongly, and must not be told to pay again
     try {
       parseAuthorizationSubmission({ method: 'ap2' });
       expect.unreachable();
@@ -161,24 +161,29 @@ describe('parseAuthorizationHeader', () => {
   });
 
   it('accepts a header exactly at the limit', () => {
-    // base64url expands by 4/3, so the payload that fits is the limit scaled
-    // down, minus room for the JSON envelope around it.
-    const payload = 'x'.repeat(Math.floor((MAX_AUTHORIZATION_HEADER_BYTES * 3) / 4) - 64);
+    // base64url turns every 3 bytes into 4 characters, so an envelope of
+    // 3/4 of the limit encodes to exactly the limit
+    const envelopeBytes = (MAX_AUTHORIZATION_HEADER_BYTES * 3) / 4;
+    const overhead = JSON.stringify({ method: 'ap2', payload: '' }).length;
+    const payload = 'x'.repeat(envelopeBytes - overhead);
     const header = encodeHeader({ method: 'ap2', payload });
-    expect(header.length).toBeLessThanOrEqual(MAX_AUTHORIZATION_HEADER_BYTES);
+    expect(header.length).toBe(MAX_AUTHORIZATION_HEADER_BYTES);
     expect(parseAuthorizationHeader(header)?.payload).toBe(payload);
   });
 
   it('does not echo the caller input back in the message', () => {
     // A JSON parse error quotes what it choked on; relaying that would put
-    // attacker-chosen bytes into our own error response.
-    const probe = '<script>alert(1)</script>';
+    // attacker-chosen bytes into our own error response. Short enough that
+    // the parse error quotes all of it.
+    const probe = '<svg/>';
+    let error: unknown;
     try {
       parseAuthorizationHeader(Buffer.from(probe).toString('base64url'));
-      expect.unreachable();
-    } catch (error) {
-      expect((error as CommerceError).message).not.toContain(probe);
+    } catch (caught) {
+      error = caught;
     }
+    expect(isCommerceError(error) && error.code).toBe('AUTHORIZATION_INVALID');
+    expect((error as CommerceError).message).not.toContain(probe);
   });
 });
 
@@ -222,7 +227,7 @@ describe('extractReservedInputFields', () => {
 
   it('strips the reserved field even when the envelope is unusable', () => {
     // An adapter that forwarded the raw field would fail schema validation
-    // with INPUT_INVALID, hiding the real reason from the caller.
+    // with INPUT_INVALID, hiding the real reason from the caller
     expect(
       codeOf(() =>
         extractReservedInputFields(
@@ -295,7 +300,7 @@ describe('payment-required envelope', () => {
     expect(envelope.authorization).toEqual({
       required: [{ method: 'ap2', version: '0.2.0', profile: 'https://example.test/checkout/v1' }],
     });
-    // Still a 402 challenge in every other respect.
+    // Still a 402 challenge in every other respect
     expect(envelope.code).toBe('PAYMENT_REQUIRED');
     expect(envelope.payment.amount).toBe('0.10');
   });

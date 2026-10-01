@@ -1,4 +1,4 @@
-/** Shared valid-config fixture, mirroring config.example.yaml. */
+/** Shared valid-config fixture, mirroring config.example.yaml */
 export function validRawConfig(): Record<string, unknown> {
   return {
     version: 1,

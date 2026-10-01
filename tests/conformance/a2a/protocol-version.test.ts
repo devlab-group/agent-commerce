@@ -6,7 +6,7 @@
  */
 import { ClientFactory } from '@a2a-js/sdk/client';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { type RunningGateway, startConformanceGateway } from './support/gateway.js';
+import { type RunningGateway, startConformanceGateway } from './support/gateway';
 
 let running: RunningGateway;
 
@@ -49,7 +49,7 @@ const SEND_MESSAGE = JSON.stringify({
 
 describe('A2A protocol version negotiation', () => {
   it('accepts 1.0, the version the official client sends', async () => {
-    // Proven by the SDK actually completing a call against this gateway.
+    // Proven by the SDK completing a call against this gateway
     const client = await new ClientFactory().createFromUrl(running.url);
     expect(client.protocolVersion).toBe('1.0');
 

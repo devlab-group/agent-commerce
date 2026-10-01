@@ -1,20 +1,20 @@
 /**
  * The Agent Card fetched the way a client fetches it: over a real
  * `createGateway()` Fastify instance with a real `createA2aAdapter()` mounted.
- * A card built correctly but never reachable at its fixed path is not
- * discovery, and only a test that traverses the gateway can tell the two
- * apart.
+ * Only a test that traverses the gateway shows the card is reachable at its
+ * fixed path.
  *
- * Fakes: ReceiptStore only. The adapter and the gateway are the real ones.
+ * Fakes: ReceiptStore and BackendExecutor. The adapter and the gateway are the
+ * real ones.
  */
 import { afterEach, describe, expect, it } from 'vitest';
-import type { GatewayConfig } from '../../src/config/index.js';
-import type { BackendExecutor } from '../../src/core/index.js';
-import { createGateway, type GatewayInstance } from '../../src/gateway/index.js';
-import { createA2aAdapter } from '../../src/protocols/a2a/index.js';
-import type { A2aAgentCard, A2aTask } from '../../src/protocols/a2a/types.js';
-import { createMcpAdapter } from '../../src/protocols/mcp/index.js';
-import { createFakeStore } from '../unit/gateway/helpers.js';
+import type { GatewayConfig } from '../../src/config';
+import type { BackendExecutor } from '../../src/core';
+import { createGateway, type GatewayInstance } from '../../src/gateway';
+import { createA2aAdapter } from '../../src/protocols/a2a';
+import type { A2aAgentCard, A2aTask } from '../../src/protocols/a2a/types';
+import { createMcpAdapter } from '../../src/protocols/mcp';
+import { createFakeStore } from '../unit/gateway/helpers';
 
 process.env['NODE_ENV'] = 'test';
 
@@ -62,7 +62,7 @@ function config(): GatewayConfig {
   };
 }
 
-/** No merchant is reachable from a test; the adapter must never call one anyway. */
+// No merchant is reachable from a test; the adapter must never call one anyway
 const backendCalls: unknown[] = [];
 const backend: BackendExecutor = {
   async call(_handler, request) {
@@ -145,7 +145,7 @@ describe('A2A agent card over the real gateway', () => {
     expect(wellKnown.statusCode).toBe(200);
 
     // POST is MCP's only method; a 200 here would mean the A2A card route had
-    // swallowed the neighbouring mount.
+    // swallowed the neighboring mount
     const mcp = await gw.server.inject({ method: 'GET', url: '/mcp' });
     expect(mcp.statusCode).toBe(405);
   });
@@ -172,7 +172,7 @@ describe('A2A JSON-RPC transport over the real gateway', () => {
     const gw = await startGateway();
     const { body } = await rpc(gw, sendMessage({ resource: 'mcp_only', input: {} }));
 
-    // A commerce answer, not a broken frame: the JSON-RPC layer stays clean.
+    // A commerce answer, not a broken frame: the JSON-RPC layer stays clean
     expect(body.error).toBeUndefined();
     expect(body.result?.task?.status.state).toBe('TASK_STATE_FAILED');
     expect(body.result?.task?.artifacts[0]?.parts[0]?.data['code']).toBe('RESOURCE_NOT_FOUND');
@@ -280,6 +280,7 @@ describe('A2A JSON-RPC transport over the real gateway', () => {
       rpc(gw, sendMessage({ resource: 'weather_basic' }), { 'content-type': 'application/json' }),
     ]);
     for (const { body } of responses) {
+      expect(body.error?.code).toBeTypeOf('number');
       const message = body.error?.message ?? '';
       expect(message).not.toMatch(/\bat .*:\d+:\d+/); // stack frame
       expect(message).not.toMatch(/[/\\](src|node_modules)[/\\]/); // path
@@ -311,7 +312,7 @@ describe('A2A in gateway discovery', () => {
     expect(a2a?.health.status).toBe('pass');
     expect(doc.protocols['a2a']).toEqual({ enabled: true, mountPath: '/a2a' });
 
-    // The neighbouring adapter's own entry is untouched.
+    // The neighboring adapter's own entry is untouched
     expect(doc.adapters.find((adapter) => adapter.name === 'mcp')?.status).toBe('stable');
   });
 
@@ -332,7 +333,7 @@ describe('A2A in gateway discovery', () => {
     ).json<{ adapters: { name: string }[] }>();
     expect(doc.adapters.map((adapter) => adapter.name)).toEqual(['mcp']);
 
-    // Nothing serves the card path when no adapter claims it.
+    // Nothing serves the card path when no adapter claims it
     const card = await gateway.server.inject({
       method: 'GET',
       url: '/.well-known/agent-card.json',
@@ -360,11 +361,11 @@ describe('A2A in gateway discovery', () => {
 
     const a2a = doc.adapters.find((adapter) => adapter.name === 'a2a');
     expect(a2a?.health.status).toBe('fail');
-    // The failure reason is internal; the anonymous route must not carry it.
+    // The failure reason is internal; the anonymous route must not carry it
     expect(a2a?.health.detail).toBeUndefined();
     expect(doc.adapters.find((adapter) => adapter.name === 'mcp')?.health.status).toBe('pass');
 
-    // MCP still answers, and no A2A route was mounted.
+    // MCP still answers, and no A2A route was mounted
     expect((await gateway.server.inject({ method: 'GET', url: '/mcp' })).statusCode).toBe(405);
     expect(
       (await gateway.server.inject({ method: 'GET', url: '/.well-known/agent-card.json' }))
@@ -374,30 +375,24 @@ describe('A2A in gateway discovery', () => {
 });
 
 /**
- * 10.2 — the request body reaches the adapter unconsumed.
- *
- * Fastify pre-registers exact-match parsers for `application/json`, so a mount
- * that does not suppress them hands the adapter an already-drained stream and
- * every request fails to parse. That regression has shipped before. Driven
- * through the gateway router, never by calling the adapter directly.
+ * The request body reaches the adapter unconsumed. Fastify's built-in
+ * `application/json` parser would otherwise hand the adapter a drained stream,
+ * so this is driven through the gateway router, never the adapter directly.
  */
 describe('A2A request body handoff through the real gateway', () => {
-  it('parses a body the gateway would otherwise have consumed', async () => {
-    const gw = await startGateway();
-    const { body } = await rpc(
-      gw,
-      sendMessage({ resource: 'weather_basic', input: { city: 'Berlin' } }),
-    );
-
-    expect(body.result?.task?.status.state).toBe('TASK_STATE_COMPLETED');
-  });
-
   it('carries a large body and non-ASCII input through intact', async () => {
     const gw = await startGateway();
-    // Big enough that the body arrives in several socket chunks, so a handler
-    // that reads only the first one fails here.
+    // Big enough to arrive in several socket chunks, so a handler that reads only
+    // the first one fails here. `inject()` delivers a body as one chunk, so this
+    // test goes over a real socket.
     const city = `Köln-${'ß'.repeat(40_000)}`;
-    const { body } = await rpc(gw, sendMessage({ resource: 'weather_basic', input: { city } }));
+    const { url } = await gw.listen();
+    const res = await fetch(`${url}/a2a`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'a2a-version': '1.0' },
+      body: JSON.stringify(sendMessage({ resource: 'weather_basic', input: { city } })),
+    });
+    const body = (await res.json()) as JsonRpcResponse;
 
     expect(body.error).toBeUndefined();
     expect(body.result?.task?.status.state).toBe('TASK_STATE_COMPLETED');
@@ -419,9 +414,7 @@ describe('A2A request body handoff through the real gateway', () => {
   });
 });
 
-/**
- * 10.3 — one adapter's failure is never another's, and never the process's.
- */
+// One adapter's failure is never another's, and never the process's
 describe('A2A adapter isolation', () => {
   it('keeps A2A serving when the MCP adapter fails to start', async () => {
     const brokenMcp = createMcpAdapter();
@@ -480,8 +473,8 @@ describe('A2A adapter isolation', () => {
     expect(failed.statusCode).toBe(500);
     expect(failed.payload).not.toContain('/var/secret/path');
 
-    // The process is fine and every other surface still answers — including
-    // this adapter's own card route and, once it stops throwing, its mount.
+    // The process is fine and every other surface still answers, including this
+    // adapter's card route and, once it stops throwing, its mount
     explode = false;
     expect(
       (await gateway.server.inject({ method: 'GET', url: '/.well-known/agent-card.json' }))
