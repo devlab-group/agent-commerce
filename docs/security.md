@@ -297,6 +297,7 @@ real funds.
 | **an imported path value naming another host**                        | percent-encoded into one segment of the configured origin         | `tests/integration/openapi-import.test.ts`        |
 | **an imported query group colliding with a pinned backend query**     | `INPUT_INVALID` before payment; nothing settled                   | same                                              |
 | **an imported operation with an unsupported required parameter**      | never becomes a resource at all                                   | same                                              |
+| **`__proto__` in an imported document, as a `$ref` segment, parameter name or property name** | refused; a `$ref` resolves own members only, so it never reaches `Object.prototype` | `tests/unit/openapi` |
 | **an ACP request with missing, non-bearer, empty or wrong authorization** | 401 before the body is read; zero merchant calls               | `tests/unit/protocols-acp/adapter.test.ts`        |
 | **an ACP request naming an unsupported API version**                  | 400 naming `supported_versions`; never mapped to the pinned one   | same                                              |
 | **an ACP POST with no or an over-long `Idempotency-Key`**             | 400; zero merchant calls                                          | `tests/conformance/acp/protocol.test.ts`          |
@@ -324,7 +325,9 @@ real funds.
 | **a mandate replayed under selective disclosure** (one mandate, many presentation strings) | refused - the replay key is the issuer-signed token, not the presentation | `tests/unit/authorization-ap2` |
 | **a released mandate re-presented after another mandate reserved or spent the same checkout** | refused as replayed; the released row remains released | `tests/unit/authorization-ap2/replay-store.test.ts` |
 | **the AP2 replay store unreachable**                                  | `AUTHORIZATION_PROVIDER_UNAVAILABLE`, retryable, never the buyer's fault | `tests/integration/ap2-runtime.test.ts`     |
-| **a payment rejected after a mandate verified**                       | the reservation is released; a corrected proof reuses the mandate | `tests/integration/ap2-x402-conformance.test.ts`  |
+| **a valid mandate presented without a payment proof**                 | 402 challenge; the mandate is not consumed                        | `tests/integration/ap2-x402-conformance.test.ts`  |
+| **a payment proof rejected at verification**                          | the mandate is never reserved; a corrected proof reuses it        | same                                              |
+| **settlement definitively refused after the mandate was reserved**    | the reservation is released; a corrected proof reuses the mandate | same                                              |
 | **settlement throws without a verdict, with or without a transaction hash** | the mandate is marked uncertain, not handed back | `tests/integration/ap2-x402-conformance.test.ts`, `tests/unit/core/execution/pipeline-authorization.test.ts` |
 | **a free resource configured to require a mandate**                   | refused at config load, and again on the execution path           | `tests/unit/config/ap2.test.ts`, `tests/unit/core/execution` |
 | **an oversized `Agent-Authorization` header**                         | `AUTHORIZATION_INVALID`; the pipeline is not called               | `tests/integration/authorization-carrier.test.ts` |
