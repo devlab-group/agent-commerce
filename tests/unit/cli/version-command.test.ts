@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import manifest from '../../../package.json' with { type: 'json' };
 import { runVersion } from '../../../src/cli/commands/version';
 import { createCapturingIo } from './fixtures';
 
@@ -19,12 +20,23 @@ describe('runVersion', () => {
     expect(io.out[0]).toMatch(/^agent-commerce v\d+\.\d+\.\d+/);
   });
 
-  it('prints pinned protocol/SDK versions read from installed manifests, not hard-coded', () => {
+  it('prints each pinned version exactly as package.json declares it', () => {
     const io = createCapturingIo();
     runVersion(io);
     const joined = io.out.join('\n');
     expect(joined).toContain('Pinned protocol / SDK versions:');
-    // These come from package.json, not from literals in the source
+    const declared: Record<string, string | undefined> = {
+      ...manifest.peerDependencies,
+      ...manifest.dependencies,
+    };
+    const printed = io.out.flatMap((line) => {
+      const match = /^ {2}(\S+)\s+(\S+)\s+\(via /.exec(line);
+      return match ? [[match[1] ?? '', match[2]] as const] : [];
+    });
+    expect(printed.length).toBeGreaterThan(0);
+    for (const [name, version] of printed) {
+      expect(version, name).toBe(declared[name]);
+    }
     expect(joined).toMatch(/@modelcontextprotocol\/sdk\s+1\.30\.0/);
     expect(joined).toMatch(/@x402\/core\s+2\.23\.0/);
     expect(joined).toMatch(/@x402\/evm\s+2\.23\.0/);

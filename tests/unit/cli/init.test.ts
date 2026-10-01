@@ -115,18 +115,7 @@ describe('runInit: a validation failure is reported', () => {
     expect(io.out.join('\n')).not.toContain('Wrote');
     expect(io.err.join('\n')).toContain('resources.report.expose');
     expect(io.err.join('\n')).toContain('Nothing was written');
-    expect(io.err.join('\n')).not.toContain('report this as a bug');
-  });
-
-  it('still reports PASS when the injected loader succeeds', async () => {
-    const outputPath = tmpConfigPath();
-    const io = createCapturingIo();
-
-    const code = await runInit({ outputPath, yes: true }, io, {
-      loadConfig: async () => makeGatewayConfig(),
-    });
-
-    expect(code).toBe(0);
+    expect(io.err.join('\n')).not.toContain('bug in the config renderer');
   });
 });
 

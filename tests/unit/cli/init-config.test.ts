@@ -8,6 +8,7 @@ import {
 } from '../../../src/cli/lib/init-config';
 import { parseConfig } from '../../../src/config';
 import { compileJsonSchema } from '../../../src/core/execution';
+import { assertDevKeyIsLocalOnly } from '../../../src/payments/x402/dev-key-guard';
 import { ANVIL_WELL_KNOWN_ACCOUNTS } from '../../../src/payments/x402/testing';
 
 describe('dev account constants', () => {
@@ -120,6 +121,19 @@ describe('renderInitConfigYaml', () => {
     const yamlText = renderInitConfigYaml(defaultInitAnswers());
     expect(yamlText).toContain('LOCAL DEVELOPMENT ONLY - DO NOT FUND');
     expect(yamlText).toContain(LOCAL_DEV_FACILITATOR_PRIVATE_KEY);
+  });
+
+  // The x402 provider refuses a well-known key behind a public RPC, so the key
+  // init writes works only against the local chain it points at
+  it('pairs its dev key with a local RPC, which the dev-key guard accepts', () => {
+    const config = parseConfig(parseYaml(renderInitConfigYaml(defaultInitAnswers())), {});
+    const x402 = config.payments.x402;
+    const key = x402?.facilitator.mode === 'local' ? x402.facilitator.signerPrivateKey : '';
+    expect(key).toBe(LOCAL_DEV_FACILITATOR_PRIVATE_KEY);
+    expect(() => assertDevKeyIsLocalOnly(x402?.rpcUrl ?? '', key)).not.toThrow();
+    expect(() => assertDevKeyIsLocalOnly('https://sepolia.base.org', key)).toThrow(
+      /well-known Anvil development key/,
+    );
   });
 
   // With every interface bound and no token, one access-control bug would

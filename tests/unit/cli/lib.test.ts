@@ -3,7 +3,7 @@ import { type FetchLike, fetchJson } from '../../../src/cli/lib/http';
 import { processIo } from '../../../src/cli/lib/io';
 import { maskMiddle } from '../../../src/cli/lib/mask';
 import { readVersionReport } from '../../../src/cli/lib/versions';
-import { createCapturingIo, createFakeFetch, jsonResponse } from './fixtures';
+import { createFakeFetch, jsonResponse } from './fixtures';
 
 describe('maskMiddle', () => {
   it('masks the middle of a long value, keeping a prefix and suffix', () => {
@@ -89,19 +89,6 @@ describe('readVersionReport', () => {
 });
 
 describe('io', () => {
-  it('createCapturingIo collects lines instead of writing to real streams', () => {
-    const io = createCapturingIo();
-    io.stdout('hello');
-    io.stderr('oops');
-    expect(io.out).toEqual(['hello']);
-    expect(io.err).toEqual(['oops']);
-  });
-
-  it('processIo is the real stdout/stderr-backed implementation', () => {
-    expect(typeof processIo.stdout).toBe('function');
-    expect(typeof processIo.stderr).toBe('function');
-  });
-
   it('processIo actually writes a newline-terminated line to stdout/stderr', () => {
     const stdoutChunks: string[] = [];
     const stderrChunks: string[] = [];

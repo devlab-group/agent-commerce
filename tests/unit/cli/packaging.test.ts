@@ -7,8 +7,9 @@
  * (reported, not passed) when it is absent, so `npm test` works on a fresh
  * clone; CI runs `npm run build` first and then this file.
  */
-import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -57,26 +58,28 @@ const BUILTINS = new Set([
 /**
  * Every bare (non-relative, non-builtin) package an ESM bundle imports.
  *
- * Matches `import x from 'p'`, `export … from 'p'` and the side-effect form
- * `import 'p'`, which has no `from` clause. esbuild emits that last form for an
- * external whose bindings were tree-shaken but whose side effects it cannot
- * prove absent, and missing it would report the CLI viem-free while the
- * published binary cannot start without viem.
+ * Matches `import x from 'p'`, `export … from 'p'`, the side-effect form
+ * `import 'p'` and the dynamic `import('p')`. esbuild emits the side-effect
+ * form for an external whose bindings were tree-shaken but whose side effects
+ * it cannot prove absent, and missing it would report the CLI viem-free while
+ * the published binary cannot start without viem. A dynamic import fails later,
+ * when the code path that calls it runs.
  */
 const bareImportsOf = (file: string): string[] => {
-  const pattern = /^(?:import|export)\b[^;]*?from\s*['"]([^'"]+)['"]|^import\s*['"]([^'"]+)['"]/gm;
+  const pattern =
+    /^(?:import|export)\b[^;]*?from\s*['"]([^'"]+)['"]|^import\s*['"]([^'"]+)['"]|\bimport\(\s*['"]([^'"]+)['"]\s*\)/gm;
   const packages = new Set<string>();
   const seen = new Set<string>();
 
-  // Follows relative imports: the library entries are built with
-  // `splitting: true`, so shared code lives in `dist/chunk-*.js`, and a peer
-  // import that moved into a chunk would otherwise go unseen
+  // Follows relative imports, static and dynamic: the library entries are
+  // built with `splitting: true`, so shared code lives in `dist/chunk-*.js`,
+  // and a peer import that moved into a chunk would otherwise go unseen
   const visit = (path: string): void => {
     if (seen.has(path) || !existsSync(path)) return;
     seen.add(path);
     const source = readFileSync(path, 'utf8');
     for (const match of source.matchAll(pattern)) {
-      const spec = (match[1] ?? match[2]) as string;
+      const spec = (match[1] ?? match[2] ?? match[3]) as string;
       if (spec.startsWith('node:')) continue;
       if (spec.startsWith('.')) {
         visit(resolve(dirname(path), spec));
@@ -96,6 +99,20 @@ const bareImportsOf = (file: string): string[] => {
 const built = existsSync(distEntry);
 const run = (...args: string[]): string =>
   execFileSync(process.execPath, [distEntry, ...args], { encoding: 'utf8' });
+
+describe('the bundle import scanner', () => {
+  it('finds side-effect and dynamic imports, including those in relative chunks', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agent-commerce-scan-'));
+    writeFileSync(join(dir, 'entry.js'), "import { a } from './chunk.js';\nimport 'node:fs';\n");
+    writeFileSync(
+      join(dir, 'chunk.js'),
+      "import 'viem';\nimport 'fs';\nexport { b } from '@x402/core/schemas';\nexport const lazy = () => import('./lazy.js');\n",
+    );
+    writeFileSync(join(dir, 'lazy.js'), 'export const load = () => import("mppx");\n');
+
+    expect(bareImportsOf(join(dir, 'entry.js'))).toEqual(['@x402/core', 'mppx', 'viem']);
+  });
+});
 
 describe('published package metadata', () => {
   it('is publishable - not marked private', () => {
@@ -147,7 +164,7 @@ describe('published package metadata', () => {
     // and they are pinned because a signature verifier is not somewhere to
     // accept whatever a fresh install resolves to.
     for (const peer of ['jose', '@sd-jwt/core']) {
-      expect(manifest.peerDependencies?.[peer]).toBeDefined();
+      expect(manifest.peerDependencies?.[peer]).toMatch(/^\d+\.\d+\.\d+$/);
       expect(manifest.peerDependenciesMeta?.[peer]?.optional).toBe(true);
       expect(manifest.dependencies?.[peer]).toBeUndefined();
       expect(manifest.devDependencies?.[peer]).toBe(manifest.peerDependencies?.[peer]);
@@ -216,14 +233,12 @@ describe('published package metadata', () => {
   });
 
   it('publishes only distributable files', () => {
-    expect(manifest.files).toBeDefined();
-    for (const entry of manifest.files ?? []) {
-      expect(['dist', 'README.md', 'LICENSE']).toContain(entry);
-    }
+    expect([...(manifest.files ?? [])].sort()).toEqual(['LICENSE', 'README.md', 'dist']);
   });
 
-  it('states its Node requirement', () => {
-    expect(manifest.engines?.['node']).toBeDefined();
+  // The minimum the README documents; CI runs every job on it
+  it('requires Node 22 or later', () => {
+    expect(manifest.engines?.['node']).toBe('>=22');
   });
 });
 
@@ -237,6 +252,14 @@ describe.skipIf(!built)('built executable', () => {
   it('runs --help and --version under plain node, without tsx', () => {
     expect(run('--help')).toContain('agent-commerce');
     expect(run('--version').trim()).toMatch(/^\d+\.\d+\.\d+/);
+  });
+
+  it('exits 1 for a missing config and for an unknown command', () => {
+    const status = (...args: string[]): number | null =>
+      spawnSync(process.execPath, [distEntry, ...args], { encoding: 'utf8' }).status;
+    expect(status('validate', '--config', join(pkgRoot, 'does-not-exist.yaml'))).toBe(1);
+    expect(status('not-a-command')).toBe(1);
+    expect(status('--help')).toBe(0);
   });
 
   it('reports real pinned versions, not the unresolved fallback', () => {
@@ -267,10 +290,16 @@ describe.skipIf(!built)('built executable', () => {
   it('resolves its own version without reading a manifest by relative path', () => {
     // Bundling changes the directory depth, so a relative `package.json`
     // require resolves from the wrong place. The package version is injected at
-    // build time and the version report inlines the manifest instead.
-    for (const entry of [distEntry, libEntry]) {
-      expect(readFileSync(entry, 'utf8')).not.toMatch(
-        /require\(['"]\.\.?\/[^'"]*package\.json['"]\)/,
+    // build time and the version report inlines the manifest instead. Any call
+    // counts, because esbuild renames a local `require` (to `require2`), and
+    // every file is read, because the library's version code sits in a chunk.
+    const files = readdirSync(join(pkgRoot, 'dist'), { recursive: true, encoding: 'utf8' }).filter(
+      (file) => file.endsWith('.js'),
+    );
+    expect(files).toContain(join('cli', 'index.js'));
+    for (const file of files) {
+      expect(readFileSync(join(pkgRoot, 'dist', file), 'utf8'), file).not.toMatch(
+        /\(\s*['"]\.\.?\/[^'"]*package\.json['"]\s*\)/,
       );
     }
   });
@@ -279,7 +308,9 @@ describe.skipIf(!built)('built executable', () => {
     // `dependencies` only - not the optional peers. The binary must run on a
     // default `npm i @devlab.group/agent-commerce`, with nothing else installed.
     const declared = new Set(Object.keys(manifest.dependencies ?? {}));
-    for (const pkg of bareImportsOf(distEntry)) {
+    const imports = bareImportsOf(distEntry);
+    expect(imports).toContain('commander');
+    for (const pkg of imports) {
       expect(declared).toContain(pkg);
     }
   });
@@ -354,16 +385,33 @@ describe.skipIf(!existsSync(libEntry))('optional-peer subpaths', () => {
       ).peerDependencies ?? {},
     );
     expect(peers.length).toBeGreaterThan(0);
-    for (const entry of [libEntry, distEntry]) {
-      expect(bareImportsOf(entry).filter((pkg) => peers.includes(pkg))).toEqual([]);
+    for (const [entry, ownImport] of [
+      [libEntry, 'fastify'],
+      [distEntry, 'commander'],
+    ] as const) {
+      const imports = bareImportsOf(entry);
+      expect(imports).toContain(ownImport);
+      expect(imports.filter((pkg) => peers.includes(pkg))).toEqual([]);
     }
   });
 
   it('imports only its own peer, in each subpath', () => {
     expect(bareImportsOf(mcpEntry)).toEqual(['@modelcontextprotocol/sdk']);
-    expect(bareImportsOf(x402Entry).sort()).toEqual(['@x402/core', '@x402/evm', 'viem']);
+    // `@coinbase/x402` is a dynamic import, loaded only for facilitator auth.type `cdp`
+    expect(bareImportsOf(x402Entry).sort()).toEqual([
+      '@coinbase/x402',
+      '@x402/core',
+      '@x402/evm',
+      'viem',
+    ]);
     // MPP settles through an x402 facilitator, so its entry also imports the x402 peers
-    expect(bareImportsOf(mppEntry).sort()).toEqual(['@x402/core', '@x402/evm', 'mppx', 'viem']);
+    expect(bareImportsOf(mppEntry).sort()).toEqual([
+      '@coinbase/x402',
+      '@x402/core',
+      '@x402/evm',
+      'mppx',
+      'viem',
+    ]);
     // `better-sqlite3` rides along through the shared storage chunk: the AP2
     // replay store is a SQLite file. It is a real dependency, not a peer, so
     // it is always installed anyway.
