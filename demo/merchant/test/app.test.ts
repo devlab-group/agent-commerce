@@ -94,10 +94,14 @@ describe('GET /api/report, a paid resource', () => {
     expect(first.json()).toEqual(second.json());
   });
 
-  it('includes non-empty metrics', async () => {
+  it('reports the three demo metrics as of the injected clock', async () => {
     const res = await app.inject({ method: 'GET', url: '/api/report' });
-    const body = res.json();
-    expect(Array.isArray(body.metrics)).toBe(true);
-    expect(body.metrics.length).toBeGreaterThan(0);
+    const body = res.json<{ generatedAt: string; metrics: { label: string }[] }>();
+    expect(body.generatedAt).toBe('2026-01-01T00:00:00.000Z');
+    expect(body.metrics.map((metric) => metric.label)).toEqual([
+      'AI Agent Commerce Index',
+      'x402 Settlement Volume',
+      'MCP Resource Adoption Rate',
+    ]);
   });
 });

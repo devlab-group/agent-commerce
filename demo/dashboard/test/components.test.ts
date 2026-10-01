@@ -105,7 +105,7 @@ describe('StatusPanel', () => {
         payments: {},
       },
     });
-    expect(html).toContain('resources/subscribe');
+    expect(html).toContain('<td class="unsupported">resources/subscribe</td>');
   });
 
   it('shows the x402 settlement destination and network when enabled', () => {
@@ -180,6 +180,7 @@ describe('EventFeed', () => {
   it('renders the event type, request id and resource', () => {
     const html = render(EventFeed, { events: [event] });
     expect(html).toContain('resource.delivered');
+    expect(html).toContain('<td>req_abcdefgh…</td>');
     expect(html).toContain('market_report');
   });
 
@@ -190,12 +191,12 @@ describe('EventFeed', () => {
     expect(rowCount).toBe(3);
   });
 
-  it('highlights the row matching highlightRequestId', () => {
+  it('highlights only the row matching highlightRequestId', () => {
     const html = render(EventFeed, {
-      events: [event],
+      events: [event, { ...event, id: 'e2', requestId: 'req_other' }],
       highlightRequestId: event.requestId,
     });
-    expect(html).toMatch(/class="highlight[ "]/);
+    expect(html.match(/class="highlight[ "]/g)).toHaveLength(1);
   });
 
   // The feed only polls, so the label must not suggest a broken stream
@@ -236,12 +237,12 @@ describe('ReceiptList', () => {
     expect(html).toContain('Free');
   });
 
-  it('highlights the row matching highlightRequestId, visually correlating with the event feed', () => {
+  it('highlights only the row matching highlightRequestId, visually correlating with the event feed', () => {
     const html = render(ReceiptList, {
-      receipts: [receipt],
+      receipts: [receipt, { ...receipt, id: 'r2', requestId: 'req_other' }],
       highlightRequestId: receipt.requestId,
     });
-    expect(html).toMatch(/class="highlight[ "]/);
+    expect(html.match(/class="highlight[ "]/g)).toHaveLength(1);
   });
 
   // A settled payment with a non-2xx backendStatus is the row an operator must

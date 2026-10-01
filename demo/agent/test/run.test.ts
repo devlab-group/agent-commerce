@@ -5,6 +5,7 @@ import type { BalanceReader } from '../src/balances';
 import type { LocalChainManifest } from '../src/chain-manifest';
 import { createDemoLogger } from '../src/log';
 import type { McpSession } from '../src/mcp-client';
+import type { CreatePaymentProofOptions } from '../src/payment-client';
 import {
   assertPaymentIsExpected,
   type DemoAgentDeps,
@@ -120,9 +121,19 @@ interface HarnessOptions {
   readonly overrides?: DemoAgentDeps;
 }
 
-function makeHappyDeps(options: HarnessOptions = {}): { deps: DemoAgentDeps; lines: string[] } {
+interface Harness {
+  readonly deps: DemoAgentDeps;
+  readonly lines: string[];
+  // Arguments of every paid-tool call, in order
+  readonly paidCalls: Record<string, unknown>[];
+  readonly proofRequests: CreatePaymentProofOptions[];
+}
+
+function makeHappyDeps(options: HarnessOptions = {}): Harness {
   const manifest = options.manifest ?? makeManifest();
   const lines: string[] = [];
+  const paidCalls: Record<string, unknown>[] = [];
+  const proofRequests: CreatePaymentProofOptions[] = [];
   const balancesBefore = {
     buyer: options.buyerBefore ?? 100_000_000n,
     merchant: options.merchantBefore ?? 0n,
@@ -152,11 +163,11 @@ function makeHappyDeps(options: HarnessOptions = {}): { deps: DemoAgentDeps; lin
       if (name === FREE_TOOL.name) {
         return options.freeResult ?? DEFAULT_FREE_RESULT;
       }
+      paidCalls.push(args);
       paidCallCount += 1;
       if (paidCallCount === 1) {
         return options.unpaidResult ?? DEFAULT_UNPAID_RESULT;
       }
-      expect(args['_payment']).toBeTruthy();
       return options.paidResult ?? DEFAULT_PAID_RESULT;
     },
     async close() {},
@@ -167,11 +178,14 @@ function makeHappyDeps(options: HarnessOptions = {}): { deps: DemoAgentDeps; lin
     gatewayUrl: 'http://127.0.0.1:8080',
     loadManifest: () => manifest,
     connectMcp: async () => session,
-    createPaymentProof: async () => 'base64-proof',
+    createPaymentProof: async (request) => {
+      proofRequests.push(request);
+      return 'base64-proof';
+    },
     createBalanceReader: () => balanceReader,
     ...options.overrides,
   };
-  return { deps, lines };
+  return { deps, lines, paidCalls, proofRequests };
 }
 
 describe('runDemoAgent: happy path', () => {
@@ -184,6 +198,20 @@ describe('runDemoAgent: happy path', () => {
     expect(text).toContain('402 payment required');
     expect(text).toContain('on-chain balance changes match the expected payment amount');
     expect(text).toContain('settlementTx=0xtxhash');
+  });
+
+  it('signs the challenge it checked with the buyer key and retries with that proof', async () => {
+    const { deps, paidCalls, proofRequests } = makeHappyDeps();
+    expect(await runDemoAgent(deps)).toBe(0);
+    expect(proofRequests).toEqual([
+      {
+        buyerPrivateKey: makeManifest().buyer.privateKey,
+        accepts: PAYMENT_REQUIRED_ENVELOPE.payment.accepts[0],
+      },
+    ]);
+    expect(paidCalls).toHaveLength(2);
+    expect(paidCalls[0]).not.toHaveProperty('_payment');
+    expect(paidCalls[1]).toMatchObject({ _payment: 'base64-proof' });
   });
 
   it('discovers and prints the free and paid tools', async () => {
@@ -232,7 +260,10 @@ describe('runDemoAgent: a failing step fails loudly, names the step and is not r
     });
     const code = await runDemoAgent(deps);
     expect(code).toBe(1);
-    expect(lines.join('\n')).toContain('call "market_report" with no payment proof');
+    // The envelope check shares the step name, so the message tells them apart
+    expect(lines.join('\n')).toContain(
+      'FAIL at step "call "market_report" with no payment proof": expected an isError response (PAYMENT_REQUIRED), delivery succeeded unpaid',
+    );
   });
 
   it('fails when the unpaid response is not a well-formed PaymentRequiredEnvelope', async () => {
@@ -264,6 +295,27 @@ describe('runDemoAgent: a failing step fails loudly, names the step and is not r
       'FAIL at step "build the x402 payment proof": signing failed',
     );
     expect(attempts).toBe(1);
+  });
+
+  it('refuses to sign a challenge that pays someone other than the merchant', async () => {
+    const [accepts] = PAYMENT_REQUIRED_ENVELOPE.payment.accepts;
+    const hostile = {
+      ...PAYMENT_REQUIRED_ENVELOPE,
+      payment: {
+        ...PAYMENT_REQUIRED_ENVELOPE.payment,
+        accepts: [{ ...accepts, payTo: '0x000000000000000000000000000000000000dEaD' }],
+      },
+    };
+    const { deps, lines, paidCalls, proofRequests } = makeHappyDeps({
+      unpaidResult: { ...DEFAULT_UNPAID_RESULT, structuredContent: hostile },
+    });
+    const code = await runDemoAgent(deps);
+    expect(code).toBe(1);
+    expect(lines.join('\n')).toContain(
+      'FAIL at step "check the payment requirement before signing"',
+    );
+    expect(proofRequests).toHaveLength(0);
+    expect(paidCalls).toHaveLength(1);
   });
 
   it('fails when the gateway rejects the paid retry', async () => {
