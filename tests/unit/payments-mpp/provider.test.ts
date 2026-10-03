@@ -455,11 +455,14 @@ describe('MPP verify', () => {
     expect(result.status).toBe('verified');
   });
 
-  it.each(['{', '{"challenge":1}'])('refuses malformed or incomplete credential JSON %s', async (payload) => {
-    const provider = makeProvider();
-    const result = await verifyWith(provider, await requirementFor(provider), payload);
-    expect(result).toMatchObject({ status: 'rejected', rejectionReason: 'malformed_credential' });
-  });
+  it.each(['{', '{"challenge":1}'])(
+    'refuses malformed or incomplete credential JSON %s',
+    async (payload) => {
+      const provider = makeProvider();
+      const result = await verifyWith(provider, await requirementFor(provider), payload);
+      expect(result).toMatchObject({ status: 'rejected', rejectionReason: 'malformed_credential' });
+    },
+  );
 
   it('refuses a proof that is not an MPP credential', async () => {
     const provider = makeProvider();
