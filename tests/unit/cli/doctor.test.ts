@@ -405,7 +405,7 @@ describe('runDoctor: degraded scenarios report the failure', () => {
       expect(check?.detail).toContain('TESTNET on Base Sepolia (eip155:84532)');
       expect(check?.detail).toContain('facilitator=remote (auth=bearer)');
       expect(check?.detail).toMatch(/draft-httpauth-payment-00@806fdb8/);
-      expect(check?.detail).toMatch(/mppx 0\.10\.1/);
+      expect(check?.detail).toMatch(/mppx 0\.13\.1/);
       expect(check?.detail).not.toContain(MPP_CONFIG.recipient);
     });
 

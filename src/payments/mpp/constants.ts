@@ -33,7 +33,7 @@ export const MPP_SPEC_DRAFTS = {
 export const MPP_MIN_CHALLENGE_SECRET_LENGTH = 32;
 
 /** Exact `mppx` release the rail is pinned to */
-export const MPPX_VERSION = '0.10.1';
+export const MPPX_VERSION = '0.13.1';
 
 /**
  * The pinned profile.

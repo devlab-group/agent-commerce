@@ -234,9 +234,9 @@ See [docs/configuration.md](docs/configuration.md).
 | Protocol | Status       | Pinned revision                                                           |
 | -------- | ------------ | ------------------------------------------------------------------------- |
 | **HTTP** | Supported    | native routes                                                             |
-| **MCP**  | Supported    | `@modelcontextprotocol/sdk@1.30.0`                                        |
+| **MCP**  | Supported    | `@modelcontextprotocol/sdk@1.32.0`                                        |
 | **x402** | Supported    | x402 v2 (`@x402/core`, `@x402/evm`), scheme `exact`, EVM                  |
-| **MPP**  | Experimental | `mppx@0.10.1`, `charge` + `evm` + EIP-3009, USDC on Base Sepolia and Base |
+| **MPP**  | Experimental | `mppx@0.13.1`, `charge` + `evm` + EIP-3009, USDC on Base Sepolia and Base |
 | **A2A**  | Experimental | A2A v1.0.0, binding `JSONRPC`, method `SendMessage`                       |
 | **ACP**  | Experimental | ACP `2026-04-17`, REST checkout + discovery                               |
 | **AP2**  | Experimental | AP2 `v0.2.0`, Direct Checkout Mandate verification                        |

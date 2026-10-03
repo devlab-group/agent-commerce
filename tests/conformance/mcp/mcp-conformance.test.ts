@@ -624,6 +624,9 @@ describe('mcp adapter: batch fan-out', () => {
   const EXPECTED_CONCURRENCY_CAP = 8;
   const EXPECTED_QUEUE_CAP = 64;
   const EXPECTED_TOTAL_ADMITTED = EXPECTED_CONCURRENCY_CAP + EXPECTED_QUEUE_CAP;
+  // The SDK returns 400 for batches over MAX_BATCH_SIZE before dispatch;
+  // 100 calls still exceed the concurrency limit plus the queue capacity
+  const SDK_MAX_BATCH_SIZE = 100;
 
   function deliveredOutcome(request: CanonicalRequest): ExecutionOutcome {
     return {
@@ -673,7 +676,7 @@ describe('mcp adapter: batch fan-out', () => {
 
   it('never runs more than the concurrency cap at once, and never admits more than cap+queue total, for an oversized JSON-RPC batch', async () => {
     const h = await setup([FREE_ECHO_RESOURCE]);
-    const BATCH_SIZE = 1000;
+    const BATCH_SIZE = SDK_MAX_BATCH_SIZE;
 
     let inFlight = 0;
     let peak = 0;
@@ -691,7 +694,7 @@ describe('mcp adapter: batch fan-out', () => {
     expect(res.status).toBe(200);
     await res.text(); // drain the SSE stream; resolves once every response is sent
 
-    // Of 1000 requested calls only cap + queue (72) reach the pipeline; the
+    // Of 100 requested calls only cap + queue (72) reach the pipeline; the
     // rest are rejected at once without touching pipeline.execute()
     expect(h.pipeline.requests.length).toBe(EXPECTED_TOTAL_ADMITTED);
     // No more than EXPECTED_CONCURRENCY_CAP of those 72 ever ran at once
@@ -711,7 +714,11 @@ describe('mcp adapter: batch fan-out', () => {
     const controller = new AbortController();
     // Fills concurrency and queue with room to spare, so however the abort
     // lands relative to dispatch, more work is admitted than could finish
-    const fetchPromise = postBatch(h, rawBatch('echo', 300), controller.signal).catch(
+    const fetchPromise = postBatch(
+      h,
+      rawBatch('echo', SDK_MAX_BATCH_SIZE),
+      controller.signal,
+    ).catch(
       () => undefined, // aborting rejects the client's own fetch; only server-side behavior matters here
     );
 
@@ -729,7 +736,7 @@ describe('mcp adapter: batch fan-out', () => {
     const second = h.pipeline.requests.length;
 
     expect(second).toBe(first); // stable: nothing new started in this window
-    expect(second).toBeLessThan(300); // and nowhere near the full batch
+    expect(second).toBeLessThan(SDK_MAX_BATCH_SIZE); // and nowhere near the full batch
   });
 
   it('the queue-full rejection carries a wire envelope that is retryable (GATEWAY_BUSY, HTTP 503)', async () => {
@@ -745,8 +752,8 @@ describe('mcp adapter: batch fan-out', () => {
       return deliveredOutcome(request);
     };
 
-    // Saturate concurrency (8) + queue (64) = 72 with plenty to spare
-    const batch = postBatch(h, rawBatch('echo', 500)).then((r) => r.text());
+    // Saturate concurrency (8) + queue (64) = 72 with room to spare
+    const batch = postBatch(h, rawBatch('echo', SDK_MAX_BATCH_SIZE)).then((r) => r.text());
     // The transport dispatches a whole batch before any call reaches the
     // pipeline, so a full concurrency slot means a full queue
     await vi.waitFor(() => expect(h.pipeline.requests).toHaveLength(EXPECTED_CONCURRENCY_CAP), {

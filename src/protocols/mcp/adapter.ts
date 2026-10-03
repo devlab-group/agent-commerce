@@ -78,12 +78,11 @@ const DEFAULT_MOUNT_PATH = '/mcp';
 const DEFAULT_SERVER_NAME = 'agent-commerce';
 
 /**
- * The SDK's transport accepts a JSON-RPC batch of any length and dispatches
- * every element to the `tools/call` handler without waiting for any to
- * settle, and stateless mode needs no `initialize` first. One POST can
- * therefore start N concurrent `pipeline.execute()` calls, each possibly a
- * live fetch to the merchant. 8 lets an agent's usual handful of concurrent
- * calls run without queuing.
+ * The SDK accepts JSON-RPC batches of up to 100 messages and dispatches their
+ * `tools/call` handlers without waiting for earlier calls to settle. Stateless
+ * mode needs no `initialize` request. One POST can therefore start many
+ * concurrent `pipeline.execute()` calls, each potentially fetching from the
+ * merchant. The limit of 8 lets a few concurrent calls run without queuing.
  */
 const MAX_CONCURRENT_TOOL_CALLS = 8;
 

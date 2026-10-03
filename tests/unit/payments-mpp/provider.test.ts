@@ -1,7 +1,7 @@
 import { Challenge, Credential, Method } from 'mppx';
 import { Methods, Types } from 'mppx/evm';
 import { charge as clientCharge } from 'mppx/evm/client';
-import type { LocalAccount } from 'viem';
+import { keccak256, type LocalAccount, stringToBytes } from 'viem';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -161,7 +161,7 @@ async function clientCredential(requirement: PaymentRequirement): Promise<string
 // client never produces
 async function signedCredential(
   challenge: Challenge.Challenge,
-  patch: Partial<Record<'to' | 'value' | 'validAfter' | 'validBefore', string>> = {},
+  patch: Partial<Record<'to' | 'value' | 'validAfter' | 'validBefore' | 'nonce', string>> = {},
   options: { readonly signer?: LocalAccount; readonly source?: string } = {},
 ): Promise<string> {
   const request = challenge.request as unknown as ChargeRequest;
@@ -188,7 +188,7 @@ async function signedCredential(
       value: BigInt(message.value),
       validAfter: BigInt(message.validAfter),
       validBefore: BigInt(message.validBefore),
-      nonce: message.nonce,
+      nonce: message.nonce as `0x${string}`,
     },
   });
   return Credential.serialize(
@@ -601,6 +601,17 @@ describe('MPP verify', () => {
         credential.payload['nonce'] = `0x${'0'.repeat(64)}`;
       });
       const result = await verifyWith(provider, requirement, wrongNonce);
+      expect(result.rejectionReason).toBe('wrong_nonce');
+    });
+
+    it('refuses the signed draft nonce format replaced by mppx 0.13', async () => {
+      const provider = makeProvider();
+      const requirement = await requirementFor(provider);
+      const challenge = issuedChallenge(requirement);
+      // draft-evm-charge-00: keccak256(abi.encodePacked(challenge.id, challenge.realm))
+      const draftNonce = keccak256(stringToBytes(`${challenge.id}${challenge.realm}`));
+      const credential = await signedCredential(challenge, { nonce: draftNonce });
+      const result = await verifyWith(provider, requirement, credential);
       expect(result.rejectionReason).toBe('wrong_nonce');
     });
 
