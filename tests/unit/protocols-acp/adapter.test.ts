@@ -520,11 +520,44 @@ describe('ACP route matching', () => {
     }
   });
 
-  // A percent-encoded separator must not become an extra path segment, and an
-  // id is a single opaque segment - not a place to hide a path
+  // Encoded separators stay inside the session id and remain encoded in the
+  // canonical endpoint path used for idempotency.
   it.each([
-    ['an encoded separator in the id', '/acp/checkout_sessions/cs%2F1/complete'],
-    ['an encoded separator smuggling an action', '/acp/checkout_sessions/cs_1%2Fcomplete'],
+    [
+      'an encoded separator in the id',
+      '/acp/checkout_sessions/cs%2F1/complete',
+      'completeCheckoutSession',
+      'cs/1',
+      '/acp/checkout_sessions/cs%2F1/complete',
+    ],
+    [
+      'an encoded separator that only looks like an action',
+      '/acp/checkout_sessions/cs_1%2Fcomplete',
+      'updateCheckoutSession',
+      'cs_1/complete',
+      '/acp/checkout_sessions/cs_1%2Fcomplete',
+    ],
+    [
+      'a global id',
+      '/acp/checkout_sessions/gid%3A%2F%2Fshop%2FCheckout%2F1',
+      'updateCheckoutSession',
+      'gid://shop/Checkout/1',
+      '/acp/checkout_sessions/gid%3A%2F%2Fshop%2FCheckout%2F1',
+    ],
+    [
+      'an id with a space',
+      '/acp/checkout_sessions/cs%201',
+      'updateCheckoutSession',
+      'cs 1',
+      '/acp/checkout_sessions/cs%201',
+    ],
+  ])('routes %s as one session id', (_label, url, operation, sessionId, path) => {
+    const matched = matchAcpRoute('POST', url, MOUNT);
+    expect(matched).toMatchObject({ kind: 'match', route: { operation, sessionId, path } });
+  });
+
+  it.each([
+    ['a control character in the id', '/acp/checkout_sessions/cs%001/complete'],
     ['a malformed escape', '/acp/checkout_sessions/%zz'],
     ['a mount prefix that only looks like ours', '/acpx/checkout_sessions'],
     ['the bare mount', '/acp'],

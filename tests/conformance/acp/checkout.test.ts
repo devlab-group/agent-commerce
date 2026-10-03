@@ -81,6 +81,17 @@ describe('getCheckoutSession', () => {
       body: undefined,
     });
   });
+
+  it('forwards an encoded merchant session id as one path segment', async () => {
+    const id = encodeURIComponent('gid://shop/Checkout/1');
+    const result = await acpFetch(stack, `/acp/checkout_sessions/${id}`, {
+      method: 'GET',
+      headers: acpHeaders({ 'content-type': '' }),
+    });
+
+    expect(result.status).toBe(200);
+    expect(stack.calls[0]?.path).toBe(`/checkout_sessions/${id}`);
+  });
 });
 
 describe('completeCheckoutSession', () => {

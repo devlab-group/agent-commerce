@@ -8,10 +8,7 @@ import type { AcpCheckoutOperation } from './constants';
 
 // Longest raw path segment accepted before decoding, which also bounds
 // `checkout_session_id`
-const MAX_SESSION_ID_LENGTH = 128;
-
-// ACP session ids are opaque, but they are path segments and go into canonical input
-const SESSION_ID_PATTERN = /^[A-Za-z0-9._~-]{1,128}$/;
+const MAX_SEGMENT_LENGTH = 512;
 
 const COLLECTION = 'checkout_sessions';
 
@@ -65,7 +62,7 @@ export function matchAcpRoute(
   }
 
   const sessionId = segments[1];
-  if (sessionId === undefined || !SESSION_ID_PATTERN.test(sessionId)) return { kind: 'not-found' };
+  if (sessionId === undefined || !isSessionId(sessionId)) return { kind: 'not-found' };
 
   // GET|POST /checkout_sessions/{id}
   if (segments.length === 2) {
@@ -113,8 +110,21 @@ export function matchAcpRoute(
   return { kind: 'not-found' };
 }
 
+// Accept decoded merchant ids such as `gid://shop/Checkout/1`. Reject empty
+// ids and ASCII control characters.
+function isSessionId(value: string): boolean {
+  if (value.length === 0) return false;
+  for (const char of value) {
+    const code = char.charCodeAt(0);
+    if (code < 0x20 || code === 0x7f) return false;
+  }
+  return true;
+}
+
+// Re-encode each segment so `/` inside a session id cannot become a route
+// separator or a distinct idempotency scope
 function endpointPath(mountPath: string, segments: readonly string[]): string {
-  return `${mountPath.replace(/\/+$/, '')}/${segments.join('/')}`;
+  return `${mountPath.replace(/\/+$/, '')}/${segments.map(encodeURIComponent).join('/')}`;
 }
 
 /**
@@ -133,7 +143,7 @@ function routeSegments(url: string | undefined, mountPath: string): readonly str
   const segments: string[] = [];
   for (const raw of rest.split('/')) {
     if (raw.length === 0) continue;
-    if (raw.length > MAX_SESSION_ID_LENGTH) return undefined;
+    if (raw.length > MAX_SEGMENT_LENGTH) return undefined;
     try {
       segments.push(decodeURIComponent(raw));
     } catch {

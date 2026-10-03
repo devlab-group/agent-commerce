@@ -370,6 +370,9 @@ gateway's. Nothing else of a merchant body reaches the agent: no free text,
 stack traces, database errors, paths or credentials. Merchant 401/403 is not
 presented as a failure of the agent's ACP bearer token.
 
+Session ids such as `gid://shop/Checkout/1` are accepted when encoded as one
+URL segment. Empty ids and ASCII control characters are refused.
+
 ### ACP discovery
 
 ```json
