@@ -31,6 +31,7 @@ import {
   assertBalanceDelta,
   expectRealSettlement,
   readBalances,
+  waitForBalances,
 } from '../../fixtures/x402/settlement';
 
 const PORT = 18792;
@@ -182,13 +183,17 @@ function altered(credential: string, change: (copy: MutableCredential) => void):
   return Credential.serialize(Credential.from(copy as unknown as Credential.Credential));
 }
 
-async function balances() {
-  return readBalances({
+function balanceQuery() {
+  return {
     rpcUrl: anvil.rpcUrl,
     asset: deployment.asset,
     buyer: deployment.buyer.address,
     merchant: deployment.merchant.address,
-  });
+  };
+}
+
+async function balances() {
+  return readBalances(balanceQuery());
 }
 
 // A refused payment: no delivery and no balance change on chain
@@ -471,8 +476,10 @@ describe('MPP settlement - real local chain', () => {
       expect(backendCalls).toBe(callsBefore);
       const [attempt] = await store.listPaymentAttempts();
       expect(attempt?.status).toBe('settlement-uncertain');
-      // The recorded outcome is unknown, but the money did move
-      assertBalanceDelta(before, await balances(), ONE_USDC);
+      // The transfer may land after the 502 because the response was lost.
+      // Poll balances to confirm the payment despite the uncertain attempt.
+      const after = await waitForBalances(balanceQuery(), (s) => s.buyer < before.buyer, 30_000);
+      assertBalanceDelta(before, after, ONE_USDC);
     } finally {
       await rpc.close();
     }
