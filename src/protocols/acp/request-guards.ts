@@ -14,7 +14,7 @@ import {
   ACP_MAX_REQUEST_ID_LENGTH,
   ACP_REQUEST_ID_HEADER,
 } from './constants';
-import { type AcpFailure, acpFailure } from './errors';
+import { type AcpFailure, type AcpResponseHeaders, acpFailure } from './errors';
 import { ACP_MAX_IDEMPOTENCY_KEY_LENGTH } from './idempotency/store';
 import { type AcpRouteMatch, matchAcpRoute } from './router';
 import { type AcpDefinition, validateAcpDocument } from './validation';
@@ -45,7 +45,7 @@ export interface AcpGuardedRequest {
 
 export type AcpGuardResult =
   | { readonly ok: true; readonly value: AcpGuardedRequest }
-  | ({ readonly ok: false } & AcpFailure);
+  | ({ readonly ok: false; readonly headers: AcpResponseHeaders } & AcpFailure);
 
 export interface AcpGuardOptions {
   readonly mountPath: string;
@@ -58,6 +58,17 @@ export async function guardAcpRequest(
   req: IncomingMessage,
   options: AcpGuardOptions,
 ): Promise<AcpGuardResult> {
+  // Echo a valid Request-Id on guard failures too. Echo Idempotency-Key once
+  // validated; both values come from request headers and must be filtered.
+  const echo: Record<string, string> = {};
+  const presentedRequestId = normalizeRequestId(header(req, ACP_REQUEST_ID_HEADER));
+  if (presentedRequestId !== undefined) echo[ACP_REQUEST_ID_HEADER] = presentedRequestId;
+  const failed = (failure: AcpFailure, extra: AcpResponseHeaders = {}): AcpGuardResult => ({
+    ok: false,
+    ...failure,
+    headers: { ...echo, ...extra },
+  });
+
   const matched = matchAcpRoute(req.method, req.url, options.mountPath);
   if (matched.kind === 'not-found') {
     return failed(acpFailure(404, 'invalid_request', 'not_found', 'Unknown ACP route.'));
@@ -70,6 +81,7 @@ export async function guardAcpRequest(
         'method_not_allowed',
         `This ACP route accepts ${matched.allow.join(', ')}.`,
       ),
+      { allow: matched.allow.join(', ') },
     );
   }
   const route = matched.route;
@@ -142,6 +154,7 @@ export async function guardAcpRequest(
       );
     }
     idempotencyKey = presented;
+    echo[ACP_IDEMPOTENCY_KEY_HEADER] = presented;
   }
 
   const read = await readCappedBody(req, options.maxBodyBytes ?? ACP_MAX_REQUEST_BODY_BYTES);
@@ -247,10 +260,6 @@ function ok(
       ...(idempotencyKey !== undefined ? { idempotencyKey } : {}),
     },
   };
-}
-
-function failed(failure: AcpFailure): AcpGuardResult {
-  return { ok: false, ...failure };
 }
 
 /**

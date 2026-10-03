@@ -187,6 +187,7 @@ describe('ACP discovery', () => {
     const { req, res, result } = fakeExchange({ method: 'POST', url: ACP_WELL_KNOWN_PATH });
     await adapter.handleDiscovery(req as never, res as never);
     expect(result().status).toBe(405);
+    expect(result().headers['allow']).toBe('GET');
   });
 
   it('serves nothing before start and reports its own health', async () => {
@@ -305,6 +306,8 @@ describe('ACP request guards', () => {
     const result = await checkout(context, { method, url, headers: goodHeaders() });
 
     expect(result.status).toBe(status);
+    // RFC 9110 requires Allow on a 405
+    if (status === 405) expect(result.headers['allow']).toBeDefined();
     expect(execute).not.toHaveBeenCalled();
   });
 
@@ -437,9 +440,29 @@ describe('ACP request guards', () => {
     expect(dropped.headers['request-id']).toBeUndefined();
   });
 
-  it('never echoes a Request-Id on a guard failure', async () => {
+  it('echoes a safe Request-Id and an Idempotency-Key after validation', async () => {
     const { context } = setup();
     const headers = goodHeaders({ 'request-id': 'req_abc-123' });
+    delete headers['authorization'];
+    const unauthorized = await checkout(context, { headers, body: VALID_CREATE });
+
+    expect(unauthorized.status).toBe(401);
+    expect(unauthorized.headers['request-id']).toBe('req_abc-123');
+    // Refused before the key was checked, so it is not echoed
+    expect(unauthorized.headers['idempotency-key']).toBeUndefined();
+
+    const invalidBody = await checkout(context, {
+      headers: goodHeaders({ 'request-id': 'req_abc-123' }),
+      body: '{',
+    });
+    expect(invalidBody.status).toBe(400);
+    expect(invalidBody.headers['request-id']).toBe('req_abc-123');
+    expect(invalidBody.headers['idempotency-key']).toBe(goodHeaders()['idempotency-key']);
+  });
+
+  it('drops a Request-Id that is not printable ASCII, even on a guard failure', async () => {
+    const { context } = setup();
+    const headers = goodHeaders({ 'request-id': 'req\u00e9' });
     delete headers['authorization'];
     const result = await checkout(context, { headers, body: VALID_CREATE });
 

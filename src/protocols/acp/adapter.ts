@@ -245,6 +245,7 @@ export class AcpProtocolAdapter implements HttpProtocolAdapter {
             'method_not_allowed',
             'The ACP discovery document is read-only.',
           ),
+          { allow: 'GET' },
         );
         return;
       }
@@ -275,9 +276,7 @@ export class AcpProtocolAdapter implements HttpProtocolAdapter {
         isAuthorized: this.isAuthorized,
       });
       if (!guarded.ok) {
-        // A guard failure echoes no Request-Id: the header is only normalized
-        // once the request is known to be well formed
-        writeAcpFailure(res, guarded);
+        writeAcpFailure(res, guarded, guarded.headers);
         return;
       }
 

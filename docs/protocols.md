@@ -233,7 +233,7 @@ match. A version upgrade adds a new snapshot rather than editing this one.
 | `API-Version`     | every checkout route | exactly `2026-04-17`; missing and unsupported are distinct errors                                                                          |
 | `Content-Type`    | every POST           | if present, `application/json` or any media type ending in `+json`; an empty body may omit it, but a supplied non-JSON type still gets 415 |
 | `Idempotency-Key` | every POST           | 1-255 printable ASCII characters                                                                                                           |
-| `Request-Id`      | optional             | bounded and filtered; echoed after request guards unless handling ends in the catch-all 500; not the gateway request id                    |
+| `Request-Id`      | optional             | bounded and filtered; echoed on guard failures too, except the catch-all 500; separate from the gateway request id                         |
 
 An absent, older, newer or malformed API version is not mapped to the supported
 snapshot.
@@ -308,7 +308,9 @@ post-claim pipeline `INPUT_INVALID` maps to ACP 400 and is cached. Request-guard
 failures occur before the claim and are never stored: 404 or 405 routing,
 authentication failure, missing or invalid idempotency and API-version headers,
 an unreadable or oversized body, invalid JSON or schema, or an unsupported
-content type. A guard failure does not echo `Request-Id`.
+content type. A guard failure still echoes the filtered `Request-Id`, and the
+`Idempotency-Key` once that header has passed its own check. A routing 405
+sends `Allow`.
 
 ACP requires a fresh attempt after a 5xx. By default, the gateway keeps the
 claim when the merchant may have acted, to avoid a duplicate order. Set
@@ -347,31 +349,32 @@ the merchant does not deduplicate.
 
 ### ACP errors
 
-| Cause                                             | Response                              |
-| ------------------------------------------------- | ------------------------------------- |
-| pipeline `INPUT_INVALID`                          | `400 invalid_request_body`            |
-| merchant 404                                      | `404 checkout_session_not_found`      |
-| merchant 405 on cancel                            | `405 checkout_session_not_cancelable` |
-| merchant 405 on another operation                 | `405 method_not_allowed`              |
-| merchant 400 or 422                               | `422 invalid_request_body`            |
-| merchant ACP error on a status relayed above      | that status, with the merchant's `type`, `code` and `param` |
-| merchant 409                                      | `409 checkout_session_conflict`       |
-| merchant 401, 403, 5xx or another unmapped status | `502 processing_error`                |
-| backend timeout                                   | `504 service_unavailable`             |
-| load shedding                                     | `503 service_unavailable`             |
-| mapping, storage or unexpected payment challenge  | `500 processing_error`                |
+| Cause                                             | Response                                                       |
+| ------------------------------------------------- | -------------------------------------------------------------- |
+| pipeline `INPUT_INVALID`                          | `400 invalid_request_body`                                     |
+| merchant 404                                      | `404 checkout_session_not_found`                               |
+| merchant 405 on cancel                            | `405 checkout_session_not_cancelable`                          |
+| merchant 405 on another operation                 | `405 method_not_allowed`                                       |
+| merchant 400 or 422                               | `422 invalid_request_body`                                     |
+| valid merchant ACP error on a relayed status      | that status, with its `type`, safe `code` and optional `param` |
+| merchant 409                                      | `409 checkout_session_conflict`                                |
+| merchant 401, 403, 5xx or another unmapped status | `502 processing_error`                                         |
+| backend timeout                                   | `504 service_unavailable`                                      |
+| load shedding                                     | `503 service_unavailable`                                      |
+| mapping, storage or unexpected payment challenge  | `500 processing_error`                                         |
 
-ACP errors contain `type`, `code`, `message`, a safe `param` when available, and
-`supported_versions` for API-version errors. When a merchant answers a relayed
-status with a valid ACP error, such as `requires_3ds` with
-`param: $.authentication_result`, its `type`, `code` (snake_case, at most 64
-characters) and `param` replace the gateway's; the `message` stays the
-gateway's. Nothing else of a merchant body reaches the agent: no free text,
-stack traces, database errors, paths or credentials. Merchant 401/403 is not
-presented as a failure of the agent's ACP bearer token.
+ACP errors contain `type`, `code`, `message`, a safe `param` when available,
+and `supported_versions` for API-version errors. For a valid merchant ACP error
+on a relayed status, the gateway uses its `type` and a snake_case `code` of at
+most 64 characters. It also includes a bounded, printable `param` when
+present. The gateway supplies its own `message`; no other merchant body fields
+are sent to the agent. Merchant 401/403 is not presented as a failure of the
+agent's ACP bearer token.
 
 Session ids such as `gid://shop/Checkout/1` are accepted when encoded as one
-URL segment. Empty ids and ASCII control characters are refused.
+URL segment. Empty ids and ASCII control characters are refused. Merchant
+markdown containing an HTML tag or comment is refused as `processing_error`
+before it reaches the agent.
 
 ### ACP discovery
 

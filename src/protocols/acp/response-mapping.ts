@@ -90,7 +90,48 @@ export function toAcpResponse(
     };
   }
 
+  const htmlPath = rawHtmlPath(outcome.body, '$');
+  if (htmlPath !== undefined) {
+    // Reject detected HTML markup before forwarding merchant markdown
+    return {
+      response: asResponse(PROCESSING_ERROR),
+      logDetail: { reason: 'backend-markdown-has-raw-html', operation, path: htmlPath },
+    };
+  }
+
   return { response: { status: expected, body: outcome.body } };
+}
+
+// Detect common HTML markup: tags, comments, processing instructions,
+// declarations and CDATA. Autolinks such as <https://x> do not match.
+const RAW_HTML = /<\/?[A-Za-z][A-Za-z0-9-]*(?=[\s/>]|$)|<!--|<\?|<![A-Za-z]|<!\[CDATA\[/;
+
+// Ignore backtick-delimited code spans when checking for HTML markup
+const CODE_SPAN = /(`+)[\s\S]*?\1/g;
+
+// Path to the first markdown `content` with detected HTML markup
+function rawHtmlPath(node: unknown, path: string): string | undefined {
+  if (Array.isArray(node)) {
+    for (const [index, item] of node.entries()) {
+      const found = rawHtmlPath(item, `${path}[${index}]`);
+      if (found !== undefined) return found;
+    }
+    return undefined;
+  }
+  if (!isRecord(node)) return undefined;
+  const content = node['content'];
+  if (
+    node['content_type'] === 'markdown' &&
+    typeof content === 'string' &&
+    RAW_HTML.test(content.replace(CODE_SPAN, ''))
+  ) {
+    return `${path}.content`;
+  }
+  for (const [key, value] of Object.entries(node)) {
+    const found = rawHtmlPath(value, `${path}.${key}`);
+    if (found !== undefined) return found;
+  }
+  return undefined;
 }
 
 /**

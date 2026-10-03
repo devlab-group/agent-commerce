@@ -143,6 +143,24 @@ describe('merchant failures', () => {
     assertNothingLeaked(result.body);
   });
 
+  it.each([
+    ['a tag', 'Ships <b>today</b>', 500],
+    ['an HTML comment', 'Ships today<!-- internal -->', 500],
+    ['a tag inside a code span, which is text', 'Use the `<b>` element', 201],
+    ['an autolink, which is not HTML', 'See <https://shop.example/terms>', 201],
+  ])('%s in merchant markdown', async (_label, content, status) => {
+    const result = await createWith({
+      status: 201,
+      body: {
+        ...ACP_EXAMPLES['create_checkout_session_response'],
+        messages: [{ type: 'info', content_type: 'markdown', content }],
+      },
+    });
+
+    // Reject tags and comments; retain code spans and autolinks as text
+    expect(result.status).toBe(status);
+  });
+
   // Relabeling the merchant's status as the one ACP expects would present a
   // backend that has not implemented the operation as if it had
   it('refuses a merchant that succeeds on the wrong status', async () => {
