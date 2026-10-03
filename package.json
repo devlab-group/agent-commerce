@@ -110,7 +110,7 @@
     "ajv-formats": "3.0.1",
     "better-sqlite3": "13.0.3",
     "commander": "15.0.0",
-    "fastify": "5.12.0",
+    "fastify": "5.12.5",
     "picocolors": "1.1.1",
     "pino": "10.3.1",
     "yaml": "2.9.0",
@@ -167,7 +167,7 @@
     "@types/react": "19.2.18",
     "@types/react-dom": "19.2.4",
     "@vitejs/plugin-react": "6.0.5",
-    "@vitest/coverage-v8": "4.1.10",
+    "@vitest/coverage-v8": "4.1.11",
     "@x402/core": "2.23.0",
     "@x402/evm": "2.23.0",
     "canonicalize": "5.0.0",
@@ -181,7 +181,7 @@
     "typescript": "5.9.3",
     "viem": "2.55.18",
     "vite": "8.2.1",
-    "vitest": "4.1.10"
+    "vitest": "4.1.11"
   },
   "overrides": {
     "@coinbase/x402": {
