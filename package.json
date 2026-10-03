@@ -185,7 +185,9 @@
   },
   "overrides": {
     "@coinbase/x402": {
-      "zod": "3.25.76"
+      "zod": "3.25.76",
+      "@coinbase/cdp-sdk": "1.55.0",
+      "axios": "1.20.0"
     },
     "@sd-jwt/core": {
       "@owf/identity-common": "0.3.2"
