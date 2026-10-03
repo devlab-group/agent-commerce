@@ -252,9 +252,10 @@ export function createMppProviderWithSettlement(
         provider: 'mpp',
         version: MPP_SPEC_DRAFTS.core,
         accepts: [challenge],
-        // Serialized here because the HTTP route, which sends it as
-        // `WWW-Authenticate`, is in the main entry and cannot import mppx
-        envelope: { wwwAuthenticate: Challenge.serialize(challenge) },
+        // Build both carrier forms here because the HTTP route and MCP
+        // adapter cannot import mppx: a header value for HTTP and challenge
+        // objects for MCP
+        envelope: { wwwAuthenticate: Challenge.serialize(challenge), challenges: [challenge] },
       },
     };
   }
@@ -269,7 +270,7 @@ export function createMppProviderWithSettlement(
 
     let credential: Credential.Credential;
     try {
-      credential = Credential.deserialize(submission.payload);
+      credential = decodeCredential(submission.payload);
     } catch {
       return rejected(requirement, 'malformed_credential');
     }
@@ -386,7 +387,7 @@ export function createMppProviderWithSettlement(
     // verify() already ran the facilitator check, and the facilitator checks
     // again before broadcasting. A throw may follow a broadcast, so it
     // propagates and the pipeline marks the payment uncertain.
-    const credential = Credential.deserialize(submission.payload);
+    const credential = decodeCredential(submission.payload);
     const authorization = credential.payload as Types.AuthorizationPayload;
     const settled = await settlement.settle({
       ...(await toX402Context({ requestId, requirement, resource, submission }, authorization)),
@@ -419,6 +420,15 @@ export function createMppProviderWithSettlement(
   }
 
   return { name: 'mpp', descriptor: MPP_DESCRIPTOR, createRequirement, verify, settle, health };
+}
+
+// Accept the HTTP `Authorization: Payment ...` value or a JSON credential
+// from MCP `_meta`. Serialize the object for mppx deserialization
+function decodeCredential(payload: string): Credential.Credential {
+  const serialized = payload.trimStart().startsWith('{')
+    ? Credential.serialize(JSON.parse(payload) as Credential.Credential)
+    : payload;
+  return Credential.deserialize(serialized);
 }
 
 // Compares the echoed challenge with the one issued for this request. Both

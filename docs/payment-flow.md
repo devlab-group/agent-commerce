@@ -4,12 +4,12 @@ How the gateway verifies, settles and records a paid invocation.
 
 ## Roles
 
-| Role        | Key material                              | Where it runs                                         |
-| ----------- | ----------------------------------------- | ----------------------------------------------------- |
-| Buyer agent | its own payment key                       | the agent's machine (`demo/agent` in the demo)        |
-| Gateway     | no buyer or merchant key required         | merchant infrastructure                               |
-| Facilitator | a gas-paying signer key                   | gateway process in local mode; remote service         |
-| Merchant    | address configured; no key required       | `payTo` for x402; `recipient` for MPP                 |
+| Role        | Key material                        | Where it runs                                  |
+| ----------- | ----------------------------------- | ---------------------------------------------- |
+| Buyer agent | its own payment key                 | the agent's machine (`demo/agent` in the demo) |
+| Gateway     | no buyer or merchant key required   | merchant infrastructure                        |
+| Facilitator | a gas-paying signer key             | gateway process in local mode; remote service  |
+| Merchant    | address configured; no key required | `payTo` for x402; `recipient` for MPP          |
 
 The gateway coordinates the protocol without taking custody. Local mode keeps
 the facilitator signer in the gateway process;
@@ -57,7 +57,8 @@ the facilitator signer in the gateway process;
 Over HTTP, x402 sends the challenge in the `402` body and base64
 `PAYMENT-REQUIRED` header, accepts the proof in `PAYMENT-SIGNATURE`, and returns
 the settlement result in `PAYMENT-RESPONSE`. MCP and A2A carry the same proof in
-the reserved `_payment` input field.
+the reserved `_payment` input field. MCP also accepts the selected rail's
+`_meta` carrier; see [Payment over MCP](protocols.md#payment-over-mcp).
 
 ### MPP
 
@@ -88,22 +89,22 @@ to redirect them.
 
 ## Fail-closed matrix
 
-| Condition | Result | Delivered? |
-| --- | --- | --- |
-| no proof supplied | `PaymentRequiredOutcome`, 402 + envelope | no |
-| malformed proof | `PAYMENT_INVALID` | no |
-| bad signature | `PAYMENT_INVALID` | no |
-| amount mismatch | `PAYMENT_INVALID` | no |
-| wrong recipient (`to != payTo`) | `PAYMENT_INVALID` | no |
-| wrong network | `PAYMENT_INVALID` | no |
-| wrong asset | `PAYMENT_INVALID` | no |
-| authorization expired / not yet valid | `PAYMENT_INVALID` | no |
-| insufficient balance | `PAYMENT_INVALID` | no |
-| authorization already spent on chain | `PAYMENT_INVALID` | no |
-| copy reaches gateway reservation before the original settles | `PAYMENT_REPLAYED` | no |
-| provider/RPC unavailable during verification | `PAYMENT_PROVIDER_UNAVAILABLE` | no |
-| settlement transaction fails | `PAYMENT_SETTLEMENT_FAILED` | no |
-| backend fails **after** settlement | `BACKEND_ERROR` / `BACKEND_TIMEOUT` | no; payment recorded, delivery failed |
+| Condition                                                    | Result                                   | Delivered?                            |
+| ------------------------------------------------------------ | ---------------------------------------- | ------------------------------------- |
+| no proof supplied                                            | `PaymentRequiredOutcome`, 402 + envelope | no                                    |
+| malformed proof                                              | `PAYMENT_INVALID`                        | no                                    |
+| bad signature                                                | `PAYMENT_INVALID`                        | no                                    |
+| amount mismatch                                              | `PAYMENT_INVALID`                        | no                                    |
+| wrong recipient (`to != payTo`)                              | `PAYMENT_INVALID`                        | no                                    |
+| wrong network                                                | `PAYMENT_INVALID`                        | no                                    |
+| wrong asset                                                  | `PAYMENT_INVALID`                        | no                                    |
+| authorization expired / not yet valid                        | `PAYMENT_INVALID`                        | no                                    |
+| insufficient balance                                         | `PAYMENT_INVALID`                        | no                                    |
+| authorization already spent on chain                         | `PAYMENT_INVALID`                        | no                                    |
+| copy reaches gateway reservation before the original settles | `PAYMENT_REPLAYED`                       | no                                    |
+| provider/RPC unavailable during verification                 | `PAYMENT_PROVIDER_UNAVAILABLE`           | no                                    |
+| settlement transaction fails                                 | `PAYMENT_SETTLEMENT_FAILED`              | no                                    |
+| backend fails **after** settlement                           | `BACKEND_ERROR` / `BACKEND_TIMEOUT`      | no; payment recorded, delivery failed |
 
 Settlement is final, so a later backend failure is a reconciliation problem,
 not a rollback. It is recorded as a

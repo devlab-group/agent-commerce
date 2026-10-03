@@ -8,13 +8,13 @@ This is merchant-side mandate verification, not a complete AP2 Merchant
 implementation. The AP2 provider verifies closed mandates but does not issue
 mandates or signed Checkout Receipts.
 
-| Property | Supported value |
-| --- | --- |
-| Specification | AP2 v0.2.0, tag 2026-04-28, commit `b4587ac` |
-| Mode | Direct (Human-Present) |
-| Mandate type | closed Checkout Mandate, `vct: mandate.checkout.1` |
-| Signature | ES256 with P-256 |
-| Trust | static public keys in `config.yaml` |
+| Property      | Supported value                                    |
+| ------------- | -------------------------------------------------- |
+| Specification | AP2 v0.2.0, tag 2026-04-28, commit `b4587ac`       |
+| Mode          | Direct (Human-Present)                             |
+| Mandate type  | closed Checkout Mandate, `vct: mandate.checkout.1` |
+| Signature     | ES256 with P-256                                   |
+| Trust         | static public keys in `config.yaml`                |
 
 ## What verification establishes
 
@@ -69,47 +69,47 @@ The identifier is a namespace, not a URL, and is frozen as a signed wire value.
 
 The mandate is an SD-JWT presentation with these claims:
 
-| Claim | Required | Rule |
-| --- | --- | --- |
-| `vct` | yes | exactly `mandate.checkout.1` |
-| `iss` | yes | configured mandate issuer |
-| `aud` | yes | issuer's configured audience |
-| `iat` | yes | no further in the future than allowed clock skew |
-| `exp` | yes | checked with allowed clock skew |
-| `checkout_hash` | yes | `base64url(SHA-256(compact checkout JWT))` |
-| `checkout_jwt` | yes | compact merchant checkout JWT after disclosure resolution |
-| `_sd_alg` | when present | `sha-256` |
+| Claim           | Required     | Rule                                                      |
+| --------------- | ------------ | --------------------------------------------------------- |
+| `vct`           | yes          | exactly `mandate.checkout.1`                              |
+| `iss`           | yes          | configured mandate issuer                                 |
+| `aud`           | yes          | issuer's configured audience                              |
+| `iat`           | yes          | no further in the future than allowed clock skew          |
+| `exp`           | yes          | checked with allowed clock skew                           |
+| `checkout_hash` | yes          | `base64url(SHA-256(compact checkout JWT))`                |
+| `checkout_jwt`  | yes          | compact merchant checkout JWT after disclosure resolution |
+| `_sd_alg`       | when present | `sha-256`                                                 |
 
 Presentations with a KB-JWT are refused because this Direct profile does not
 verify them. The verifier does not inspect `cnf`.
 
 ### Merchant checkout JWT
 
-| Claim | Required | Rule |
-| --- | --- | --- |
-| `iss` | yes | configured checkout issuer |
-| `aud` | yes | issuer's configured audience |
-| `iat` | yes | no further in the future than allowed clock skew |
-| `exp` | yes | required and checked |
-| `jti` | yes | opaque id stored for replay defense and receipt reconciliation |
-| `agent_commerce` | yes | profile object below |
+| Claim            | Required | Rule                                                           |
+| ---------------- | -------- | -------------------------------------------------------------- |
+| `iss`            | yes      | configured checkout issuer                                     |
+| `aud`            | yes      | issuer's configured audience                                   |
+| `iat`            | yes      | no further in the future than allowed clock skew               |
+| `exp`            | yes      | required and checked                                           |
+| `jti`            | yes      | opaque id stored for replay defense and receipt reconciliation |
+| `agent_commerce` | yes      | profile object below                                           |
 
 ### Profile fields
 
 The first six fields are required, non-empty strings. An absent field is a
 mismatch.
 
-| Field | Compared with |
-| --- | --- |
-| `profile` | `agent-commerce/ap2/checkout/v1` |
-| `resource_id` | resolved resource id |
-| `input_hash` | validated canonical input digest |
-| `amount` | resolved decimal price string |
-| `currency` | resolved currency |
-| `payment_method` | selected payment provider |
-| `destination` | payment requirement destination |
-| `network` | payment requirement CAIP-2 network |
-| `asset` | payment requirement asset |
+| Field            | Compared with                      |
+| ---------------- | ---------------------------------- |
+| `profile`        | `agent-commerce/ap2/checkout/v1`   |
+| `resource_id`    | resolved resource id               |
+| `input_hash`     | validated canonical input digest   |
+| `amount`         | resolved decimal price string      |
+| `currency`       | resolved currency                  |
+| `payment_method` | selected payment provider          |
+| `destination`    | payment requirement destination    |
+| `network`        | payment requirement CAIP-2 network |
+| `asset`          | payment requirement asset          |
 
 For `destination`, `network` and `asset`, a value present on either side
 must be present and equal on both. x402 and MPP requirements name all three.
@@ -198,12 +198,12 @@ the full presentation. Different selective-disclosure presentations therefore
 collide. The checkout JWT `jti` is also reserved, preventing two mandates
 bound to one checkout document from both settling.
 
-| State | Meaning | Reusable? |
-| --- | --- | --- |
-| `reserved` | settlement outcome not known yet | no |
-| `consumed` | settlement succeeded | no |
-| `released` | failure proved that no funds moved | only if no other non-released row has the same checkout `jti` |
-| `uncertain` | settlement may have been broadcast | no |
+| State       | Meaning                            | Reusable?                                                     |
+| ----------- | ---------------------------------- | ------------------------------------------------------------- |
+| `reserved`  | settlement outcome not known yet   | no                                                            |
+| `consumed`  | settlement succeeded               | no                                                            |
+| `released`  | failure proved that no funds moved | only if no other non-released row has the same checkout `jti` |
+| `uncertain` | settlement may have been broadcast | no                                                            |
 
 No replay rows are swept. Deleting a `reserved`, `consumed` or `uncertain` row
 could make a mandate spendable again, so a bounded deployment should archive
@@ -239,12 +239,12 @@ this receipt store.
 
 ## Errors
 
-| Code | HTTP | Meaning |
-| --- | --- | --- |
-| `AUTHORIZATION_REQUIRED` | 403 | after payment verification, required authorization was absent or did not satisfy every required method |
-| `AUTHORIZATION_INVALID` | 403 | malformed, untrusted, expired or mismatched proof |
-| `AUTHORIZATION_REPLAYED` | 409 | mandate or checkout JWT has a `reserved`, `consumed` or `uncertain` row |
-| `AUTHORIZATION_PROVIDER_UNAVAILABLE` | 503 | verifier or replay store did not produce a verdict; retryable |
+| Code                                 | HTTP | Meaning                                                                                                |
+| ------------------------------------ | ---- | ------------------------------------------------------------------------------------------------------ |
+| `AUTHORIZATION_REQUIRED`             | 403  | after payment verification, required authorization was absent or did not satisfy every required method |
+| `AUTHORIZATION_INVALID`              | 403  | malformed, untrusted, expired or mismatched proof                                                      |
+| `AUTHORIZATION_REPLAYED`             | 409  | mandate or checkout JWT has a `reserved`, `consumed` or `uncertain` row                                |
+| `AUTHORIZATION_PROVIDER_UNAVAILABLE` | 503  | verifier or replay store did not produce a verdict; retryable                                          |
 
 With no payment proof, the pipeline returns a payment-required response before
 checking authorization. After payment verification, missing and invalid
@@ -262,11 +262,11 @@ HTTP, MCP and A2A carry this envelope:
 { "method": "ap2", "payload": "<SD-JWT presentation>" }
 ```
 
-| Surface | Carrier |
-| --- | --- |
-| HTTP | base64url-encoded JSON in `Agent-Authorization` |
-| MCP | reserved `_authorization` tool argument |
-| A2A | reserved `_authorization` input field |
+| Surface | Carrier                                         |
+| ------- | ----------------------------------------------- |
+| HTTP    | base64url-encoded JSON in `Agent-Authorization` |
+| MCP     | reserved `_authorization` tool argument         |
+| A2A     | reserved `_authorization` input field           |
 
 The HTTP header is limited to 8192 encoded bytes before decoding. Transport
 adapters preserve `payload` byte for byte. Reserved fields are removed before
@@ -314,10 +314,10 @@ Open mandates are refused because their spending constraints are not evaluated.
 
 ## Code map
 
-| Path | Responsibility |
-| --- | --- |
-| `src/authorization/ap2/` | verifier, trust, purchase binding and replay store |
-| `src/core/domain/authorization.ts` | generic authorization contract |
-| `src/core/execution/pipeline.ts` | verification and reservation ordering |
-| `tests/integration/ap2-x402-conformance.test.ts` | end-to-end refusal cases |
-| `tests/e2e/authorization/` | on-chain gated settlement |
+| Path                                             | Responsibility                                     |
+| ------------------------------------------------ | -------------------------------------------------- |
+| `src/authorization/ap2/`                         | verifier, trust, purchase binding and replay store |
+| `src/core/domain/authorization.ts`               | generic authorization contract                     |
+| `src/core/execution/pipeline.ts`                 | verification and reservation ordering              |
+| `tests/integration/ap2-x402-conformance.test.ts` | end-to-end refusal cases                           |
+| `tests/e2e/authorization/`                       | on-chain gated settlement                          |

@@ -34,6 +34,8 @@ export const MCP_UNSUPPORTED: readonly string[] = [
   'notifications/tools/list_changed',
   'tasks',
   'dns-rebinding-protection',
+  // The gateway sends challenges in tool-result `_meta`, which mppx reads
+  'MPP payment-required as JSON-RPC error -32042',
 ];
 
 export function buildDescriptor(implementationVersion: string): AdapterDescriptor {

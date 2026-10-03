@@ -32,6 +32,8 @@ export const A2A_UNSUPPORTED: readonly string[] = [
   'authenticated extended agent cards',
   'A2A authentication schemes',
   'artifact types beyond Agent Commerce outcome data',
+  // The extension uses task continuation; this adapter uses `_payment`
+  'x402 A2A extension (a2a-x402)',
 ];
 
 export function buildDescriptor(implementationVersion: string): AdapterDescriptor {

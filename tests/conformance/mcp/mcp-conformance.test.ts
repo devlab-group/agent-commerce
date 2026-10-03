@@ -11,7 +11,11 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
-import { type CallToolResult, LATEST_PROTOCOL_VERSION } from '@modelcontextprotocol/sdk/types.js';
+import {
+  type CallToolResult,
+  ErrorCode,
+  LATEST_PROTOCOL_VERSION,
+} from '@modelcontextprotocol/sdk/types.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   type CanonicalRequest,
@@ -90,6 +94,16 @@ async function callTool(
 function structured(result: CallToolResult): Record<string, unknown> {
   expect(result.structuredContent).toBeDefined();
   return result.structuredContent as Record<string, unknown>;
+}
+
+// MCP makes an unknown tool a protocol error (-32602), not a tool result
+async function expectUnknownTool(client: Client, name: string): Promise<Error> {
+  const error = await callTool(client, { name, arguments: {} }).then(
+    () => undefined,
+    (e: unknown) => e,
+  );
+  expect(error).toMatchObject({ code: ErrorCode.InvalidParams });
+  return error as Error;
 }
 
 function firstText(result: CallToolResult): string {
@@ -234,12 +248,9 @@ describe('mcp adapter: invocation', () => {
       throw new Error('must not be called for an unregistered tool name');
     };
 
-    const result = await callTool(h.client, { name: 'does-not-exist', arguments: {} });
+    await expectUnknownTool(h.client, 'does-not-exist');
 
     expect(h.pipeline.requests).toHaveLength(0);
-    expect(result.isError).toBe(true);
-    const sc = structured(result);
-    expect(sc.code).toBe('RESOURCE_NOT_FOUND');
   });
 
   it('hides an http-only resource from tools/list and refuses a crafted tools/call for it', async () => {
@@ -251,14 +262,11 @@ describe('mcp adapter: invocation', () => {
     const { tools } = await h.client.listTools();
     expect(tools.map((t) => t.name)).not.toContain('internal-report');
 
-    const result = await callTool(h.client, { name: 'internal-report', arguments: {} });
+    const error = await expectUnknownTool(h.client, 'internal-report');
 
     expect(h.pipeline.requests).toHaveLength(0);
-    expect(result.isError).toBe(true);
-    const sc = structured(result);
-    expect(sc.code).toBe('RESOURCE_NOT_FOUND');
     // Must not reveal that the resource exists but is scoped to another protocol
-    expect(JSON.stringify(sc).toLowerCase()).not.toContain('http');
+    expect(error.message.toLowerCase()).not.toContain('http');
   });
 
   it('gates tools/call on a skipped illegal-tool-name resource: guessing its raw id is rejected', async () => {
@@ -267,11 +275,9 @@ describe('mcp adapter: invocation', () => {
       throw new Error('must not be called for a resource skipped at start()');
     };
 
-    const result = await callTool(h.client, { name: 'bad tool id!', arguments: {} });
+    await expectUnknownTool(h.client, 'bad tool id!');
 
     expect(h.pipeline.requests).toHaveLength(0);
-    expect(result.isError).toBe(true);
-    expect(structured(result).code).toBe('RESOURCE_NOT_FOUND');
   });
 
   it('returns isError plus a valid PaymentRequiredEnvelope (with accepts[0]) when a paid resource is called without a proof', async () => {
@@ -316,10 +322,13 @@ describe('mcp adapter: invocation', () => {
       payTo: '0xMerchantWallet',
     });
 
-    const text = firstText(result);
-    expect(text).toMatch(/0\.05/);
-    expect(text).toContain('USDC');
-    expect(text).toContain('0xMerchantWallet');
+    // The first text block repeats structuredContent as JSON; the second
+    // explains the payment to a reader
+    expect(JSON.parse(firstText(result))).toEqual(result.structuredContent);
+    const sentence = String((result.content[1] as { text: string }).text);
+    expect(sentence).toMatch(/0\.05/);
+    expect(sentence).toContain('USDC');
+    expect(sentence).toContain('0xMerchantWallet');
   });
 
   it('forwards a supplied _payment proof as payment:{method:x402,payload} and maps the delivered result', async () => {
@@ -782,6 +791,7 @@ describe('mcp adapter: transport and lifecycle', () => {
     const h = await setup([FREE_ECHO_RESOURCE]);
     const res = await fetch(`${h.server.url}${h.adapter.mountPath}`, { method: 'GET' });
     expect(res.status).toBe(405);
+    expect(res.headers.get('allow')).toBe('POST');
     const body = (await res.json()) as { jsonrpc: string; error: { message: string } };
     expect(body.jsonrpc).toBe('2.0');
     expect(body.error.message.toLowerCase()).toContain('method not allowed');

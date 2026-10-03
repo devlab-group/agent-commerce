@@ -37,17 +37,17 @@ publish it.
 
 ### Options
 
-| Option | Effect |
-| --- | --- |
-| `--output <path>` | Write to this path, creating missing directories. The default is `<source-stem>.agent-commerce.yaml` in the working directory |
-| `--force` | Replace an existing output file. Without it, an existing file stops the run |
-| `--base-url <url>` | Override document `servers` entries. The value must be absolute HTTP(S), with no query or fragment |
-| `--operation <id>` | Import a matching `operationId` or generated resource id. Repeatable; an unmatched value fails the run |
-| `--tag <tag>` | Import operations carrying any named tag. Repeatable |
-| `--free` | Add `pricing: { type: free }` |
-| `--expose <list>` | Add a comma-separated `expose` list from `http,mcp,a2a,acp` |
-| `--strict` | Treat any warning as a failed run |
-| `--json` | Print a machine-readable summary |
+| Option             | Effect                                                                                                                        |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------- |
+| `--output <path>`  | Write to this path, creating missing directories. The default is `<source-stem>.agent-commerce.yaml` in the working directory |
+| `--force`          | Replace an existing output file. Without it, an existing file stops the run                                                   |
+| `--base-url <url>` | Override document `servers` entries. The value must be absolute HTTP(S), with no query or fragment                            |
+| `--operation <id>` | Import a matching `operationId` or generated resource id. Repeatable; an unmatched value fails the run                        |
+| `--tag <tag>`      | Import operations carrying any named tag. Repeatable                                                                          |
+| `--free`           | Add `pricing: { type: free }`                                                                                                 |
+| `--expose <list>`  | Add a comma-separated `expose` list from `http,mcp,a2a,acp`                                                                   |
+| `--strict`         | Treat any warning as a failed run                                                                                             |
+| `--json`           | Print a machine-readable summary                                                                                              |
 
 To use an imported resource for ACP, enable `protocols.acp` and map the resource
 to one checkout operation. Each mapped resource must be free at the Agent
@@ -126,27 +126,27 @@ names both operations.
 
 ## Support matrix
 
-| Feature | Status |
-| --- | --- |
-| OpenAPI 3.0, 3.1 and 3.2 | supported |
-| Swagger 2.0 | unsupported; convert first |
-| local YAML or JSON source | supported |
-| remote URL source | unsupported |
-| internal `$ref` | supported for path items, parameters, request bodies, schemas, responses and servers; OpenAPI 3.2 media-type object references are also supported |
-| external file or URL `$ref` | refused |
-| GET, POST, PUT, PATCH, DELETE | supported |
-| HEAD, OPTIONS, TRACE, QUERY and other methods | skipped with a warning |
-| path parameters | primitive values using default `simple` style |
-| query parameters | primitive values using default `form` style |
-| `deepObject`, `spaceDelimited`, `pipeDelimited` | unsupported |
-| object/array parameters or parameter `content` | unsupported |
-| `application/json` request body | supported |
-| `application/*+json` request body | supported with a static `Content-Type` header |
-| multipart, form-urlencoded, binary or streaming bodies | unsupported |
-| body on GET or DELETE | omitted with a warning |
-| dynamic header or cookie parameters | unsupported |
-| security credential import | unsupported |
-| output schema | one deterministically selected explicit 2xx JSON response |
+| Feature                                                | Status                                                                                                                                            |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| OpenAPI 3.0, 3.1 and 3.2                               | supported                                                                                                                                         |
+| Swagger 2.0                                            | unsupported; convert first                                                                                                                        |
+| local YAML or JSON source                              | supported                                                                                                                                         |
+| remote URL source                                      | unsupported                                                                                                                                       |
+| internal `$ref`                                        | supported for path items, parameters, request bodies, schemas, responses and servers; OpenAPI 3.2 media-type object references are also supported |
+| external file or URL `$ref`                            | refused                                                                                                                                           |
+| GET, POST, PUT, PATCH, DELETE                          | supported                                                                                                                                         |
+| HEAD, OPTIONS, TRACE, QUERY and other methods          | skipped with a warning                                                                                                                            |
+| path parameters                                        | primitive values using default `simple` style                                                                                                     |
+| query parameters                                       | primitive values using default `form` style                                                                                                       |
+| `deepObject`, `spaceDelimited`, `pipeDelimited`        | unsupported                                                                                                                                       |
+| object/array parameters or parameter `content`         | unsupported                                                                                                                                       |
+| `application/json` request body                        | supported                                                                                                                                         |
+| `application/*+json` request body                      | supported with a static `Content-Type` header                                                                                                     |
+| multipart, form-urlencoded, binary or streaming bodies | unsupported                                                                                                                                       |
+| body on GET or DELETE                                  | omitted with a warning                                                                                                                            |
+| dynamic header or cookie parameters                    | unsupported                                                                                                                                       |
+| security credential import                             | unsupported                                                                                                                                       |
+| output schema                                          | one deterministically selected explicit 2xx JSON response                                                                                         |
 
 An unsupported required parameter or body normally skips the operation. GET and
 DELETE bodies are always omitted with a warning, even when marked required. An
@@ -235,13 +235,13 @@ See [security.md](security.md#openapi-import) for the threat model.
 Core importer code is under `src/openapi/`; command registration and handling
 live under `src/cli/`:
 
-| File | Responsibility |
-| --- | --- |
-| `load.ts` | read, parse and validate the local document; reject external and malformed references |
-| `refs.ts` | resolve internal references |
-| `discover.ts` | find operations, ids and server URLs |
-| `schema.ts` | convert schemas |
-| `request.ts` | map parameters and JSON bodies |
-| `draft.ts` | build drafts and render YAML |
-| `src/cli/program.ts` | register the command and define its flags |
-| `src/cli/commands/import-openapi.ts` | handle the command |
+| File                                 | Responsibility                                                                        |
+| ------------------------------------ | ------------------------------------------------------------------------------------- |
+| `load.ts`                            | read, parse and validate the local document; reject external and malformed references |
+| `refs.ts`                            | resolve internal references                                                           |
+| `discover.ts`                        | find operations, ids and server URLs                                                  |
+| `schema.ts`                          | convert schemas                                                                       |
+| `request.ts`                         | map parameters and JSON bodies                                                        |
+| `draft.ts`                           | build drafts and render YAML                                                          |
+| `src/cli/program.ts`                 | register the command and define its flags                                             |
+| `src/cli/commands/import-openapi.ts` | handle the command                                                                    |

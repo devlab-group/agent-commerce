@@ -34,7 +34,9 @@ import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import {
   CallToolRequestSchema,
   type CallToolResult,
+  ErrorCode,
   ListToolsRequestSchema,
+  McpError,
   type Tool,
 } from '@modelcontextprotocol/sdk/types.js';
 import {
@@ -45,10 +47,14 @@ import {
   type CommerceResource,
   extractReservedInputFields,
   type HttpProtocolAdapter,
+  type PaymentSubmission,
   type ProtocolAdapterContext,
   toCommerceError,
 } from '../../core';
 import { toLogInfo } from '../../core/errors';
+import { isRecord } from '../../core/is-record';
+import { MPP_MCP_CREDENTIAL_META_KEY } from '../../payments/mpp/transport';
+import { X402_MCP_PAYMENT_META_KEY } from '../../payments/x402/transport';
 import { PACKAGE_VERSION } from '../../version';
 import { MCP_TOOL_NAME_PATTERN } from './constants';
 import { buildDescriptor } from './descriptor';
@@ -269,7 +275,11 @@ class McpProtocolAdapter implements HttpProtocolAdapter {
 
   private writeJsonRpcError(res: ServerResponse, status: number, message: string): void {
     if (res.headersSent) return;
-    res.writeHead(status, { 'content-type': 'application/json' });
+    res.writeHead(status, {
+      'content-type': 'application/json',
+      // RFC 9110 requires Allow on a 405, and this endpoint takes only POST
+      ...(status === 405 ? { allow: 'POST' } : {}),
+    });
     res.end(JSON.stringify({ jsonrpc: '2.0', error: { code: -32000, message }, id: null }));
   }
 
@@ -282,7 +292,12 @@ class McpProtocolAdapter implements HttpProtocolAdapter {
       tools: this.tools.map((t) => t.tool),
     }));
     server.setRequestHandler(CallToolRequestSchema, async (request) =>
-      this.handleToolCall(request.params.name, request.params.arguments ?? {}, signal),
+      this.handleToolCall(
+        request.params.name,
+        request.params.arguments ?? {},
+        request.params._meta,
+        signal,
+      ),
     );
     return server;
   }
@@ -290,28 +305,24 @@ class McpProtocolAdapter implements HttpProtocolAdapter {
   private async handleToolCall(
     resourceId: string,
     rawArgs: Record<string, unknown>,
+    meta: Record<string, unknown> | undefined,
     signal: AbortSignal,
   ): Promise<CallToolResult> {
     const context = this.context;
     if (!context) {
       return errorResult(new CommerceError('INTERNAL_ERROR', 'MCP adapter is not running.'));
     }
+    // Clients can call names absent from `tools/list`. Return the same MCP
+    // error for unknown and non-MCP resources without revealing the latter
+    const resource = this.toolsByResourceId.get(resourceId);
+    if (!resource) {
+      throw new McpError(ErrorCode.InvalidParams, `Unknown tool "${resourceId}".`);
+    }
     try {
-      // `tools/list` advertises only mcp-exposed resources, but a client can
-      // call any name. The answer is the one an unknown id gets, so it never
-      // reveals a resource scoped to another protocol.
-      const resource = this.toolsByResourceId.get(resourceId);
-      if (!resource) {
-        return errorResult(
-          new CommerceError('RESOURCE_NOT_FOUND', `Unknown tool "${resourceId}".`, { resourceId }),
-        );
-      }
       const requestId = context.ids.next('mcp');
-      const { input, payment, authorization } = extractReservedInputFields(
-        rawArgs,
-        resource,
-        requestId,
-      );
+      const fields = extractReservedInputFields(rawArgs, resource, requestId);
+      const { input, authorization } = fields;
+      const payment = fields.payment ?? paymentFromMeta(meta, resource);
       const request: CanonicalRequest = {
         requestId,
         resourceId,
@@ -350,7 +361,7 @@ class McpProtocolAdapter implements HttpProtocolAdapter {
         { adapter: 'mcp', resourceId, err: toLogInfo(error) },
         'mcp adapter: execution failed',
       );
-      return errorResult(error);
+      return errorResult(error, resource.paymentMethods[0]);
     }
   }
 
@@ -389,6 +400,25 @@ class McpProtocolAdapter implements HttpProtocolAdapter {
     if (next !== undefined) next();
     else this.inFlightToolCalls--;
   }
+}
+
+// Read a proof from the selected rail's MCP carrier when `_payment` is absent
+function paymentFromMeta(
+  meta: Record<string, unknown> | undefined,
+  resource: CommerceResource,
+): PaymentSubmission | undefined {
+  const method = resource.paymentMethods[0];
+  const x402Payload = meta?.[X402_MCP_PAYMENT_META_KEY];
+  if (method === 'x402' && isRecord(x402Payload)) {
+    // Match the HTTP header's base64-encoded PaymentPayload JSON
+    return { method, payload: Buffer.from(JSON.stringify(x402Payload), 'utf8').toString('base64') };
+  }
+  const credential = meta?.[MPP_MCP_CREDENTIAL_META_KEY];
+  if (method === 'mpp' && isRecord(credential)) {
+    // The MPP provider converts this object to an Authorization value
+    return { method, payload: JSON.stringify(credential) };
+  }
+  return undefined;
 }
 
 export function createMcpAdapter(options?: McpAdapterOptions): HttpProtocolAdapter {

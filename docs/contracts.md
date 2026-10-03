@@ -351,10 +351,12 @@ the pipeline records `settlement-uncertain` and returns
 `PAYMENT_SETTLEMENT_FAILED`. Returned results name `mpp`; `health` returns the
 internal x402 provider's health unchanged.
 
-`PaymentSubmission.payload` is the serialized credential: the value of an
-`Authorization: Payment ...` header, scheme included. `PaymentChallenge.envelope`
-is `{ wwwAuthenticate }`, the challenge as a `WWW-Authenticate` value, and a
-settled result's `metadata.receipt` is the `Payment-Receipt` value.
+`PaymentSubmission.payload` accepts either the full
+`Authorization: Payment ...` value, including its scheme, or a JSON string
+containing the credential object from MPP's MCP `_meta` carrier.
+`PaymentChallenge.envelope` contains `wwwAuthenticate` for the HTTP header
+and `challenges` for the MCP carrier. A settled result with a transaction
+reference carries the `Payment-Receipt` value in `metadata.receipt`.
 
 ## AP2
 

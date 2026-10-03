@@ -447,6 +447,20 @@ describe('MPP verify', () => {
     });
   });
 
+  it('accepts a JSON credential object from the MPP MCP carrier', async () => {
+    const provider = makeProvider();
+    const requirement = await requirementFor(provider);
+    const object = Credential.deserialize(await clientCredential(requirement));
+    const result = await verifyWith(provider, requirement, JSON.stringify(object));
+    expect(result.status).toBe('verified');
+  });
+
+  it.each(['{', '{"challenge":1}'])('refuses malformed or incomplete credential JSON %s', async (payload) => {
+    const provider = makeProvider();
+    const result = await verifyWith(provider, await requirementFor(provider), payload);
+    expect(result).toMatchObject({ status: 'rejected', rejectionReason: 'malformed_credential' });
+  });
+
   it('refuses a proof that is not an MPP credential', async () => {
     const provider = makeProvider();
     const result = await verifyWith(provider, await requirementFor(provider), 'Payment !!!');
