@@ -42,8 +42,9 @@ function assertNothingLeaked(body: Record<string, unknown>): void {
   expect(serialized).not.toContain('cluster.local');
   expect(serialized).not.toContain(ACP_TOKEN);
   expect(serialized).not.toContain('acp_checkout_');
-  // The ACP Error object carries these three fields and nothing else
-  expect(Object.keys(body).sort()).toEqual(['code', 'message', 'type']);
+  // Accept the optional `param` field, but no other response fields
+  const keys = 'param' in body ? ['code', 'message', 'param', 'type'] : ['code', 'message', 'type'];
+  expect(Object.keys(body).sort()).toEqual(keys);
 }
 
 async function createWith(reply: {
@@ -76,6 +77,51 @@ describe('merchant failures', () => {
     expect(result.body['code']).toBe(code);
     expect(validateAcpDocument('error', result.body)).toBeUndefined();
     assertNothingLeaked(result.body);
+  });
+
+  it('uses a merchant ACP error type, code and param without forwarding its message', async () => {
+    const result = await createWith({
+      status: 400,
+      body: {
+        type: 'invalid_request',
+        code: 'requires_3ds',
+        // Merchant free text must not become the gateway's error message
+        message: LEAKY_BODY.error,
+        param: '$.authentication_result',
+      },
+    });
+
+    expect(result.status).toBe(422);
+    expect(result.body).toMatchObject({
+      type: 'invalid_request',
+      code: 'requires_3ds',
+      param: '$.authentication_result',
+    });
+    expect(validateAcpDocument('error', result.body)).toBeUndefined();
+    assertNothingLeaked(result.body);
+  });
+
+  it.each([
+    ['an invalid code', { code: 'Requires 3DS!' }],
+    ['a non-ACP error body', { code: 'requires_3ds', extra: true }],
+  ])('uses gateway error mapping for %s', async (_label, patch) => {
+    const result = await createWith({
+      status: 400,
+      body: { type: 'invalid_request', message: 'm', ...patch },
+    });
+
+    expect(result.status).toBe(422);
+    expect(result.body['code']).toBe('invalid_request_body');
+  });
+
+  it('uses gateway error mapping for an unrelayed merchant status', async () => {
+    const result = await createWith({
+      status: 500,
+      body: { type: 'processing_error', code: 'database_down', message: LEAKY_BODY.error },
+    });
+
+    expect(result.status).toBe(502);
+    expect(result.body['code']).toBe('processing_error');
   });
 
   it('maps a merchant that never answers to a service_unavailable', async () => {

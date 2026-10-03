@@ -347,6 +347,7 @@ effect.
 | merchant 405 on cancel                            | `405 checkout_session_not_cancelable` |
 | merchant 405 on another operation                 | `405 method_not_allowed`              |
 | merchant 400 or 422                               | `422 invalid_request_body`            |
+| merchant ACP error on a status relayed above      | that status, with the merchant's `type`, `code` and `param` |
 | merchant 409                                      | `409 checkout_session_conflict`       |
 | merchant 401, 403, 5xx or another unmapped status | `502 processing_error`                |
 | backend timeout                                   | `504 service_unavailable`             |
@@ -354,8 +355,12 @@ effect.
 | mapping, storage or unexpected payment challenge  | `500 processing_error`                |
 
 ACP errors contain `type`, `code`, `message`, a safe `param` when available, and
-`supported_versions` for API-version errors. They omit merchant bodies, stack
-traces, database errors, paths and credentials. Merchant 401/403 is not
+`supported_versions` for API-version errors. When a merchant answers a relayed
+status with a valid ACP error, such as `requires_3ds` with
+`param: $.authentication_result`, its `type`, `code` (snake_case, at most 64
+characters) and `param` replace the gateway's; the `message` stays the
+gateway's. Nothing else of a merchant body reaches the agent: no free text,
+stack traces, database errors, paths or credentials. Merchant 401/403 is not
 presented as a failure of the agent's ACP bearer token.
 
 ### ACP discovery

@@ -38,6 +38,19 @@ export interface HttpBackendExecutorOptions {
   readonly logger?: Logger;
 }
 
+/**
+ * A merchant's non-2xx response, attached to `BACKEND_ERROR` as its cause.
+ * An adapter can inspect the body when its protocol defines an error format.
+ * `CommerceError.toInfo()` omits the cause from client responses; the backend
+ * executor logs a truncated body snippet at debug level.
+ */
+export class BackendErrorResponse {
+  constructor(
+    readonly status: number,
+    readonly body: unknown,
+  ) {}
+}
+
 export class HttpBackendExecutor implements BackendExecutor {
   private readonly fetchImpl: typeof fetch;
   private readonly logger: Logger;
@@ -188,6 +201,7 @@ export class HttpBackendExecutor implements BackendExecutor {
         requestId: request.requestId,
         resourceId: request.resourceId,
         details: { status: response.status },
+        cause: new BackendErrorResponse(response.status, parsedBody),
       });
     }
 

@@ -2,12 +2,14 @@
  * Execution outcome -> ACP response, under two rules. A successful answer must
  * be a document the pinned snapshot accepts, on the status ACP fixes for the
  * route, because a merchant backend is not automatically ACP-conformant. A
- * failure is described in ACP's vocabulary only: no merchant response body,
- * stack, internal path or database error.
+ * failure uses ACP's error shape. Only selected fields of a valid merchant
+ * ACP error can cross this boundary; internal details stay in logs.
  */
 import type { CommerceError, DeliveredOutcome } from '../../core';
+import { BackendErrorResponse } from '../../core/execution/backend-http';
+import { isRecord } from '../../core/is-record';
 import type { AcpCheckoutOperation } from './constants';
-import { type AcpFailure, acpFailure } from './errors';
+import { type AcpErrorType, type AcpFailure, acpFailure } from './errors';
 import { type AcpDefinition, validateAcpDocument } from './validation';
 
 /** One ACP answer, as a value: it may have to be stored before it is written */
@@ -105,9 +107,9 @@ function responseDefinition(operation: AcpCheckoutOperation, body: unknown): Acp
 }
 
 /**
- * Every failure the pipeline can raise, in ACP's vocabulary. Only the error
- * code and, for a backend failure, the backend's status cross this boundary,
- * never the merchant's response body.
+ * Map pipeline failures to ACP errors. For relayed merchant statuses, a
+ * valid ACP error can contribute its type, safe code and optional param. The
+ * merchant's message and remaining body fields stay out of the response.
  */
 export function mapCommerceErrorToAcp(
   error: CommerceError,
@@ -154,6 +156,35 @@ export function mapCommerceErrorToAcp(
  * did.
  */
 function fromBackendStatus(error: CommerceError, operation: AcpCheckoutOperation): AcpFailure {
+  const failure = statusFailure(error, operation);
+  return failure.status < 500 ? withMerchantError(failure, error) : failure;
+}
+
+// Limit merchant codes to snake_case and params to short printable text
+// beginning with `$`
+const MERCHANT_CODE = /^[a-z][a-z0-9_]{0,63}$/;
+const MERCHANT_PARAM = /^\$[\x20-\x7e]{0,255}$/;
+
+/**
+ * Keep the type and safe code from a valid merchant ACP error on a relayed
+ * status. Include a safe param when present; retain the gateway's message.
+ */
+function withMerchantError(failure: AcpFailure, error: CommerceError): AcpFailure {
+  const body = error.cause instanceof BackendErrorResponse ? error.cause.body : undefined;
+  if (!isRecord(body) || validateAcpDocument('error', body) !== undefined) return failure;
+  const { type, code, param } = body;
+  if (typeof code !== 'string' || !MERCHANT_CODE.test(code)) return failure;
+  const relayParam = typeof param === 'string' && MERCHANT_PARAM.test(param) ? param : undefined;
+  return acpFailure(
+    failure.status,
+    type as AcpErrorType,
+    code,
+    failure.error.message,
+    relayParam !== undefined ? { param: relayParam } : {},
+  );
+}
+
+function statusFailure(error: CommerceError, operation: AcpCheckoutOperation): AcpFailure {
   const status = error.details?.['status'];
   switch (typeof status === 'number' ? status : 0) {
     case 404:
