@@ -1,9 +1,8 @@
 # Vendored ACP schema - snapshot `2026-04-17`
 
-`schema.agentic_checkout.json` is a byte-for-byte copy of the released ACP
-checkout schema. It is the wire contract this adapter validates against, and it
-is vendored rather than fetched so a protocol upgrade is an explicit code change
-with a diff, never something that happens at install or at runtime.
+`schema.agentic_checkout.json` copies the ACP checkout schema from the
+upstream commit below. The adapter validates against this local snapshot, so a
+schema change requires a reviewed code change.
 
 | | |
 |---|---|
@@ -16,6 +15,16 @@ with a diff, never something that happens at install or at runtime.
 
 The file is excluded from Biome in `biome.json`: a formatter pass would rewrite
 it and the copy would no longer be verifiable against upstream.
+
+## Amended after release
+
+Upstream amended the dated snapshot after release. The release commit
+`9abf303` (2026-04-17) contains schema blob `93a88203`. Commit `6b82868`
+("SEP: Order Schema - Post-Checkout Alignment") changed `Order`,
+`OrderLineItem`, `OrderLineItemQuantity`, `Fulfillment`, `FulfillmentEvent` and
+`Adjustment`. This repository vendors the later blob, `9c019241`. For example,
+an order with `quantity: { ordered, shipped }` but no `current` may satisfy the
+release-day schema but fails validation here.
 
 ## Updating
 
