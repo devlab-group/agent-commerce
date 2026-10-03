@@ -253,14 +253,15 @@ describe('A2A JSON-RPC transport over the real gateway', () => {
     ['a missing version header', {}],
     ['an older version', { 'a2a-version': '0.3' }],
     ['an unknown version', { 'a2a-version': '2.0' }],
-  ])('refuses %s', async (_label, headers) => {
+  ])('returns VersionNotSupportedError with the request id for %s', async (_label, headers) => {
     const gw = await startGateway();
     const { statusCode, body } = await rpc(gw, sendMessage({ resource: 'weather_basic' }), {
       'content-type': 'application/json',
       ...headers,
     });
     expect(statusCode).toBe(200);
-    expect(body.error?.code).toBe(-32004);
+    expect(body.id).toBe('req-1');
+    expect(body.error?.code).toBe(-32009);
     expect(body.error?.message).toContain('1.0');
   });
 

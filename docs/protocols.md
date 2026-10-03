@@ -124,14 +124,14 @@ settle payments or call merchant backends.
 
 **Experimental.** Enable with `protocols.a2a.enabled: true`.
 
-| Property                | Value                                    |
-| ----------------------- | ---------------------------------------- |
-| Binding                 | JSON-RPC 2.0 over HTTP(S)                |
-| Method                  | `SendMessage`, not legacy `message/send` |
-| Required version header | `A2A-Version: 1.0`                       |
-| Agent Card              | `GET /.well-known/agent-card.json`       |
-| Default mount           | `/a2a`                                   |
-| Task model              | synchronous terminal tasks only          |
+| Property       | Value                                                       |
+| -------------- | ----------------------------------------------------------- |
+| Binding        | JSON-RPC 2.0 over HTTP(S)                                   |
+| Method         | `SendMessage`, not legacy `message/send`                    |
+| Version header | `A2A-Version: 1.0`; patch suffixes are accepted but ignored |
+| Agent Card     | `GET /.well-known/agent-card.json`                          |
+| Default mount  | `/a2a`                                                      |
+| Task model     | synchronous terminal tasks only                             |
 
 Resources exposed through A2A become Agent Card skills. The skill id is the
 resource id; paid skills are tagged `paid` and include their price in the
@@ -187,11 +187,23 @@ A non-object merchant body is wrapped as `{ "value": ... }`. Payment required
 is terminal because there is no task store; the buyer sends a new message with
 the proof.
 
-JSON-RPC errors are reserved for malformed or unsupported A2A requests:
-`-32700`, `-32600`, `-32601`, `-32602`, `-32603`, and `-32004`
-(`UnsupportedOperationError`) for recognized operations, versions or message
-features this deployment declines, including text/file parts and task or
-context continuation.
+The adapter returns JSON-RPC errors for invalid requests and A2A features it
+cannot serve. Alongside `-32700`, `-32600`, `-32601`, `-32602` and `-32603`, it
+uses these A2A codes:
+
+| Code     | A2A error                           | Returned for                                                          |
+| -------- | ----------------------------------- | --------------------------------------------------------------------- |
+| `-32001` | `TaskNotFoundError`                 | a `taskId` that cannot be found because the adapter stores no tasks   |
+| `-32003` | `PushNotificationNotSupportedError` | the four push notification configuration methods                      |
+| `-32004` | `UnsupportedOperationError`         | other unsupported methods and message features listed below           |
+| `-32005` | `ContentTypeNotSupportedError`      | a structured data part with a non-JSON `mediaType`                    |
+| `-32009` | `VersionNotSupportedError`          | an unsupported version; a missing or empty header is treated as `0.3` |
+
+The `-32004` message features are text, file, inline-byte and URL parts,
+multipart messages, a `contextId` and non-empty `referenceTaskIds`. A non-user
+role is `-32602`. Each A2A error carries a `google.rpc.ErrorInfo` in
+`error.data`, with a reason such as `VERSION_NOT_SUPPORTED` and the domain
+`a2a-protocol.org`.
 
 ### A2A exclusions
 

@@ -19,13 +19,21 @@ function envelope(data: unknown, overrides: Record<string, unknown> = {}): unkno
   };
 }
 
-function expectRejected(params: unknown, code: 'INPUT_INVALID' | 'PROTOCOL_UNSUPPORTED'): void {
+// Check the specific A2A error code when the mapper supplies one
+function expectRejected(
+  params: unknown,
+  code: 'INPUT_INVALID' | 'PROTOCOL_UNSUPPORTED',
+  a2aErrorCode?: number,
+): void {
   try {
     parseInvocation(params);
     expect.unreachable();
   } catch (error) {
     expect(isCommerceError(error)).toBe(true);
-    if (isCommerceError(error)) expect(error.code).toBe(code);
+    if (isCommerceError(error)) {
+      expect(error.code).toBe(code);
+      expect(error.details?.['a2aErrorCode']).toBe(a2aErrorCode);
+    }
   }
 }
 
@@ -163,25 +171,27 @@ describe('parseInvocation: legal A2A this adapter does not serve', () => {
         parts: [{ data: { resource: 'ping' }, mediaType: 'application/xml' }],
       },
     };
-    expectRejected(params, 'PROTOCOL_UNSUPPORTED');
+    expectRejected(params, 'PROTOCOL_UNSUPPORTED', -32005);
   });
 
+  // Every supplied task id is unknown to this stateless adapter
   it.each([
-    ['a params-level taskId', { taskId: 'task-1' }],
-    ['a params-level contextId', { contextId: 'ctx-1' }],
-  ])('rejects %s', (_label, extra) => {
+    ['a params-level taskId', { taskId: 'task-1' }, -32001],
+    ['a params-level contextId', { contextId: 'ctx-1' }, undefined],
+  ])('rejects %s', (_label, extra, a2aErrorCode) => {
     expectRejected(
       { ...(envelope({ resource: 'ping' }) as object), ...extra },
       'PROTOCOL_UNSUPPORTED',
+      a2aErrorCode,
     );
   });
 
   it.each([
-    ['a message-level taskId', { taskId: 'task-1' }],
-    ['a message-level contextId', { contextId: 'ctx-1' }],
-    ['referenced tasks', { referenceTaskIds: ['task-1'] }],
-  ])('rejects %s', (_label, overrides) => {
-    expectRejected(envelope({ resource: 'ping' }, overrides), 'PROTOCOL_UNSUPPORTED');
+    ['a message-level taskId', { taskId: 'task-1' }, -32001],
+    ['a message-level contextId', { contextId: 'ctx-1' }, undefined],
+    ['referenced tasks', { referenceTaskIds: ['task-1'] }, undefined],
+  ])('rejects %s', (_label, overrides, a2aErrorCode) => {
+    expectRejected(envelope({ resource: 'ping' }, overrides), 'PROTOCOL_UNSUPPORTED', a2aErrorCode);
   });
 
   it('accepts an empty referenceTaskIds array, which continues nothing', () => {

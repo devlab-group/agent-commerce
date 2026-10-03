@@ -33,14 +33,24 @@ export const A2A_JSON_MEDIA_TYPE = 'application/json';
 export const A2A_DEFAULT_AGENT_NAME = 'agent-commerce';
 
 /**
- * Version negotiation header. A2A v1 carries the protocol version out of band,
- * so a request without it comes from an older convention and is refused as
- * unsupported.
+ * Version negotiation header. An absent or empty value means `0.3`, which
+ * this adapter does not serve.
  */
 export const A2A_VERSION_HEADER = 'a2a-version';
 
 /** The one JSON-RPC method this adapter serves, not the legacy `message/send` */
 export const A2A_METHOD_SEND_MESSAGE = 'SendMessage';
+
+/**
+ * Push notification configuration methods. The card declares no push
+ * support, so these return `PushNotificationNotSupportedError`.
+ */
+export const A2A_PUSH_CONFIG_METHODS: readonly string[] = [
+  'CreateTaskPushNotificationConfig',
+  'GetTaskPushNotificationConfig',
+  'ListTaskPushNotificationConfigs',
+  'DeleteTaskPushNotificationConfig',
+];
 
 /**
  * A2A methods that exist and are not served here, kept apart from unknown
@@ -53,10 +63,7 @@ export const A2A_UNSUPPORTED_METHODS: readonly string[] = [
   'ListTasks',
   'CancelTask',
   'SubscribeToTask',
-  'CreateTaskPushNotificationConfig',
-  'GetTaskPushNotificationConfig',
-  'ListTaskPushNotificationConfigs',
-  'DeleteTaskPushNotificationConfig',
+  ...A2A_PUSH_CONFIG_METHODS,
   'GetExtendedAgentCard',
 ];
 

@@ -6,8 +6,9 @@
  * through `additionalHttpRoutes` so the gateway needs no A2A-specific routing.
  *
  * Only the synchronous `SendMessage` path is in scope; every other A2A method
- * is listed in `descriptor.unsupported` rather than half-served. This file
- * never calls a merchant backend and never inspects a payment object.
+ * is listed in `descriptor.unsupported`. This adapter maps reserved payment
+ * fields but leaves verification, settlement and merchant calls to the
+ * pipeline.
  */
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import {
@@ -34,12 +35,15 @@ import {
   A2A_JSON_MEDIA_TYPE,
   A2A_METHOD_SEND_MESSAGE,
   A2A_PROTOCOL_VERSION,
+  A2A_PUSH_CONFIG_METHODS,
   A2A_UNSUPPORTED_METHODS,
   A2A_VERSION_HEADER,
 } from './constants';
 import { buildDescriptor } from './descriptor';
 import {
+  A2A_ERROR_PUSH_NOTIFICATION_NOT_SUPPORTED,
   A2A_ERROR_UNSUPPORTED_OPERATION,
+  A2A_ERROR_VERSION_NOT_SUPPORTED,
   JSONRPC_INTERNAL_ERROR,
   JSONRPC_INVALID_PARAMS,
   JSONRPC_INVALID_REQUEST,
@@ -57,6 +61,9 @@ import type { A2aAgentCard, A2aTask } from './types';
 // A second line behind the gateway mount's cap, bounding what this adapter
 // buffers if it is mounted without that guard
 const MAX_REQUEST_BODY_BYTES = 256 * 1024;
+
+// Accept patch suffixes; only major.minor determines the protocol version
+const VERSION_PATTERN = /^(\d+\.\d+)(?:\.\d+)?$/;
 
 export interface A2aAdapterOptions {
   readonly mountPath?: string;
@@ -178,24 +185,6 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
         return;
       }
 
-      const version = req.headers[A2A_VERSION_HEADER];
-      const declared = Array.isArray(version) ? version[0] : version;
-      if (declared !== A2A_PROTOCOL_VERSION) {
-        // Missing counts as unsupported: a client that negotiates no version
-        // is speaking an older convention, and answering it as if it were v1
-        // would be guessing on its behalf
-        this.writeJson(
-          res,
-          200,
-          jsonRpcError(
-            null,
-            A2A_ERROR_UNSUPPORTED_OPERATION,
-            `Unsupported A2A protocol version. Send the ${A2A_VERSION_HEADER} header with "${A2A_PROTOCOL_VERSION}".`,
-          ),
-        );
-        return;
-      }
-
       const read = await readCappedBody(req, MAX_REQUEST_BODY_BYTES);
       if (read.kind !== 'ok') {
         this.writeJson(
@@ -211,6 +200,24 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
         this.writeJson(res, 200, jsonRpcError(parsed.id, parsed.error.code, parsed.error.message));
         return;
       }
+
+      // Parse first so a version error can echo the request id. A missing
+      // header represents `0.3`, which this adapter does not serve.
+      const version = req.headers[A2A_VERSION_HEADER];
+      const declared = Array.isArray(version) ? version[0] : version;
+      if (declared?.match(VERSION_PATTERN)?.[1] !== A2A_PROTOCOL_VERSION) {
+        this.writeJson(
+          res,
+          200,
+          jsonRpcError(
+            parsed.request.id,
+            A2A_ERROR_VERSION_NOT_SUPPORTED,
+            `Unsupported A2A protocol version. Send the ${A2A_VERSION_HEADER} header with "${A2A_PROTOCOL_VERSION}".`,
+          ),
+        );
+        return;
+      }
+
       this.writeJson(
         res,
         200,
@@ -232,6 +239,13 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
     method: string,
     params: unknown,
   ): Promise<Record<string, unknown>> {
+    if (A2A_PUSH_CONFIG_METHODS.includes(method)) {
+      return jsonRpcError(
+        id,
+        A2A_ERROR_PUSH_NOTIFICATION_NOT_SUPPORTED,
+        `A2A method "${method}" is not supported: this agent does not support push notifications.`,
+      );
+    }
     if (A2A_UNSUPPORTED_METHODS.includes(method)) {
       return jsonRpcError(
         id,
@@ -248,10 +262,13 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
       invocation = parseInvocation(params);
     } catch (err) {
       const error = toCommerceError(err);
+      const a2aErrorCode = error.details?.['a2aErrorCode'];
       const code =
-        error.code === 'PROTOCOL_UNSUPPORTED'
-          ? A2A_ERROR_UNSUPPORTED_OPERATION
-          : JSONRPC_INVALID_PARAMS;
+        typeof a2aErrorCode === 'number'
+          ? a2aErrorCode
+          : error.code === 'PROTOCOL_UNSUPPORTED'
+            ? A2A_ERROR_UNSUPPORTED_OPERATION
+            : JSONRPC_INVALID_PARAMS;
       // CommerceError messages are written for a client; nothing else is
       // relayed
       return jsonRpcError(id, code, error.message);

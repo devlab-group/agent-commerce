@@ -23,7 +23,14 @@ interface JsonRpcResponse {
   readonly jsonrpc?: string;
   readonly id?: string | number | null;
   readonly result?: unknown;
-  readonly error?: { code: number; message: string };
+  readonly error?: { code: number; message: string; data?: Record<string, unknown>[] };
+}
+
+// Expected ErrorInfo detail for A2A-specific errors
+function errorInfo(reason: string): Record<string, unknown>[] {
+  return [
+    { '@type': 'type.googleapis.com/google.rpc.ErrorInfo', reason, domain: 'a2a-protocol.org' },
+  ];
 }
 
 async function post(body: unknown): Promise<{ status: number; body: JsonRpcResponse }> {
@@ -71,18 +78,36 @@ describe('method routing', () => {
     expect(body.error?.code).toBe(-32601);
   });
 
-  it.each(['GetTask', 'ListTasks', 'CancelTask', 'SendStreamingMessage', 'SubscribeToTask'])(
-    'refuses the known operation %s as unsupported, not unknown',
-    async (method) => {
-      const { body } = await post({ jsonrpc: '2.0', id: 1, method, params: {} });
-      expect(body.error?.code).toBe(-32004);
-      expect(body.error?.message).toContain(method);
-    },
-  );
+  it.each([
+    'GetTask',
+    'ListTasks',
+    'CancelTask',
+    'SendStreamingMessage',
+    'SubscribeToTask',
+    'GetExtendedAgentCard',
+  ])('returns UnsupportedOperationError for known method %s', async (method) => {
+    const { body } = await post({ jsonrpc: '2.0', id: 1, method, params: {} });
+    expect(body.error?.code).toBe(-32004);
+    expect(body.error?.message).toContain(method);
+    expect(body.error?.data).toEqual(errorInfo('UNSUPPORTED_OPERATION'));
+  });
 
-  it('reports a method that does not exist as method-not-found', async () => {
+  // Push configuration methods return -32003 when the card disables them
+  it.each([
+    'CreateTaskPushNotificationConfig',
+    'GetTaskPushNotificationConfig',
+    'ListTaskPushNotificationConfigs',
+    'DeleteTaskPushNotificationConfig',
+  ])('refuses %s with PushNotificationNotSupportedError', async (method) => {
+    const { body } = await post({ jsonrpc: '2.0', id: 1, method, params: {} });
+    expect(body.error?.code).toBe(-32003);
+    expect(body.error?.data).toEqual(errorInfo('PUSH_NOTIFICATION_NOT_SUPPORTED'));
+  });
+
+  it('returns method-not-found without A2A detail for an unknown method', async () => {
     const { body } = await post({ jsonrpc: '2.0', id: 1, method: 'Frobnicate', params: {} });
     expect(body.error?.code).toBe(-32601);
+    expect(body.error).not.toHaveProperty('data');
   });
 
   it('echoes a string or number id and answers any other id with null', async () => {
@@ -126,11 +151,20 @@ describe('invocation envelope refusals', () => {
     expect(body.error?.code).toBe(-32004);
   });
 
-  it('refuses task continuation, which it cannot honor', async () => {
+  it('returns TaskNotFoundError for an unknown task id', async () => {
     const { body } = await post(
       sendMessage(message([{ data: { resource: 'weather_basic' } }], { taskId: 'task-1' })),
     );
-    expect(body.error?.code).toBe(-32004);
+    expect(body.error?.code).toBe(-32001);
+    expect(body.error?.data).toEqual(errorInfo('TASK_NOT_FOUND'));
+  });
+
+  it('returns ContentTypeNotSupportedError for a non-JSON data part', async () => {
+    const { body } = await post(
+      sendMessage(message([{ data: { resource: 'weather_basic' }, mediaType: 'text/csv' }])),
+    );
+    expect(body.error?.code).toBe(-32005);
+    expect(body.error?.data).toEqual(errorInfo('CONTENT_TYPE_NOT_SUPPORTED'));
   });
 });
 
