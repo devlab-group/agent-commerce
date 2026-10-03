@@ -228,6 +228,8 @@ function checkoutResources(origin: string, timeoutMs: number): GatewayConfig['re
 export interface StartAcpStackOptions {
   /** Backend timeout, lowered by the test that provokes one */
   readonly backendTimeoutMs?: number;
+  /** Declares that the merchant deduplicates by the derived Idempotency-Key */
+  readonly merchantIdempotent?: boolean;
 }
 
 export async function startAcpStack(options: StartAcpStackOptions = {}): Promise<AcpStack> {
@@ -247,7 +249,11 @@ export async function startAcpStack(options: StartAcpStackOptions = {}): Promise
         enabled: true,
         mountPath: '/acp',
         auth: { type: 'bearer', token: ACP_TOKEN },
-        idempotency: { path: ':memory:', retentionHours: 24 },
+        idempotency: {
+          path: ':memory:',
+          retentionHours: 24,
+          merchantIdempotent: options.merchantIdempotent ?? false,
+        },
         checkout: { operations: ACP_OPERATIONS },
       },
     },
@@ -264,7 +270,11 @@ export async function startAcpStack(options: StartAcpStackOptions = {}): Promise
         mountPath: '/acp',
         token: ACP_TOKEN,
         operations: ACP_OPERATIONS,
-        idempotency: { path: ':memory:', retentionHours: 24 },
+        idempotency: {
+          path: ':memory:',
+          retentionHours: 24,
+          merchantIdempotent: options.merchantIdempotent ?? false,
+        },
       }),
     ],
   });

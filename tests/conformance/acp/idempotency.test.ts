@@ -106,9 +106,30 @@ describe('completion replay', () => {
     // The merchant was reached and its outcome is unknown, so the answer is
     // neither replayed (we have none to give) nor re-run (it could order twice)
     expect(retry.status).toBe(409);
-    expect(retry.body['code']).toBe('idempotency_unresolved');
+    expect(retry.body).toMatchObject({ type: 'invalid_request', code: 'idempotency_unresolved' });
     expect(retry.headers.get('idempotent-replayed')).toBeNull();
     expect(stack.calls).toHaveLength(1);
+  });
+
+  it('retries after a merchant 5xx when merchant idempotency is enabled', async () => {
+    const dedup = await startAcpStack({ merchantIdempotent: true });
+    try {
+      dedup.nextReply({ status: 500, body: { error: 'merchant exploded' } });
+      const headers = acpHeaders({ 'idempotency-key': 'idem-dedup-5' });
+      const failed = await acpFetch(dedup, COMPLETE_PATH, { headers, body: COMPLETE_REQUEST });
+      const retry = await acpFetch(dedup, COMPLETE_PATH, { headers, body: COMPLETE_REQUEST });
+
+      expect(failed.status).toBe(502);
+      // The gateway retries with the same derived key; the merchant must
+      // deduplicate the operation in this mode
+      expect(retry.status).toBe(200);
+      expect(dedup.calls).toHaveLength(2);
+      expect(dedup.calls[1]?.headers['idempotency-key']).toBe(
+        dedup.calls[0]?.headers['idempotency-key'],
+      );
+    } finally {
+      await dedup.close();
+    }
   });
 
   it('places one order when the merchant acts and the answer arrives too late', async () => {

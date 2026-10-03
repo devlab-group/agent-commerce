@@ -67,7 +67,7 @@ function config(acpEnabled: boolean): GatewayConfig {
             enabled: true,
             mountPath: '/acp',
             auth: { type: 'bearer', token: TOKEN },
-            idempotency: { path: ':memory:', retentionHours: 24 },
+            idempotency: { path: ':memory:', retentionHours: 24, merchantIdempotent: false },
             checkout: { operations: OPERATIONS },
           }
         : { enabled: false, mountPath: '/acp' },
@@ -293,7 +293,7 @@ describe('ACP adapter isolation', () => {
       mountPath: '/acp',
       token: TOKEN,
       operations: OPERATIONS,
-      idempotency: { path: ':memory:', retentionHours: 24 },
+      idempotency: { path: ':memory:', retentionHours: 24, merchantIdempotent: false },
       // A currency ACP's schema rejects: the adapter refuses to publish a
       // non-conformant discovery document and fails its own start
       discovery: { supportedCurrencies: ['US Dollars'] },

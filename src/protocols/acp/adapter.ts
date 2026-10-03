@@ -107,7 +107,15 @@ export interface AcpAdapterOptions {
   /** Which canonical resource implements each ACP checkout operation */
   readonly operations: Readonly<Record<AcpCheckoutOperation, string>>;
   /** Where checkout idempotency records live, and how long they are kept */
-  readonly idempotency: { readonly path: string; readonly retentionHours: number };
+  readonly idempotency: {
+    readonly path: string;
+    readonly retentionHours: number;
+    /**
+     * Declare that the merchant deduplicates by the derived `Idempotency-Key`.
+     * Allows a fresh retry after a 5xx. Defaults to false.
+     */
+    readonly merchantIdempotent?: boolean;
+  };
   readonly discovery?: AcpDiscoveryMetadata;
 }
 
@@ -197,6 +205,7 @@ export class AcpProtocolAdapter implements HttpProtocolAdapter {
     this.idempotency = createAcpIdempotencyStore({
       path: this.idempotencyOptions.path,
       retentionHours: this.idempotencyOptions.retentionHours,
+      releaseOrphans: this.idempotencyOptions.merchantIdempotent === true,
       logger: context.logger,
     });
 
@@ -315,7 +324,7 @@ export class AcpProtocolAdapter implements HttpProtocolAdapter {
         return asResponse(
           acpFailure(
             409,
-            'processing_error',
+            'invalid_request',
             'idempotency_unresolved',
             'An earlier request with this Idempotency-Key reached the merchant and its outcome is unknown. Check the operation with the merchant before retrying.',
           ),
@@ -348,8 +357,9 @@ export class AcpProtocolAdapter implements HttpProtocolAdapter {
     // A 2xx or 4xx is an outcome, even a refusal, and answers every retry
     if (outcome.response.status < 500) {
       store.complete(scope, outcome.response);
-    } else if (outcome.reached === 'no') {
-      // Proven never to have left the gateway, so the key is freed for a retry
+    } else if (outcome.reached === 'no' || this.idempotencyOptions.merchantIdempotent === true) {
+      // Release the claim when no merchant call ran or the merchant is
+      // configured to deduplicate retries by the derived key
       store.release(scope);
     } else {
       // A timeout, a merchant status ACP cannot relay or a non-ACP reply: the

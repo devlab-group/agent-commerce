@@ -176,7 +176,11 @@ const MountPathSchema = z
 const AcpAuthSchema = z.object({ type: z.literal('bearer'), token: z.string().min(1) }).strict();
 
 const AcpIdempotencySchema = z
-  .object({ path: z.string().min(1), retentionHours: NumberOrString.optional() })
+  .object({
+    path: z.string().min(1),
+    retentionHours: NumberOrString.optional(),
+    merchantIdempotent: z.boolean().optional(),
+  })
   .strict();
 
 // Operation names are checked against `ACP_CHECKOUT_OPERATIONS` in the
@@ -462,7 +466,11 @@ export type AcpProtocolConfig =
       readonly enabled: true;
       readonly mountPath: string;
       readonly auth: { readonly type: 'bearer'; readonly token: string };
-      readonly idempotency: { readonly path: string; readonly retentionHours: number };
+      readonly idempotency: {
+        readonly path: string;
+        readonly retentionHours: number;
+        readonly merchantIdempotent: boolean;
+      };
       readonly checkout: {
         readonly operations: Readonly<Record<AcpCheckoutOperation, string>>;
       };
@@ -1100,6 +1108,7 @@ function normalizeAcp(raw: RawAcp | undefined): AcpProtocolConfig {
         'protocols.acp.idempotency.retentionHours',
         { min: ACP_RETENTION_HOURS },
       ),
+      merchantIdempotent: raw.idempotency.merchantIdempotent ?? false,
     },
     checkout: { operations: normalizeAcpOperations(raw.checkout) },
     // Built key by key so absent metadata stays absent rather than `undefined`

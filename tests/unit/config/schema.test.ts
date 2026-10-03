@@ -1577,7 +1577,11 @@ describe('protocols.acp', () => {
       enabled: true,
       mountPath: '/acp',
       auth: { type: 'bearer', token: 'secret-token' },
-      idempotency: { path: './acp-idempotency.sqlite', retentionHours: 24 },
+      idempotency: {
+        path: './acp-idempotency.sqlite',
+        retentionHours: 24,
+        merchantIdempotent: false,
+      },
       checkout: { operations: OPERATIONS },
     });
   });

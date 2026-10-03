@@ -292,15 +292,15 @@ The body fingerprint uses parsed JSON. Object key order and numeric spelling
 such as `1` versus `1.0` normalize; array order, type, and null versus absence
 remain distinct.
 
-| Situation                                                                  | Response                                                                              |
-| -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| first request                                                              | atomically claimed before merchant execution                                          |
-| same key and body, still running                                           | `409 idempotency_in_flight` with `Retry-After`                                        |
-| same key and body, completed                                               | stored response with `Idempotent-Replayed: true`; no merchant call                    |
-| same key, different body                                                   | `422 idempotency_conflict`; no merchant call                                          |
-| ACP response below 500 after the claim, including pipeline `INPUT_INVALID` | cached                                                                                |
-| ACP response 500 or higher after the merchant may have run                 | `409 idempotency_unresolved` on retry, without `Retry-After`; no second merchant call |
-| ACP response 500 or higher when the merchant was not called                | claim released; a clean retry may run                                                 |
+| Situation                                                                  | Response                                                                                                       |
+| -------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| first request                                                              | atomically claimed before merchant execution                                                                   |
+| same key and body, still running                                           | `409 idempotency_in_flight` with `Retry-After`                                                                 |
+| same key and body, completed                                               | stored response with `Idempotent-Replayed: true`; no merchant call                                             |
+| same key, different body                                                   | `422 idempotency_conflict`; no merchant call                                                                   |
+| ACP response below 500 after the claim, including pipeline `INPUT_INVALID` | cached                                                                                                         |
+| ACP response 500 or higher after the merchant may have run                 | `409 idempotency_unresolved` on retry by default; with `merchantIdempotent`, the claim is released for a retry |
+| ACP response 500 or higher when the merchant was not called                | claim released; a clean retry may run                                                                          |
 
 The ACP response status controls finalization, not the merchant's raw status. A
 merchant 401 or 403 maps to ACP 502 and becomes unresolved, while a
@@ -310,11 +310,17 @@ authentication failure, missing or invalid idempotency and API-version headers,
 an unreadable or oversized body, invalid JSON or schema, or an unsupported
 content type. A guard failure does not echo `Request-Id`.
 
+ACP requires a fresh attempt after a 5xx. By default, the gateway keeps the
+claim when the merchant may have acted, to avoid a duplicate order. Set
+`protocols.acp.idempotency.merchantIdempotent: true` only if the merchant
+deduplicates by the derived key. The gateway then releases the claim after a
+5xx and frees claims left in flight when it next starts.
+
 An in-flight row becomes completed, released or unresolved when the request
 finishes. A crash or a SQLite error while finalizing can leave it in-flight;
-the next gateway start marks every remaining in-flight row unresolved and logs
-a warning with the count. This assumes one gateway process per idempotency
-database file.
+the next gateway start marks it unresolved by default or frees it when
+`merchantIdempotent` is enabled. Startup logs the count. This assumes one
+gateway process per idempotency database file.
 
 Only completed records expire, after at least 24 hours. Unresolved records
 remain for operator reconciliation. This avoids rerunning an unknown remote
@@ -333,10 +339,11 @@ stable across retries, restarts and bearer-token rotation; differs across
 endpoints and deployments; and reveals no caller key. A static
 `Idempotency-Key` in backend headers is replaced by this derived value.
 
-The merchant should store and replay results under the derived key. Without
-merchant-side idempotency, gateway-visible retries remain protected, but a
-proxy retry or duplicate delivery outside the gateway can repeat the side
-effect.
+The merchant should store and replay results under the derived key. In the
+default mode, the gateway holds uncertain claims to block duplicate checkout
+calls. With `merchantIdempotent` enabled, the merchant must prevent duplicates
+on retry. A proxy retry outside the gateway can also repeat a side effect if
+the merchant does not deduplicate.
 
 ### ACP errors
 

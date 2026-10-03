@@ -160,6 +160,7 @@ protocols:
     idempotency:
       path: ./data/acp-idempotency.sqlite
       retentionHours: 24       # default, and the floor
+      merchantIdempotent: false  # set true only when the merchant deduplicates by Idempotency-Key
     checkout:
       operations:              # all five, each on its own resource
         createCheckoutSession: acp_checkout_create
@@ -222,6 +223,12 @@ configuration is in [examples/acp-checkout](../examples/acp-checkout).
 until an operator clears it, because to the next retry, deleting it looks
 exactly like the operation never having happened. The idempotency database is
 its own file - it never shares a table with receipts or the x402 replay defense.
+
+Set `merchantIdempotent: true` only if the merchant stores and replays results
+under the `Idempotency-Key` the gateway derives for each checkout POST. With
+this setting, the gateway releases a claim after a 5xx so the same key can be
+retried, as ACP requires. Without merchant deduplication, that retry could
+repeat the side effect. See [ACP idempotency](protocols.md#idempotency).
 
 The gateway forwards an `Idempotency-Key` header to the merchant on every
 side-effecting checkout call, derived so that it is stable across retries, a
