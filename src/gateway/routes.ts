@@ -18,7 +18,6 @@ import {
   PAYMENT_RESPONSE_HEADER,
   type PaymentMethodName,
   type PaymentProvider,
-  type PaymentResult,
   parseAuthorizationHeader,
   type ReceiptStore,
   type ResourceRegistry,
@@ -28,6 +27,12 @@ import {
 } from '../core';
 import { isRecord } from '../core/is-record';
 import { mppProblem } from '../payments/mpp/problems';
+import {
+  settlementFailure,
+  settlementResponse,
+  settlementResponseFromDetails,
+  x402ErrorCode,
+} from '../payments/x402/transport';
 import { buildOperatorTokenHook } from './access-control';
 import type { AdapterRuntime } from './adapters';
 import { toPublicResource } from './public-resource';
@@ -185,7 +190,10 @@ async function handleInvoke(
     }
 
     if (outcome.payment) {
-      reply.header(PAYMENT_RESPONSE_HEADER, encodePaymentSummary(summaryOf(outcome.payment)));
+      reply.header(
+        PAYMENT_RESPONSE_HEADER,
+        encodeHeaderDocument(settlementResponse(outcome.payment)),
+      );
       const receipt = outcome.payment.metadata?.['receipt'];
       if (outcome.payment.provider === 'mpp' && typeof receipt === 'string') {
         reply.header('payment-receipt', receipt);
@@ -216,12 +224,12 @@ function sendInvokeError(
   const details = error.details;
   // Report a settled payment even if backend delivery fails. MPP forbids a
   // `Payment-Receipt` header on error responses, so send only this summary
-  const settled = errorPaymentSummary(error);
+  const settled = settlementResponseFromDetails(details);
   if (settled !== undefined) {
-    reply.header(PAYMENT_RESPONSE_HEADER, encodePaymentSummary(settled));
+    reply.header(PAYMENT_RESPONSE_HEADER, encodeHeaderDocument(settled));
   }
   if (error.code === 'PAYMENT_SETTLEMENT_FAILED') {
-    reply.header(PAYMENT_RESPONSE_HEADER, encodeSettlementFailure(details));
+    reply.header(PAYMENT_RESPONSE_HEADER, encodeHeaderDocument(settlementFailure(details)));
   }
   // Attach a fresh challenge to a 402 when the rail provides one
   const challenge = details?.['challenge'];
@@ -233,7 +241,10 @@ function sendInvokeError(
       // `PAYMENT-RESPONSE` alone
       reply.header(
         PAYMENT_REQUIRED_HEADER,
-        encodeHeaderDocument({ ...challenge, error: x402ErrorCode(error) }),
+        encodeHeaderDocument({
+          ...challenge,
+          error: x402ErrorCode(error.code, details?.['reason']),
+        }),
       );
     }
     reply.header('cache-control', 'no-store');
@@ -259,14 +270,6 @@ function sendInvokeError(
   reply.status(error.httpStatus).send(envelope);
 }
 
-// Use the provider's x402 refusal reason when present. For a replay, use the
-// spent-nonce code returned by x402 facilitators
-function x402ErrorCode(error: CommerceError): string {
-  if (error.code === 'PAYMENT_REPLAYED') return 'invalid_exact_evm_nonce_already_used';
-  const reason = error.details?.['reason'];
-  return typeof reason === 'string' ? reason : 'unexpected_verify_error';
-}
-
 // Each rail has its own proof header. MPP uses HTTP authentication, and an
 // `Authorization` value in another scheme is not a payment proof.
 function paymentProof(
@@ -281,50 +284,6 @@ function paymentProof(
   return Array.isArray(value) ? value[0] : value;
 }
 
-interface PaymentSummary {
-  readonly status: string;
-  readonly provider: string;
-  readonly currency: string;
-  readonly network?: string;
-  readonly externalReference?: string;
-  readonly payer?: string;
-  readonly amountBaseUnits?: string;
-}
-
-function summaryOf(payment: PaymentResult): PaymentSummary {
-  const amountBaseUnits = payment.metadata?.['amountBaseUnits'];
-  return {
-    status: payment.status,
-    provider: payment.provider,
-    currency: payment.currency,
-    ...(payment.network !== undefined ? { network: payment.network } : {}),
-    ...(payment.externalReference !== undefined
-      ? { externalReference: payment.externalReference }
-      : {}),
-    ...(payment.payer !== undefined ? { payer: payment.payer } : {}),
-    ...(typeof amountBaseUnits === 'string' ? { amountBaseUnits } : {}),
-  };
-}
-
-function errorPaymentSummary(error: CommerceError): PaymentSummary | undefined {
-  const payment = error.details?.['payment'];
-  if (!isRecord(payment)) return undefined;
-  const { status, provider, currency, network, externalReference, payer, amountBaseUnits } =
-    payment;
-  if (typeof status !== 'string' || typeof provider !== 'string' || typeof currency !== 'string') {
-    return undefined;
-  }
-  return {
-    status,
-    provider,
-    currency,
-    ...(typeof network === 'string' ? { network } : {}),
-    ...(typeof externalReference === 'string' ? { externalReference } : {}),
-    ...(typeof payer === 'string' ? { payer } : {}),
-    ...(typeof amountBaseUnits === 'string' ? { amountBaseUnits } : {}),
-  };
-}
-
 /**
  * Base64 of a JSON document, the encoding every x402 v2 payment header uses.
  * Not imported from the x402 SDK: this module is reachable from the main
@@ -332,50 +291,6 @@ function errorPaymentSummary(error: CommerceError): PaymentSummary | undefined {
  */
 function encodeHeaderDocument(document: unknown): string {
   return Buffer.from(JSON.stringify(document), 'utf8').toString('base64');
-}
-
-/**
- * The settlement result in the `SettleResponse` shape an x402 v2 client
- * decodes from `PAYMENT-RESPONSE`. When present, `amount` uses base units.
- * `status`, `provider`, `currency`, and `externalReference` are gateway
- * extensions; a v2 client ignores fields it does not know.
- */
-function encodePaymentSummary(payment: PaymentSummary): string {
-  return encodeHeaderDocument({
-    success: payment.status === 'settled',
-    transaction: payment.externalReference ?? '',
-    network: payment.network ?? '',
-    ...(payment.payer !== undefined ? { payer: payment.payer } : {}),
-    ...(payment.amountBaseUnits !== undefined ? { amount: payment.amountBaseUnits } : {}),
-    status: payment.status,
-    provider: payment.provider,
-    currency: payment.currency,
-    ...(payment.externalReference !== undefined
-      ? { externalReference: payment.externalReference }
-      : {}),
-  });
-}
-
-// Encode a refused or unconfirmed settlement as a failed `SettleResponse`.
-// An unconfirmed transfer with a hash uses x402's `settlement_pending` reason
-function encodeSettlementFailure(details: Readonly<Record<string, unknown>> | undefined): string {
-  const text = (key: string): string | undefined => {
-    const value = details?.[key];
-    return typeof value === 'string' ? value : undefined;
-  };
-  const transaction = text('transactionHash');
-  const payer = text('payer');
-  let errorReason = text('reason') ?? 'unexpected_settle_error';
-  if (details?.['settlementUncertain'] === true) {
-    errorReason = transaction !== undefined ? 'settlement_pending' : 'unexpected_settle_error';
-  }
-  return encodeHeaderDocument({
-    success: false,
-    errorReason,
-    transaction: transaction ?? '',
-    network: text('network') ?? '',
-    ...(payer !== undefined ? { payer } : {}),
-  });
 }
 
 // Undefined when absent or unparseable, so the store applies its default. A
