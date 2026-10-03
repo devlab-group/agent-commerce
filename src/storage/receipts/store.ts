@@ -140,6 +140,9 @@ export function createSqliteReceiptStore(options: SqliteReceiptStoreOptions): Re
   const listPaymentAttemptsByRequestStmt = db.prepare<[string, number], PaymentAttemptRow>(
     'SELECT * FROM payment_attempts WHERE request_id = ? ORDER BY created_at DESC, seq DESC LIMIT ?',
   );
+  const paymentAttemptStatusStmt = db.prepare<[string], Pick<PaymentAttemptRow, 'status'>>(
+    'SELECT status FROM payment_attempts WHERE replay_key = ?',
+  );
 
   let closed = false;
 
@@ -204,10 +207,16 @@ export function createSqliteReceiptStore(options: SqliteReceiptStoreOptions): Re
         }) as PaymentAttemptRow;
       } catch (err) {
         if (isUniqueConstraintOn(err, 'payment_attempts.replay_key')) {
+          // Report the existing status so the pipeline can choose a replay response
+          const existing = paymentAttemptStatusStmt.get(reservation.replayKey);
           throw new CommerceError(
             'PAYMENT_REPLAYED',
             `Payment authorization has already been used (replayKey=${reservation.replayKey})`,
-            { requestId: reservation.requestId, resourceId: reservation.resourceId },
+            {
+              requestId: reservation.requestId,
+              resourceId: reservation.resourceId,
+              ...(existing !== undefined ? { details: { attemptStatus: existing.status } } : {}),
+            },
           );
         }
         throw toCommerceError(err, 'STORAGE_ERROR', 'Failed to reserve payment attempt');

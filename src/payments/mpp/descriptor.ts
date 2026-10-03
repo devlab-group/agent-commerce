@@ -40,5 +40,7 @@ export const MPP_DESCRIPTOR: AdapterDescriptor = {
     // A separate EVM draft, not an option of charge
     'evm sessions',
     'discovery extension',
+    // The core draft says body-bearing requests SHOULD use digest binding
+    'challenge digest binding',
   ],
 };

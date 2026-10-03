@@ -386,8 +386,8 @@ export function createMppProviderWithSettlement(
     // verify() already ran the facilitator check, and the facilitator checks
     // again before broadcasting. A throw may follow a broadcast, so it
     // propagates and the pipeline marks the payment uncertain.
-    const authorization = Credential.deserialize(submission.payload)
-      .payload as Types.AuthorizationPayload;
+    const credential = Credential.deserialize(submission.payload);
+    const authorization = credential.payload as Types.AuthorizationPayload;
     const settled = await settlement.settle({
       ...(await toX402Context({ requestId, requirement, resource, submission }, authorization)),
       verification: { ...verification, provider: 'x402' },
@@ -400,13 +400,17 @@ export function createMppProviderWithSettlement(
       replayKey: verification.replayKey,
     };
     if (settled.status !== 'settled' || settled.externalReference === undefined) return result;
-    // Serialized for the HTTP route's `Payment-Receipt` header
-    const receipt = Receipt.from({
+    // Include the EVM method's `challengeId` and `chainId` in the receipt
+    // sent through the HTTP `Payment-Receipt` header
+    const fields: Receipt.Receipt & { challengeId: string; chainId: number } = {
       method: MPP_PROFILE.method,
       reference: settled.externalReference,
       status: 'success',
       timestamp: settled.settledAt ?? clock.nowIso(),
-    });
+      challengeId: credential.challenge.id,
+      chainId,
+    };
+    const receipt = Receipt.from(fields);
     return { ...result, metadata: { ...settled.metadata, receipt: Receipt.serialize(receipt) } };
   }
 

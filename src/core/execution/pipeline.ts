@@ -404,7 +404,7 @@ export function createExecutionPipeline(
           {
             requestId: request.requestId,
             resourceId: resource.id,
-            ...retryChallenge(requirement),
+            ...retryChallenge(requirement, verification.rejectionReason),
           },
         );
       }
@@ -469,7 +469,7 @@ export function createExecutionPipeline(
             data: { reason: mapped.code },
           }),
         );
-        throw mapped;
+        throw finishedReplay(mapped, requirement);
       }
 
       await safeEmit(
@@ -541,6 +541,7 @@ export function createExecutionPipeline(
           details: {
             settlementUncertain: true,
             ...(txHash !== undefined ? { transactionHash: txHash } : {}),
+            ...settlementParties(requirement, verification),
           },
         });
       }
@@ -570,12 +571,20 @@ export function createExecutionPipeline(
             data: settlement.rejectionReason ? { reason: settlement.rejectionReason } : {},
           }),
         );
+        // A returned rejection says settlement did not occur, so the buyer
+        // needs another payment. Both rails report this with 402
+        const rejectionDetails = retryChallenge(requirement, settlement.rejectionReason).details;
         throw new CommerceError(
           'PAYMENT_SETTLEMENT_FAILED',
           settlement.rejectionReason ?? 'Settlement was rejected',
           {
             requestId: request.requestId,
             resourceId: resource.id,
+            httpStatus: 402,
+            details: {
+              ...rejectionDetails,
+              ...settlementParties(requirement, settlement, verification),
+            },
           },
         );
       }
@@ -668,6 +677,10 @@ export function createExecutionPipeline(
                 ...(paymentResult.network !== undefined ? { network: paymentResult.network } : {}),
                 ...(paymentResult.externalReference !== undefined
                   ? { externalReference: paymentResult.externalReference }
+                  : {}),
+                ...(paymentResult.payer !== undefined ? { payer: paymentResult.payer } : {}),
+                ...(typeof paymentResult.metadata?.['amountBaseUnits'] === 'string'
+                  ? { amountBaseUnits: paymentResult.metadata['amountBaseUnits'] }
                   : {}),
                 ...(typeof paymentResult.metadata?.['receipt'] === 'string'
                   ? { receipt: paymentResult.metadata['receipt'] }
@@ -775,11 +788,54 @@ function resolveAuthorizationProviders(
   });
 }
 
-// A rejected proof leaves this request's challenge unused. Returning it lets a
-// client pay again without another round trip for a fresh one.
-function retryChallenge(requirement: PaymentRequirement): { details?: Record<string, unknown> } {
+// A refusal leaves this request's challenge unused. Return it with the
+// provider's reason so the client can retry without fetching another challenge
+function retryChallenge(
+  requirement: PaymentRequirement,
+  reason?: string,
+): { details?: Record<string, unknown> } {
   const envelope = requirement.challenge.envelope;
-  return envelope === undefined ? {} : { details: { challenge: envelope } };
+  if (envelope === undefined && reason === undefined) return {};
+  return {
+    details: {
+      ...(envelope !== undefined ? { challenge: envelope } : {}),
+      ...(reason !== undefined ? { reason } : {}),
+    },
+  };
+}
+
+// Attempt statuses the pipeline treats as finished when handling a replay. The
+// legacy `failed` is not one: it recorded any throw from settle(), so it may
+// hide a transfer, like `settlement-uncertain`.
+const FINISHED_ATTEMPT_STATUSES: ReadonlySet<string> = new Set(['settled', 'rejected']);
+
+// Treat a finished attempt as eligible for a 402 with a new challenge. Keep
+// 409 when the first attempt is unfinished or its status is unavailable;
+// another challenge could lead to a second payment
+function finishedReplay(error: CommerceError, requirement: PaymentRequirement): CommerceError {
+  const status = error.details?.['attemptStatus'];
+  if (error.code !== 'PAYMENT_REPLAYED' || typeof status !== 'string') return error;
+  if (!FINISHED_ATTEMPT_STATUSES.has(status)) return error;
+  return new CommerceError('PAYMENT_REPLAYED', error.message, {
+    ...(error.requestId !== undefined ? { requestId: error.requestId } : {}),
+    ...(error.resourceId !== undefined ? { resourceId: error.resourceId } : {}),
+    httpStatus: 402,
+    details: { ...error.details, ...retryChallenge(requirement).details },
+  });
+}
+
+// Prefer the network and payer reported by settlement or verification, then
+// fall back to the requirement's network
+function settlementParties(
+  requirement: PaymentRequirement,
+  ...results: readonly PaymentResult[]
+): { network?: string; payer?: string } {
+  const network = results.find((r) => r.network !== undefined)?.network ?? requirement.network;
+  const payer = results.find((r) => r.payer !== undefined)?.payer;
+  return {
+    ...(network !== undefined ? { network } : {}),
+    ...(payer !== undefined ? { payer } : {}),
+  };
 }
 
 function pickProvider(

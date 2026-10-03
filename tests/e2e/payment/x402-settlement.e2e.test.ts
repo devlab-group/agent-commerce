@@ -9,7 +9,7 @@
  * refusal stopped a payment that would otherwise have moved funds.
  */
 
-import { x402Client } from '@x402/core/client';
+import { x402Client, x402HTTPClient } from '@x402/core/client';
 import type { PaymentRequired } from '@x402/core/types';
 import { registerExactEvmScheme } from '@x402/evm/exact/client';
 import { privateKeyToAccount } from 'viem/accounts';
@@ -175,6 +175,10 @@ async function expectRefused(proof: string, reason: string): Promise<void> {
   expect(refused.statusCode).toBe(402);
   expect(refused.body['code']).toBe('PAYMENT_INVALID');
   expect(refused.body['message']).toBe(reason);
+  // The x402 client reads the refusal reason from the new challenge
+  const header = (name: string) => refused.headers[name.toLowerCase()] as string | undefined;
+  const challenge = new x402HTTPClient(new x402Client()).getPaymentRequiredResponse(header);
+  expect(challenge.error).toBe(reason);
   expect(backendCalls).toBe(callsBefore);
   expect(await balances()).toEqual(before);
 }
@@ -271,6 +275,15 @@ describe('x402 settlement - real local chain', () => {
     expect(backendCalls).toBe(callsBefore + 1);
     const [receipt] = await store.listReceipts({ limit: 1 });
     expect(receipt?.payment).toMatchObject({ provider: 'x402', status: 'settled' });
+    // Check that the SDK client reads the base-unit amount and payer
+    const header = (name: string) => paid.headers[name.toLowerCase()] as string | undefined;
+    const settlement = new x402HTTPClient(new x402Client()).getPaymentSettleResponse(header);
+    expect(settlement).toMatchObject({
+      success: true,
+      transaction: receipt?.payment?.externalReference,
+      amount: '1000000',
+      payer: deployment.buyer.address,
+    });
     await expectRealSettlement({
       rpcUrl: anvil.rpcUrl,
       asset: deployment.asset,

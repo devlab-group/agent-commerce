@@ -611,7 +611,7 @@ describe('AP2 over x402: when settlement goes wrong', () => {
     const presentation = await mandate();
 
     const failed = await purchase(presentation, gw);
-    expect(failed.statusCode).toBe(502);
+    expect(failed.statusCode).toBe(402);
     expect(failed.body['code']).toBe('PAYMENT_SETTLEMENT_FAILED');
 
     // The reservation was released, so the buyer's own mandate is still theirs
@@ -637,7 +637,8 @@ describe('AP2 over x402: when settlement goes wrong', () => {
     expect(uncertain.statusCode).toBe(502);
     expect(uncertain.body['code']).toBe('PAYMENT_SETTLEMENT_FAILED');
     // No hash to hand over, but the buyer is still told not to pay again
-    expect(uncertain.body['details']).toEqual({ settlementUncertain: true });
+    expect(uncertain.body['details']).toMatchObject({ settlementUncertain: true });
+    expect(uncertain.body['details']).not.toHaveProperty('transactionHash');
 
     // A *different* payment authorization, so nothing here can be refused as
     // a payment replay: the rail issues a fresh replayKey per verify, and the

@@ -568,6 +568,8 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
       ...(verification.asset !== undefined ? { asset: verification.asset } : {}),
       ...(verification.replayKey !== undefined ? { replayKey: verification.replayKey } : {}),
       settledAt: clock.nowIso(),
+      // `amount` is the display value; x402's settlement response reports base units
+      metadata: { amountBaseUnits: payload.payload.authorization.value },
     };
   }
 

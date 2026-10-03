@@ -119,7 +119,9 @@ same `requestId`.
    in quick succession and unlock a second delivery before the first settles.
    So the pipeline reserves `replayKey`, derived only from
    `(chainId, asset, payer, nonce)`, under a `UNIQUE` constraint **before**
-   calling `settle`. The second request is `PAYMENT_REPLAYED`.
+   calling `settle`. A duplicate is `PAYMENT_REPLAYED`: it returns 409 while
+   the first attempt is unfinished or its status is unavailable, and 402 with
+   a fresh challenge when its stored status is treated as finished.
 
 Because the key comes from the authorization rather than the request, replaying
 it against another request still collides.

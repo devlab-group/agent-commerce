@@ -405,12 +405,20 @@ before replay reservation; settlement broadcasts later.
 MPP and x402 derive the same replay identity for the same EIP-3009
 authorization, so reuse across rails collides in one receipt store.
 
+Over HTTP, MPP verification, replay, settlement, and provider errors use
+`application/problem+json` and the core draft's problem types. The gateway
+keeps `code`, `message`, and `details` as extension members. A successful
+`Payment-Receipt` includes `challengeId` and `chainId`.
+
+Terminate TLS in front of deployed MPP endpoints. The core draft forbids
+issuing challenges over plain HTTP.
+
 Base mainnet deployments must satisfy the
 [mainnet guardrails](configuration.md#mainnet-guardrails).
 
 Unsupported variants are listed in `src/payments/mpp/descriptor.ts`: non-EVM
 methods, Permit2/transaction/hash credentials, splits, subscriptions, EVM
-sessions and discovery extension.
+sessions, the discovery extension and challenge `digest` binding.
 
 ## HTTP surface
 
@@ -428,13 +436,23 @@ sessions and discovery extension.
 
 The invoke route uses the selected rail's headers:
 
-| Rail | Proof | Challenge on 402 | Rejected proof (402) | Delivered response | Backend error after settlement |
-| --- | --- | --- | --- | --- | --- |
-| x402 | `PAYMENT-SIGNATURE` | `PAYMENT-REQUIRED` | none | `PAYMENT-RESPONSE` | `PAYMENT-RESPONSE` |
-| MPP | `Authorization: Payment ...` | `WWW-Authenticate: Payment ...` | a fresh `WWW-Authenticate: Payment ...` | `Payment-Receipt` and `PAYMENT-RESPONSE` | `Payment-Receipt` and `PAYMENT-RESPONSE` |
+| Rail | Proof | Challenge on 402 | Refused proof or spent authorization (402) | Refused settlement (402) | Delivered response | Backend error after settlement |
+| --- | --- | --- | --- | --- | --- | --- |
+| x402 | `PAYMENT-SIGNATURE` | `PAYMENT-REQUIRED` | a fresh `PAYMENT-REQUIRED` with `error` | `PAYMENT-RESPONSE` with `success: false` | `PAYMENT-RESPONSE` | `PAYMENT-RESPONSE` |
+| MPP | `Authorization: Payment ...` | `WWW-Authenticate: Payment ...` | a fresh `WWW-Authenticate` | a fresh `WWW-Authenticate` and `PAYMENT-RESPONSE` with `success: false` | `Payment-Receipt` and `PAYMENT-RESPONSE` | `PAYMENT-RESPONSE` |
 
-The body of a rejected proof's error carries the rail's fresh challenge as
-`details.challenge` on both rails.
+The error body carries `details.challenge` when the pipeline supplies a
+retry challenge. Other outcomes:
+
+- A replay returns 409 without a challenge if the first attempt is unfinished,
+  has the legacy `failed` status, or its status is unavailable. Issuing another
+  challenge could lead to a second payment for the same request.
+- A settlement without a verdict returns 502 with `PAYMENT-RESPONSE`. Its
+  reason is `settlement_pending` when a transaction hash is available, or
+  `unexpected_settle_error` otherwise.
+- A settled `PAYMENT-RESPONSE` includes `amount` in base units when the
+  provider supplies it. Paid deliveries use `Cache-Control: private`; fresh
+  402 challenges use `no-store`.
 
 ## Adding an integration
 

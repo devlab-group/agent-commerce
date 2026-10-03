@@ -212,7 +212,9 @@ describe('adversarial: duplicate concurrent request', () => {
     const secondProvider = countingProvider(0);
     const second = await buildGateway(storePath, secondProvider);
     const replayed = await invoke(second.gateway, VALID_PROOF);
-    expect(replayed.statusCode).toBe(409);
+    // A settled authorization returns 402 and a new challenge; an unfinished
+    // attempt would return 409
+    expect(replayed.statusCode).toBe(402);
     expect(replayed.json().code).toBe('PAYMENT_REPLAYED');
     // Refused at the replay reservation, which runs before settle()
     expect(secondProvider.settleCalls()).toBe(0);

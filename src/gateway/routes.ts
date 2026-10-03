@@ -18,6 +18,7 @@ import {
   PAYMENT_RESPONSE_HEADER,
   type PaymentMethodName,
   type PaymentProvider,
+  type PaymentResult,
   parseAuthorizationHeader,
   type ReceiptStore,
   type ResourceRegistry,
@@ -26,6 +27,7 @@ import {
   toPaymentRequiredEnvelope,
 } from '../core';
 import { isRecord } from '../core/is-record';
+import { mppProblem } from '../payments/mpp/problems';
 import { buildOperatorTokenHook } from './access-control';
 import type { AdapterRuntime } from './adapters';
 import { toPublicResource } from './public-resource';
@@ -123,6 +125,8 @@ async function handleInvoke(
   options: RegisterRoutesOptions,
 ): Promise<void> {
   const resourceId = (request.params as { id: string }).id;
+  // Track the selected rail so errors use its payment headers
+  let paymentMethod: PaymentMethodName | undefined;
 
   try {
     const resource = options.resources.get(resourceId);
@@ -136,7 +140,7 @@ async function handleInvoke(
     // createGateway puts provider-backed methods first, so this label matches
     // the rail selected by the pipeline. Without a method, drop the proof
     // instead of inventing a rail; the pipeline receives an unpaid request.
-    const paymentMethod = resource.paymentMethods[0];
+    paymentMethod = resource.paymentMethods[0];
     const paymentValue = paymentProof(request, paymentMethod);
     const payment =
       paymentValue !== undefined && paymentMethod !== undefined
@@ -181,36 +185,86 @@ async function handleInvoke(
     }
 
     if (outcome.payment) {
-      reply.header(PAYMENT_RESPONSE_HEADER, encodePaymentSummary(outcome.payment));
+      reply.header(PAYMENT_RESPONSE_HEADER, encodePaymentSummary(summaryOf(outcome.payment)));
       const receipt = outcome.payment.metadata?.['receipt'];
       if (outcome.payment.provider === 'mpp' && typeof receipt === 'string') {
         reply.header('payment-receipt', receipt);
       }
+      // Payment headers identify this buyer's payment; MPP also requires
+      // private caching for responses carrying `Payment-Receipt`
+      reply.header('cache-control', 'private');
     }
     reply.status(outcome.backendStatus).send(outcome.body);
   } catch (error) {
-    const commerceError = toCommerceError(error);
-    // A backend failure after settlement carries the payment summary in
-    // details.payment. Send the success path's headers so the buyer still
-    // learns what they paid.
-    const settledPayment = errorPaymentSummary(commerceError);
-    if (settledPayment !== undefined) {
-      reply.header(PAYMENT_RESPONSE_HEADER, encodePaymentSummary(settledPayment));
-      if (settledPayment.provider === 'mpp' && settledPayment.receipt !== undefined) {
-        reply.header('payment-receipt', settledPayment.receipt);
-      }
-    }
-    // An MPP client pays again only from a fresh WWW-Authenticate challenge
-    const challenge = commerceError.details?.['challenge'] as Record<string, unknown> | undefined;
-    if (
-      commerceError.code === 'PAYMENT_INVALID' &&
-      typeof challenge?.['wwwAuthenticate'] === 'string'
-    ) {
-      reply.header('www-authenticate', challenge['wwwAuthenticate']);
-      reply.header('cache-control', 'no-store');
-    }
-    reply.status(commerceError.httpStatus).send(toErrorEnvelope(commerceError));
+    sendInvokeError(reply, toCommerceError(error), paymentMethod);
   }
+}
+
+// Codes whose MPP response body is a Problem Details document
+const MPP_PROBLEM_CODES: ReadonlySet<string> = new Set([
+  'PAYMENT_INVALID',
+  'PAYMENT_REPLAYED',
+  'PAYMENT_SETTLEMENT_FAILED',
+  'PAYMENT_PROVIDER_UNAVAILABLE',
+]);
+
+function sendInvokeError(
+  reply: FastifyReply,
+  error: CommerceError,
+  paymentMethod: PaymentMethodName | undefined,
+): void {
+  const details = error.details;
+  // Report a settled payment even if backend delivery fails. MPP forbids a
+  // `Payment-Receipt` header on error responses, so send only this summary
+  const settled = errorPaymentSummary(error);
+  if (settled !== undefined) {
+    reply.header(PAYMENT_RESPONSE_HEADER, encodePaymentSummary(settled));
+  }
+  if (error.code === 'PAYMENT_SETTLEMENT_FAILED') {
+    reply.header(PAYMENT_RESPONSE_HEADER, encodeSettlementFailure(details));
+  }
+  // Attach a fresh challenge to a 402 when the rail provides one
+  const challenge = details?.['challenge'];
+  if (error.httpStatus === 402 && isRecord(challenge)) {
+    if (paymentMethod === 'mpp' && typeof challenge['wwwAuthenticate'] === 'string') {
+      reply.header('www-authenticate', challenge['wwwAuthenticate']);
+    } else if (paymentMethod === 'x402' && error.code !== 'PAYMENT_SETTLEMENT_FAILED') {
+      // x402 includes the reason in the challenge; settlement refusals use
+      // `PAYMENT-RESPONSE` alone
+      reply.header(
+        PAYMENT_REQUIRED_HEADER,
+        encodeHeaderDocument({ ...challenge, error: x402ErrorCode(error) }),
+      );
+    }
+    reply.header('cache-control', 'no-store');
+  }
+
+  const envelope = toErrorEnvelope(error);
+  if (paymentMethod === 'mpp' && MPP_PROBLEM_CODES.has(error.code)) {
+    // RFC 9457 `status` is the HTTP status, so it replaces the envelope's
+    // `status: 'error'`; the other envelope fields stay as extension members
+    const { status: _envelopeStatus, ...members } = envelope;
+    const reason = typeof details?.['reason'] === 'string' ? details['reason'] : undefined;
+    reply
+      .header('content-type', 'application/problem+json')
+      .status(error.httpStatus)
+      .send({
+        ...mppProblem(error.code, error.httpStatus, reason),
+        status: error.httpStatus,
+        detail: error.message,
+        ...members,
+      });
+    return;
+  }
+  reply.status(error.httpStatus).send(envelope);
+}
+
+// Use the provider's x402 refusal reason when present. For a replay, use the
+// spent-nonce code returned by x402 facilitators
+function x402ErrorCode(error: CommerceError): string {
+  if (error.code === 'PAYMENT_REPLAYED') return 'invalid_exact_evm_nonce_already_used';
+  const reason = error.details?.['reason'];
+  return typeof reason === 'string' ? reason : 'unexpected_verify_error';
 }
 
 // Each rail has its own proof header. MPP uses HTTP authentication, and an
@@ -230,36 +284,44 @@ function paymentProof(
 interface PaymentSummary {
   readonly status: string;
   readonly provider: string;
-  readonly amount: string;
   readonly currency: string;
   readonly network?: string;
   readonly externalReference?: string;
-  // Serialized MPP `Payment-Receipt`, when the provider issued one
-  readonly receipt?: string;
+  readonly payer?: string;
+  readonly amountBaseUnits?: string;
 }
 
-function errorPaymentSummary(
-  error: ReturnType<typeof toCommerceError>,
-): PaymentSummary | undefined {
+function summaryOf(payment: PaymentResult): PaymentSummary {
+  const amountBaseUnits = payment.metadata?.['amountBaseUnits'];
+  return {
+    status: payment.status,
+    provider: payment.provider,
+    currency: payment.currency,
+    ...(payment.network !== undefined ? { network: payment.network } : {}),
+    ...(payment.externalReference !== undefined
+      ? { externalReference: payment.externalReference }
+      : {}),
+    ...(payment.payer !== undefined ? { payer: payment.payer } : {}),
+    ...(typeof amountBaseUnits === 'string' ? { amountBaseUnits } : {}),
+  };
+}
+
+function errorPaymentSummary(error: CommerceError): PaymentSummary | undefined {
   const payment = error.details?.['payment'];
   if (!isRecord(payment)) return undefined;
-  const { status, provider, amount, currency, network, externalReference, receipt } = payment;
-  if (
-    typeof status !== 'string' ||
-    typeof provider !== 'string' ||
-    typeof amount !== 'string' ||
-    typeof currency !== 'string'
-  ) {
+  const { status, provider, currency, network, externalReference, payer, amountBaseUnits } =
+    payment;
+  if (typeof status !== 'string' || typeof provider !== 'string' || typeof currency !== 'string') {
     return undefined;
   }
   return {
     status,
     provider,
-    amount,
     currency,
     ...(typeof network === 'string' ? { network } : {}),
     ...(typeof externalReference === 'string' ? { externalReference } : {}),
-    ...(typeof receipt === 'string' ? { receipt } : {}),
+    ...(typeof payer === 'string' ? { payer } : {}),
+    ...(typeof amountBaseUnits === 'string' ? { amountBaseUnits } : {}),
   };
 }
 
@@ -274,21 +336,45 @@ function encodeHeaderDocument(document: unknown): string {
 
 /**
  * The settlement result in the `SettleResponse` shape an x402 v2 client
- * decodes from `PAYMENT-RESPONSE`. `status`, `provider`, `amount`, `currency`
- * and `externalReference` are ours; a v2 client ignores fields it does not know.
+ * decodes from `PAYMENT-RESPONSE`. When present, `amount` uses base units.
+ * `status`, `provider`, `currency`, and `externalReference` are gateway
+ * extensions; a v2 client ignores fields it does not know.
  */
 function encodePaymentSummary(payment: PaymentSummary): string {
   return encodeHeaderDocument({
     success: payment.status === 'settled',
     transaction: payment.externalReference ?? '',
     network: payment.network ?? '',
+    ...(payment.payer !== undefined ? { payer: payment.payer } : {}),
+    ...(payment.amountBaseUnits !== undefined ? { amount: payment.amountBaseUnits } : {}),
     status: payment.status,
     provider: payment.provider,
-    amount: payment.amount,
     currency: payment.currency,
     ...(payment.externalReference !== undefined
       ? { externalReference: payment.externalReference }
       : {}),
+  });
+}
+
+// Encode a refused or unconfirmed settlement as a failed `SettleResponse`.
+// An unconfirmed transfer with a hash uses x402's `settlement_pending` reason
+function encodeSettlementFailure(details: Readonly<Record<string, unknown>> | undefined): string {
+  const text = (key: string): string | undefined => {
+    const value = details?.[key];
+    return typeof value === 'string' ? value : undefined;
+  };
+  const transaction = text('transactionHash');
+  const payer = text('payer');
+  let errorReason = text('reason') ?? 'unexpected_settle_error';
+  if (details?.['settlementUncertain'] === true) {
+    errorReason = transaction !== undefined ? 'settlement_pending' : 'unexpected_settle_error';
+  }
+  return encodeHeaderDocument({
+    success: false,
+    errorReason,
+    transaction: transaction ?? '',
+    network: text('network') ?? '',
+    ...(payer !== undefined ? { payer } : {}),
   });
 }
 

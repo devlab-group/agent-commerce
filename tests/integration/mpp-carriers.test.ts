@@ -209,7 +209,15 @@ describe('MPP over HTTP', () => {
     expect(paid.statusCode).toBe(200);
     expect(paid.json()).toEqual(REPORT);
     const receipt = Receipt.deserialize(String(paid.headers['payment-receipt']));
-    expect(receipt).toMatchObject({ method: 'evm', reference: '0xabc', status: 'success' });
+    // Check the EVM receipt's challenge and chain identifiers
+    expect(receipt).toMatchObject({
+      method: 'evm',
+      reference: '0xabc',
+      status: 'success',
+      challengeId: Challenge.deserialize(String(challenged.headers['www-authenticate'])).id,
+      chainId: 84532,
+    });
+    expect(paid.headers['cache-control']).toBe('private');
   });
 
   it('persists a settled payment and rejects the credential replay', async () => {
@@ -221,7 +229,16 @@ describe('MPP over HTTP', () => {
     expect((await invokeHttp(gw, { authorization: credential })).statusCode).toBe(200);
     const replayed = await invokeHttp(gw, { authorization: credential });
 
-    expect(replayed.json()).toMatchObject({ code: 'PAYMENT_REPLAYED' });
+    // A spent credential returns 402 with a new challenge and the
+    // invalid-challenge problem type
+    expect(replayed.statusCode).toBe(402);
+    expect(replayed.headers['content-type']).toMatch(/^application\/problem\+json/);
+    expect(replayed.json()).toMatchObject({
+      type: 'https://paymentauth.org/problems/invalid-challenge',
+      status: 402,
+      code: 'PAYMENT_REPLAYED',
+    });
+    expect(replayed.headers['www-authenticate']).toMatch(/^Payment /);
     const [receipt] = await store.listReceipts();
     expect(receipt?.payment).toMatchObject({
       provider: 'mpp',
@@ -244,7 +261,14 @@ describe('MPP over HTTP', () => {
     const refused = await invokeHttp(gw, { authorization: await credentialFor(first) });
 
     expect(refused.statusCode).toBe(402);
-    expect(refused.json()).toMatchObject({ code: 'PAYMENT_INVALID' });
+    expect(refused.headers['content-type']).toMatch(/^application\/problem\+json/);
+    expect(refused.json()).toMatchObject({
+      type: 'https://paymentauth.org/problems/verification-failed',
+      title: 'Verification Failed',
+      status: 402,
+      detail: 'insufficient_funds',
+      code: 'PAYMENT_INVALID',
+    });
     expect(refused.headers['cache-control']).toBe('no-store');
     const fresh = refused.headers['www-authenticate'];
     expect(fresh).not.toBe(first);
@@ -252,7 +276,34 @@ describe('MPP over HTTP', () => {
     expect(paid.statusCode).toBe(200);
   });
 
-  it('returns Payment-Receipt when the backend fails after settlement', async () => {
+  it('answers a refused settlement with 402, a fresh challenge and a failed PAYMENT-RESPONSE', async () => {
+    const gw = await startGateway();
+    const first = (await invokeHttp(gw)).headers['www-authenticate'];
+    facilitator.settle.mockResolvedValueOnce({
+      success: false,
+      errorReason: 'insufficient_funds',
+      transaction: '',
+      network: 'eip155:84532',
+    });
+
+    const refused = await invokeHttp(gw, { authorization: await credentialFor(first) });
+
+    expect(refused.statusCode).toBe(402);
+    expect(refused.json()).toMatchObject({
+      type: 'https://paymentauth.org/problems/verification-failed',
+      code: 'PAYMENT_SETTLEMENT_FAILED',
+    });
+    const fresh = refused.headers['www-authenticate'];
+    expect(fresh).toMatch(/^Payment /);
+    expect(fresh).not.toBe(first);
+    const settlement = JSON.parse(
+      Buffer.from(String(refused.headers['payment-response']), 'base64').toString('utf8'),
+    );
+    expect(settlement).toMatchObject({ success: false, errorReason: 'insufficient_funds' });
+    expect(refused.headers['payment-receipt']).toBeUndefined();
+  });
+
+  it('sends no Payment-Receipt header when the backend fails after settlement', async () => {
     const failing: BackendExecutor = {
       async call() {
         throw new Error('backend down');
@@ -264,8 +315,10 @@ describe('MPP over HTTP', () => {
     const res = await invokeHttp(gw, { authorization: credential });
 
     expect(res.json()).toMatchObject({ code: 'BACKEND_ERROR' });
+    // MPP puts the receipt in the error body, not a Payment-Receipt header
+    expect(res.headers['payment-receipt']).toBeUndefined();
     expect(res.headers['payment-response']).toBeDefined();
-    const receipt = Receipt.deserialize(String(res.headers['payment-receipt']));
+    const receipt = Receipt.deserialize(String(res.json().details.payment.receipt));
     expect(receipt).toMatchObject({ method: 'evm', reference: '0xabc', status: 'success' });
   });
 

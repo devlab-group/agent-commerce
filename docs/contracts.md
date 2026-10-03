@@ -63,8 +63,10 @@ This table is for navigation, not enumeration.
 6. `HttpBackendExecutor` is the only built-in outbound HTTP path to merchant
    backends and always applies a timeout. A custom `GatewayOptions.backend`
    replaces it and must enforce its own timeout.
-7. Amounts are decimal strings in display units, such as `"0.01"`. Payment
-   providers convert them to base units.
+7. Payment amounts are decimal strings in display units, such as `"0.01"`.
+   Providers convert them to base units. If a settled result includes
+   `metadata.amountBaseUnits`, the HTTP route uses that value for
+   `PAYMENT-RESPONSE.amount`.
 8. `exactOptionalPropertyTypes` is enabled. Add optional properties
    conditionally instead of assigning `undefined`.
 9. Preserve `AuthorizationSubmission.payload` byte-for-byte as opaque provider
@@ -228,8 +230,12 @@ export function createSqliteReceiptStore(
 ): ReceiptStore;
 ```
 
-`reservePaymentAttempt` is atomic and throws
-`CommerceError('PAYMENT_REPLAYED', …)` for a duplicate `replayKey`.
+`reservePaymentAttempt` atomically claims a `replayKey`. On a duplicate, it
+throws `CommerceError('PAYMENT_REPLAYED', …)` with the existing attempt's
+status in `details.attemptStatus` if the store can read it. The pipeline
+returns 402 and a fresh challenge if that status is `settled` or `rejected`.
+It returns 409 for any other status or when the status is unavailable. That
+includes the legacy `failed`, which may hide a settlement with no verdict.
 
 ## x402
 
