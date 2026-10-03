@@ -239,10 +239,13 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
       // EIP-712 domain without calling `version()` on the token.
       // `assetTransferMethod` names the one method this provider settles, so a
       // conforming client never picks the `exact` scheme's Permit2 path.
+      // The pipeline settles before calling the backend, so declare the
+      // non-default `upfront` flow: backend failure can follow payment
       extra: {
         name: options.assetName,
         version: options.assetVersion,
         assetTransferMethod: 'eip3009',
+        paymentFlow: 'upfront',
       },
     };
 
@@ -290,10 +293,9 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
    * Checks a submission against the requirement this provider built, never
    * against `payload.accepted`, the copy the client echoes back.
    *
-   * The amount must match exactly. The pinned `@x402/evm` exact/EVM scheme
-   * rejects any other value as
-   * `invalid_exact_evm_payload_authorization_value_mismatch`, so an
-   * overpayment is refused here as `wrong_amount`, a reason the buyer can act on.
+   * The `exact` scheme requires the authorized amount to match exactly,
+   * including when the buyer offers more. Local refusals use x402 error codes
+   * where available.
    */
   async function verify(context: PaymentVerificationContext): Promise<PaymentResult> {
     const { requirement, submission } = context;
@@ -339,10 +341,10 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
 
     const payload = decodePaymentSubmission(submission.payload);
     if (!payload) {
-      return rejected('malformed_payment_payload');
+      return rejected('invalid_payload');
     }
     if (payload.x402Version !== X402_VERSION) {
-      return rejected('unsupported_x402_version');
+      return rejected('invalid_x402_version');
     }
     if (!isExactEvmPayload(payload)) {
       return rejected('unsupported_scheme');
@@ -351,15 +353,15 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
     const { authorization } = payload.payload;
 
     if (!isAddress(authorization.from) || !isAddress(authorization.to)) {
-      return rejected('malformed_payment_payload');
+      return rejected('invalid_payload');
     }
     // `accepted.network` names the chain the buyer signed for, so a mismatch
     // means a signature bound to a chain we do not settle on
     if (payload.accepted.network !== options.network) {
-      return rejected('wrong_network');
+      return rejected('invalid_network');
     }
     if (getAddress(authorization.to) !== getAddress(options.payTo)) {
-      return rejected('wrong_recipient');
+      return rejected('invalid_exact_evm_payload_recipient_mismatch');
     }
     let authorizedValue: bigint;
     let required: bigint;
@@ -367,10 +369,10 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
       authorizedValue = BigInt(authorization.value);
       required = BigInt(requirements.amount);
     } catch {
-      return rejected('malformed_payment_payload');
+      return rejected('invalid_payload');
     }
     if (authorizedValue !== required) {
-      return rejected('wrong_amount');
+      return rejected('invalid_exact_evm_payload_authorization_value_mismatch');
     }
 
     const scope = binding.open();

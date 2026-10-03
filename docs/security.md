@@ -269,10 +269,10 @@ real funds.
 | missing `PAYMENT-SIGNATURE`                                           | 402, no delivery                                                  | `tests/unit/gateway/server.test.ts`               |
 | malformed `PAYMENT-SIGNATURE` over HTTP                              | `PAYMENT_INVALID`; no backend call                                | `tests/integration/adversarial-payment.test.ts`   |
 | x402 signature, nonce or payer changed after signing                   | rejected before settlement; balances unchanged                   | `tests/e2e/payment/x402-settlement.e2e.test.ts`   |
-| network substitution                                                 | `wrong_network` before settlement                                 | `tests/e2e/payment`                               |
+| network substitution                                                 | `invalid_network` before settlement                               | `tests/e2e/payment`                               |
 | requirement changed to another deployed token, or buyer proof signed for that token | `wrong_asset` or invalid signature before settlement; balances unchanged | `tests/e2e/payment/x402-settlement.e2e.test.ts` |
-| proof recipient differs from configured `payTo`                       | `wrong_recipient` before settlement                               | `tests/e2e/payment/x402-settlement.e2e.test.ts`, `tests/unit/payments-x402/provider.test.ts` |
-| amount differs from the price in either direction                    | `wrong_amount` before settlement                                  | `tests/e2e/payment/x402-settlement.e2e.test.ts`   |
+| proof recipient differs from configured `payTo`                       | `invalid_exact_evm_payload_recipient_mismatch` before settlement  | `tests/e2e/payment/x402-settlement.e2e.test.ts`, `tests/unit/payments-x402/provider.test.ts` |
+| amount differs from the price in either direction                    | `invalid_exact_evm_payload_authorization_value_mismatch` before settlement | `tests/e2e/payment/x402-settlement.e2e.test.ts`   |
 | replay, sequentially                                                 | refused, no second transfer                                       | `tests/e2e/payment/x402-settlement.e2e.test.ts`, `tests/mainnet/base.smoke.test.ts` |
 | **duplicate concurrent request**                                     | settles once, other gets `PAYMENT_REPLAYED`                       | `tests/integration/adversarial-payment.test.ts`   |
 | **replay after a gateway restart**                                   | still refused - the reservation is in SQLite                      | same                                              |

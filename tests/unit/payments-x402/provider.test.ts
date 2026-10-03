@@ -99,12 +99,13 @@ describe('createRequirement', () => {
     expect(accepted['amount']).toBe('10000'); // 0.01 * 10^6
     expect(accepted['payTo']).toBe(PAY_TO);
     expect(accepted['asset']).toBe(ASSET);
-    // extra.name/version are required so the EIP-712 domain needs no on-chain
-    // version() call, and assetTransferMethod keeps clients off Permit2
+    // Explicit EIP-712 values avoid a token version() call
+    // assetTransferMethod selects EIP-3009; paymentFlow declares settlement before delivery
     expect(accepted['extra']).toEqual({
       name: 'MockUSDC',
       version: '2',
       assetTransferMethod: 'eip3009',
+      paymentFlow: 'upfront',
     });
   });
 
@@ -154,7 +155,7 @@ describe('verify - rejects before touching the network', () => {
       submission: { method: 'x402', payload: '!!! not base64 or json !!!' },
     });
     expect(result.status).toBe('rejected');
-    expect(result.rejectionReason).toBe('malformed_payment_payload');
+    expect(result.rejectionReason).toBe('invalid_payload');
   });
 
   it('rejects valid base64 that decodes to non-JSON', async () => {
@@ -168,7 +169,7 @@ describe('verify - rejects before touching the network', () => {
       submission: { method: 'x402', payload },
     });
     expect(result.status).toBe('rejected');
-    expect(result.rejectionReason).toBe('malformed_payment_payload');
+    expect(result.rejectionReason).toBe('invalid_payload');
   });
 
   it('rejects valid JSON that does not match the x402 PaymentPayload schema', async () => {
@@ -182,7 +183,7 @@ describe('verify - rejects before touching the network', () => {
       submission: { method: 'x402', payload },
     });
     expect(result.status).toBe('rejected');
-    expect(result.rejectionReason).toBe('malformed_payment_payload');
+    expect(result.rejectionReason).toBe('invalid_payload');
   });
 
   it('rejects an empty string payload', async () => {
@@ -195,7 +196,7 @@ describe('verify - rejects before touching the network', () => {
       submission: { method: 'x402', payload: '' },
     });
     expect(result.status).toBe('rejected');
-    expect(result.rejectionReason).toBe('malformed_payment_payload');
+    expect(result.rejectionReason).toBe('invalid_payload');
   });
 
   it('rejects when the requirement has already expired', async () => {
@@ -279,7 +280,7 @@ describe('verify - rejects before touching the network', () => {
       submission: { method: 'x402', payload: tamperedProof },
     });
     expect(result.status).toBe('rejected');
-    expect(result.rejectionReason).toBe('wrong_network');
+    expect(result.rejectionReason).toBe('invalid_network');
   });
 
   it('rejects the wrong recipient', async () => {
@@ -297,7 +298,7 @@ describe('verify - rejects before touching the network', () => {
       submission: { method: 'x402', payload: proof },
     });
     expect(result.status).toBe('rejected');
-    expect(result.rejectionReason).toBe('wrong_recipient');
+    expect(result.rejectionReason).toBe('invalid_exact_evm_payload_recipient_mismatch');
   });
 
   // 0.01 at 6 decimals is 10000 base units. An overpayment is refused as well
@@ -318,7 +319,7 @@ describe('verify - rejects before touching the network', () => {
         submission: { method: 'x402', payload: proof },
       });
       expect(result.status).toBe('rejected');
-      expect(result.rejectionReason).toBe('wrong_amount');
+      expect(result.rejectionReason).toBe('invalid_exact_evm_payload_authorization_value_mismatch');
     },
   );
 
@@ -340,7 +341,7 @@ describe('verify - rejects before touching the network', () => {
       submission: { method: 'x402', payload: tamperedProof },
     });
     expect(result.status).toBe('rejected');
-    expect(result.rejectionReason).toBe('malformed_payment_payload');
+    expect(result.rejectionReason).toBe('invalid_payload');
   });
 
   it('rejects a malformed "from" address in the authorization', async () => {
@@ -361,7 +362,7 @@ describe('verify - rejects before touching the network', () => {
       submission: { method: 'x402', payload: tamperedProof },
     });
     expect(result.status).toBe('rejected');
-    expect(result.rejectionReason).toBe('malformed_payment_payload');
+    expect(result.rejectionReason).toBe('invalid_payload');
   });
 
   it('rejects a v1 payload - this gateway speaks x402 v2 only', async () => {
@@ -392,7 +393,7 @@ describe('verify - rejects before touching the network', () => {
       submission: { method: 'x402', payload: proof },
     });
     expect(result.status).toBe('rejected');
-    expect(result.rejectionReason).toBe('malformed_payment_payload');
+    expect(result.rejectionReason).toBe('invalid_payload');
   });
 
   it('rejects a Permit2 payload - the challenge asks for EIP-3009', async () => {
@@ -680,7 +681,7 @@ describe('settle', () => {
           provider: 'x402',
           amount: '0.01',
           currency: 'USD',
-          rejectionReason: 'wrong_amount',
+          rejectionReason: 'invalid_exact_evm_payload_authorization_value_mismatch',
         },
       }),
     ).rejects.toSatisfy(

@@ -361,9 +361,14 @@ The x402 provider supports v2 `exact` on EVM through EIP-3009
 and version used by the EIP-712 domain.
 
 Verification checks the scheme, signature, recipient, amount, validity window,
-payer balance, network and asset. The provider computes a replay key from the
-authorization, and the pipeline reserves it before settlement. A successful
+payer balance, network and asset. Local refusals use x402 error codes where
+available, such as `invalid_network`. The provider derives a replay key from
+the authorization, which the pipeline reserves before settlement. A successful
 settlement records the transaction hash.
+
+Settlement runs before the backend call, so requirements declare
+`extra.paymentFlow: "upfront"`. A backend failure after settlement leaves the
+buyer charged; the gateway records the receipt as undelivered.
 
 Unsupported: SVM, Permit2, `upto`, `deferred`, multi-asset routing and
 dynamic pricing.

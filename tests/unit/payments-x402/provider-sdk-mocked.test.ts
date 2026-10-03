@@ -186,7 +186,7 @@ describe('provider - SDK-boundary branches (mocked x402/facilitator)', () => {
       submission: { method: 'x402', payload: tampered },
     });
     expect(result.status).toBe('rejected');
-    expect(result.rejectionReason).toBe('malformed_payment_payload');
+    expect(result.rejectionReason).toBe('invalid_payload');
   });
 
   it('verify() returns verified with a replayKey when the SDK reports isValid', async () => {

@@ -314,7 +314,7 @@ describe('x402 settlement - real local chain', () => {
         submission: { method: 'x402', payload },
       });
       expect(result.status).toBe('rejected');
-      expect(result.rejectionReason).toBe('malformed_payment_payload');
+      expect(result.rejectionReason).toBe('invalid_payload');
     }
   });
 
@@ -340,13 +340,19 @@ describe('x402 settlement - real local chain', () => {
   it.each(['999999', '1000001'])(
     '4. an authorized value other than the price is refused before settlement: %s',
     async (value) => {
-      await expectRefused(await gatewayProof({ value }), 'wrong_amount');
+      await expectRefused(
+        await gatewayProof({ value }),
+        'invalid_exact_evm_payload_authorization_value_mismatch',
+      );
     },
   );
 
   it('5. a proof paying another recipient is refused before settlement', async () => {
     // A valid address, just not the merchant
-    await expectRefused(await gatewayProof({ payTo: deployment.buyer.address }), 'wrong_recipient');
+    await expectRefused(
+      await gatewayProof({ payTo: deployment.buyer.address }),
+      'invalid_exact_evm_payload_recipient_mismatch',
+    );
   });
 
   it('6. a proof for another network is refused before settlement', async () => {
@@ -354,7 +360,7 @@ describe('x402 settlement - real local chain', () => {
     const proof = altered(await gatewayProof(), (d) => {
       d.accepted['network'] = 'eip155:8453';
     });
-    await expectRefused(proof, 'wrong_network');
+    await expectRefused(proof, 'invalid_network');
   });
 
   it('7. another deployed token is refused in the requirement or the buyer proof', async () => {
