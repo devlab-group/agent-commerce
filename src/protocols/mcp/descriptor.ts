@@ -1,16 +1,14 @@
 /**
- * Adapter self-description.
- *
- * `supportedSpec` is the SDK's `LATEST_PROTOCOL_VERSION`. The SDK's
- * `initialize` echoes a requested version it supports, older ones included,
- * and otherwise answers with this one, so it is the best single value to
- * report.
+ * Adapter self-description. `supportedSpec` lists the modern revision and
+ * the newest 2025-era revision. The SDK's legacy fallback also accepts older
+ * 2025-era revisions.
  */
-import { LATEST_PROTOCOL_VERSION } from '@modelcontextprotocol/sdk/types.js';
+import { LATEST_PROTOCOL_VERSION } from '@modelcontextprotocol/server';
 import type { AdapterDescriptor } from '../../core';
+import { MCP_MODERN_PROTOCOL_REVISION } from './constants';
 
-// The MCP protocol revision this adapter targets
-const MCP_SUPPORTED_SPEC = LATEST_PROTOCOL_VERSION;
+// List the modern revision followed by the SDK's latest legacy revision
+const MCP_SUPPORTED_SPEC = `${MCP_MODERN_PROTOCOL_REVISION}, ${LATEST_PROTOCOL_VERSION}`;
 
 // Tool-oriented capabilities this adapter implements
 const MCP_CAPABILITIES: readonly string[] = ['tools/list', 'tools/call'];

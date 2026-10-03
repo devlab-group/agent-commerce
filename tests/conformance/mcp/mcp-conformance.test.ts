@@ -37,7 +37,10 @@ import {
   PAID_NO_METHOD_RESOURCE,
   PAID_WEATHER_RESOURCE,
 } from './fixtures';
-import { EXPECTED_MCP_PROTOCOL_REVISION } from './protocol-revision.fixture';
+import {
+  EXPECTED_MCP_MODERN_PROTOCOL_REVISION,
+  EXPECTED_MCP_PROTOCOL_REVISION,
+} from './protocol-revision.fixture';
 import { type RunningAdapterServer, startAdapterServer } from './support';
 
 interface Harness {
@@ -60,8 +63,8 @@ async function setup(
   const server = await startAdapterServer(adapter);
   const client = new Client({ name: 'conformance-client', version: '0.0.0-test' });
   const transport = new StreamableHTTPClientTransport(new URL(`${server.url}${adapter.mountPath}`));
-  // The same exactOptionalPropertyTypes mismatch with the SDK's accessor typing
-  // as on the server side (see src/protocols/mcp/adapter.ts)
+  // The v1 transport's `onclose`/`onerror` are typed `T | undefined`, which
+  // exactOptionalPropertyTypes rejects for the bare optional `T` in `Transport`
   await client.connect(transport as Transport);
 
   const harness: Harness = { adapter, pipeline, server, client, transport };
@@ -126,9 +129,12 @@ describe('mcp adapter: descriptor and support matrix', () => {
     expect(adapter.descriptor.unsupported ?? []).toEqual(
       expect.arrayContaining(['resources', 'prompts', 'sampling', 'dns-rebinding-protection']),
     );
-    // The negotiated revision, the fixture and the SDK constant must all agree
-    expect(adapter.descriptor.supportedSpec).toBe(LATEST_PROTOCOL_VERSION);
-    expect(adapter.descriptor.supportedSpec).toBe(EXPECTED_MCP_PROTOCOL_REVISION);
+    // The descriptor names both served revisions
+    expect(adapter.descriptor.supportedSpec).toBe(
+      `${EXPECTED_MCP_MODERN_PROTOCOL_REVISION}, ${EXPECTED_MCP_PROTOCOL_REVISION}`,
+    );
+    // The v1 client's revision is the newest 2025-era one the server serves
+    expect(LATEST_PROTOCOL_VERSION).toBe(EXPECTED_MCP_PROTOCOL_REVISION);
   });
 
   it('actually negotiates the expected protocol revision over a live connection', async () => {

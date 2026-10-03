@@ -22,3 +22,9 @@ export const MCP_TOOL_NAME_MAX_LENGTH = 128;
 export const MCP_TOOL_NAME_PATTERN = new RegExp(
   `^[${MCP_TOOL_NAME_CHARS}]{1,${MCP_TOOL_NAME_MAX_LENGTH}}$`,
 );
+
+/**
+ * The modern revision served by the SDK. A v2 client negotiates this value
+ * in the conformance test.
+ */
+export const MCP_MODERN_PROTOCOL_REVISION = '2026-07-28';

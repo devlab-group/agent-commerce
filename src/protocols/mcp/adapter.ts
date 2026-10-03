@@ -2,14 +2,15 @@
  * MCP protocol adapter.
  *
  * One MCP tool per mcp-exposed canonical resource. Every `tools/call` builds a
- * `CanonicalRequest` and goes through `context.pipeline.execute()`; this file
- * never calls a merchant backend and never inspects a payment object.
+ * `CanonicalRequest` and goes through `context.pipeline.execute()`. This
+ * adapter reads payment carriers but leaves verification, settlement and
+ * merchant calls to the pipeline.
  *
- * Transport: Streamable HTTP in stateless mode (no `sessionIdGenerator`). A
- * fresh low-level `Server` and `StreamableHTTPServerTransport` pair is created
- * per HTTP request and torn down when the response closes, the pattern of the
- * SDK's `examples/server/simpleStatelessStreamableHttp.js`, so no session
- * state outlives a request.
+ * The SDK's `createMcpHandler` serves `2026-07-28` over Streamable HTTP and
+ * routes 2025-era requests through its stateless fallback. It creates a
+ * low-level `Server` for each request. This adapter converts the gateway's
+ * Node request and response to the web types the handler uses, without adding
+ * `@modelcontextprotocol/node` as a peer.
  *
  * Tools are registered on the low-level `Server`, not through
  * `McpServer.registerTool`, whose `inputSchema` accepts only a Zod schema or
@@ -18,27 +19,22 @@
  * through with no lossy conversion. The SDK marks `Server` `@deprecated` but
  * still documents it for advanced cases such as this one.
  *
- * Host and Origin validation (DNS-rebinding protection) is not done here. The
- * SDK deprecates the transport's `allowedHosts`, `allowedOrigins` and
- * `enableDnsRebindingProtection` in favor of validation by the host. The
- * gateway's server-wide `onRequest` hook checks every request, `/mcp`
- * included, and `McpAdapterOptions` offers nothing to build a second
- * allowlist from. Mounted outside this gateway, the adapter has no such
- * protection, which is why `MCP_UNSUPPORTED`, published at
- * `/.well-known/agent-commerce`, lists `dns-rebinding-protection`.
+ * The gateway's `onRequest` hook validates Host and Origin for every route,
+ * including `/mcp`. This adapter has no separate allowlist. When mounted
+ * outside the gateway, it provides no Host or Origin checks; its descriptor
+ * therefore lists `dns-rebinding-protection` as unsupported.
  */
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
+import { Readable } from 'node:stream';
 import {
-  CallToolRequestSchema,
   type CallToolResult,
-  ErrorCode,
-  ListToolsRequestSchema,
-  McpError,
+  createMcpHandler,
+  type McpHttpHandler,
+  ProtocolError,
+  ProtocolErrorCode,
+  Server,
   type Tool,
-} from '@modelcontextprotocol/sdk/types.js';
+} from '@modelcontextprotocol/server';
 import {
   type AdapterDescriptor,
   type AdapterHealth,
@@ -84,11 +80,9 @@ const DEFAULT_MOUNT_PATH = '/mcp';
 const DEFAULT_SERVER_NAME = 'agent-commerce';
 
 /**
- * The SDK accepts JSON-RPC batches of up to 100 messages and dispatches their
- * `tools/call` handlers without waiting for earlier calls to settle. Stateless
- * mode needs no `initialize` request. One POST can therefore start many
- * concurrent `pipeline.execute()` calls, each potentially fetching from the
- * merchant. The limit of 8 lets a few concurrent calls run without queuing.
+ * The SDK can dispatch several `tools/call` requests in one JSON-RPC batch
+ * before earlier calls settle. One POST can therefore start concurrent
+ * `pipeline.execute()` calls. Limit active calls to 8 per adapter instance.
  */
 const MAX_CONCURRENT_TOOL_CALLS = 8;
 
@@ -113,7 +107,7 @@ class McpProtocolAdapter implements HttpProtocolAdapter {
   private tools: readonly RegisteredTool[] = [];
   private toolsByResourceId: ReadonlyMap<string, CommerceResource> = new Map();
   private skipped: readonly SkippedResource[] = [];
-  private readonly activeTransports = new Set<StreamableHTTPServerTransport>();
+  private handler: McpHttpHandler | undefined;
 
   // Counting semaphore on `pipeline.execute()`. It lives on the adapter, not
   // the request, so the cap holds across concurrent `/mcp` requests as well
@@ -185,6 +179,16 @@ class McpProtocolAdapter implements HttpProtocolAdapter {
     this.tools = tools;
     this.toolsByResourceId = toolsByResourceId;
     this.skipped = skipped;
+    // Route 2025-era requests through the SDK's stateless fallback
+    this.handler = createMcpHandler(
+      (ctx) => this.buildServer(ctx.requestInfo?.signal ?? new AbortController().signal),
+      {
+        legacy: 'stateless',
+        // Reporting only: a request the SDK rejects is already answered
+        onerror: (err) =>
+          context.logger.debug({ adapter: 'mcp', err: toLogInfo(err) }, 'mcp adapter: SDK error'),
+      },
+    );
     this.started = true;
 
     context.logger.info(
@@ -200,7 +204,7 @@ class McpProtocolAdapter implements HttpProtocolAdapter {
 
   async handleHttp(req: IncomingMessage, res: ServerResponse): Promise<void> {
     try {
-      if (!this.started || !this.context) {
+      if (!this.started || !this.context || !this.handler) {
         this.writeJsonRpcError(res, 503, 'MCP adapter is not running.');
         return;
       }
@@ -213,26 +217,9 @@ class McpProtocolAdapter implements HttpProtocolAdapter {
       // before `pipeline.execute()`: a call that may already have settled
       // must finish, or the buyer is charged for nothing.
       const abortController = new AbortController();
-      const server = this.buildServer(abortController.signal);
-      // Stateless: `sessionIdGenerator` is omitted rather than set to
-      // `undefined`, as `exactOptionalPropertyTypes` requires; the SDK treats
-      // both the same
-      const transport = new StreamableHTTPServerTransport();
-      this.activeTransports.add(transport);
-
-      const cleanup = (): void => {
-        abortController.abort();
-        this.activeTransports.delete(transport);
-        transport.close().catch(() => {});
-        server.close().catch(() => {});
-      };
-      res.once('close', cleanup);
-
-      // The transport implements `Transport`; the cast only bridges its
-      // `onclose`/`onerror` typed `T | undefined`, which conflicts with a bare
-      // optional `T` under `exactOptionalPropertyTypes`
-      await server.connect(transport as Transport);
-      await transport.handleRequest(req, res);
+      res.once('close', () => abortController.abort());
+      const response = await this.handler.fetch(toWebRequest(req, abortController.signal));
+      await writeWebResponse(response, res);
     } catch (err) {
       this.context?.logger.error(
         { adapter: 'mcp', err: toLogInfo(err) },
@@ -259,17 +246,13 @@ class McpProtocolAdapter implements HttpProtocolAdapter {
 
   async stop(): Promise<void> {
     this.started = false;
-    const transports = [...this.activeTransports];
-    this.activeTransports.clear();
-    await Promise.all(
-      transports.map(async (transport) => {
-        try {
-          await transport.close();
-        } catch {
-          // Best effort: stop() must be idempotent and never throw
-        }
-      }),
-    );
+    const handler = this.handler;
+    this.handler = undefined;
+    try {
+      await handler?.close();
+    } catch {
+      // Best effort: stop() must be idempotent and never throw
+    }
     this.context = undefined;
   }
 
@@ -288,10 +271,10 @@ class McpProtocolAdapter implements HttpProtocolAdapter {
       { name: this.serverName, version: this.serverVersion },
       { capabilities: { tools: {} } },
     );
-    server.setRequestHandler(ListToolsRequestSchema, async () => ({
+    server.setRequestHandler('tools/list', async () => ({
       tools: this.tools.map((t) => t.tool),
     }));
-    server.setRequestHandler(CallToolRequestSchema, async (request) =>
+    server.setRequestHandler('tools/call', async (request) =>
       this.handleToolCall(
         request.params.name,
         request.params.arguments ?? {},
@@ -316,7 +299,7 @@ class McpProtocolAdapter implements HttpProtocolAdapter {
     // error for unknown and non-MCP resources without revealing the latter
     const resource = this.toolsByResourceId.get(resourceId);
     if (!resource) {
-      throw new McpError(ErrorCode.InvalidParams, `Unknown tool "${resourceId}".`);
+      throw new ProtocolError(ProtocolErrorCode.InvalidParams, `Unknown tool "${resourceId}".`);
     }
     try {
       const requestId = context.ids.next('mcp');
@@ -400,6 +383,34 @@ class McpProtocolAdapter implements HttpProtocolAdapter {
     if (next !== undefined) next();
     else this.inFlightToolCalls--;
   }
+}
+
+// Pass the Node request body to the SDK as a stream. The gateway's socket
+// byte limit still applies, and the signal reports client disconnects.
+function toWebRequest(req: IncomingMessage, signal: AbortSignal): Request {
+  const headers = new Headers();
+  for (const [name, value] of Object.entries(req.headers)) {
+    if (value !== undefined) headers.set(name, Array.isArray(value) ? value.join(', ') : value);
+  }
+  return new Request(new URL(req.url ?? '/', 'http://localhost'), {
+    method: req.method ?? 'POST',
+    headers,
+    body: Readable.toWeb(req) as ReadableStream<Uint8Array>,
+    duplex: 'half',
+    signal,
+  });
+}
+
+// Stream the SDK's response body, including SSE, to the Node response
+async function writeWebResponse(response: Response, res: ServerResponse): Promise<void> {
+  res.writeHead(response.status, Object.fromEntries(response.headers));
+  if (response.body !== null) {
+    for await (const chunk of response.body) {
+      if (res.destroyed) break;
+      res.write(chunk);
+    }
+  }
+  res.end();
 }
 
 // Read a proof from the selected rail's MCP carrier when `_payment` is absent

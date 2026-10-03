@@ -20,7 +20,7 @@ export interface VersionReport {
 // The protocol/SDK pins (the A2A SDK is test-only, so it is not listed), each
 // with the main src/ directory that uses it
 const PINS: readonly (readonly [name: string, via: string])[] = [
-  ['@modelcontextprotocol/sdk', 'protocols/mcp'],
+  ['@modelcontextprotocol/server', 'protocols/mcp'],
   ['ajv', 'protocols/acp'],
   ['ajv-formats', 'protocols/acp'],
   ['@x402/core', 'payments/x402'],

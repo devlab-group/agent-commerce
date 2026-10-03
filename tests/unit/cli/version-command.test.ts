@@ -37,7 +37,7 @@ describe('runVersion', () => {
     for (const [name, version] of printed) {
       expect(version, name).toBe(declared[name]);
     }
-    expect(joined).toMatch(/@modelcontextprotocol\/sdk\s+1\.32\.0/);
+    expect(joined).toMatch(/@modelcontextprotocol\/server\s+2\.3\.0/);
     expect(joined).toMatch(/@x402\/core\s+2\.25\.0/);
     expect(joined).toMatch(/@x402\/evm\s+2\.25\.0/);
     expect(joined).toMatch(/better-sqlite3\s+13\.0\.3/);

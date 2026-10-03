@@ -5,7 +5,7 @@
  * `_payment` and `_authorization` properties the resource accepts
  */
 
-import type { Tool } from '@modelcontextprotocol/sdk/types.js';
+import type { JSONObject, Tool } from '@modelcontextprotocol/server';
 import {
   AUTHORIZATION_INPUT_FIELD,
   type CommerceResource,
@@ -99,13 +99,14 @@ export function buildInputSchema(resource: CommerceResource): Tool['inputSchema'
   const base = resource.inputSchema;
   const baseIsObject = isRecord(base);
 
-  const basePropertyEntries: readonly [string, object][] =
+  // Keep object-valued property schemas from the resource's config JSON
+  const basePropertyEntries: readonly [string, JSONObject][] =
     baseIsObject && isRecord(base.properties)
-      ? Object.entries(base.properties).filter((entry): entry is [string, object] =>
+      ? Object.entries(base.properties).filter((entry): entry is [string, JSONObject] =>
           isRecord(entry[1]),
         )
       : [];
-  const properties: Record<string, object> = Object.fromEntries(basePropertyEntries);
+  const properties: Record<string, JSONObject> = Object.fromEntries(basePropertyEntries);
 
   // Both overwrite a resource-declared property of the same name; config
   // rejects that collision at load time

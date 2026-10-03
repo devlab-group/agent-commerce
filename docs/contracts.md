@@ -202,7 +202,7 @@ persistence must not fail the commerce flow.
 | ----------------------------------- | ------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
 | `@devlab.group/agent-commerce`      | Core contract, config, gateway, receipt store, A2A and ACP adapters | None                                                                                    |
 | `@devlab.group/agent-commerce/ap2`  | AP2 verification and checkout signing                               | `jose`, `@sd-jwt/core`, `canonicalize`                                                  |
-| `@devlab.group/agent-commerce/mcp`  | MCP adapter                                                         | `@modelcontextprotocol/sdk`                                                             |
+| `@devlab.group/agent-commerce/mcp`  | MCP adapter                                                         | `@modelcontextprotocol/server`                                                          |
 | `@devlab.group/agent-commerce/mpp`  | MPP provider and profile metadata                                   | `@coinbase/x402` (only for `auth.type: cdp`), `@x402/core`, `@x402/evm`, `mppx`, `viem` |
 | `@devlab.group/agent-commerce/x402` | x402 provider and client proof helper                               | `@coinbase/x402` (only for `auth.type: cdp`), `@x402/core`, `@x402/evm`, `viem`         |
 
@@ -597,7 +597,7 @@ unset `adminToken` makes operator routes return 404; an empty
 
 | Route                             | Behavior                                                                                                                                                              |
 | --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET /health`                     | Returns 200 after the Host check and, when present, the Origin check pass; a rejected Host or Origin returns 403.                                                       |
+| `GET /health`                     | Returns 200 after the Host check and, when present, the Origin check pass; a rejected Host or Origin returns 403.                                                     |
 | `GET /ready`                      | Returns 503 if the store, an adapter, or either provider kind reports `fail`; `warn` remains ready. Results are briefly cached and concurrent probes share one check. |
 | `GET /.well-known/agent-commerce` | Publishes merchant and sanitized adapter, provider, store, and protocol metadata.                                                                                     |
 | `GET /api/resources`              | Lists canonical resources without secrets.                                                                                                                            |

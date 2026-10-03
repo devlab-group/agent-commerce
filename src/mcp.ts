@@ -1,9 +1,9 @@
 /**
  * `@devlab.group/agent-commerce/mcp`: the MCP protocol adapter. A separate entry
- * point because it needs the optional peer `@modelcontextprotocol/sdk`, which a
- * consumer importing only `createGateway` should not have to install.
+ * point because it needs the optional peer `@modelcontextprotocol/server`, which
+ * a consumer importing only `createGateway` should not have to install.
  *
- *   npm install @devlab.group/agent-commerce @modelcontextprotocol/sdk
+ *   npm install @devlab.group/agent-commerce @modelcontextprotocol/server
  *   import { mcp } from '@devlab.group/agent-commerce/mcp';
  *
  * Without the peer, importing this subpath fails at load with Node's

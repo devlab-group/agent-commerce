@@ -5,7 +5,7 @@
  * two envelopes, so each shape is defined once.
  */
 
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import type { CallToolResult } from '@modelcontextprotocol/server';
 import {
   type CommerceError,
   DELIVERY_SUMMARY_META_KEY,

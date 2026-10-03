@@ -191,7 +191,7 @@ describe('published package metadata', () => {
     }
     for (const peer of [
       '@coinbase/x402',
-      '@modelcontextprotocol/sdk',
+      '@modelcontextprotocol/server',
       '@sd-jwt/core',
       '@x402/core',
       '@x402/evm',
@@ -267,7 +267,7 @@ describe.skipIf(!built)('built executable', () => {
     // as "0.0.0-unknown" and an empty pinned list.
     const out = run('version');
     expect(out).not.toContain('0.0.0-unknown');
-    expect(out).toContain('@modelcontextprotocol/sdk');
+    expect(out).toContain('@modelcontextprotocol/server');
     expect(out).toContain('x402');
   });
 
@@ -396,7 +396,7 @@ describe.skipIf(!existsSync(libEntry))('optional-peer subpaths', () => {
   });
 
   it('imports only its own peer, in each subpath', () => {
-    expect(bareImportsOf(mcpEntry)).toEqual(['@modelcontextprotocol/sdk']);
+    expect(bareImportsOf(mcpEntry)).toEqual(['@modelcontextprotocol/server']);
     // `@coinbase/x402` is a dynamic import, loaded only for facilitator auth.type `cdp`
     expect(bareImportsOf(x402Entry).sort()).toEqual([
       '@coinbase/x402',
