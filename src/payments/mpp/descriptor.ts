@@ -25,7 +25,7 @@ export const MPP_DESCRIPTOR: AdapterDescriptor = {
     'verify-before-settle',
     'payment-receipt',
   ],
-  // The pinned specs are -00 drafts and mppx is pre-1.0, so the wire format can still change
+  // The pinned specs are drafts and mppx is pre-1.0; the wire format may change
   status: 'experimental',
   unsupported: [
     // Name other methods as a class instead of maintaining a second list

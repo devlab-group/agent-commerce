@@ -21,7 +21,7 @@ export const MPP_SPEC_COMMIT = '806fdb8b8c92cda5c84b8660558921b6bbeef7e0';
 
 /** The core HTTP authentication draft, the `charge` intent, and its EVM method */
 export const MPP_SPEC_DRAFTS = {
-  core: 'draft-httpauth-payment-00',
+  core: 'draft-httpauth-payment-01',
   intent: 'draft-payment-intent-charge-00',
   method: 'draft-evm-charge-00',
 } as const;

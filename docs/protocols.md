@@ -12,7 +12,7 @@ This page records the implemented subset and pinned revision for each protocol.
 | **A2A** | Experimental | v1.0.0; negotiation `1.0`; `JSONRPC` binding | Agent Card, `SendMessage`, terminal tasks and paid flow |
 | **ACP** | Experimental | stable snapshot `2026-04-17`; REST binding | discovery and the five checkout operations |
 | **AP2** | Experimental | v0.2.0, tag 2026-04-28, commit `b4587ac`; Direct mode | closed Checkout Mandate verification before settlement |
-| **MPP** | Experimental | `-00` drafts at `tempoxyz/mpp-specs@806fdb8`; `mppx@0.13.1` | `charge`/`evm`/EIP-3009 over HTTP, MCP and A2A |
+| **MPP** | Experimental | drafts at `tempoxyz/mpp-specs@806fdb8`; `mppx@0.13.1` | `charge`/`evm`/EIP-3009 over HTTP, MCP and A2A |
 | UCP | Planned | - | no implementation |
 
 Experimental components are disabled unless configured and support only the
@@ -379,14 +379,17 @@ remote mode and the guardrails in
 
 **Experimental.** Enable with `payments.mpp.enabled: true`.
 
-The wire format follows three `-00` drafts read at `tempoxyz/mpp-specs@806fdb8`
-and the pre-1.0 `mppx@0.13.1`, pinned as an optional peer. For EIP-3009, this
-gateway follows `mppx`: the nonce is the keccak256 hash of
-`JSON.stringify([id, realm])`. The `draft-evm-charge-00` nonce instead hashes
-`abi.encodePacked(id, realm)`. Credentials using that draft nonce, including
-those produced by `mppx` 0.12 or earlier, fail verification with `wrong_nonce`.
-Later drafts or `mppx` releases may change the wire format again, so MPP remains
-experimental.
+The gateway targets `draft-httpauth-payment-01`,
+`draft-payment-intent-charge-00`, and `draft-evm-charge-00` at
+`tempoxyz/mpp-specs@806fdb8`. It pins the pre-1.0 `mppx@0.13.1` as an
+optional peer. For EIP-3009, the gateway follows `mppx`: it hashes
+`JSON.stringify([id, realm])` with keccak256 to derive the nonce. The EVM
+draft instead hashes `abi.encodePacked(id, realm)`. Credentials using the
+draft nonce, including those produced by `mppx` 0.12 or earlier, fail
+verification with `wrong_nonce`.
+
+Later drafts or `mppx` releases may change the wire format again, so MPP
+remains experimental.
 
 The implemented profile is `charge` intent, `evm` method and EIP-3009
 `authorization` credential, using USDC on Base Sepolia or Base. The challenge
