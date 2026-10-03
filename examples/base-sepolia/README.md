@@ -37,15 +37,15 @@ MERCHANT_WALLET=0xYourMerchantAddress \
 ## Run it
 
 ```bash
-# 1. Your backend, or this repo's demo merchant API
+# Terminal 1: your backend, or this repo's demo merchant API (foreground)
 npm run dev:merchant
 
-# 2. The gateway, on Base Sepolia
+# Terminal 2: the gateway, on Base Sepolia
 AGENT_COMMERCE_CONFIG=examples/base-sepolia/config.yaml \
   MERCHANT_WALLET=0xYourMerchantAddress \
   npm run dev:gateway
 
-# 3. In another terminal: check the deployment
+# Terminal 3: check the deployment
 MERCHANT_WALLET=0xYourMerchantAddress \
   npm run agent-commerce -- doctor --config examples/base-sepolia/config.yaml
 ```

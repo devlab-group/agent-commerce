@@ -1501,6 +1501,15 @@ describe('protocols.acp', () => {
 
   // A resource shaped like the canonical envelope the adapter sends. `optional`
   // keys are declared but not required, as a cancel's `body` must be.
+  const ENVELOPE_SCHEMAS = {
+    path: {
+      type: 'object',
+      properties: { checkout_session_id: { type: 'string' } },
+      required: ['checkout_session_id'],
+    },
+    body: { type: 'object', additionalProperties: true },
+  } as const;
+
   function checkoutResource(
     keys: readonly ('path' | 'body')[],
     optional: readonly 'body'[] = [],
@@ -1510,7 +1519,7 @@ describe('protocols.acp', () => {
       name: 'ACP checkout operation',
       input: {
         type: 'object',
-        properties: Object.fromEntries(declared.map((key) => [key, { type: 'object' }])),
+        properties: Object.fromEntries(declared.map((key) => [key, ENVELOPE_SCHEMAS[key]])),
         required: [...keys],
         additionalProperties: false,
       },
@@ -1758,6 +1767,60 @@ describe('protocols.acp', () => {
         {},
       ),
     ).not.toThrow();
+  });
+
+  // Load closes an object node that omits additionalProperties, so this body
+  // would accept no key and refuse every ACP document with INPUT_INVALID
+  it('rejects a bare body: { type: object }, which load closes', () => {
+    const resource = checkoutResource(['body']);
+    (resource['input'] as { properties: Record<string, unknown> }).properties['body'] = {
+      type: 'object',
+    };
+    expectConfigInvalid(
+      () => parseConfig(withAcp(enabledAcp(), { acp_checkout_create: resource }), {}),
+      'protocols.acp.checkout.operations.createCheckoutSession',
+      'its "body" schema accepts no keys',
+    );
+  });
+
+  it('accepts a closed body that declares the document fields', () => {
+    const resource = checkoutResource(['body']);
+    (resource['input'] as { properties: Record<string, unknown> }).properties['body'] = {
+      type: 'object',
+      properties: {
+        line_items: { type: 'array' },
+        currency: { type: 'string' },
+        capabilities: { type: 'object', additionalProperties: true },
+      },
+      additionalProperties: false,
+    };
+    expect(() =>
+      parseConfig(withAcp(enabledAcp(), { acp_checkout_create: resource }), {}),
+    ).not.toThrow();
+  });
+
+  it('rejects a closed path schema that does not declare checkout_session_id', () => {
+    // The backend URL is not templated, so the path-binding rule does not fire
+    const resource = checkoutResource(['path']);
+    (resource['input'] as { properties: Record<string, unknown> }).properties['path'] = {
+      type: 'object',
+    };
+    expectConfigInvalid(
+      () => parseConfig(withAcp(enabledAcp(), { acp_checkout_get: resource }), {}),
+      'protocols.acp.checkout.operations.getCheckoutSession',
+      'its "path" schema sets additionalProperties: false without declaring "checkout_session_id"',
+    );
+  });
+
+  it('rejects an input schema with no properties at all, which load closes', () => {
+    const resource = checkoutResource(['body']);
+    resource['input'] = { type: 'object' };
+    delete (resource['backend'] as Record<string, unknown>)['inputBindings'];
+    expectConfigInvalid(
+      () => parseConfig(withAcp(enabledAcp(), { acp_checkout_create: resource }), {}),
+      'protocols.acp.checkout.operations.createCheckoutSession',
+      'without declaring "body"',
+    );
   });
 
   it('rejects expose: [acp] when protocols.acp.enabled is false', () => {

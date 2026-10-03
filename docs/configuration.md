@@ -196,7 +196,7 @@ one sends. A cancel carries `body` only when the caller sends one, such as an
             checkout_session_id: { type: string }
           required: [checkout_session_id]
           additionalProperties: false
-        body: { type: object }
+        body: { type: object, additionalProperties: true }
       required: [path]
       additionalProperties: false
     backend:
@@ -211,8 +211,10 @@ one sends. A cancel carries `body` only when the caller sends one, such as an
 Config checks that shape at load. It rejects a resource whose schema forbids
 a key the adapter may send, or requires one the operation does not always
 send, before it can fail at request time. A closed cancel schema must
-therefore declare `body` without requiring it, as the example above does. A
-complete, validating configuration is in [examples/acp-checkout](../examples/acp-checkout).
+therefore declare `body` without requiring it, as the example above does.
+`body` sets `additionalProperties: true` because load closes any object schema
+that omits it; a `body` that accepts no keys is refused. A complete, validating
+configuration is in [examples/acp-checkout](../examples/acp-checkout).
 
 `retentionHours` may not go below 24: a shorter window would let a replayed
 `Idempotency-Key` past an expired record and run a checkout twice. It bounds

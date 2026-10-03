@@ -58,6 +58,7 @@ import {
   ACP_CHECKOUT_OPERATIONS,
   ACP_OPERATION_INPUT_KEYS,
   ACP_OPERATION_OPTIONAL_INPUT_KEYS,
+  ACP_SESSION_ID_INPUT_KEY,
   ACP_WELL_KNOWN_PATH,
   type AcpCheckoutOperation,
 } from '../protocols/acp/constants';
@@ -1206,7 +1207,10 @@ function validateAcpCheckoutMapping(
 // A schema that forbids a key the adapter sends, or requires one it may not
 // send, fails requests with INPUT_INVALID. Refused at load instead. An optional
 // key counts as sent: a closed cancel schema without `body` would pass a bare
-// cancel and refuse every one that carries `intent_trace`.
+// cancel and refuse every one that carries `intent_trace`. Normalization has
+// already closed every object node that omits additionalProperties, so the
+// check also looks inside `path` and `body`: a bare `body: { type: object }`
+// arrives here accepting no key at all.
 function validateAcpOperationInput(
   path: string,
   operation: AcpCheckoutOperation,
@@ -1216,11 +1220,12 @@ function validateAcpOperationInput(
   if (schema === undefined) return;
   const keys: readonly string[] = ACP_OPERATION_INPUT_KEYS[operation];
   const optionalKeys: readonly string[] = ACP_OPERATION_OPTIONAL_INPUT_KEYS[operation] ?? [];
-  const properties = schema['properties'];
+  const sent = [...keys, ...optionalKeys];
 
-  if (schema['additionalProperties'] === false && isRecord(properties)) {
-    for (const key of [...keys, ...optionalKeys]) {
-      if (!Object.hasOwn(properties, key)) {
+  const topLevel = closedObjectProperties(schema);
+  if (topLevel !== undefined) {
+    for (const key of sent) {
+      if (!Object.hasOwn(topLevel, key)) {
         const when = keys.includes(key) ? 'always sends' : 'sends when the caller supplies it';
         throw acpInvalid(
           path,
@@ -1229,6 +1234,28 @@ function validateAcpOperationInput(
         );
       }
     }
+  }
+
+  const declared = isRecord(schema['properties']) ? schema['properties'] : {};
+  const pathKeys = closedObjectProperties(declared['path']);
+  if (
+    sent.includes('path') &&
+    pathKeys !== undefined &&
+    !Object.hasOwn(pathKeys, ACP_SESSION_ID_INPUT_KEY)
+  ) {
+    throw acpInvalid(
+      path,
+      `Resource "${resource.id}" implements ACP operation "${operation}" but its "path" schema sets additionalProperties: false without declaring "${ACP_SESSION_ID_INPUT_KEY}", which the adapter always sends inside "path"`,
+      { resourceId: resource.id },
+    );
+  }
+  const bodyKeys = closedObjectProperties(declared['body']);
+  if (sent.includes('body') && bodyKeys !== undefined && Object.keys(bodyKeys).length === 0) {
+    throw acpInvalid(
+      path,
+      `Resource "${resource.id}" implements ACP operation "${operation}" but its "body" schema accepts no keys, so it refuses every ACP document. Config load closes an object schema that omits additionalProperties: declare body as { type: object, additionalProperties: true }`,
+      { resourceId: resource.id },
+    );
   }
 
   const required = schema['required'];
@@ -1243,6 +1270,13 @@ function validateAcpOperationInput(
       }
     }
   }
+}
+
+// The declared properties of a closed object schema, or undefined when the
+// schema accepts keys it does not declare
+function closedObjectProperties(schema: unknown): Record<string, unknown> | undefined {
+  if (!isRecord(schema) || schema['additionalProperties'] !== false) return undefined;
+  return isRecord(schema['properties']) ? schema['properties'] : {};
 }
 
 interface NormalizedX402 {

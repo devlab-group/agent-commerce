@@ -6,31 +6,32 @@ This paid resource is exposed as an MCP tool. With
 endpoint; this setting controls exposure, not authentication.
 
 `config.yaml` validates without environment variables, but its default
-`X402_ASSET` is a placeholder. Step 3 supplies the deployed MockUSDC address
-from `.deploy/local.json`. The commands use the local demo stack.
+`X402_ASSET` is a placeholder. The gateway command supplies the deployed
+MockUSDC address from `.deploy/local.json`. The commands use the local demo
+stack.
 
 ## Run it
 
 From the repository root:
 
 ```bash
-# 1. Local chain + mock USDC (once per session)
+# Terminal 1: the local chain, which stays in the foreground
 npm run chain:start
-npm run chain:deploy
 
-# 2. Start the demo merchant API
+# Terminal 2: mock USDC, then the demo merchant API (also foreground)
+npm run chain:deploy
 npm run dev:merchant
 
-# 3. Start the gateway with this example's config
+# Terminal 3: the gateway with this example's config
 AGENT_COMMERCE_CONFIG=examples/paid-mcp-tool/config.yaml \
   X402_ASSET=$(node -p "require('./.deploy/local.json').asset") \
   npm run dev:gateway
 
-# 4. In another terminal: verify config and stack health
+# Terminal 4: verify config and stack health
 npm run agent-commerce -- validate --config examples/paid-mcp-tool/config.yaml
 npm run agent-commerce -- doctor --config examples/paid-mcp-tool/config.yaml
 
-# 5. Discover it as an MCP tool (Streamable HTTP, default mount /mcp)
+# Discover it as an MCP tool (Streamable HTTP, default mount /mcp)
 curl -s http://localhost:8080/mcp \
   -H 'content-type: application/json' -H 'accept: application/json, text/event-stream' \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'

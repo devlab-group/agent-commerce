@@ -10,7 +10,11 @@
  * a `PaymentSubmission` built from it would charge a gateway payment on top.
  */
 import type { CanonicalRequest } from '../../core';
-import { ACP_OPERATION_INPUT_KEYS, ACP_OPERATION_OPTIONAL_INPUT_KEYS } from './constants';
+import {
+  ACP_OPERATION_INPUT_KEYS,
+  ACP_OPERATION_OPTIONAL_INPUT_KEYS,
+  ACP_SESSION_ID_INPUT_KEY,
+} from './constants';
 import type { AcpGuardedRequest } from './request-guards';
 
 export interface AcpCanonicalRequestOptions {
@@ -44,7 +48,7 @@ function canonicalInput(request: AcpGuardedRequest): Record<string, unknown> {
   const input: Record<string, unknown> = {};
 
   if (keys.includes('path') && request.route.sessionId !== undefined) {
-    input['path'] = { checkout_session_id: request.route.sessionId };
+    input['path'] = { [ACP_SESSION_ID_INPUT_KEY]: request.route.sessionId };
   }
   if (keys.includes('body')) {
     input['body'] = request.body;

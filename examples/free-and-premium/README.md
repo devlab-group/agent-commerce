@@ -4,35 +4,36 @@ This example puts a free weather resource and an x402-paid report on the
 same gateway. Both call the merchant API and are exposed over HTTP and MCP.
 
 `config.yaml` validates without environment variables, but its default
-`X402_ASSET` is a placeholder. Step 3 supplies the deployed MockUSDC address
-from `.deploy/local.json`. The commands use the local demo stack.
+`X402_ASSET` is a placeholder. The gateway command supplies the deployed
+MockUSDC address from `.deploy/local.json`. The commands use the local demo
+stack.
 
 ## Run it
 
 From the repository root:
 
 ```bash
-# 1. Local chain + mock USDC (once per session)
+# Terminal 1: the local chain, which stays in the foreground
 npm run chain:start
-npm run chain:deploy
 
-# 2. Start the demo merchant API
+# Terminal 2: mock USDC, then the demo merchant API (also foreground)
+npm run chain:deploy
 npm run dev:merchant
 
-# 3. Start the gateway with this example's config
+# Terminal 3: the gateway with this example's config
 AGENT_COMMERCE_CONFIG=examples/free-and-premium/config.yaml \
   X402_ASSET=$(node -p "require('./.deploy/local.json').asset") \
   npm run dev:gateway
 
-# 4. In another terminal: verify config and stack health
+# Terminal 4: verify config and stack health
 npm run agent-commerce -- validate --config examples/free-and-premium/config.yaml
 npm run agent-commerce -- doctor --config examples/free-and-premium/config.yaml
 
-# 5. Call the free resource (no payment proof needed)
+# Call the free resource (no payment proof needed)
 curl -s "http://localhost:8080/api/resources/basic_weather/invoke" \
   -X POST -H 'content-type: application/json' -d '{"city":"berlin"}'
 
-# 6. Call the paid resource (402 without a payment proof)
+# Call the paid resource (402 without a payment proof)
 curl -i http://localhost:8080/api/resources/premium_report/invoke -X POST
 # A real buyer completes the 402 challenge with `createPaymentProof`
 # (`src/payments/x402/client.ts`); see `npm run demo:agent`

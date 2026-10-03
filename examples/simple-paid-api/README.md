@@ -5,32 +5,32 @@ free resource or MCP exposure. Point `backend.url` at the merchant API and
 configure the payment settings for your deployment.
 
 `config.yaml` validates without environment variables, but its default
-`X402_ASSET` is a placeholder. Step 3 supplies the deployed MockUSDC address
-from `.deploy/local.json`. The commands use the local demo stack: Anvil,
-MockUSDC and the demo merchant API.
+`X402_ASSET` is a placeholder. The gateway command supplies the deployed
+MockUSDC address from `.deploy/local.json`. The commands use the local demo
+stack: Anvil, MockUSDC and the demo merchant API.
 
 ## Run it
 
 From the repository root:
 
 ```bash
-# 1. Local chain + mock USDC (once per session)
+# Terminal 1: the local chain, which stays in the foreground
 npm run chain:start
-npm run chain:deploy
 
-# 2. Start the demo merchant API
+# Terminal 2: mock USDC, then the demo merchant API (also foreground)
+npm run chain:deploy
 npm run dev:merchant
 
-# 3. Start the gateway with this example's config
+# Terminal 3: the gateway with this example's config
 AGENT_COMMERCE_CONFIG=examples/simple-paid-api/config.yaml \
   X402_ASSET=$(node -p "require('./.deploy/local.json').asset") \
   npm run dev:gateway
 
-# 4. In another terminal: verify the config and the running stack
+# Terminal 4: verify the config and the running stack
 npm run agent-commerce -- validate --config examples/simple-paid-api/config.yaml
 npm run agent-commerce -- doctor --config examples/simple-paid-api/config.yaml
 
-# 5. Request the paid resource without a proof (returns 402)
+# Request the paid resource without a proof (returns 402)
 curl -i http://localhost:8080/api/resources/premium_report/invoke -X POST
 # -> 402 Payment Required, with a PaymentRequiredEnvelope challenge.
 # A real buyer completes the challenge with `createPaymentProof`

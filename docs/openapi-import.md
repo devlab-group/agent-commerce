@@ -39,7 +39,7 @@ publish it.
 
 | Option | Effect |
 | --- | --- |
-| `--output <path>` | Write to this path. The default is `<source-stem>.agent-commerce.yaml` in the working directory |
+| `--output <path>` | Write to this path, creating missing directories. The default is `<source-stem>.agent-commerce.yaml` in the working directory |
 | `--force` | Replace an existing output file. Without it, an existing file stops the run |
 | `--base-url <url>` | Override document `servers` entries. The value must be absolute HTTP(S), with no query or fragment |
 | `--operation <id>` | Import a matching `operationId` or generated resource id. Repeatable; an unmatched value fails the run |

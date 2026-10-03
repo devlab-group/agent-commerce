@@ -312,6 +312,7 @@ real funds.
 | **a merchant leaking a connection string or stack in an error body**  | never relayed; the ACP error carries type, code and message only  | same                                              |
 | **an ACP `Request-Id` carrying a header-injection payload**           | dropped, never echoed                                             | `tests/unit/protocols-acp/adapter.test.ts`        |
 | **an ACP checkout resource configured as paid**                       | refused at config load; a defensive runtime challenge maps to 500 | `tests/unit/config/schema.test.ts`, `tests/unit/protocols-acp/checkout-mapping.test.ts` |
+| **an ACP `body` or `path` schema that load closes before it accepts what the adapter sends** | refused at config load, not as INPUT_INVALID on every request | `tests/unit/config/schema.test.ts`, `tests/unit/cli/examples.test.ts` |
 | **an AP2 mandate with a tampered signature**                          | `AUTHORIZATION_INVALID`; nothing settles                          | `tests/integration/ap2-x402-conformance.test.ts`  |
 | **an expired AP2 mandate**                                            | `AUTHORIZATION_INVALID`; nothing settles                          | same                                              |
 | **a mandate from an issuer that is not configured**                   | refused at the trust allowlist, before any signature check        | same, `tests/unit/authorization-ap2`              |

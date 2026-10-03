@@ -9,6 +9,9 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse as parseYaml } from 'yaml';
 import { parseConfig } from '../../../src/config';
+import { compileJsonSchema } from '../../../src/core/execution/validation';
+import { toCanonicalRequest } from '../../../src/protocols/acp/checkout-mapping';
+import type { AcpCheckoutOperation } from '../../../src/protocols/acp/constants';
 
 const REPO_ROOT = join(import.meta.dirname, '../../..');
 const EXAMPLES_DIR = join(REPO_ROOT, 'examples');
@@ -87,6 +90,52 @@ ${block}`),
     expect(config.resources.map((r) => r.pricing.type).sort()).toEqual(['fixed', 'free']);
     for (const resource of config.resources) {
       expect([...resource.exposedVia].sort()).toEqual(['http', 'mcp']);
+    }
+  });
+
+  // Loading is not serving: config load closes every object schema that omits
+  // additionalProperties, and a bare `body: { type: object }` once loaded fine
+  // and then refused every checkout with INPUT_INVALID
+  it('acp-checkout: every mapped resource accepts the vendored ACP request documents', () => {
+    const yamlText = readFileSync(join(EXAMPLES_DIR, 'acp-checkout/config.yaml'), 'utf8');
+    const config = parseConfig(parseYaml(yamlText), {});
+    const acp = config.protocols.acp;
+    if (!acp.enabled) throw new Error('the acp-checkout example must enable ACP');
+    const examples = JSON.parse(
+      readFileSync(
+        join(REPO_ROOT, 'tests/fixtures/acp/2026-04-17/examples.agentic_checkout.json'),
+        'utf8',
+      ),
+    ) as Record<string, Record<string, unknown>>;
+
+    const requests: Record<AcpCheckoutOperation, Record<string, unknown>> = {
+      createCheckoutSession: examples['create_checkout_session_request'] ?? {},
+      updateCheckoutSession: examples['update_checkout_session_request'] ?? {},
+      getCheckoutSession: {},
+      completeCheckoutSession: examples['complete_checkout_session_request'] ?? {},
+      cancelCheckoutSession: examples['cancel_checkout_session_request'] ?? {},
+    };
+    for (const [operation, body] of Object.entries(requests) as [
+      AcpCheckoutOperation,
+      Record<string, unknown>,
+    ][]) {
+      const resourceId = acp.checkout.operations[operation];
+      const { input } = toCanonicalRequest({
+        request: {
+          route: {
+            operation,
+            path: '/acp/checkout_sessions',
+            acceptsBody: operation !== 'getCheckoutSession',
+            ...(operation === 'createCheckoutSession' ? {} : { sessionId: 'checkout_session_123' }),
+          },
+          body,
+        },
+        resourceId,
+        requestId: 'acp_test',
+        receivedAt: '2026-04-17T00:00:00.000Z',
+      });
+      const schema = config.resources.find((resource) => resource.id === resourceId)?.inputSchema;
+      expect(compileJsonSchema(schema)(input), operation).toMatchObject({ valid: true });
     }
   });
 

@@ -70,6 +70,8 @@ protocols:
 #
 # `inputBindings` maps the canonical ACP envelope onto the merchant request:
 # `path` carries `{ checkout_session_id }`, `body` carries the ACP document.
+# `body` stays open (`additionalProperties: true`) because config load closes
+# every object schema that omits it, and a closed body refuses every document.
 resources:
   acp_checkout_create:
     name: Create checkout session
@@ -77,7 +79,7 @@ resources:
     input:
       type: object
       properties:
-        body: { type: object }
+        body: { type: object, additionalProperties: true }
       required: [body]
       additionalProperties: false
     backend:
@@ -103,7 +105,7 @@ resources:
             checkout_session_id: { type: string }
           required: [checkout_session_id]
           additionalProperties: false
-        body: { type: object }
+        body: { type: object, additionalProperties: true }
       required: [path]
       additionalProperties: false
     backend:
@@ -155,7 +157,7 @@ resources:
             checkout_session_id: { type: string }
           required: [checkout_session_id]
           additionalProperties: false
-        body: { type: object }
+        body: { type: object, additionalProperties: true }
       required: [path]
       additionalProperties: false
     backend:
@@ -182,7 +184,7 @@ resources:
             checkout_session_id: { type: string }
           required: [checkout_session_id]
           additionalProperties: false
-        body: { type: object }
+        body: { type: object, additionalProperties: true }
       required: [path]
       additionalProperties: false
     backend:

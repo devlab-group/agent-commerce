@@ -90,13 +90,19 @@ function ap2Block(dir: string) {
 }
 
 // A free resource shaped like the envelope the ACP adapter sends
+// What the adapter sends: `path` carries the session id, `body` the ACP document
+const ACP_ENVELOPE_SCHEMAS: Record<string, object> = {
+  path: { type: 'object', properties: { checkout_session_id: { type: 'string' } } },
+  body: { type: 'object', additionalProperties: true },
+};
+
 function acpResource(keys: readonly string[], optional: readonly string[] = []) {
   const declared = [...keys, ...optional];
   return {
     name: 'ACP checkout operation',
     input: {
       type: 'object',
-      properties: Object.fromEntries(declared.map((key) => [key, { type: 'object' }])),
+      properties: Object.fromEntries(declared.map((key) => [key, ACP_ENVELOPE_SCHEMAS[key]])),
       required: [...keys],
       additionalProperties: false,
     },

@@ -6,8 +6,8 @@
  * `--output config.yaml --force` replaces that file rather than merging.
  */
 import { existsSync } from 'node:fs';
-import { rename, rm, writeFile } from 'node:fs/promises';
-import { basename, extname, resolve } from 'node:path';
+import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
+import { basename, dirname, extname, resolve } from 'node:path';
 import { PROTOCOL_NAMES } from '../../core';
 import {
   buildResourceDrafts,
@@ -178,6 +178,8 @@ async function writeAtomically(
   const target = resolve(outputPath);
   const temporary = `${target}.${process.pid}.tmp`;
   try {
+    // Like `init --output`: a missing output directory is created, not an error
+    await mkdir(dirname(target), { recursive: true });
     await writeFile(temporary, content, 'utf8');
     await rename(temporary, target);
   } catch (error) {

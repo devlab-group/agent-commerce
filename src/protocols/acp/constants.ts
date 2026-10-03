@@ -61,6 +61,9 @@ export const ACP_OPERATION_OPTIONAL_INPUT_KEYS: Readonly<
   cancelCheckoutSession: ['body'],
 };
 
+/** The key inside `path` that carries the checkout session id from the route */
+export const ACP_SESSION_ID_INPUT_KEY = 'checkout_session_id';
+
 /** Media type for every ACP request and response body */
 export const ACP_JSON_MEDIA_TYPE = 'application/json';
 
