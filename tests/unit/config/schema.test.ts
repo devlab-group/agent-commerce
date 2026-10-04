@@ -1386,10 +1386,16 @@ describe('protocols.mcp.mountPath', () => {
 });
 
 describe('protocols.a2a', () => {
+  // Give enabled adapters a resource so tests reach their intended config rule
   function withA2a(a2a: unknown): Record<string, unknown> {
     const raw = validRawConfig();
     if (a2a === undefined) delete (raw['protocols'] as Record<string, unknown>)['a2a'];
     else (raw['protocols'] as Record<string, unknown>)['a2a'] = a2a;
+    if ((a2a as { enabled?: unknown } | undefined)?.enabled === true) {
+      (raw['resources'] as { weather_basic: { expose: string[] } }).weather_basic.expose.push(
+        'a2a',
+      );
+    }
     return raw;
   }
 
@@ -1455,6 +1461,16 @@ describe('protocols.a2a', () => {
       'http',
       'a2a',
     ]);
+  });
+
+  it('rejects enabled A2A when no resource would appear as a card skill', () => {
+    const raw = withA2a({ enabled: true });
+    (raw['resources'] as { weather_basic: { expose: string[] } }).weather_basic.expose = ['http'];
+    expectConfigInvalid(
+      () => parseConfig(raw, {}),
+      'protocols.a2a.enabled',
+      'no resource lists "a2a"',
+    );
   });
 
   it('rejects expose: [a2a] when protocols.a2a.enabled is false', () => {

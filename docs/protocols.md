@@ -136,7 +136,8 @@ settle payments or call merchant backends.
 Resources exposed through A2A become Agent Card skills. The skill id is the
 resource id; paid skills are tagged `paid` and include their price in the
 description. A2A v1.0 `AgentSkill` has no input-schema field, so the canonical
-schema is not embedded in the card.
+schema is not embedded in the card. This gateway requires at least one A2A
+resource when the adapter is enabled, so its card publishes a skill.
 
 The card has a content-based `ETag` and `Cache-Control: public, max-age=300`.
 A matching `If-None-Match` request receives `304` without a body.

@@ -44,10 +44,10 @@ protocols:
     enabled: true
     mountPath: /mcp
   # A2A (Agent2Agent) v1.0.0 - experimental, off by default.
-  # Enabling it serves JSON-RPC `SendMessage` at mountPath and the
-  # specification-fixed Agent Card at /.well-known/agent-card.json. Clients must
-  # send `A2A-Version: 1.0`. Streaming, task persistence and push notifications
-  # are not implemented; see docs/protocols.md#a2a.
+  # Serves JSON-RPC `SendMessage` at mountPath and the Agent Card at
+  # /.well-known/agent-card.json. Enable at least one resource with
+  # `expose: [a2a]`. Clients send `A2A-Version: 1.0`.
+  # See docs/protocols.md#a2a for supported features.
   a2a:
     enabled: false
     mountPath: /a2a

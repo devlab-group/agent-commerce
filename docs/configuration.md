@@ -453,7 +453,8 @@ unsupported `version` · unresolved `${VAR}` · duplicate resource ids ·
 `pricing.type: dynamic` · a paid resource with no `payments` · a paid resource
 none of whose listed rails is enabled · `expose` values outside
 `[http, mcp, a2a, acp]` (UCP is planned, not supported) · `expose: [mcp]` while
-`protocols.mcp.enabled` is false (likewise `a2a` and `acp`) · two enabled
+`protocols.mcp.enabled` is false (likewise `a2a` and `acp`) ·
+enabled A2A with no resource exposed through `a2a` · two enabled
 protocol mounts that overlap · a mount that claims a route the gateway already
 serves, including the A2A Agent Card and ACP discovery paths · an ACP checkout
 mapping that is incomplete, names a missing or non-`acp` resource, reuses one

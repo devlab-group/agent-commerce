@@ -743,6 +743,14 @@ function normalize(raw: RawConfig): GatewayConfig {
     normalizeResource(id, entry, protocols, x402, mpp, ap2),
   );
   if (protocols.acp.enabled) validateAcpCheckoutMapping(protocols.acp, resources);
+  // Require an exposed resource so the enabled adapter publishes a skill
+  if (protocols.a2a.enabled && !resources.some((r) => r.exposedVia.includes('a2a'))) {
+    throw new CommerceError(
+      'CONFIG_INVALID',
+      'protocols.a2a.enabled is true but no resource lists "a2a" in its expose',
+      { details: { path: 'protocols.a2a.enabled' } },
+    );
+  }
 
   return {
     version: SUPPORTED_CONFIG_VERSION,
