@@ -24,6 +24,8 @@ export const MPP_DESCRIPTOR: AdapterDescriptor = {
     `asset=${MPP_PROFILE.assetSymbol}`,
     'verify-before-settle',
     'payment-receipt',
+    // HTTP request bodies only; MCP and A2A carry the proof in the body
+    'challenge-digest-binding',
   ],
   // The pinned specs are drafts and mppx is pre-1.0; the wire format may change
   status: 'experimental',
@@ -40,7 +42,5 @@ export const MPP_DESCRIPTOR: AdapterDescriptor = {
     // A separate EVM draft, not an option of charge
     'evm sessions',
     'discovery extension',
-    // The core draft says body-bearing requests SHOULD use digest binding
-    'challenge digest binding',
   ],
 };

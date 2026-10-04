@@ -3,8 +3,21 @@
  * optional peer imports, so the `./mcp` subpath can use it.
  */
 
+import { createHash } from 'node:crypto';
 import { isRecord } from '../../core/is-record';
 import { mppProblem } from './problems';
+
+/**
+ * `CanonicalRequest.metadata` key for the digest of an HTTP request body. The
+ * MPP provider binds it into the challenge when present, so a credential
+ * cannot pay for a different body.
+ */
+export const CONTENT_DIGEST_METADATA_KEY = 'contentDigest';
+
+/** RFC 9530 `sha-256` digest of a request body, the form of the MPP `digest` parameter */
+export function contentDigest(body: Uint8Array): string {
+  return `sha-256=:${createHash('sha256').update(body).digest('base64')}:`;
+}
 
 /** MCP `_meta` key of a tool call's credential object */
 export const MPP_MCP_CREDENTIAL_META_KEY = 'org.paymentauth/credential';

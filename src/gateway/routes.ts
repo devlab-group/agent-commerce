@@ -3,6 +3,7 @@
  * Adapter mounting (e.g. `/mcp`) is handled separately in adapters.ts.
  */
 
+import { Transform } from 'node:stream';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { GatewayConfig } from '../config';
 import {
@@ -27,6 +28,7 @@ import {
 } from '../core';
 import { isRecord } from '../core/is-record';
 import { mppProblem } from '../payments/mpp/problems';
+import { CONTENT_DIGEST_METADATA_KEY, contentDigest } from '../payments/mpp/transport';
 import {
   settlementFailure,
   settlementResponse,
@@ -88,9 +90,13 @@ export function registerRoutes(options: RegisterRoutesOptions): void {
     resources: options.resources.list().map(toPublicResource),
   }));
 
-  server.post('/api/resources/:id/invoke', async (request, reply) => {
-    await handleInvoke(request, reply, options);
-  });
+  server.post(
+    '/api/resources/:id/invoke',
+    { preParsing: async (request, _reply, payload) => payload.pipe(digestingStream(request)) },
+    async (request, reply) => {
+      await handleInvoke(request, reply, options);
+    },
+  );
 
   // The admin token gate is per route, not global; access-control.ts says why
   const tokenHook = buildOperatorTokenHook(options.config.server.adminToken);
@@ -105,6 +111,24 @@ export function registerRoutes(options: RegisterRoutesOptions): void {
     { onRequest: tokenHook },
     ledgerHandler('events', (list) => options.store.listEvents(list)),
   );
+}
+
+// Keep a digest of each invoke body's original bytes through parsing.
+const bodyDigests = new WeakMap<FastifyRequest, string>();
+
+// Forward each body chunk unchanged and record the digest at the end.
+function digestingStream(request: FastifyRequest): Transform {
+  const chunks: Buffer[] = [];
+  return new Transform({
+    transform(chunk: Buffer, _encoding, callback) {
+      chunks.push(chunk);
+      callback(null, chunk);
+    },
+    flush(callback) {
+      if (chunks.length > 0) bodyDigests.set(request, contentDigest(Buffer.concat(chunks)));
+      callback();
+    },
+  });
 }
 
 // `GET /api/receipts` and `GET /api/events`: one page of a ledger
@@ -160,6 +184,7 @@ async function handleInvoke(
       request.id,
     );
 
+    const digest = bodyDigests.get(request);
     const canonicalRequest: CanonicalRequest = {
       requestId: request.id,
       resourceId,
@@ -168,6 +193,7 @@ async function handleInvoke(
       receivedAt: options.clock.nowIso(),
       ...(payment !== undefined ? { payment } : {}),
       ...(authorization !== undefined ? { authorization } : {}),
+      ...(digest !== undefined ? { metadata: { [CONTENT_DIGEST_METADATA_KEY]: digest } } : {}),
     };
 
     const outcome = await options.pipeline.execute(canonicalRequest);

@@ -39,6 +39,7 @@ import {
   MPP_SPEC_DRAFTS,
 } from './constants';
 import { MPP_DESCRIPTOR } from './descriptor';
+import { CONTENT_DIGEST_METADATA_KEY } from './transport';
 
 const DEFAULT_CHALLENGE_TTL_SECONDS = 300;
 
@@ -221,10 +222,14 @@ export function createMppProviderWithSettlement(
       settlementTermsChecked = true;
     }
     const expires = new Date(clock.now().getTime() + ttlSeconds * 1000);
+    const digest = context.metadata?.[CONTENT_DIGEST_METADATA_KEY];
     const challenge = Challenge.fromMethod(Methods.charge, {
       secretKey: options.challengeSecret,
       realm: options.realm,
       expires,
+      // Present for an HTTP request with a body. MCP and A2A carry the proof
+      // in the body itself, so their challenges bind none.
+      ...(typeof digest === 'string' ? { digest } : {}),
       // Bound by the challenge HMAC, so a challenge for one resource cannot pay
       // for another at the same price
       meta: { resource: context.resource.id },
@@ -448,6 +453,12 @@ function bindingMismatch(
   // so compare it with the encoding of this resource's binding
   if (echoed.opaque !== PaymentRequest.serialize({ resource: resourceId })) {
     return 'wrong_resource';
+  }
+  // `issued` was built for the request carrying this credential, so a
+  // different body, or none, fails here. A challenge without a digest binds
+  // no body, as the core draft reads it.
+  if (echoed.digest !== undefined && echoed.digest !== issued.digest) {
+    return 'body_digest_mismatch';
   }
   const got = echoed.request as ChargeRequest;
   const want = issued.request as ChargeRequest;

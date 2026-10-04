@@ -474,6 +474,12 @@ is HMAC-bound to the resource and terms. The credential is verified locally,
 then checked by the x402 settlement provider. Both checks run in `verify`,
 before replay reservation; settlement broadcasts later.
 
+For an HTTP request with a body, the challenge includes an RFC 9530
+`sha-256` digest of the original body bytes. The paid retry must send the same
+bytes: even equivalent JSON with different spacing returns
+`body_digest_mismatch`. MCP and A2A challenges omit the digest because their
+payment proof travels in the request body.
+
 MPP and x402 derive the same replay identity for the same EIP-3009
 authorization, so reuse across rails collides in one receipt store.
 
@@ -490,7 +496,7 @@ Base mainnet deployments must satisfy the
 
 Unsupported variants are listed in `src/payments/mpp/descriptor.ts`: non-EVM
 methods, Permit2/transaction/hash credentials, splits, subscriptions, EVM
-sessions, the discovery extension and challenge `digest` binding.
+sessions and the discovery extension.
 
 ## HTTP surface
 

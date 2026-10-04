@@ -318,6 +318,8 @@ export function createExecutionPipeline(
           amount: pricing.amount,
           currency: pricing.currency,
           requestedAt: options.clock.nowIso(),
+          // Transport facts a rail may bind into its challenge, such as a body digest
+          ...(request.metadata !== undefined ? { metadata: request.metadata } : {}),
         });
       } catch (error) {
         throw isCommerceError(error)

@@ -132,6 +132,7 @@ function requirementFor(
   resource = paidResource(),
   amount = '0.01',
   currency = 'USDC',
+  contentDigest?: string,
 ): Promise<PaymentRequirement> {
   return provider.createRequirement({
     requestId: 'req-1',
@@ -139,6 +140,7 @@ function requirementFor(
     amount,
     currency,
     requestedAt: new Date().toISOString(),
+    ...(contentDigest !== undefined ? { metadata: { contentDigest } } : {}),
   });
 }
 
@@ -367,6 +369,54 @@ describe('MPP createRequirement', () => {
     await expect(requirementFor(makeProvider(), paidResource(), '0.01', 'EUR')).rejects.toSatisfy(
       (error: unknown) => isCommerceError(error) && error.code === 'CONFIG_INVALID',
     );
+  });
+});
+
+describe('MPP challenge body binding', () => {
+  const BODY_A = 'sha-256=:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=:';
+  const BODY_B = 'sha-256=:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=:';
+
+  it('binds a request body digest into the challenge, and none without one', async () => {
+    const provider = makeProvider();
+    const bound = await requirementFor(provider, paidResource(), '0.01', 'USDC', BODY_A);
+    expect(issuedChallenge(bound).digest).toBe(BODY_A);
+    expect(issuedChallenge(await requirementFor(provider)).digest).toBeUndefined();
+  });
+
+  it('refuses a credential whose challenge bound another body, or one now absent', async () => {
+    const provider = makeProvider();
+    const resource = paidResource();
+    const credential = await clientCredential(
+      await requirementFor(provider, resource, '0.01', 'USDC', BODY_A),
+    );
+
+    for (const retry of [BODY_B, undefined]) {
+      const result = await verifyWith(
+        provider,
+        await requirementFor(provider, resource, '0.01', 'USDC', retry),
+        credential,
+      );
+      expect(result).toMatchObject({ status: 'rejected', rejectionReason: 'body_digest_mismatch' });
+    }
+    expect(facilitator.verify).not.toHaveBeenCalled();
+  });
+
+  it('accepts a matching body and an unbound credential', async () => {
+    const provider = makeProvider();
+    const resource = paidResource();
+    const bound = await clientCredential(
+      await requirementFor(provider, resource, '0.01', 'USDC', BODY_A),
+    );
+    const unbound = await clientCredential(await requirementFor(provider, resource));
+
+    for (const credential of [bound, unbound]) {
+      const result = await verifyWith(
+        provider,
+        await requirementFor(provider, resource, '0.01', 'USDC', BODY_A),
+        credential,
+      );
+      expect(result.status).toBe('verified');
+    }
   });
 });
 

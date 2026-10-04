@@ -5,6 +5,7 @@
  * same credential string in `_payment`. The provider and the x402 settlement
  * provider are real; only the x402 HTTP facilitator client is mocked.
  */
+import { createHash } from 'node:crypto';
 import { Challenge, Receipt } from 'mppx';
 import { charge as clientCharge } from 'mppx/evm/client';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
@@ -130,12 +131,12 @@ async function credentialFor(wwwAuthenticate: unknown): Promise<string> {
   return String(await client.createCredential({ challenge, context: {} }));
 }
 
-function invokeHttp(gw: GatewayInstance, headers: Record<string, string> = {}) {
+function invokeHttp(gw: GatewayInstance, headers: Record<string, string> = {}, body = '{}') {
   return gw.server.inject({
     method: 'POST',
     url: '/api/resources/market_report/invoke',
     headers: { 'content-type': 'application/json', ...headers },
-    payload: {},
+    payload: body,
   });
 }
 
@@ -320,6 +321,37 @@ describe('MPP over HTTP', () => {
     expect(res.headers['payment-response']).toBeDefined();
     const receipt = Receipt.deserialize(String(res.json().details.payment.receipt));
     expect(receipt).toMatchObject({ method: 'evm', reference: '0xabc', status: 'success' });
+  });
+
+  it('binds the digest of the request body bytes into the challenge', async () => {
+    const gw = await startGateway();
+
+    const challenged = await invokeHttp(gw, {}, '{ }');
+
+    const digest = createHash('sha256').update('{ }').digest('base64');
+    expect(Challenge.deserialize(String(challenged.headers['www-authenticate'])).digest).toBe(
+      `sha-256=:${digest}:`,
+    );
+  });
+
+  it('refuses a credential sent with a different body, then settles it with the original', async () => {
+    const gw = await startGateway();
+    const credential = await credentialFor(
+      (await invokeHttp(gw, {}, '{ }')).headers['www-authenticate'],
+    );
+
+    // The same JSON in different bytes is a different body
+    const swapped = await invokeHttp(gw, { authorization: credential }, '{}');
+
+    expect(swapped.statusCode).toBe(402);
+    expect(swapped.json()).toMatchObject({
+      type: 'https://paymentauth.org/problems/verification-failed',
+      detail: 'body_digest_mismatch',
+      code: 'PAYMENT_INVALID',
+    });
+    expect(facilitator.settle).not.toHaveBeenCalled();
+    const paid = await invokeHttp(gw, { authorization: credential }, '{ }');
+    expect(paid.statusCode).toBe(200);
   });
 
   it('treats an Authorization header in another scheme as no payment', async () => {
