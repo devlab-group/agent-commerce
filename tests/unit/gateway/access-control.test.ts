@@ -148,10 +148,13 @@ describe('buildAccessControlHook (Host and CORS only)', () => {
         'mcp-name',
         'a2a-version',
         'a2a-extensions',
+        'api-version',
+        'idempotency-key',
+        'request-id',
       ]),
     );
     // Browser code can read only the response headers named here: the
-    // challenge and the settlement result
+    // challenge, the settlement result and ACP's echoed headers
     const exposed = String(reply.headers['access-control-expose-headers']).split(',');
     expect(exposed).toEqual(
       expect.arrayContaining([
@@ -159,6 +162,10 @@ describe('buildAccessControlHook (Host and CORS only)', () => {
         'payment-response',
         'www-authenticate',
         'payment-receipt',
+        'idempotency-key',
+        'request-id',
+        'idempotent-replayed',
+        'retry-after',
       ]),
     );
   });

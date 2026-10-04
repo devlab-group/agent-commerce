@@ -17,8 +17,10 @@ import { createBearerCheck } from '../protocols/http';
 
 const CORS_METHODS = 'GET,POST,OPTIONS';
 // `authorization` carries bearer tokens (admin, ACP) and MPP credentials; the
-// AP2 mandate travels in its own header. Browser clients also need the MCP
-// and A2A protocol headers on the CORS preflight allowlist.
+// AP2 mandate travels in its own header. Browser clients also need the MCP,
+// A2A and ACP protocol headers on the CORS preflight allowlist. ACP's
+// `signature` and `timestamp` are allowed so a signing client is not refused
+// at preflight, not because the gateway verifies them.
 const CORS_HEADERS = [
   'content-type',
   PAYMENT_HEADER,
@@ -30,11 +32,25 @@ const CORS_HEADERS = [
   'mcp-name',
   'a2a-version',
   'a2a-extensions',
+  'api-version',
+  'idempotency-key',
+  'request-id',
+  'signature',
+  'timestamp',
 ].join(',');
 // Cross-origin JS sees only CORS-safelisted response headers unless they are
-// named here, so a browser client could read neither the challenge nor the
-// settlement result
-const CORS_EXPOSED_HEADERS = 'payment-required,payment-response,www-authenticate,payment-receipt';
+// named here, so a browser client could read neither the challenge, the
+// settlement result, nor ACP's echoed correlation and replay headers
+const CORS_EXPOSED_HEADERS = [
+  'payment-required',
+  'payment-response',
+  'www-authenticate',
+  'payment-receipt',
+  'idempotency-key',
+  'request-id',
+  'idempotent-replayed',
+  'retry-after',
+].join(',');
 
 export interface AccessControlOptions {
   readonly publicBaseUrl: string;
