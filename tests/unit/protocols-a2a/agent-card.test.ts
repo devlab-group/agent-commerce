@@ -88,15 +88,18 @@ async function cardFrom(
 async function callCardRoute(
   adapter: ReturnType<typeof createA2aAdapter>,
   method = 'GET',
-): Promise<{ status: number; body: string }> {
+  requestHeaders: Record<string, string> = {},
+): Promise<{ status: number; body: string; headers: Record<string, string> }> {
   const route = adapter.additionalHttpRoutes[0];
   if (route === undefined) throw new Error('no agent card route declared');
   let body = '';
   let status = 0;
+  let headers: Record<string, string> = {};
   const res = {
     headersSent: false,
-    writeHead(code: number) {
+    writeHead(code: number, written: Record<string, string> = {}) {
       status = code;
+      headers = written;
       return res;
     },
     end(chunk?: string) {
@@ -105,10 +108,10 @@ async function callCardRoute(
     },
   };
   await route.handleHttp(
-    { method } as never,
+    { method, headers: requestHeaders } as never,
     res as unknown as Parameters<typeof route.handleHttp>[1],
   );
-  return { status, body };
+  return { status, body, headers };
 }
 
 describe('A2A agent card', () => {
@@ -246,6 +249,33 @@ describe('A2A adapter lifecycle', () => {
     const res = await callCardRoute(adapter);
     expect(res.status).toBe(503);
     expect(res.body).not.toContain('weather_basic');
+  });
+
+  it('sends cache headers and returns 304 for a matching If-None-Match', async () => {
+    const adapter = createA2aAdapter();
+    await adapter.start(context([resource()]));
+    const first = await callCardRoute(adapter);
+    const etag = first.headers['etag'] ?? '';
+
+    expect(first.headers['cache-control']).toMatch(/max-age=\d+/);
+    expect(etag).toMatch(/^"[^"]+"$/);
+
+    for (const ifNoneMatch of [etag, `W/${etag}`, `"other", ${etag}`, '*']) {
+      const revalidated = await callCardRoute(adapter, 'GET', { 'if-none-match': ifNoneMatch });
+      expect(revalidated.status).toBe(304);
+      expect(revalidated.body).toBe('');
+      expect(revalidated.headers['etag']).toBe(etag);
+    }
+    expect((await callCardRoute(adapter, 'GET', { 'if-none-match': '"stale"' })).status).toBe(200);
+  });
+
+  it('updates the ETag when the adapter starts with a different card', async () => {
+    const adapter = createA2aAdapter();
+    await adapter.start(context([resource()]));
+    const before = (await callCardRoute(adapter)).headers['etag'];
+    await adapter.start(context([resource(), paid]));
+
+    expect((await callCardRoute(adapter)).headers['etag']).not.toBe(before);
   });
 
   it('refuses a non-GET on the card route', async () => {

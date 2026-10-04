@@ -10,6 +10,7 @@
  * fields but leaves verification, settlement and merchant calls to the
  * pipeline.
  */
+import { createHash } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import {
   type AdapterDescriptor,
@@ -65,6 +66,9 @@ const MAX_REQUEST_BODY_BYTES = 256 * 1024;
 // Accept patch suffixes; only major.minor determines the protocol version
 const VERSION_PATTERN = /^(\d+\.\d+)(?:\.\d+)?$/;
 
+// Cache the card until the adapter starts again with new configuration
+const AGENT_CARD_CACHE_CONTROL = 'public, max-age=300';
+
 export interface A2aAdapterOptions {
   readonly mountPath?: string;
   /** Agent name published on the card */
@@ -95,6 +99,8 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
   // Built once at start: resources are fixed at config load, and a per-request
   // build would be work an unauthenticated GET could trigger at will
   private card: A2aAgentCard | undefined;
+  private cardBody = '';
+  private cardEtag = '';
 
   constructor(options: A2aAdapterOptions = {}) {
     this.mountPath = options.mountPath ?? A2A_DEFAULT_MOUNT_PATH;
@@ -135,6 +141,8 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
       mountPath: this.mountPath,
       resources,
     });
+    this.cardBody = JSON.stringify(this.card);
+    this.cardEtag = `"${createHash('sha256').update(this.cardBody).digest('base64url')}"`;
     this.started = true;
 
     context.logger.info(
@@ -154,7 +162,14 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
         this.writeJson(res, 405, { error: 'Method not allowed. The Agent Card is read-only.' });
         return;
       }
-      this.writeJson(res, 200, this.card);
+      const cacheHeaders = { 'cache-control': AGENT_CARD_CACHE_CONTROL, etag: this.cardEtag };
+      if (matchesEtag(req.headers['if-none-match'], this.cardEtag)) {
+        res.writeHead(304, cacheHeaders);
+        res.end();
+        return;
+      }
+      res.writeHead(200, { 'content-type': A2A_JSON_MEDIA_TYPE, ...cacheHeaders });
+      res.end(this.cardBody);
     } catch (err) {
       this.context?.logger.error({ err: toLogInfo(err) }, 'a2a adapter: agent card request failed');
       this.writeJson(res, 500, { error: 'Internal server error.' });
@@ -369,6 +384,8 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
   async stop(): Promise<void> {
     this.started = false;
     this.card = undefined;
+    this.cardBody = '';
+    this.cardEtag = '';
     this.skillsById = new Map();
     this.context = undefined;
   }
@@ -378,6 +395,15 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
     res.writeHead(status, { 'content-type': A2A_JSON_MEDIA_TYPE });
     res.end(JSON.stringify(body));
   }
+}
+
+// Compare entity tags weakly; `*` matches any current card
+function matchesEtag(header: string | undefined, etag: string): boolean {
+  if (header === undefined) return false;
+  return header
+    .split(',')
+    .map((tag) => tag.trim().replace(/^W\//, ''))
+    .some((tag) => tag === '*' || tag === etag);
 }
 
 export function createA2aAdapter(options: A2aAdapterOptions = {}): A2aProtocolAdapter {

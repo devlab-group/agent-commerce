@@ -138,6 +138,23 @@ describe('A2A agent card over the real gateway', () => {
     expect(card).not.toHaveProperty('url');
   });
 
+  it('revalidates the card through the gateway with its ETag', async () => {
+    const gw = await startGateway();
+    const url = '/.well-known/agent-card.json';
+
+    const first = await gw.server.inject({ method: 'GET', url });
+    const etag = String(first.headers['etag']);
+    expect(first.headers['cache-control']).toMatch(/max-age=\d+/);
+
+    const revalidated = await gw.server.inject({
+      method: 'GET',
+      url,
+      headers: { 'if-none-match': etag },
+    });
+    expect(revalidated.statusCode).toBe(304);
+    expect(revalidated.body).toBe('');
+  });
+
   it('leaves the gateway own well-known document and the MCP mount untouched', async () => {
     const gw = await startGateway();
 

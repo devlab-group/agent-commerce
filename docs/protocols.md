@@ -138,6 +138,9 @@ resource id; paid skills are tagged `paid` and include their price in the
 description. A2A v1.0 `AgentSkill` has no input-schema field, so the canonical
 schema is not embedded in the card.
 
+The card has a content-based `ETag` and `Cache-Control: public, max-age=300`.
+A matching `If-None-Match` request receives `304` without a body.
+
 ### Invocation and payment
 
 The adapter requires a non-empty `messageId` and exactly one structured data
