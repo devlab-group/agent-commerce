@@ -243,7 +243,11 @@ describe('A2A JSON-RPC transport over the real gateway', () => {
       id: 'req-1',
       method: 'SendMessage',
       params: {
-        message: { role: 'ROLE_USER', parts: [{ text: 'give me the weather' }] },
+        message: {
+          role: 'ROLE_USER',
+          messageId: 'msg-1',
+          parts: [{ text: 'give me the weather' }],
+        },
       },
     });
     expect(body.error?.code).toBe(-32004);

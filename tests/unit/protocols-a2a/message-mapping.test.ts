@@ -67,13 +67,10 @@ describe('parseInvocation: accepted envelope', () => {
   });
 
   it('accepts a part with no declared media type', () => {
-    const params = { message: { role: 'ROLE_USER', parts: [{ data: { resource: 'ping' } }] } };
+    const params = {
+      message: { role: 'ROLE_USER', messageId: 'msg-1', parts: [{ data: { resource: 'ping' } }] },
+    };
     expect(parseInvocation(params).resourceId).toBe('ping');
-  });
-
-  it('omits messageId when the client sent none', () => {
-    const params = { message: { role: 'ROLE_USER', parts: [{ data: { resource: 'ping' } }] } };
-    expect(parseInvocation(params)).not.toHaveProperty('messageId');
   });
 });
 
@@ -87,8 +84,18 @@ describe('parseInvocation: malformed envelopes', () => {
     expectRejected(params, 'INPUT_INVALID');
   });
 
+  it.each([
+    ['no messageId', undefined],
+    ['an empty messageId', ''],
+  ])('rejects a message with %s', (_label, messageId) => {
+    expectRejected(envelope({ resource: 'ping' }, { messageId }), 'INPUT_INVALID');
+  });
+
   it('rejects an empty parts array', () => {
-    expectRejected({ message: { role: 'ROLE_USER', parts: [] } }, 'INPUT_INVALID');
+    expectRejected(
+      { message: { role: 'ROLE_USER', messageId: 'msg-1', parts: [] } },
+      'INPUT_INVALID',
+    );
   });
 
   it('rejects a part whose data is not an object', () => {
@@ -126,18 +133,26 @@ describe('parseInvocation: malformed envelopes', () => {
 describe('parseInvocation: legal A2A this adapter does not serve', () => {
   it('rejects a file part', () => {
     const params = {
-      message: { role: 'ROLE_USER', parts: [{ file: { uri: 'https://example.com/a.pdf' } }] },
+      message: {
+        role: 'ROLE_USER',
+        messageId: 'msg-1',
+        parts: [{ file: { uri: 'https://example.com/a.pdf' } }],
+      },
     };
     expectRejected(params, 'PROTOCOL_UNSUPPORTED');
   });
 
   it('rejects a raw binary file part', () => {
-    const params = { message: { role: 'ROLE_USER', parts: [{ file: { bytes: 'AAAA' } }] } };
+    const params = {
+      message: { role: 'ROLE_USER', messageId: 'msg-1', parts: [{ file: { bytes: 'AAAA' } }] },
+    };
     expectRejected(params, 'PROTOCOL_UNSUPPORTED');
   });
 
   it('rejects a text part', () => {
-    const params = { message: { role: 'ROLE_USER', parts: [{ text: 'get me the report' }] } };
+    const params = {
+      message: { role: 'ROLE_USER', messageId: 'msg-1', parts: [{ text: 'get me the report' }] },
+    };
     expectRejected(params, 'PROTOCOL_UNSUPPORTED');
   });
 
@@ -145,6 +160,7 @@ describe('parseInvocation: legal A2A this adapter does not serve', () => {
     const params = {
       message: {
         role: 'ROLE_USER',
+        messageId: 'msg-1',
         parts: [
           { data: { resource: 'weather_basic', input: {} } },
           { data: { resource: 'market_report', input: {} } },
@@ -158,6 +174,7 @@ describe('parseInvocation: legal A2A this adapter does not serve', () => {
     const params = {
       message: {
         role: 'ROLE_USER',
+        messageId: 'msg-1',
         parts: [{ text: 'please' }, { data: { resource: 'market_report' } }],
       },
     };
@@ -168,6 +185,7 @@ describe('parseInvocation: legal A2A this adapter does not serve', () => {
     const params = {
       message: {
         role: 'ROLE_USER',
+        messageId: 'msg-1',
         parts: [{ data: { resource: 'ping' }, mediaType: 'application/xml' }],
       },
     };
@@ -211,6 +229,9 @@ describe('parseInvocation: A2A v1 part spellings', () => {
     ['inline bytes', { raw: 'QUFBQQ==', filename: 'a.bin', mediaType: 'application/octet-stream' }],
     ['a url part', { url: 'https://example.com/a.pdf', mediaType: 'application/pdf' }],
   ])('rejects %s', (_label, part) => {
-    expectRejected({ message: { role: 'ROLE_USER', parts: [part] } }, 'PROTOCOL_UNSUPPORTED');
+    expectRejected(
+      { message: { role: 'ROLE_USER', messageId: 'msg-1', parts: [part] } },
+      'PROTOCOL_UNSUPPORTED',
+    );
   });
 });

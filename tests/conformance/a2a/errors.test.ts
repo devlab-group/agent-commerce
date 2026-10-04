@@ -166,6 +166,13 @@ describe('invocation envelope refusals', () => {
     expect(body.error?.code).toBe(-32005);
     expect(body.error?.data).toEqual(errorInfo('CONTENT_TYPE_NOT_SUPPORTED'));
   });
+
+  it('returns invalid params when messageId is missing', async () => {
+    const { body } = await post(
+      sendMessage(message([{ data: { resource: 'weather_basic' } }], { messageId: undefined })),
+    );
+    expect(body.error?.code).toBe(-32602);
+  });
 });
 
 describe('commerce outcomes are never JSON-RPC errors', () => {

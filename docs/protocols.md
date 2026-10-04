@@ -140,7 +140,8 @@ schema is not embedded in the card.
 
 ### Invocation and payment
 
-`SendMessage` must contain one structured-data part:
+The adapter requires a non-empty `messageId` and exactly one structured data
+part in `SendMessage`. The part has this shape:
 
 ```json
 {
@@ -200,10 +201,10 @@ uses these A2A codes:
 | `-32009` | `VersionNotSupportedError`          | an unsupported version; a missing or empty header is treated as `0.3` |
 
 The `-32004` message features are text, file, inline-byte and URL parts,
-multipart messages, a `contextId` and non-empty `referenceTaskIds`. A non-user
-role is `-32602`. Each A2A error carries a `google.rpc.ErrorInfo` in
-`error.data`, with a reason such as `VERSION_NOT_SUPPORTED` and the domain
-`a2a-protocol.org`.
+multipart messages, a `contextId` and non-empty `referenceTaskIds`. A missing
+`messageId` and a non-user role are `-32602`. Each A2A error carries a
+`google.rpc.ErrorInfo` in `error.data`, with a reason such as
+`VERSION_NOT_SUPPORTED` and the domain `a2a-protocol.org`.
 
 ### A2A exclusions
 

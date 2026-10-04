@@ -37,8 +37,8 @@ const A2A_USER_ROLE = 'ROLE_USER';
 export interface A2aInvocation {
   readonly resourceId: string;
   readonly input: Record<string, unknown>;
-  /** Client-assigned message id, when the request carried one */
-  readonly messageId?: string;
+  /** Client-assigned message id */
+  readonly messageId: string;
 }
 
 /**
@@ -139,6 +139,11 @@ export function parseInvocation(rawParams: unknown): A2aInvocation {
   }
   const params = parsed.data;
   const message = params.message;
+  // A2A requires a message id. This adapter also rejects an empty one.
+  if (message.messageId === undefined || message.messageId.length === 0) {
+    throw invalid('Message must carry a non-empty "messageId".');
+  }
+  const messageId = message.messageId;
 
   assertNoContinuation(params);
 
@@ -178,9 +183,5 @@ export function parseInvocation(rawParams: unknown): A2aInvocation {
     throw invalid('Message part data "input" must be a JSON object.');
   }
 
-  return {
-    resourceId,
-    input: rawInput ?? {},
-    ...(message.messageId !== undefined ? { messageId: message.messageId } : {}),
-  };
+  return { resourceId, input: rawInput ?? {}, messageId };
 }
