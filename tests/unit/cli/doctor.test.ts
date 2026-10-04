@@ -1153,7 +1153,7 @@ describe('runDoctor: A2A', () => {
     expect(a2a?.status).toBe('PASS');
     // Spec revision and negotiation version are different values that look
     // alike; both must appear, named
-    expect(a2a?.detail).toContain('spec 1.0.0');
+    expect(a2a?.detail).toContain('spec 1.0.1');
     expect(a2a?.detail).toContain('protocol 1.0');
     expect(a2a?.detail).toContain('binding JSONRPC');
     expect(a2a?.detail).toContain('mount /agents/a2a');

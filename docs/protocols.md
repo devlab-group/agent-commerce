@@ -9,7 +9,7 @@ This page records the implemented subset and pinned revision for each protocol.
 | **HTTP** | Supported    | native                                                                         | resource routes and rail-specific payment headers                           |
 | **MCP**  | Supported    | MCP `2026-07-28` and `2025-11-25` through `@modelcontextprotocol/server@2.3.0` | tool discovery, invocation, payment-required and error mapping              |
 | **x402** | Supported    | x402 v2, `@x402/core@2.25.0`, `@x402/evm@2.25.0`                               | `exact` EVM/EIP-3009 challenge, verification, settlement and replay binding |
-| **A2A**  | Experimental | v1.0.0; negotiation `1.0`; `JSONRPC` binding                                   | Agent Card, `SendMessage`, terminal tasks and paid flow                     |
+| **A2A**  | Experimental | v1.0.1; negotiation `1.0`; `JSONRPC` binding                                   | Agent Card, `SendMessage`, terminal tasks and paid flow                     |
 | **ACP**  | Experimental | stable snapshot `2026-04-17`; REST binding                                     | discovery and the five checkout operations                                  |
 | **AP2**  | Experimental | v0.2.0, tag 2026-04-28, commit `b4587ac`; Direct mode                          | closed Checkout Mandate verification before settlement                      |
 | **MPP**  | Experimental | drafts at `tempoxyz/mpp-specs@806fdb8`; `mppx@0.13.1`                          | `charge`/`evm`/EIP-3009 over HTTP, MCP and A2A                              |

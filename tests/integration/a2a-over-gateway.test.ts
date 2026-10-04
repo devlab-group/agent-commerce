@@ -329,7 +329,7 @@ describe('A2A in gateway discovery', () => {
 
     const a2a = doc.adapters.find((adapter) => adapter.name === 'a2a');
     expect(a2a?.status).toBe('experimental');
-    expect(a2a?.supportedSpec).toBe('1.0.0');
+    expect(a2a?.supportedSpec).toBe('1.0.1');
     expect(a2a?.unsupported).toContain('SendStreamingMessage');
     expect(a2a?.health.status).toBe('pass');
     expect(doc.protocols['a2a']).toEqual({ enabled: true, mountPath: '/a2a' });

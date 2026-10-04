@@ -1,7 +1,7 @@
 /**
  * Adapter self-description.
  *
- * `supportedSpec` is the A2A specification revision (`1.0.0`), never the
+ * `supportedSpec` is the A2A specification revision (`1.0.1`), never the
  * negotiation version (`1.0`) and never this package's version. Status is
  * `experimental` while the adapter lacks the features in the unsupported list
  * below; an entry leaves that list only when its feature is implemented.

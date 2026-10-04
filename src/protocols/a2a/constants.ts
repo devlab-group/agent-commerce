@@ -2,13 +2,13 @@
  * A2A pins, kept in one place so nothing infers one version from another.
  *
  * The specification revision and the negotiation version look alike but
- * differ: `1.0.0` names the document this adapter was written against, `1.0`
+ * differ: `1.0.1` names the document this adapter was written against, `1.0`
  * is what a client negotiates on the wire. Neither is this package's version
  * (`PACKAGE_VERSION`).
  */
 
 /** A2A specification revision this adapter targets */
-export const A2A_SPEC_VERSION = '1.0.0';
+export const A2A_SPEC_VERSION = '1.0.1';
 
 /** Protocol negotiation version carried on the wire */
 export const A2A_PROTOCOL_VERSION = '1.0';

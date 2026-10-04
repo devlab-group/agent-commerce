@@ -210,7 +210,7 @@ describe('A2A adapter lifecycle', () => {
   it('reports the pinned spec revision, experimental status and a complete unsupported list', () => {
     const { descriptor } = createA2aAdapter();
     expect(descriptor.name).toBe('a2a');
-    expect(descriptor.supportedSpec).toBe('1.0.0');
+    expect(descriptor.supportedSpec).toBe('1.0.1');
     expect(descriptor.status).toBe('experimental');
     expect(descriptor.capabilities).toEqual(['agent-card', 'jsonrpc', 'SendMessage']);
     // Every A2A feature the project scope leaves out is named, so no client
