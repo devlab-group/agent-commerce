@@ -101,11 +101,14 @@ mandate claims without `delegate_payload`, presentations with a KB-JWT, and
 `~~`-joined delegation chains as `unsupported_mandate_type`. It does not
 inspect `cnf`.
 
-AP2 makes the token's `aud`, `iat` and `exp` optional. The verifier checks
-these claims when present. Operators can require `aud`, or require `exp` on
-either the token or the mandate content. The checkout JWT independently
-requires an audience and expiry, and replay protection checks reuse of the
-signed mandate.
+AP2 makes the token's `aud`, `iat` and `exp` optional. One reference SDK vector
+omits all three. The verifier checks these claims when present. Operators can
+require `aud`, or require `exp` on either the token or the mandate content.
+The checkout JWT independently requires an audience and expiry, and replay
+protection checks reuse of the signed mandate.
+
+`tests/fixtures/ap2/v0.2.0` contains mandates minted with the AP2 reference
+SDK. The verifier tests use them.
 
 ### Merchant checkout JWT
 

@@ -6,8 +6,9 @@
  * the signing are the shipped ones. Settlement behind a mandate is
  * `tests/e2e/authorization`.
  *
- * FIXTURE PROVENANCE: mandates are minted to the AP2 v0.2.0 shape (tagged
- * 2026-04-28, commit b4587ac), not upstream golden vectors. See fixtures.ts.
+ * These tests mint AP2 v0.2.0 Trusted Agent Provider mandates with local
+ * fixtures.ts helpers. sdk-vectors.test.ts also checks mandates minted with
+ * the reference SDK.
  */
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { createAp2AuthorizationProvider } from '../../src/authorization/ap2';

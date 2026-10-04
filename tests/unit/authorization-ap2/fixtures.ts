@@ -5,6 +5,8 @@
  * commit b4587ac): an issuer-signed SD-JWT whose one `delegate_payload`
  * element, disclosed, is the closed Checkout Mandate. They carry top-level
  * `iss`, `aud`, `iat` and `exp`, so each check can be varied on its own.
+ * Reference SDK vectors, including one without those top-level claims, are
+ * in tests/fixtures/ap2/v0.2.0.
  *
  * Keys are generated per run and never written down.
  */
