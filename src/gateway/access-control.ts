@@ -17,13 +17,19 @@ import { createBearerCheck } from '../protocols/http';
 
 const CORS_METHODS = 'GET,POST,OPTIONS';
 // `authorization` carries bearer tokens (admin, ACP) and MPP credentials; the
-// AP2 mandate travels in its own header
+// AP2 mandate travels in its own header. Browser clients also need the MCP
+// and A2A protocol headers on the CORS preflight allowlist.
 const CORS_HEADERS = [
   'content-type',
   PAYMENT_HEADER,
   AUTHORIZATION_HEADER,
   'x-request-id',
   'authorization',
+  'mcp-protocol-version',
+  'mcp-method',
+  'mcp-name',
+  'a2a-version',
+  'a2a-extensions',
 ].join(',');
 // Cross-origin JS sees only CORS-safelisted response headers unless they are
 // named here, so a browser client could read neither the challenge nor the
