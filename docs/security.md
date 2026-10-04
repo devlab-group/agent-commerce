@@ -54,8 +54,11 @@ revocation, `jku`, or `x5u` lookup. Removing a key from configuration and
 restarting the process revokes it. See [AP2 trust and rotation](ap2.md#trust).
 
 Local policy fixes verification to ES256 over P-256. The presented `iss` and
-`kid` select one configured key, with no fallback to other keys. Replay
-identity uses the issuer-signed token, while checkout binding hashes the
+`kid` select one configured key. If `iss` is absent, `kid` selects the issuer;
+a `kid` shared by two mandate issuers is refused. The verifier does not try
+other keys after selecting one.
+
+Replay identity uses the issuer-signed token. Checkout binding hashes the
 compact checkout JWT as presented. Neither value is reconstructed from parsed
 JSON before hashing.
 
@@ -320,6 +323,9 @@ real funds.
 | **a mandate from an issuer that is not configured**                                                                                     | refused at the trust allowlist, before any signature check                                                                                         | same, `tests/unit/authorization-ap2`                                                                            |
 | **a mandate claiming a trusted `kid` but signed with another key**                                                                      | refused at the signature; `kid` selects the key, never labels it                                                                                   | same                                                                                                            |
 | **a mandate naming a `kid` the issuer does not have**                                                                                   | refused; no "try every key" fallback                                                                                                               | same                                                                                                            |
+| **a mandate with no `iss` whose `kid` two trusted issuers share**                                                                       | `unknown_key`; neither key is tried                                                                                                                | `tests/unit/authorization-ap2`                                                                                  |
+| **a mandate token with no `aud` or `exp`**                                                                                              | absence alone is allowed by default; strict settings may refuse it, and the checkout JWT has its own required `aud` and `exp`                      | same                                                                                                            |
+| **a delegation chain or key-bound presentation** (autonomous mode)                                                                      | `unsupported_mandate_type`; nothing settles                                                                                                        | same                                                                                                            |
 | **a mandate whose `checkout_hash` does not match its checkout JWT**                                                                     | `checkout_binding_failed`; nothing settles                                                                                                         | same                                                                                                            |
 | **a mandate approved for another resource, input, amount, currency, payment method, network or asset**                                  | `purchase_mismatch`, one coarse reason; nothing settles                                                                                            | same                                                                                                            |
 | **a mandate silent about the chain the requirement names**                                                                              | refused - fail closed both ways                                                                                                                    | same                                                                                                            |

@@ -464,7 +464,7 @@ describe('AP2 over x402: mandates that must not settle', () => {
   it('refuses a mandate whose checkout_hash does not match the disclosed checkout', async () => {
     await refuse(
       await mandate({
-        mandate: { payloadOverrides: { checkout_hash: await sha256Base64url('another-document') } },
+        mandate: { mandateOverrides: { checkout_hash: await sha256Base64url('another-document') } },
       }),
       'checkout_binding_failed',
     );

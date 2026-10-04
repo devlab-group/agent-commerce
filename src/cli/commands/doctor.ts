@@ -516,7 +516,7 @@ export async function runDoctor(
     checks.push({
       name: 'AP2',
       status: 'PASS',
-      detail: `experimental · spec ${AP2_SPEC_VERSION} · mode ${ap2.mode} · ${AP2_CHECKOUT_MANDATE_VCT} · profile ${AP2_CHECKOUT_PROFILE} · clock skew ${ap2.clockSkewSeconds}s`,
+      detail: `experimental · spec ${AP2_SPEC_VERSION} · mode ${ap2.mode} · ${AP2_CHECKOUT_MANDATE_VCT} · profile ${AP2_CHECKOUT_PROFILE} · clock skew ${ap2.clockSkewSeconds}s · mandate aud ${ap2.requireMandateAudience === true ? 'required' : 'optional'} · mandate exp ${ap2.requireMandateExpiry === true ? 'required' : 'optional'}`,
     });
 
     // Two lists, reported separately: signing the merchant's checkout

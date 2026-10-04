@@ -1448,6 +1448,17 @@ describe('runDoctor: AP2', () => {
     expect(ap2?.detail).toContain('mandate.checkout.1');
     expect(ap2?.detail).toContain('agent-commerce/ap2/checkout/v1');
     expect(ap2?.detail).toContain('clock skew 60s');
+    expect(ap2?.detail).toContain('mandate aud optional · mandate exp optional');
+  });
+
+  it('reports a mandate audience and expiry the operator requires', async () => {
+    const report = await ap2Report(
+      enabledAp2({ requireMandateAudience: true, requireMandateExpiry: true }),
+    );
+
+    expect(report.checks.find((c) => c.name === 'AP2')?.detail).toContain(
+      'mandate aud required · mandate exp required',
+    );
   });
 
   it('names the trusted issuers and how many keys each has, never a key', async () => {

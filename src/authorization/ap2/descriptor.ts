@@ -16,6 +16,7 @@ import {
 /** What this provider actually verifies */
 export const AP2_CAPABILITIES: readonly string[] = [
   'direct-mode',
+  'trusted-agent-provider',
   AP2_CHECKOUT_MANDATE_VCT,
   'sd-jwt-presentation',
   AP2_SIGNING_ALGORITHM,

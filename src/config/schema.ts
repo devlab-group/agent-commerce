@@ -417,6 +417,8 @@ const Ap2Schema = z
       .strict()
       .optional(),
     clockSkewSeconds: NumberOrString.optional(),
+    requireMandateAudience: BooleanOrString.optional(),
+    requireMandateExpiry: BooleanOrString.optional(),
     replay: z
       .object({ path: z.string().min(1) })
       .strict()
@@ -870,6 +872,14 @@ function normalizeAp2(raw: RawAp2 | undefined): Ap2AuthorizationConfig | undefin
       raw.clockSkewSeconds ?? AP2_DEFAULT_CLOCK_SKEW_SECONDS,
       'authorization.ap2.clockSkewSeconds',
       { min: 0, max: AP2_MAX_CLOCK_SKEW_SECONDS },
+    ),
+    requireMandateAudience: toBoolean(
+      raw.requireMandateAudience ?? false,
+      'authorization.ap2.requireMandateAudience',
+    ),
+    requireMandateExpiry: toBoolean(
+      raw.requireMandateExpiry ?? false,
+      'authorization.ap2.requireMandateExpiry',
     ),
     replay: { path: raw.replay.path },
   };

@@ -198,6 +198,10 @@ payments:
 #     specVersion: "0.2.0"     # the only supported value
 #     mode: direct             # the only supported mode
 #     clockSkewSeconds: 60     # default; 300 is the ceiling
+#     # AP2 makes a mandate's `aud` and `exp` optional. Set these to refuse
+#     # mandates without them; the checkout JWT requires both regardless.
+#     requireMandateAudience: false
+#     requireMandateExpiry: false
 #     replay:
 #       # Its own file. An authorization replay is not a payment replay, and a
 #       # spent mandate must stay spent for as long as you can be asked what

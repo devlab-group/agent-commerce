@@ -389,6 +389,8 @@ export type Ap2AuthorizationConfig =
         readonly checkoutIssuers: readonly Ap2TrustedIssuer[];
       };
       readonly clockSkewSeconds: number;
+      readonly requireMandateAudience?: boolean;
+      readonly requireMandateExpiry?: boolean;
       readonly replay: { readonly path: string };
     };
 

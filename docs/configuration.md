@@ -249,6 +249,8 @@ authorization:
     specVersion: "0.2.0"       # the only supported value
     mode: direct               # the only supported mode
     clockSkewSeconds: 60       # default; 300 is the ceiling
+    requireMandateAudience: false   # default; AP2 makes `aud` optional
+    requireMandateExpiry: false     # default; AP2 makes `exp` optional
     replay:
       path: ./data/ap2-authorizations.sqlite   # its own file, never shared
     trust:
@@ -283,8 +285,16 @@ refused at load and names the key to rotate.
 
 The two issuer lists are separate on purpose - signing the merchant's checkout
 documents must not confer the power to issue mandates - and `audience` is
-required per issuer rather than defaulted, because without it a mandate minted
-for another merchant would verify here.
+required per issuer rather than defaulted: a mandate that carries `aud` must
+name it, so one addressed to another merchant is refused.
+
+`requireMandateAudience` rejects a token without `aud`.
+`requireMandateExpiry` rejects a mandate without `exp` on either the token or
+its content. Both default to `false` because AP2 makes these claims optional.
+The checkout JWT independently requires `aud` and `exp`.
+
+A token without `iss` is matched by `kid` alone. Use distinct `kid`s across
+mandate issuers; a shared `kid` makes an issuerless token ambiguous.
 
 Refused at load: requiring `ap2` while the block is absent or disabled;
 requiring it on a **free** resource, since authorization gates settlement and

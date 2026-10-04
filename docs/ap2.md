@@ -8,13 +8,14 @@ This is merchant-side mandate verification, not a complete AP2 Merchant
 implementation. The AP2 provider verifies closed mandates but does not issue
 mandates or signed Checkout Receipts.
 
-| Property      | Supported value                                    |
-| ------------- | -------------------------------------------------- |
-| Specification | AP2 v0.2.0, tag 2026-04-28, commit `b4587ac`       |
-| Mode          | Direct (Human-Present)                             |
-| Mandate type  | closed Checkout Mandate, `vct: mandate.checkout.1` |
-| Signature     | ES256 with P-256                                   |
-| Trust         | static public keys in `config.yaml`                |
+| Property      | Supported value                                           |
+| ------------- | --------------------------------------------------------- |
+| Specification | AP2 v0.2.0, tag 2026-04-28, commit `b4587ac`              |
+| Mode          | Direct (Human-Present)                                    |
+| Delegation    | Trusted Agent Provider: the mandate in `delegate_payload` |
+| Mandate type  | closed Checkout Mandate, `vct: mandate.checkout.1`        |
+| Signature     | ES256 with P-256                                          |
+| Trust         | static public keys in `config.yaml`                       |
 
 ## What verification establishes
 
@@ -22,7 +23,8 @@ A successful verify-and-reserve call shows that, immediately before its
 reservation:
 
 1. a configured mandate issuer signed it with the named configured key;
-2. its time claims and audience are valid;
+2. each time claim it carries is valid, and any `aud` names the configured
+   audience;
 3. it binds a checkout JWT signed by a configured checkout issuer;
 4. that checkout JWT matches the resolved resource, validated input, price,
    payment method and settlement coordinates;
@@ -67,21 +69,43 @@ The identifier is a namespace, not a URL, and is frozen as a signed wire value.
 
 ### Closed Checkout Mandate
 
-The mandate is an SD-JWT presentation with these claims:
+The mandate is an SD-JWT presentation in AP2's Trusted Agent Provider shape.
+The agent provider signs the token. The verifier reads the mandate from the
+single object element of `delegate_payload` after resolving disclosures. The
+header must name a configured `kid`.
 
-| Claim           | Required     | Rule                                                      |
-| --------------- | ------------ | --------------------------------------------------------- |
-| `vct`           | yes          | exactly `mandate.checkout.1`                              |
-| `iss`           | yes          | configured mandate issuer                                 |
-| `aud`           | yes          | issuer's configured audience                              |
-| `iat`           | yes          | no further in the future than allowed clock skew          |
-| `exp`           | yes          | checked with allowed clock skew                           |
-| `checkout_hash` | yes          | `base64url(SHA-256(compact checkout JWT))`                |
-| `checkout_jwt`  | yes          | compact merchant checkout JWT after disclosure resolution |
-| `_sd_alg`       | when present | `sha-256`                                                 |
+Claims of the issuer-signed token:
 
-Presentations with a KB-JWT are refused because this Direct profile does not
-verify them. The verifier does not inspect `cnf`.
+| Claim              | Required                           | Rule                                                                  |
+| ------------------ | ---------------------------------- | --------------------------------------------------------------------- |
+| `delegate_payload` | yes                                | exactly one object element after disclosure resolution                |
+| `iss`              | no                                 | configured mandate issuer; without it, `kid` alone selects the issuer |
+| `aud`              | only with `requireMandateAudience` | issuer's configured audience                                          |
+| `iat`              | no                                 | no further in the future than allowed clock skew                      |
+| `exp`              | no                                 | checked with allowed clock skew; see `requireMandateExpiry` below     |
+| `_sd_alg`          | when present                       | `sha-256`                                                             |
+
+Claims of the mandate, the disclosed element:
+
+| Claim           | Required | Rule                                                      |
+| --------------- | -------- | --------------------------------------------------------- |
+| `vct`           | yes      | exactly `mandate.checkout.1`                              |
+| `checkout_hash` | yes      | `base64url(SHA-256(compact checkout JWT))`                |
+| `checkout_jwt`  | yes      | compact merchant checkout JWT after disclosure resolution |
+| `iat`           | no       | as on the token                                           |
+| `exp`           | no       | as on the token; also satisfies `requireMandateExpiry`    |
+
+A top-level `vct`, such as `com.example.agent_mandate`, names the credential
+type; the verifier reads the mandate's `vct` instead. It refuses top-level
+mandate claims without `delegate_payload`, presentations with a KB-JWT, and
+`~~`-joined delegation chains as `unsupported_mandate_type`. It does not
+inspect `cnf`.
+
+AP2 makes the token's `aud`, `iat` and `exp` optional. The verifier checks
+these claims when present. Operators can require `aud`, or require `exp` on
+either the token or the mandate content. The checkout JWT independently
+requires an audience and expiry, and replay protection checks reuse of the
+signed mandate.
 
 ### Merchant checkout JWT
 
@@ -172,7 +196,9 @@ Verification uses operator-configured public keys only:
 
 - `trust.mandateIssuers` and `trust.checkoutIssuers` are separate;
 - each issuer has a required, non-defaulted audience;
-- `iss` and `kid` must select an exact configured key;
+- `iss` and `kid` must select an exact configured key. A mandate without
+  `iss` is matched by `kid` alone and refused when two mandate issuers share
+  that `kid`;
 - keys are restricted to public P-256 JWK members;
 - the verifier does not fetch JWKS, issuer metadata, `jku` or `x5u`.
 
@@ -185,8 +211,10 @@ a key from config and restarting is the available revocation mechanism.
 ## Time checks
 
 `clockSkewSeconds` defaults to 60 and cannot exceed 300. It applies to
-`exp`, `nbf` and `iat` on the mandate and checkout JWT. An `iat` beyond
-the permitted future skew is refused.
+`exp`, `nbf` and `iat` on the signed mandate token, and to time claims on the
+checkout JWT. It also applies to `exp` and `iat` in the mandate content. An
+`iat` beyond the permitted future skew is refused. The mandate's time claims
+are optional; the checkout JWT requires `iat` and `exp`.
 
 ## Replay states
 
