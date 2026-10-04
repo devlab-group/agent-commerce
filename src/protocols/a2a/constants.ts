@@ -68,9 +68,14 @@ export const A2A_UNSUPPORTED_METHODS: readonly string[] = [
 ];
 
 /**
- * Terminal task states. Only these two are ever returned: a synchronous
- * execution is finished by the time the response is written, and no task
- * store exists for a caller to poll a non-terminal one against.
+ * Terminal states for completed and failed calls. An unpaid x402 extension
+ * task instead waits in `TASK_STATE_INPUT_REQUIRED`. `GetTask` is unsupported.
  */
 export const A2A_TASK_STATE_COMPLETED = 'TASK_STATE_COMPLETED';
 export const A2A_TASK_STATE_FAILED = 'TASK_STATE_FAILED';
+
+/** An unpaid x402 extension task waiting for a payment message */
+export const A2A_TASK_STATE_INPUT_REQUIRED = 'TASK_STATE_INPUT_REQUIRED';
+
+/** Extension activation header, a comma-separated list of extension URIs */
+export const A2A_EXTENSIONS_HEADER = 'a2a-extensions';

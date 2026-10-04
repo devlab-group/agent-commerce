@@ -24,13 +24,18 @@ import {
   toPaymentRequiredEnvelope,
 } from '../../core';
 import { isRecord } from '../../core/is-record';
-import { A2A_JSON_MEDIA_TYPE, A2A_TASK_STATE_COMPLETED, A2A_TASK_STATE_FAILED } from './constants';
+import {
+  A2A_JSON_MEDIA_TYPE,
+  A2A_TASK_STATE_COMPLETED,
+  A2A_TASK_STATE_FAILED,
+  A2A_TASK_STATE_INPUT_REQUIRED,
+} from './constants';
 import type { A2aArtifact, A2aTask } from './types';
 
 export interface TaskIdentity {
   /** Gateway request id, reused so a task correlates with receipts and events */
   readonly taskId: string;
-  /** Fresh every time: nothing here can be continued, so nothing shares a context */
+  /** Fresh for each purchase; a pending x402 payment keeps this context */
   readonly contextId: string;
   readonly artifactId: string;
   readonly timestamp: string;
@@ -69,9 +74,9 @@ export function completedTask(outcome: DeliveredOutcome, identity: TaskIdentity)
 }
 
 /**
- * `TASK_STATE_FAILED`, not `TASK_STATE_INPUT_REQUIRED`: without a task store
- * the adapter cannot resume the task, so it ends it. The caller retries by
- * sending a new message carrying the proof.
+ * Without the x402 extension, payment required ends the task. The client
+ * starts a new one with `_payment`. With the extension, `inputRequired` keeps
+ * this task open for a payment message.
  */
 export function paymentRequiredTask(
   outcome: PaymentRequiredOutcome,
@@ -81,6 +86,36 @@ export function paymentRequiredTask(
     name: outcome.resourceId,
     parts: [{ data: { ...toPaymentRequiredEnvelope(outcome) }, mediaType: A2A_JSON_MEDIA_TYPE }],
   });
+}
+
+/** The same task waiting for payment, with the extension's metadata on its status message */
+export function inputRequired(
+  base: A2aTask,
+  metadata: Record<string, unknown>,
+  messageId: string,
+): A2aTask {
+  return withStatusMessage(
+    { ...base, status: { ...base.status, state: A2A_TASK_STATE_INPUT_REQUIRED } },
+    'Payment is required. Send the x402 payment payload on this task.',
+    metadata,
+    messageId,
+  );
+}
+
+/** Attaches an agent status message carrying extension metadata */
+export function withStatusMessage(
+  base: A2aTask,
+  text: string,
+  metadata: Record<string, unknown>,
+  messageId: string,
+): A2aTask {
+  return {
+    ...base,
+    status: {
+      ...base.status,
+      message: { role: 'ROLE_AGENT', messageId, parts: [{ text }], metadata },
+    },
+  };
 }
 
 export function failedTask(error: CommerceError, identity: TaskIdentity): A2aTask {

@@ -58,7 +58,9 @@ Over HTTP, x402 sends the challenge in the `402` body and base64
 `PAYMENT-REQUIRED` header, accepts the proof in `PAYMENT-SIGNATURE`, and returns
 the settlement result in `PAYMENT-RESPONSE`. MCP and A2A carry the same proof in
 the reserved `_payment` input field. MCP also accepts the selected rail's
-`_meta` carrier; see [Payment over MCP](protocols.md#payment-over-mcp).
+`_meta` carrier; see [Payment over MCP](protocols.md#payment-over-mcp). A2A
+also accepts the x402 extension's task metadata; see
+[x402 extension](protocols.md#x402-extension).
 
 ### MPP
 

@@ -18,10 +18,18 @@ export interface A2aAgentInterface {
   readonly protocolVersion: string;
 }
 
+/** An extension the agent supports, which a client activates per request */
+export interface A2aAgentExtension {
+  readonly uri: string;
+  readonly description: string;
+  readonly required: boolean;
+}
+
 export interface A2aAgentCapabilities {
   readonly streaming: boolean;
   readonly pushNotifications: boolean;
   readonly extendedAgentCard: boolean;
+  readonly extensions?: readonly A2aAgentExtension[];
 }
 
 /**
@@ -54,10 +62,23 @@ export interface A2aAgentCard {
   readonly skills: readonly A2aAgentSkill[];
 }
 
-/** A structured data part, the only part kind this adapter emits */
+/** A structured data part, the only part kind an artifact carries */
 export interface A2aDataPart {
   readonly data: Record<string, unknown>;
   readonly mediaType: string;
+}
+
+/** A human-readable part, used only in a task status message */
+export interface A2aTextPart {
+  readonly text: string;
+}
+
+/** The agent's message on a task status, which carries extension metadata */
+export interface A2aMessage {
+  readonly role: 'ROLE_AGENT';
+  readonly messageId: string;
+  readonly parts: readonly A2aTextPart[];
+  readonly metadata?: Record<string, unknown>;
 }
 
 export interface A2aArtifact {
@@ -70,12 +91,12 @@ export interface A2aArtifact {
 export interface A2aTaskStatus {
   readonly state: string;
   readonly timestamp: string;
+  readonly message?: A2aMessage;
 }
 
 /**
- * A terminal task. No `history`, and no id a caller can fetch later: tasks are
- * ephemeral representations of a synchronous result, which is why `GetTask` is
- * unsupported rather than missing.
+ * A task with no `history`. `GetTask` is unsupported; a pending x402 task
+ * can only be resumed with a payment message that names its id.
  */
 export interface A2aTask {
   readonly id: string;

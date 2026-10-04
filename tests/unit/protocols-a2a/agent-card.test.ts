@@ -178,6 +178,18 @@ describe('A2A agent card', () => {
     });
   });
 
+  it('declares the optional x402 extension when a skill selects x402', async () => {
+    const card = await cardFrom([resource(), paid]);
+    expect(card.capabilities.extensions).toEqual([
+      expect.objectContaining({
+        uri: 'https://github.com/google-a2a/a2a-x402/v0.1',
+        required: false,
+      }),
+    ]);
+    const mppOnly = await cardFrom([{ ...paid, paymentMethods: ['mpp'] }]);
+    expect(mppOnly.capabilities).not.toHaveProperty('extensions');
+  });
+
   it('marks a paid skill as paid and names its price', async () => {
     const card = await cardFrom([resource(), paid]);
     expect(card.skills[0]?.tags).toContain('free');
@@ -212,7 +224,12 @@ describe('A2A adapter lifecycle', () => {
     expect(descriptor.name).toBe('a2a');
     expect(descriptor.supportedSpec).toBe('1.0.1');
     expect(descriptor.status).toBe('experimental');
-    expect(descriptor.capabilities).toEqual(['agent-card', 'jsonrpc', 'SendMessage']);
+    expect(descriptor.capabilities).toEqual([
+      'agent-card',
+      'jsonrpc',
+      'SendMessage',
+      'x402-extension',
+    ]);
     // Every A2A feature the project scope leaves out is named, so no client
     // reads the descriptor as full protocol support
     expect(descriptor.unsupported).toEqual(

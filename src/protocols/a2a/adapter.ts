@@ -26,6 +26,7 @@ import {
   toCommerceError,
 } from '../../core';
 import { toLogInfo } from '../../core/errors';
+import { isRecord } from '../../core/is-record';
 import { PACKAGE_VERSION } from '../../version';
 import { readCappedBody } from '../http';
 import { buildAgentCard } from './agent-card';
@@ -33,10 +34,12 @@ import {
   A2A_AGENT_CARD_PATH,
   A2A_DEFAULT_AGENT_NAME,
   A2A_DEFAULT_MOUNT_PATH,
+  A2A_EXTENSIONS_HEADER,
   A2A_JSON_MEDIA_TYPE,
   A2A_METHOD_SEND_MESSAGE,
   A2A_PROTOCOL_VERSION,
   A2A_PUSH_CONFIG_METHODS,
+  A2A_TASK_STATE_FAILED,
   A2A_UNSUPPORTED_METHODS,
   A2A_VERSION_HEADER,
 } from './constants';
@@ -56,8 +59,29 @@ import {
   parseJsonRpcRequest,
 } from './jsonrpc';
 import { type A2aInvocation, parseInvocation } from './message-mapping';
-import { completedTask, failedTask, paymentRequiredTask, type TaskIdentity } from './task-mapping';
+import {
+  completedTask,
+  failedTask,
+  inputRequired,
+  paymentRequiredTask,
+  type TaskIdentity,
+  withStatusMessage,
+} from './task-mapping';
 import type { A2aAgentCard, A2aTask } from './types';
+import {
+  A2A_X402_EXTENSION_URI,
+  createPendingPayments,
+  type PendingPayment,
+  type PendingPayments,
+  paymentCompletedMetadata,
+  paymentFailureMetadata,
+  paymentRejectedMetadata,
+  paymentRequiredMetadata,
+  readPaymentSubmission,
+  requestsX402Extension,
+  X402_PAYMENT_PAYLOAD_KEY,
+  X402_PAYMENT_STATUS_KEY,
+} from './x402-extension';
 
 // A second line behind the gateway mount's cap, bounding what this adapter
 // buffers if it is mounted without that guard
@@ -101,6 +125,8 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
   private card: A2aAgentCard | undefined;
   private cardBody = '';
   private cardEtag = '';
+  // Purchases waiting for an x402 extension payment
+  private pendingPayments: PendingPayments | undefined;
 
   constructor(options: A2aAdapterOptions = {}) {
     this.mountPath = options.mountPath ?? A2A_DEFAULT_MOUNT_PATH;
@@ -141,6 +167,7 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
       mountPath: this.mountPath,
       resources,
     });
+    this.pendingPayments = createPendingPayments(context.clock);
     this.cardBody = JSON.stringify(this.card);
     this.cardEtag = `"${createHash('sha256').update(this.cardBody).digest('base64url')}"`;
     this.started = true;
@@ -233,10 +260,18 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
         return;
       }
 
+      // Echoed when activated, as A2A asks of a server that activates an extension
+      const x402Extension = requestsX402Extension(req.headers[A2A_EXTENSIONS_HEADER]);
       this.writeJson(
         res,
         200,
-        await this.dispatch(parsed.request.id, parsed.request.method, parsed.request.params),
+        await this.dispatch(
+          parsed.request.id,
+          parsed.request.method,
+          parsed.request.params,
+          x402Extension,
+        ),
+        x402Extension ? { [A2A_EXTENSIONS_HEADER]: A2A_X402_EXTENSION_URI } : {},
       );
     } catch (err) {
       // Nothing from `err` reaches the client
@@ -253,6 +288,7 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
     id: JsonRpcId,
     method: string,
     params: unknown,
+    x402Extension: boolean,
   ): Promise<Record<string, unknown>> {
     if (A2A_PUSH_CONFIG_METHODS.includes(method)) {
       return jsonRpcError(
@@ -272,6 +308,9 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
       return jsonRpcError(id, JSONRPC_METHOD_NOT_FOUND, `Unknown method "${method}".`);
     }
 
+    const resumed = await this.resumePayment(id, params);
+    if (resumed !== undefined) return resumed;
+
     let invocation: ReturnType<typeof parseInvocation>;
     try {
       invocation = parseInvocation(params);
@@ -289,13 +328,14 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
       return jsonRpcError(id, code, error.message);
     }
 
-    return this.execute(id, invocation);
+    return this.execute(id, invocation, x402Extension);
   }
 
   // One accepted invocation, one `pipeline.execute()`
   private async execute(
     id: JsonRpcId,
     invocation: A2aInvocation,
+    x402Extension: boolean,
   ): Promise<Record<string, unknown>> {
     const context = this.context;
     if (context === undefined) {
@@ -340,11 +380,28 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
         ...(authorization !== undefined ? { authorization } : {}),
       };
       const outcome: ExecutionOutcome = await context.pipeline.execute(request);
+      if (outcome.kind !== 'payment-required') {
+        return this.taskResult(id, completedTask(outcome, identity));
+      }
+      const task = paymentRequiredTask(outcome, identity);
+      const envelope = outcome.requirement.challenge.envelope;
+      // The extension carries x402 only; any other rail keeps the terminal task
+      if (!x402Extension || outcome.requirement.provider !== 'x402' || !isRecord(envelope)) {
+        return this.taskResult(id, task);
+      }
+      this.pendingPayments?.put(
+        identity.taskId,
+        {
+          contextId: identity.contextId,
+          resourceId: invocation.resourceId,
+          input,
+          ...(authorization !== undefined ? { authorization } : {}),
+        },
+        outcome.requirement.expiresAt,
+      );
       return this.taskResult(
         id,
-        outcome.kind === 'payment-required'
-          ? paymentRequiredTask(outcome, identity)
-          : completedTask(outcome, identity),
+        inputRequired(task, paymentRequiredMetadata(envelope), context.ids.next('a2a-msg')),
       );
     } catch (err) {
       // A downstream failure is the caller's answer, not a broken frame.
@@ -357,6 +414,125 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
       );
       return this.taskResult(id, failedTask(error, identity));
     }
+  }
+
+  /**
+   * A message on a task waiting for an x402 extension payment, recognized by
+   * its `taskId` whether or not the header activated the extension again. Any
+   * other task id falls through to `parseInvocation`, which answers
+   * TaskNotFoundError.
+   */
+  private async resumePayment(
+    id: JsonRpcId,
+    params: unknown,
+  ): Promise<Record<string, unknown> | undefined> {
+    const context = this.context;
+    const message = isRecord(params) ? params['message'] : undefined;
+    const taskId = isRecord(message) ? message['taskId'] : undefined;
+    if (context === undefined || typeof taskId !== 'string') return undefined;
+    const pending = this.pendingPayments?.get(taskId);
+    if (pending === undefined) return undefined;
+
+    const messageId = isRecord(message) ? message['messageId'] : undefined;
+    if (typeof messageId !== 'string' || messageId.length === 0) {
+      return jsonRpcError(
+        id,
+        JSONRPC_INVALID_PARAMS,
+        'Message must carry a non-empty "messageId".',
+      );
+    }
+    const submission = readPaymentSubmission(message);
+    if (submission === undefined) {
+      // The task stays pending, so a corrected message can still pay it
+      return jsonRpcError(
+        id,
+        JSONRPC_INVALID_PARAMS,
+        `For a pending task, set "${X402_PAYMENT_STATUS_KEY}" to "payment-submitted" and provide a "${X402_PAYMENT_PAYLOAD_KEY}" object, or set it to "payment-rejected".`,
+      );
+    }
+    // Taken before execution, so a second payment message for the task finds
+    // nothing and cannot run the purchase twice
+    this.pendingPayments?.delete(taskId);
+    const identity: TaskIdentity = {
+      taskId,
+      contextId: pending.contextId,
+      artifactId: context.ids.next('a2a-artifact'),
+      timestamp: context.clock.nowIso(),
+    };
+    const statusMessageId = context.ids.next('a2a-msg');
+
+    if (submission.kind === 'rejected') {
+      const declined: A2aTask = {
+        id: taskId,
+        contextId: pending.contextId,
+        status: { state: A2A_TASK_STATE_FAILED, timestamp: identity.timestamp },
+        artifacts: [],
+      };
+      return this.taskResult(
+        id,
+        withStatusMessage(
+          declined,
+          'Payment was declined.',
+          paymentRejectedMetadata(),
+          statusMessageId,
+        ),
+      );
+    }
+    return this.taskResult(
+      id,
+      await this.payPending(context, pending, submission.payload, identity, statusMessageId),
+    );
+  }
+
+  // The pending purchase, now with the x402 `PaymentPayload` as its proof
+  private async payPending(
+    context: ProtocolAdapterContext,
+    pending: PendingPayment,
+    payload: Record<string, unknown>,
+    identity: TaskIdentity,
+    statusMessageId: string,
+  ): Promise<A2aTask> {
+    const requestId = context.ids.next('a2a');
+    const request: CanonicalRequest = {
+      requestId,
+      resourceId: pending.resourceId,
+      input: pending.input,
+      protocol: 'a2a',
+      receivedAt: context.clock.nowIso(),
+      // The same encoding as the HTTP header's base64 PaymentPayload JSON
+      payment: {
+        method: 'x402',
+        payload: Buffer.from(JSON.stringify(payload), 'utf8').toString('base64'),
+      },
+      ...(pending.authorization !== undefined ? { authorization: pending.authorization } : {}),
+    };
+    let error: CommerceError;
+    try {
+      const outcome = await context.pipeline.execute(request);
+      if (outcome.kind === 'delivered' && outcome.payment !== undefined) {
+        return withStatusMessage(
+          completedTask(outcome, identity),
+          'Payment settled.',
+          paymentCompletedMetadata(outcome.payment),
+          statusMessageId,
+        );
+      }
+      // A proof was sent, so neither a free delivery nor a new challenge is a
+      // payment this task can report
+      error = new CommerceError('PAYMENT_INVALID', 'The payment was not accepted.', { requestId });
+    } catch (err) {
+      error = toCommerceError(err);
+      context.logger.warn(
+        { resourceId: pending.resourceId, requestId, err: toLogInfo(error) },
+        'a2a adapter: x402 extension payment failed',
+      );
+    }
+    const metadata = paymentFailureMetadata(error);
+    const text =
+      metadata[X402_PAYMENT_STATUS_KEY] === 'payment-completed'
+        ? 'Payment settled, but the resource could not be delivered.'
+        : 'Payment failed.';
+    return withStatusMessage(failedTask(error, identity), text, metadata, statusMessageId);
   }
 
   private taskIdentity(context: ProtocolAdapterContext, requestId: string): TaskIdentity {
@@ -386,13 +562,20 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
     this.card = undefined;
     this.cardBody = '';
     this.cardEtag = '';
+    this.pendingPayments?.clear();
+    this.pendingPayments = undefined;
     this.skillsById = new Map();
     this.context = undefined;
   }
 
-  private writeJson(res: ServerResponse, status: number, body: unknown): void {
+  private writeJson(
+    res: ServerResponse,
+    status: number,
+    body: unknown,
+    headers: Readonly<Record<string, string>> = {},
+  ): void {
     if (res.headersSent) return;
-    res.writeHead(status, { 'content-type': A2A_JSON_MEDIA_TYPE });
+    res.writeHead(status, { 'content-type': A2A_JSON_MEDIA_TYPE, ...headers });
     res.end(JSON.stringify(body));
   }
 }

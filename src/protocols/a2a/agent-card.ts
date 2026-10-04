@@ -10,6 +10,7 @@ import type { CommerceResource } from '../../core';
 import { joinUrl } from '../http';
 import { A2A_JSON_MEDIA_TYPE, A2A_PROTOCOL_BINDING, A2A_PROTOCOL_VERSION } from './constants';
 import type { A2aAgentCard, A2aAgentSkill } from './types';
+import { A2A_X402_EXTENSION_URI } from './x402-extension';
 
 export interface AgentCardOptions {
   readonly name: string;
@@ -66,7 +67,24 @@ export function buildAgentCard(options: AgentCardOptions): A2aAgentCard {
         protocolVersion: A2A_PROTOCOL_VERSION,
       },
     ],
-    capabilities: { streaming: false, pushNotifications: false, extendedAgentCard: false },
+    capabilities: {
+      streaming: false,
+      pushNotifications: false,
+      extendedAgentCard: false,
+      // Only a skill whose rail is x402 can be paid through the extension.
+      // Not required: `_payment` keeps working for clients without it.
+      ...(options.resources.some((resource) => resource.paymentMethods[0] === 'x402')
+        ? {
+            extensions: [
+              {
+                uri: A2A_X402_EXTENSION_URI,
+                description: 'x402 payments: input-required tasks carrying x402 v2 documents.',
+                required: false,
+              },
+            ],
+          }
+        : {}),
+    },
     defaultInputModes: [A2A_JSON_MEDIA_TYPE],
     defaultOutputModes: [A2A_JSON_MEDIA_TYPE],
     skills: options.resources.map(buildAgentSkill),

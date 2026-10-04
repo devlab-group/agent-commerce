@@ -9,7 +9,7 @@ This page records the implemented subset and pinned revision for each protocol.
 | **HTTP** | Supported    | native                                                                         | resource routes and rail-specific payment headers                           |
 | **MCP**  | Supported    | MCP `2026-07-28` and `2025-11-25` through `@modelcontextprotocol/server@2.3.0` | tool discovery, invocation, payment-required and error mapping              |
 | **x402** | Supported    | x402 v2, `@x402/core@2.25.0`, `@x402/evm@2.25.0`                               | `exact` EVM/EIP-3009 challenge, verification, settlement and replay binding |
-| **A2A**  | Experimental | v1.0.1; negotiation `1.0`; `JSONRPC` binding                                   | Agent Card, `SendMessage`, terminal tasks and paid flow                     |
+| **A2A**  | Experimental | v1.0.1; negotiation `1.0`; `JSONRPC` binding                                   | Agent Card, `SendMessage`, paid flow and the x402 extension                 |
 | **ACP**  | Experimental | stable snapshot `2026-04-17`; REST binding                                     | discovery and the five checkout operations                                  |
 | **AP2**  | Experimental | v0.2.0, tag 2026-04-28, commit `b4587ac`; Direct mode                          | closed Checkout Mandate verification before settlement                      |
 | **MPP**  | Experimental | drafts at `tempoxyz/mpp-specs@806fdb8`; `mppx@0.13.1`                          | `charge`/`evm`/EIP-3009 over HTTP, MCP and A2A                              |
@@ -133,7 +133,7 @@ settle payments or call merchant backends.
 | Version header | `A2A-Version: 1.0`; patch suffixes are accepted but ignored |
 | Agent Card     | `GET /.well-known/agent-card.json`                          |
 | Default mount  | `/a2a`                                                      |
-| Task model     | synchronous terminal tasks only                             |
+| Task model     | synchronous; terminal except an unpaid x402 extension task  |
 
 Resources exposed through A2A become Agent Card skills. The skill id is the
 resource id; paid skills are tagged `paid` and include their price in the
@@ -174,24 +174,62 @@ A paid retry adds the same reserved field used by MCP:
 }
 ```
 
-Text, file, inline-byte and URL parts; multipart messages; non-user roles; and
-task or context continuation are refused.
+For a new purchase, the adapter refuses text, file, inline-byte and URL
+parts, multipart messages, non-user roles, and task or context continuation.
+A payment message can resume a pending x402 extension task.
 
-A2A payment uses only `_payment`. The `a2a-x402` extension uses task
-continuation, which this adapter does not implement.
+### x402 extension
+
+A client activates the extension with
+`A2A-Extensions: https://github.com/google-a2a/a2a-x402/v0.1` and can then
+pay without `_payment`. The gateway uses x402 v2 documents from the
+[x402 A2A transport](https://github.com/x402-foundation/x402/blob/main/specs/transports-v2/a2a.md).
+Its examples use lowercase task states and roles, `kind` on parts, and the
+`X-A2A-Extensions` header. This gateway uses the A2A 1.0 forms:
+`TASK_STATE_INPUT_REQUIRED`, `ROLE_AGENT`, parts without `kind`, and
+`A2A-Extensions`. It echoes the header when activated. The Agent Card advertises the extension as
+optional when x402 is a skill's selected payment rail.
+
+1. An x402 paid call without a proof returns `TASK_STATE_INPUT_REQUIRED`. The status
+   message carries `x402.payment.status: payment-required` and the v2
+   `PaymentRequired` in `x402.payment.required`.
+2. The client sends a message with that `taskId` and sets
+   `x402.payment.status` to `payment-submitted` in the message metadata. It
+   puts the `PaymentPayload` in `x402.payment.payload`. The gateway reruns the
+   stored purchase through input validation, payment verification, replay
+   reservation and settlement.
+3. A successful purchase returns `TASK_STATE_COMPLETED`,
+   `payment-completed` and a settlement entry in `x402.payment.receipts`. A
+   payment failure returns `TASK_STATE_FAILED`, `payment-failed`, an
+   `x402.payment.error` code and a failed receipt. If the backend fails after
+   settlement, the task fails but its status message reports
+   `payment-completed` with the settlement entry. A client can also send
+   `payment-rejected` to end the task without paying.
+
+The gateway holds unpaid tasks in process memory until the payment
+requirement expires, for no longer than one hour. If the requirement has no
+expiry, the task waits ten minutes. When 256 tasks are pending, the oldest is
+evicted. A restart or a payment routed to another instance loses the task;
+the client receives `TaskNotFoundError` and must start a new purchase. A
+malformed payment message returns `-32602` without consuming the task. This
+extension applies only to x402; an MPP resource still returns a terminal task.
 
 ### Results
 
-Each accepted invocation returns a terminal task with one artifact:
+These outcomes return a terminal task with one artifact:
 
-| Outcome          | State                  | Artifact data                                            |
-| ---------------- | ---------------------- | -------------------------------------------------------- |
-| delivered        | `TASK_STATE_COMPLETED` | merchant response and `agent-commerce/delivery` metadata |
-| payment required | `TASK_STATE_FAILED`    | shared payment-required envelope                         |
-| commerce failure | `TASK_STATE_FAILED`    | shared error envelope                                    |
+| Outcome                            | State                  | Artifact data                                            |
+| ---------------------------------- | ---------------------- | -------------------------------------------------------- |
+| Delivered                          | `TASK_STATE_COMPLETED` | Merchant response and `agent-commerce/delivery` metadata |
+| Payment required on terminal path  | `TASK_STATE_FAILED`    | Shared payment-required envelope                         |
+| Commerce failure                   | `TASK_STATE_FAILED`    | Shared error envelope                                    |
 
-A non-object merchant body is wrapped as `{ "value": ... }`. Payment required
-is terminal because there is no task store; the buyer sends a new message with
+With the x402 extension, an unpaid task is `TASK_STATE_INPUT_REQUIRED`; its
+payment terms are in the status message metadata. If the client declines,
+the task ends with no artifact.
+
+A non-object merchant body is wrapped as `{ "value": ... }`. Without the x402
+extension, payment required is terminal; the buyer sends a new message with
 the proof.
 
 The adapter returns JSON-RPC errors for invalid requests and A2A features it
@@ -200,7 +238,7 @@ uses these A2A codes:
 
 | Code     | A2A error                           | Returned for                                                          |
 | -------- | ----------------------------------- | --------------------------------------------------------------------- |
-| `-32001` | `TaskNotFoundError`                 | a `taskId` that cannot be found because the adapter stores no tasks   |
+| `-32001` | `TaskNotFoundError`                 | an unknown, expired or completed `taskId`                             |
 | `-32003` | `PushNotificationNotSupportedError` | the four push notification configuration methods                      |
 | `-32004` | `UnsupportedOperationError`         | other unsupported methods and message features listed below           |
 | `-32005` | `ContentTypeNotSupportedError`      | a structured data part with a non-JSON `mediaType`                    |
@@ -217,9 +255,9 @@ multipart messages, a `contextId` and non-empty `referenceTaskIds`. A missing
 Unsupported methods are `SendStreamingMessage`, `GetTask`, `ListTasks`,
 `CancelTask`, `SubscribeToTask`, the four task-push-notification-config
 methods and `GetExtendedAgentCard`. The adapter also excludes REST and gRPC
-bindings, SSE, persistent or resumable tasks, push delivery, multi-turn
-continuation, authenticated extended cards, A2A authentication and other
-artifact types.
+bindings, SSE, persistent tasks, task continuation beyond the pending x402
+payment, push delivery, multi-turn continuation, authenticated
+extended cards, A2A authentication and other artifact types.
 
 The A2A adapter accepts `_payment` but does not verify or settle payments
 or call merchant backends. `@a2a-js/sdk` is a test-only dependency.

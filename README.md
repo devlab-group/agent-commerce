@@ -237,7 +237,7 @@ See [docs/configuration.md](docs/configuration.md).
 | **MCP**  | Supported    | `2026-07-28` and `2025-11-25`, `@modelcontextprotocol/server@2.3.0`       |
 | **x402** | Supported    | x402 v2 (`@x402/core`, `@x402/evm`), scheme `exact`, EVM                  |
 | **MPP**  | Experimental | `mppx@0.13.1`, `charge` + `evm` + EIP-3009, USDC on Base Sepolia and Base |
-| **A2A**  | Experimental | A2A v1.0.1, binding `JSONRPC`, method `SendMessage`                       |
+| **A2A**  | Experimental | A2A v1.0.1, binding `JSONRPC`, method `SendMessage`, x402 extension       |
 | **ACP**  | Experimental | ACP `2026-04-17`, REST checkout + discovery                               |
 | **AP2**  | Experimental | AP2 `v0.2.0`, Direct Checkout Mandate verification                        |
 | UCP      | Planned      | no implementation                                                         |

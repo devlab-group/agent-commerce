@@ -30,6 +30,9 @@ import { createGateway, type GatewayInstance } from '../../../src/gateway';
 import { createConfiguredPaymentProviders } from '../../../src/gateway/payment-providers';
 import { createPaymentProof, createX402PaymentProvider } from '../../../src/payments/x402';
 import { type AnvilHandle, deployLocalChain, startAnvil } from '../../../src/payments/x402/testing';
+import { createA2aAdapter } from '../../../src/protocols/a2a';
+import type { A2aTask } from '../../../src/protocols/a2a/types';
+import { A2A_X402_EXTENSION_URI } from '../../../src/protocols/a2a/x402-extension';
 import { createSqliteReceiptStore } from '../../../src/storage/receipts';
 import { startLossyRpc, unreachableRpcUrl } from '../../fixtures/x402/lossy-rpc';
 import {
@@ -85,13 +88,17 @@ async function startGateway(): Promise<void> {
       merchant: { id: 'x402-e2e', name: 'x402 E2E', publicBaseUrl: 'http://127.0.0.1:8080' },
       server: { port: 8080, host: '127.0.0.1', allowedOrigins: [] },
       storage: { receipts: { driver: 'sqlite', path: ':memory:' } },
-      protocols: { http: { enabled: true }, mcp: { enabled: false, mountPath: '/mcp' } },
+      protocols: {
+        http: { enabled: true },
+        mcp: { enabled: false, mountPath: '/mcp' },
+        a2a: { enabled: true, mountPath: '/a2a' },
+      },
       resources: {
         [RESOURCE_ID]: {
           name: 'Market report',
           backend: { type: 'http', method: 'GET', url: 'http://merchant.invalid/api/report' },
           pricing: { type: 'fixed', amount: '1.00', currency: 'USDC' },
-          expose: ['http'],
+          expose: ['http', 'a2a'],
           payments: ['x402'],
         },
       },
@@ -118,7 +125,7 @@ async function startGateway(): Promise<void> {
     config,
     store,
     paymentProviders: createConfiguredPaymentProviders(config.payments, NOOP_LOGGER),
-    protocolAdapters: [],
+    protocolAdapters: [createA2aAdapter()],
     backend,
   });
 }
@@ -666,6 +673,75 @@ describe('x402 settlement - real local chain', () => {
       after: await balances(),
       amountBaseUnits: 1_000_000n,
       txHash,
+    });
+  });
+
+  it('14. settles an A2A x402 payment on the local chain', async () => {
+    async function sendMessage(message: Record<string, unknown>): Promise<A2aTask> {
+      const res = await gateway.server.inject({
+        method: 'POST',
+        url: '/a2a',
+        headers: {
+          'content-type': 'application/json',
+          'a2a-version': '1.0',
+          'a2a-extensions': A2A_X402_EXTENSION_URI,
+        },
+        payload: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'SendMessage',
+          params: { message },
+        }),
+      });
+      return res.json<{ result: { task: A2aTask } }>().result.task;
+    }
+    const callsBefore = backendCalls;
+
+    const waiting = await sendMessage({
+      role: 'ROLE_USER',
+      messageId: 'msg-buy',
+      parts: [{ data: { resource: RESOURCE_ID }, mediaType: 'application/json' }],
+    });
+    expect(waiting.status.state).toBe('TASK_STATE_INPUT_REQUIRED');
+    expect(backendCalls).toBe(callsBefore);
+
+    const client = new x402Client();
+    registerExactEvmScheme(client, {
+      signer: privateKeyToAccount(deployment.buyer.privateKey),
+      networks: ['eip155:84532'],
+    });
+    client.setSpendControls(false); // MockUSDC is not in the SDK's asset list
+    const payload = await client.createPaymentPayload(
+      waiting.status.message?.metadata?.['x402.payment.required'] as PaymentRequired,
+    );
+
+    const before = await balances();
+    const paid = await sendMessage({
+      role: 'ROLE_USER',
+      messageId: 'msg-pay',
+      taskId: waiting.id,
+      contextId: waiting.contextId,
+      parts: [{ text: 'Here is the payment authorization.' }],
+      metadata: { 'x402.payment.status': 'payment-submitted', 'x402.payment.payload': payload },
+    });
+    const after = await balances();
+
+    expect(paid.status.state).toBe('TASK_STATE_COMPLETED');
+    const [receipt] = (paid.status.message?.metadata?.['x402.payment.receipts'] ?? []) as {
+      success: boolean;
+      transaction: string;
+    }[];
+    expect(receipt?.success).toBe(true);
+    expect(backendCalls).toBe(callsBefore + 1);
+    await expectRealSettlement({
+      rpcUrl: anvil.rpcUrl,
+      asset: deployment.asset,
+      buyer: deployment.buyer.address,
+      merchant: deployment.merchant.address,
+      before,
+      after,
+      amountBaseUnits: 1_000_000n,
+      txHash: receipt?.transaction as string,
     });
   });
 });
