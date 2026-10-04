@@ -330,9 +330,10 @@ does not close authorization providers.
 published through discovery and `doctor`. The broader implementation limits are:
 
 - autonomous mode and open Checkout Mandates (`mandate.checkout.open.1`)
-- intent, cart and Payment Mandate verification
+- Payment Mandates (`mandate.payment.1`)
 - spending-constraint evaluation
-- `cnf`-bound agent keys and delegation chains
+- `cnf`-bound agent keys, delegation chains and key-binding JWTs
+- User Credential delegation through OpenID4VP
 - JWKS, issuer metadata, remote key discovery or remote revocation
 - key rotation without a config change
 - signatures other than ES256 or digests other than SHA-256
