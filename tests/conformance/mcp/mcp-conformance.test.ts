@@ -889,3 +889,38 @@ describe('mcp adapter: transport and lifecycle', () => {
     await server.close();
   });
 });
+
+describe('mcp adapter: malformed tools/call params', () => {
+  async function postToolCall(h: Harness, params: unknown): Promise<Record<string, unknown>> {
+    const res = await fetch(`${h.server.url}${h.adapter.mountPath}`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 'bad-1', method: 'tools/call', params }),
+    });
+    expect(res.status).toBe(200);
+    return (await res.json()) as Record<string, unknown>;
+  }
+
+  // The SDK's own refusal carries its schema validator's issue list
+  it.each([
+    ['params that are not an object', 'nope', 'params must be an object'],
+    ['a non-string name', { name: 7 }, '"name" must be a string'],
+    ['non-object arguments', { name: 'echo', arguments: 'x' }, '"arguments" must be an object'],
+    ['array arguments', { name: 'echo', arguments: [] }, '"arguments" must be an object'],
+    ['a non-object _meta', { name: 'echo', _meta: 1 }, '"_meta" must be an object'],
+  ])('refuses %s with -32602 and one short sentence', async (_label, params, problem) => {
+    const h = await setup([FREE_ECHO_RESOURCE]);
+
+    const body = await postToolCall(h, params);
+
+    expect(body).toEqual({
+      jsonrpc: '2.0',
+      id: 'bad-1',
+      error: { code: -32602, message: `Invalid tools/call params: ${problem}.` },
+    });
+    expect(h.pipeline.requests).toHaveLength(0);
+  });
+});

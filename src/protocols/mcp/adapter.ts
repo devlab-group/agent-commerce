@@ -25,7 +25,6 @@
  * therefore lists `dns-rebinding-protection` as unsupported.
  */
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { Readable } from 'node:stream';
 import {
   type CallToolResult,
   createMcpHandler,
@@ -52,6 +51,7 @@ import { isRecord } from '../../core/is-record';
 import { MPP_MCP_CREDENTIAL_META_KEY } from '../../payments/mpp/transport';
 import { X402_MCP_PAYMENT_META_KEY } from '../../payments/x402/transport';
 import { PACKAGE_VERSION } from '../../version';
+import { readCappedBody } from '../http';
 import { MCP_TOOL_NAME_PATTERN } from './constants';
 import { buildDescriptor } from './descriptor';
 import { errorResult, mapOutcome } from './result-mapping';
@@ -85,6 +85,10 @@ const DEFAULT_SERVER_NAME = 'agent-commerce';
  * `pipeline.execute()` calls. Limit active calls to 8 per adapter instance.
  */
 const MAX_CONCURRENT_TOOL_CALLS = 8;
+
+// A second line behind the gateway mount's cap, bounding what this adapter
+// buffers if it is mounted without that guard
+const MAX_REQUEST_BODY_BYTES = 256 * 1024;
 
 /**
  * Bounds the queue behind the semaphore, per adapter instance. Without it an
@@ -218,7 +222,19 @@ class McpProtocolAdapter implements HttpProtocolAdapter {
       // must finish, or the buyer is charged for nothing.
       const abortController = new AbortController();
       res.once('close', () => abortController.abort());
-      const response = await this.handler.fetch(toWebRequest(req, abortController.signal));
+      const read = await readCappedBody(req, MAX_REQUEST_BODY_BYTES);
+      if (read.kind !== 'ok') {
+        this.writeJsonRpcError(res, 400, 'Could not read the request body.');
+        return;
+      }
+      const malformed = malformedToolCall(read.text);
+      if (malformed !== undefined) {
+        this.writeJsonRpcError(res, 200, malformed.message, -32602, malformed.id);
+        return;
+      }
+      const response = await this.handler.fetch(
+        toWebRequest(req, read.text, abortController.signal),
+      );
       await writeWebResponse(response, res);
     } catch (err) {
       this.context?.logger.error(
@@ -256,14 +272,20 @@ class McpProtocolAdapter implements HttpProtocolAdapter {
     this.context = undefined;
   }
 
-  private writeJsonRpcError(res: ServerResponse, status: number, message: string): void {
+  private writeJsonRpcError(
+    res: ServerResponse,
+    status: number,
+    message: string,
+    code = -32000,
+    id: string | number | null = null,
+  ): void {
     if (res.headersSent) return;
     res.writeHead(status, {
       'content-type': 'application/json',
       // RFC 9110 requires Allow on a 405, and this endpoint takes only POST
       ...(status === 405 ? { allow: 'POST' } : {}),
     });
-    res.end(JSON.stringify({ jsonrpc: '2.0', error: { code: -32000, message }, id: null }));
+    res.end(JSON.stringify({ jsonrpc: '2.0', error: { code, message }, id }));
   }
 
   private buildServer(signal: AbortSignal): Server {
@@ -387,7 +409,7 @@ class McpProtocolAdapter implements HttpProtocolAdapter {
 
 // Pass the Node request body to the SDK as a stream. The gateway's socket
 // byte limit still applies, and the signal reports client disconnects.
-function toWebRequest(req: IncomingMessage, signal: AbortSignal): Request {
+function toWebRequest(req: IncomingMessage, body: string, signal: AbortSignal): Request {
   const headers = new Headers();
   for (const [name, value] of Object.entries(req.headers)) {
     if (value !== undefined) headers.set(name, Array.isArray(value) ? value.join(', ') : value);
@@ -395,10 +417,38 @@ function toWebRequest(req: IncomingMessage, signal: AbortSignal): Request {
   return new Request(new URL(req.url ?? '/', 'http://localhost'), {
     method: req.method ?? 'POST',
     headers,
-    body: Readable.toWeb(req) as ReadableStream<Uint8Array>,
-    duplex: 'half',
+    body,
     signal,
   });
+}
+
+/**
+ * Check malformed `tools/call` params before passing them to the SDK so the
+ * response uses a short -32602 message. The SDK handles other requests,
+ * including malformed JSON, batches and notifications.
+ */
+function malformedToolCall(body: string): { id: string | number; message: string } | undefined {
+  let message: unknown;
+  try {
+    message = JSON.parse(body);
+  } catch {
+    return undefined;
+  }
+  if (!isRecord(message) || message['method'] !== 'tools/call') return undefined;
+  const id = message['id'];
+  if (typeof id !== 'string' && typeof id !== 'number') return undefined;
+  const params = message['params'];
+  let problem: string | undefined;
+  if (!isRecord(params)) problem = 'params must be an object';
+  else if (typeof params['name'] !== 'string') problem = '"name" must be a string';
+  else if (params['arguments'] !== undefined && !isRecord(params['arguments'])) {
+    problem = '"arguments" must be an object';
+  } else if (params['_meta'] !== undefined && !isRecord(params['_meta'])) {
+    problem = '"_meta" must be an object';
+  }
+  return problem === undefined
+    ? undefined
+    : { id, message: `Invalid tools/call params: ${problem}.` };
 }
 
 // Stream the SDK's response body, including SSE, to the Node response

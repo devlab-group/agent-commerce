@@ -45,7 +45,9 @@ Resources with `expose: [mcp]` become MCP tools:
   for a paid resource and an optional `_authorization` object
   (`{ method, payload }`) for a resource that requires authorization.
 
-Calling an unknown tool returns JSON-RPC error `-32602`.
+Calling an unknown tool returns JSON-RPC error `-32602`. Malformed
+`tools/call` params, such as a non-string `name` or non-object `arguments`,
+return the same code with a short message.
 
 ### Payment over MCP
 
