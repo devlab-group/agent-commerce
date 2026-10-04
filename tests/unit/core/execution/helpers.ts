@@ -202,6 +202,8 @@ export interface FakePaymentProviderOptions {
   readonly name?: PaymentMethodName;
   /** Sets `challenge.envelope` on the default requirement */
   readonly challengeEnvelope?: Readonly<Record<string, unknown>>;
+  /** Sets `metadata` on the default requirement */
+  readonly requirementMetadata?: Readonly<Record<string, unknown>>;
   readonly createRequirement?: (ctx: PaymentContext) => Promise<PaymentRequirement>;
   readonly verify?: (ctx: PaymentVerificationContext) => Promise<PaymentResult>;
   readonly settle?: (ctx: PaymentSettlementContext) => Promise<PaymentResult>;
@@ -232,6 +234,9 @@ export function createFakePaymentProvider(
             ? { envelope: options.challengeEnvelope }
             : {}),
         },
+        ...(options.requirementMetadata !== undefined
+          ? { metadata: options.requirementMetadata }
+          : {}),
       })),
     verify:
       options.verify ??

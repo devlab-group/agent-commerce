@@ -7,11 +7,11 @@
  *    (INPUT_INVALID, or BACKEND_ERROR for an illegal configured header)
  * 3. resolve price
  * 4. free: straight to the backend
- * 5. paid: pick provider, createRequirement, then either return the challenge
- *    or verify, reserve the authorization, reserve the replay key, settle, and
- *    consume, release or mark uncertain the authorization. Fail closed at every
- *    step
- * 6. call backend (BACKEND_TIMEOUT / BACKEND_ERROR)
+ * 5. paid: pick provider and createRequirement, then return a challenge or
+ *    verify the proof and reserve authorization and replay identities
+ * 6. settle before calling the backend, or call the backend first and settle
+ *    only if it succeeds. Finalize authorization according to the outcome
+ *    (BACKEND_TIMEOUT / BACKEND_ERROR)
  * 7. persist receipt, emit events, return outcome
  */
 
@@ -22,7 +22,12 @@ import type {
 } from '../domain/authorization';
 import type { AuthorizationMethodName, PaymentMethodName } from '../domain/common';
 import type { CommerceEvent, EventSink } from '../domain/event';
-import type { PaymentProvider, PaymentRequirement, PaymentResult } from '../domain/payment';
+import type {
+  PaymentProvider,
+  PaymentRequirement,
+  PaymentResult,
+  PaymentSubmission,
+} from '../domain/payment';
 import type { CommerceReceipt } from '../domain/receipt';
 import type { CanonicalRequest, ExecutionOutcome, ExecutionPipeline } from '../domain/request';
 import type { CommerceResource, ResourceRegistry } from '../domain/resource';
@@ -34,6 +39,7 @@ import type { Clock, IdGenerator } from '../interfaces/runtime';
 import type { ReceiptStore } from '../interfaces/store';
 import { isRecord } from '../is-record';
 import { validateBackendRequestShape } from './backend-http';
+import { SETTLE_AFTER_BACKEND_METADATA_KEY } from './settlement-order';
 import { compileJsonSchema, type Validator } from './validation';
 
 export interface CreateExecutionPipelineOptions {
@@ -208,6 +214,173 @@ export function createExecutionPipeline(
     };
   }
 
+  interface SettleArgs {
+    readonly request: CanonicalRequest;
+    readonly resource: CommerceResource;
+    readonly provider: PaymentProvider;
+    readonly requirement: PaymentRequirement;
+    readonly payment: PaymentSubmission;
+    readonly verification: PaymentResult;
+    readonly replayKey: string;
+    readonly hold: AuthorizationHold | undefined;
+  }
+
+  // Settle a verified, reserved payment and finalize its authorization.
+  // Rejected or uncertain settlement throws before any response is delivered.
+  async function settle(args: SettleArgs): Promise<PaymentResult> {
+    const { request, resource, provider, requirement, payment, verification, replayKey, hold } =
+      args;
+    let settlement: PaymentResult;
+    try {
+      settlement = await provider.settle({
+        requestId: request.requestId,
+        resource,
+        requirement,
+        submission: payment,
+        verification,
+      });
+    } catch (error) {
+      // A throw gives no settlement verdict. The facilitator may have
+      // broadcast before losing its response, even without a transaction
+      // hash. Keep the authorization uncertain so it cannot be spent again.
+      const txHash = settlementTxHash(error);
+      await hold?.finalize('markUncertain');
+      await safePersist(
+        () =>
+          options.store.updatePaymentAttempt({
+            replayKey,
+            status: 'settlement-uncertain',
+            ...(txHash !== undefined ? { externalReference: txHash } : {}),
+            ...(error instanceof Error ? { rejectionReason: error.message } : {}),
+          }),
+        'updatePaymentAttempt(settlement-uncertain)',
+        request.requestId,
+      );
+      await safeEmit(
+        buildEvent({
+          type: 'payment.rejected',
+          requestId: request.requestId,
+          resourceId: resource.id,
+          adapter: request.protocol,
+          paymentProvider: provider.name,
+          status: 'error',
+          data: {
+            reason: 'settlement-uncertain',
+            ...(txHash !== undefined ? { transactionHash: txHash } : {}),
+          },
+        }),
+      );
+      // The replay key remains reserved, so report an uncertain, non-retryable
+      // outcome. Expose only the transaction hash from the underlying error.
+      throw new CommerceError('PAYMENT_SETTLEMENT_FAILED', 'Settlement could not be confirmed', {
+        requestId: request.requestId,
+        resourceId: resource.id,
+        cause: error,
+        details: {
+          settlementUncertain: true,
+          ...(txHash !== undefined ? { transactionHash: txHash } : {}),
+          ...settlementParties(requirement, verification),
+        },
+      });
+    }
+
+    if (settlement.status !== 'settled') {
+      await hold?.finalize('release');
+      await safePersist(
+        () =>
+          options.store.updatePaymentAttempt({
+            replayKey,
+            status: 'rejected',
+            ...(settlement.rejectionReason !== undefined
+              ? { rejectionReason: settlement.rejectionReason }
+              : {}),
+          }),
+        'updatePaymentAttempt(rejected)',
+        request.requestId,
+      );
+      await safeEmit(
+        buildEvent({
+          type: 'payment.rejected',
+          requestId: request.requestId,
+          resourceId: resource.id,
+          adapter: request.protocol,
+          paymentProvider: provider.name,
+          status: 'error',
+          data: settlement.rejectionReason ? { reason: settlement.rejectionReason } : {},
+        }),
+      );
+      // A returned rejection confirms no settlement. Both rails return 402.
+      const rejectionDetails = retryChallenge(requirement, settlement.rejectionReason).details;
+      throw new CommerceError(
+        'PAYMENT_SETTLEMENT_FAILED',
+        settlement.rejectionReason ?? 'Settlement was rejected',
+        {
+          requestId: request.requestId,
+          resourceId: resource.id,
+          httpStatus: 402,
+          details: {
+            ...rejectionDetails,
+            ...settlementParties(requirement, settlement, verification),
+          },
+        },
+      );
+    }
+
+    await hold?.finalize('consume');
+    await safePersist(
+      () =>
+        options.store.updatePaymentAttempt({
+          replayKey,
+          status: 'settled',
+          ...(settlement.externalReference !== undefined
+            ? { externalReference: settlement.externalReference }
+            : {}),
+        }),
+      'updatePaymentAttempt(settled)',
+      request.requestId,
+    );
+    await safeEmit(
+      buildEvent({
+        type: 'payment.settled',
+        requestId: request.requestId,
+        resourceId: resource.id,
+        adapter: request.protocol,
+        paymentProvider: provider.name,
+        status: 'ok',
+      }),
+    );
+
+    return settlement;
+  }
+
+  // The backend failed before settlement. Keep the payment replay key,
+  // record rejection, and release the separate authorization hold.
+  async function abandonSettlement(args: SettleArgs, backendErrorCode: string): Promise<void> {
+    const { request, resource, provider, replayKey, hold } = args;
+    await hold?.finalize('release');
+    await safePersist(
+      () =>
+        options.store.updatePaymentAttempt({
+          replayKey,
+          status: 'rejected',
+          rejectionReason: 'backend_failed',
+        }),
+      'updatePaymentAttempt(backend-failed)',
+      request.requestId,
+    );
+    await safeEmit(
+      buildEvent({
+        type: 'payment.rejected',
+        requestId: request.requestId,
+        resourceId: resource.id,
+        adapter: request.protocol,
+        paymentProvider: provider.name,
+        status: 'error',
+        data: { reason: 'backend-failed', backendErrorCode },
+      }),
+    );
+  }
+
   async function execute(request: CanonicalRequest): Promise<ExecutionOutcome> {
     const pipelineStart = options.clock.monotonicMs();
 
@@ -286,6 +459,7 @@ export function createExecutionPipeline(
 
     let paymentResult: PaymentResult | undefined;
     let authorization: AuthorizationRecord | undefined;
+    let deferredSettlement: SettleArgs | undefined;
 
     if (resource.pricing.type === 'fixed') {
       const pricing = resource.pricing;
@@ -485,137 +659,21 @@ export function createExecutionPipeline(
         }),
       );
 
-      let settlement: PaymentResult;
-      try {
-        settlement = await provider.settle({
-          requestId: request.requestId,
-          resource,
-          requirement,
-          submission: payment,
-          verification,
-        });
-      } catch (error) {
-        // A verdict arrives as a returned PaymentResult; a throw means none. A
-        // facilitator can broadcast a settlement and then lose the response, so
-        // a missing transaction hash is no evidence that nothing moved. Every
-        // throw is recorded as settlement-uncertain and the authorization is
-        // marked uncertain, not released: a released mandate could be spent
-        // again against a charge that may have landed. Of the settlement
-        // outcomes, only a returned result other than `settled` releases it.
-        // Nothing is delivered either way.
-        const txHash = settlementTxHash(error);
-        await hold?.finalize('markUncertain');
-        await safePersist(
-          () =>
-            options.store.updatePaymentAttempt({
-              replayKey,
-              status: 'settlement-uncertain',
-              ...(txHash !== undefined ? { externalReference: txHash } : {}),
-              ...(error instanceof Error ? { rejectionReason: error.message } : {}),
-            }),
-          'updatePaymentAttempt(settlement-uncertain)',
-          request.requestId,
-        );
-        await safeEmit(
-          buildEvent({
-            type: 'payment.rejected',
-            requestId: request.requestId,
-            resourceId: resource.id,
-            adapter: request.protocol,
-            paymentProvider: provider.name,
-            status: 'error',
-            data: {
-              reason: 'settlement-uncertain',
-              ...(txHash !== undefined ? { transactionHash: txHash } : {}),
-            },
-          }),
-        );
-        // The buyer must learn the outcome is unknown, since their funds may
-        // have moved. Not the retryable PAYMENT_PROVIDER_UNAVAILABLE: a retry
-        // would hit the reserved replay key, and an unresolved settlement must
-        // never invite paying again. Of the underlying error only the
-        // transaction hash travels: the buyer's own payment, public on-chain
-        // once it lands.
-        throw new CommerceError('PAYMENT_SETTLEMENT_FAILED', 'Settlement could not be confirmed', {
-          requestId: request.requestId,
-          resourceId: resource.id,
-          cause: error,
-          details: {
-            settlementUncertain: true,
-            ...(txHash !== undefined ? { transactionHash: txHash } : {}),
-            ...settlementParties(requirement, verification),
-          },
-        });
+      const settleArgs: SettleArgs = {
+        request,
+        resource,
+        provider,
+        requirement,
+        payment,
+        verification,
+        replayKey,
+        hold,
+      };
+      if (requirement.metadata?.[SETTLE_AFTER_BACKEND_METADATA_KEY] === true) {
+        deferredSettlement = settleArgs;
+      } else {
+        paymentResult = await settle(settleArgs);
       }
-
-      if (settlement.status !== 'settled') {
-        await hold?.finalize('release');
-        await safePersist(
-          () =>
-            options.store.updatePaymentAttempt({
-              replayKey,
-              status: 'rejected',
-              ...(settlement.rejectionReason !== undefined
-                ? { rejectionReason: settlement.rejectionReason }
-                : {}),
-            }),
-          'updatePaymentAttempt(rejected)',
-          request.requestId,
-        );
-        await safeEmit(
-          buildEvent({
-            type: 'payment.rejected',
-            requestId: request.requestId,
-            resourceId: resource.id,
-            adapter: request.protocol,
-            paymentProvider: provider.name,
-            status: 'error',
-            data: settlement.rejectionReason ? { reason: settlement.rejectionReason } : {},
-          }),
-        );
-        // A returned rejection says settlement did not occur, so the buyer
-        // needs another payment. Both rails report this with 402
-        const rejectionDetails = retryChallenge(requirement, settlement.rejectionReason).details;
-        throw new CommerceError(
-          'PAYMENT_SETTLEMENT_FAILED',
-          settlement.rejectionReason ?? 'Settlement was rejected',
-          {
-            requestId: request.requestId,
-            resourceId: resource.id,
-            httpStatus: 402,
-            details: {
-              ...rejectionDetails,
-              ...settlementParties(requirement, settlement, verification),
-            },
-          },
-        );
-      }
-
-      await hold?.finalize('consume');
-      await safePersist(
-        () =>
-          options.store.updatePaymentAttempt({
-            replayKey,
-            status: 'settled',
-            ...(settlement.externalReference !== undefined
-              ? { externalReference: settlement.externalReference }
-              : {}),
-          }),
-        'updatePaymentAttempt(settled)',
-        request.requestId,
-      );
-      await safeEmit(
-        buildEvent({
-          type: 'payment.settled',
-          requestId: request.requestId,
-          resourceId: resource.id,
-          adapter: request.protocol,
-          paymentProvider: provider.name,
-          status: 'ok',
-        }),
-      );
-
-      paymentResult = settlement;
     }
 
     // 6. call backend
@@ -641,6 +699,11 @@ export function createExecutionPipeline(
           data: { code: commerceError.code },
         }),
       );
+
+      if (deferredSettlement !== undefined) {
+        await abandonSettlement(deferredSettlement, commerceError.code);
+        throw commerceError;
+      }
 
       if (paymentResult !== undefined) {
         // The payment settled and the backend then failed. Record an
@@ -707,6 +770,12 @@ export function createExecutionPipeline(
         data: { status: backendResponse.status },
       }),
     );
+
+    // Hold the backend response until settlement succeeds. A refusal or
+    // uncertain outcome throws before delivery.
+    if (deferredSettlement !== undefined) {
+      paymentResult = await settle(deferredSettlement);
+    }
 
     // 7. persist receipt, emit final event, return outcome
     const receipt: CommerceReceipt = {

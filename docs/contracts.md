@@ -59,6 +59,10 @@ This table is for navigation, not enumeration.
 4. `PaymentProvider.verify` does not move funds. `settle` runs only after
    verification returns `verified` with a non-empty `replayKey`, any required
    authorization is verified and reserved, and `reservePaymentAttempt` succeeds.
+   A provider that sets `PaymentRequirement.metadata.settleAfterBackend` to
+   `true` has `settle` run after a successful backend call instead of before
+   it. A backend failure then settles nothing. A rejected or unconfirmed
+   settlement withholds the response.
 5. `EventSink.emit` and event persistence must not fail a commerce flow.
 6. `HttpBackendExecutor` is the only built-in outbound HTTP path to merchant
    backends and always applies a timeout. A custom `GatewayOptions.backend`
@@ -165,7 +169,9 @@ persistence must not fail the commerce flow.
   optional authorization fields on requests, resources, 402 outcomes, and
   receipts. Authorization is neither a transport nor a payment rail.
 - The pipeline verifies and reserves authorization before payment replay
-  reservation, then consumes, releases, or marks it uncertain after settlement.
+  reservation. It consumes, releases, or marks the reservation uncertain based
+  on the outcome. If the backend fails before settlement, it releases the
+  reservation without settling.
   Receipts store an `AuthorizationRecord`, not the live reservation handle or
   proof. An uncertain settlement moves the mandate to `uncertain`; only
   `released` mandates can be presented again, so an uncertain mandate cannot
