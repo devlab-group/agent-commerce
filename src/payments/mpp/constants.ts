@@ -21,7 +21,7 @@ export const MPP_SPEC_COMMIT = '806fdb8b8c92cda5c84b8660558921b6bbeef7e0';
 
 /** The core HTTP authentication draft, the `charge` intent, and its EVM method */
 export const MPP_SPEC_DRAFTS = {
-  core: 'draft-httpauth-payment-00',
+  core: 'draft-httpauth-payment-01',
   intent: 'draft-payment-intent-charge-00',
   method: 'draft-evm-charge-00',
 } as const;
@@ -33,7 +33,7 @@ export const MPP_SPEC_DRAFTS = {
 export const MPP_MIN_CHALLENGE_SECRET_LENGTH = 32;
 
 /** Exact `mppx` release the rail is pinned to */
-export const MPPX_VERSION = '0.10.1';
+export const MPPX_VERSION = '0.13.1';
 
 /**
  * The pinned profile.

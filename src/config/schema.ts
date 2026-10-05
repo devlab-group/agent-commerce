@@ -55,6 +55,11 @@ import {
 } from '../payments/mpp/constants';
 import { resolveX402Deployment, type X402FacilitatorConfig } from '../payments/x402/guardrails';
 import {
+  X402_DEFAULT_PAYMENT_FLOW,
+  X402_PAYMENT_FLOWS,
+  type X402PaymentFlow,
+} from '../payments/x402/payment-flow';
+import {
   ACP_CHECKOUT_OPERATIONS,
   ACP_OPERATION_INPUT_KEYS,
   ACP_OPERATION_OPTIONAL_INPUT_KEYS,
@@ -176,7 +181,11 @@ const MountPathSchema = z
 const AcpAuthSchema = z.object({ type: z.literal('bearer'), token: z.string().min(1) }).strict();
 
 const AcpIdempotencySchema = z
-  .object({ path: z.string().min(1), retentionHours: NumberOrString.optional() })
+  .object({
+    path: z.string().min(1),
+    retentionHours: NumberOrString.optional(),
+    merchantIdempotent: z.boolean().optional(),
+  })
   .strict();
 
 // Operation names are checked against `ACP_CHECKOUT_OPERATIONS` in the
@@ -290,6 +299,7 @@ const ResourceEntrySchema = z
     pricing: PricingSchema,
     expose: z.array(z.string().min(1)).min(1),
     payments: z.array(z.string().min(1)).optional(),
+    paymentFlow: z.enum(X402_PAYMENT_FLOWS).optional(),
     authorization: z
       .object({ required: z.array(z.string().min(1)).min(1) })
       .strict()
@@ -344,6 +354,8 @@ const X402Schema = z
     assetDecimals: NumberOrString,
     payTo: z.string().min(1),
     maxTimeoutSeconds: NumberOrString,
+    // `authorization` (the x402 default) settles after the backend call
+    paymentFlow: z.enum(X402_PAYMENT_FLOWS).optional(),
     facilitator: FacilitatorSchema,
     // Real funds. Never defaulted; see src/payments/x402/guardrails.ts
     allowMainnet: BooleanOrString.optional(),
@@ -364,6 +376,8 @@ const MppSchema = z
     realm: z.string().min(1),
     challengeSecret: z.string().min(1),
     challengeTtlSeconds: NumberOrString.optional(),
+    // Same values and default as `payments.x402.paymentFlow`
+    paymentFlow: z.enum(X402_PAYMENT_FLOWS).optional(),
     facilitator: FacilitatorSchema,
     // Real funds. Never defaulted; see src/payments/x402/guardrails.ts
     allowMainnet: BooleanOrString.optional(),
@@ -413,6 +427,8 @@ const Ap2Schema = z
       .strict()
       .optional(),
     clockSkewSeconds: NumberOrString.optional(),
+    requireMandateAudience: BooleanOrString.optional(),
+    requireMandateExpiry: BooleanOrString.optional(),
     replay: z
       .object({ path: z.string().min(1) })
       .strict()
@@ -462,7 +478,11 @@ export type AcpProtocolConfig =
       readonly enabled: true;
       readonly mountPath: string;
       readonly auth: { readonly type: 'bearer'; readonly token: string };
-      readonly idempotency: { readonly path: string; readonly retentionHours: number };
+      readonly idempotency: {
+        readonly path: string;
+        readonly retentionHours: number;
+        readonly merchantIdempotent: boolean;
+      };
       readonly checkout: {
         readonly operations: Readonly<Record<AcpCheckoutOperation, string>>;
       };
@@ -498,6 +518,10 @@ export interface GatewayConfig {
       readonly assetDecimals: number;
       readonly payTo: string;
       readonly maxTimeoutSeconds: number;
+      /** Defaults to `authorization`, the x402 default */
+      readonly paymentFlow?: X402PaymentFlow;
+      /** Resources whose `paymentFlow` overrides the rail's, by resource id */
+      readonly resourcePaymentFlows?: Readonly<Record<string, X402PaymentFlow>>;
       readonly facilitator: X402FacilitatorConfig;
       readonly allowMainnet?: boolean;
       readonly allowUnauthenticatedFacilitator?: boolean;
@@ -513,6 +537,10 @@ export interface GatewayConfig {
       readonly realm: string;
       readonly challengeSecret: string;
       readonly challengeTtlSeconds?: number;
+      /** Defaults to `authorization`: settle after a successful backend call */
+      readonly paymentFlow?: X402PaymentFlow;
+      /** Resources whose `paymentFlow` overrides the rail's, by resource id */
+      readonly resourcePaymentFlows?: Readonly<Record<string, X402PaymentFlow>>;
       readonly facilitator: X402FacilitatorConfig;
       readonly allowMainnet?: boolean;
       readonly allowUnauthenticatedFacilitator?: boolean;
@@ -690,6 +718,7 @@ function normalize(raw: RawConfig): GatewayConfig {
               min: 1,
             },
           ),
+          paymentFlow: x402Raw.paymentFlow ?? X402_DEFAULT_PAYMENT_FLOW,
           facilitator: normalizeFacilitator(x402Raw.facilitator),
           ...(x402Raw.allowMainnet !== undefined
             ? { allowMainnet: toBoolean(x402Raw.allowMainnet, 'payments.x402.allowMainnet') }
@@ -734,7 +763,27 @@ function normalize(raw: RawConfig): GatewayConfig {
   const resources = Object.entries(raw.resources).map(([id, entry]) =>
     normalizeResource(id, entry, protocols, x402, mpp, ap2),
   );
+  // CommerceResource has no payment-flow field, so the overrides travel with
+  // each rail, and the one selected for a request applies them
+  const resourcePaymentFlows = Object.fromEntries(
+    Object.entries(raw.resources).flatMap(([id, entry]) =>
+      entry.paymentFlow !== undefined ? [[id, entry.paymentFlow]] : [],
+    ),
+  );
+  const hasFlowOverrides = Object.keys(resourcePaymentFlows).length > 0;
+  const x402WithFlows =
+    x402 !== undefined && hasFlowOverrides ? { ...x402, resourcePaymentFlows } : x402;
+  const mppWithFlows =
+    mpp !== undefined && hasFlowOverrides ? { ...mpp, resourcePaymentFlows } : mpp;
   if (protocols.acp.enabled) validateAcpCheckoutMapping(protocols.acp, resources);
+  // Require an exposed resource so the enabled adapter publishes a skill
+  if (protocols.a2a.enabled && !resources.some((r) => r.exposedVia.includes('a2a'))) {
+    throw new CommerceError(
+      'CONFIG_INVALID',
+      'protocols.a2a.enabled is true but no resource lists "a2a" in its expose',
+      { details: { path: 'protocols.a2a.enabled' } },
+    );
+  }
 
   return {
     version: SUPPORTED_CONFIG_VERSION,
@@ -754,8 +803,8 @@ function normalize(raw: RawConfig): GatewayConfig {
     protocols,
     resources,
     payments: {
-      ...(x402 !== undefined ? { x402 } : {}),
-      ...(mpp !== undefined ? { mpp } : {}),
+      ...(x402WithFlows !== undefined ? { x402: x402WithFlows } : {}),
+      ...(mppWithFlows !== undefined ? { mpp: mppWithFlows } : {}),
     },
     ...(ap2 !== undefined ? { authorization: { ap2 } } : {}),
   };
@@ -854,6 +903,14 @@ function normalizeAp2(raw: RawAp2 | undefined): Ap2AuthorizationConfig | undefin
       raw.clockSkewSeconds ?? AP2_DEFAULT_CLOCK_SKEW_SECONDS,
       'authorization.ap2.clockSkewSeconds',
       { min: 0, max: AP2_MAX_CLOCK_SKEW_SECONDS },
+    ),
+    requireMandateAudience: toBoolean(
+      raw.requireMandateAudience ?? false,
+      'authorization.ap2.requireMandateAudience',
+    ),
+    requireMandateExpiry: toBoolean(
+      raw.requireMandateExpiry ?? false,
+      'authorization.ap2.requireMandateExpiry',
     ),
     replay: { path: raw.replay.path },
   };
@@ -1100,6 +1157,7 @@ function normalizeAcp(raw: RawAcp | undefined): AcpProtocolConfig {
         'protocols.acp.idempotency.retentionHours',
         { min: ACP_RETENTION_HOURS },
       ),
+      merchantIdempotent: raw.idempotency.merchantIdempotent ?? false,
     },
     checkout: { operations: normalizeAcpOperations(raw.checkout) },
     // Built key by key so absent metadata stays absent rather than `undefined`
@@ -1321,6 +1379,7 @@ function normalizeMpp(raw: RawConfig['payments']['mpp']): NormalizedMpp | undefi
           ),
         }
       : {}),
+    paymentFlow: raw.paymentFlow ?? X402_DEFAULT_PAYMENT_FLOW,
     facilitator: normalizeFacilitator(raw.facilitator),
     ...(raw.allowMainnet !== undefined
       ? { allowMainnet: toBoolean(raw.allowMainnet, 'payments.mpp.allowMainnet') }
@@ -1501,6 +1560,18 @@ function normalizeResource(
       }
       validatePricingAmount(id, entry.pricing.amount, MPP_PROFILE.assetDecimals);
     }
+  }
+
+  if (
+    entry.paymentFlow !== undefined &&
+    (entry.pricing.type !== 'fixed' ||
+      !paymentMethods.some((method) => method === 'x402' || method === 'mpp'))
+  ) {
+    throw new CommerceError(
+      'CONFIG_INVALID',
+      `Resource "${id}" sets paymentFlow, which requires fixed pricing and "x402" or "mpp" in payments`,
+      { details: { path: `resources.${id}.paymentFlow`, resourceId: id } },
+    );
   }
 
   const pricing: Pricing =

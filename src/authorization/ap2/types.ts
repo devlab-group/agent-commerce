@@ -44,6 +44,17 @@ export type Ap2AuthorizationConfig =
         readonly checkoutIssuers: readonly Ap2TrustedIssuer[];
       };
       readonly clockSkewSeconds: number;
+      /**
+       * Refuse a mandate with no `aud`. AP2 makes the claim optional, so by
+       * default it is checked only when present.
+       */
+      readonly requireMandateAudience?: boolean;
+      /**
+       * Refuse a mandate with no `exp`, at the top level or in the mandate
+       * content. AP2 makes it optional, so by default it is checked only when
+       * present.
+       */
+      readonly requireMandateExpiry?: boolean;
       /** Its own SQLite file. An authorization replay is not a payment replay */
       readonly replay: { readonly path: string };
     };

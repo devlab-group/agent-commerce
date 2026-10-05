@@ -20,12 +20,33 @@ export const JSONRPC_METHOD_NOT_FOUND = -32601;
 export const JSONRPC_INVALID_PARAMS = -32602;
 export const JSONRPC_INTERNAL_ERROR = -32603;
 
+/** A2A `TaskNotFoundError` for a task id this stateless adapter cannot find */
+export const A2A_ERROR_TASK_NOT_FOUND = -32001;
+
+/** A2A `PushNotificationNotSupportedError` for push configuration methods */
+export const A2A_ERROR_PUSH_NOTIFICATION_NOT_SUPPORTED = -32003;
+
 /**
- * A2A's own `UnsupportedOperationError`, for a real A2A operation this
- * deployment declines to serve (an unsupported protocol version included), as
- * distinct from `METHOD_NOT_FOUND`, which means the method does not exist
+ * A2A `UnsupportedOperationError` for a known operation or message feature
+ * this adapter does not serve. Unknown methods use `METHOD_NOT_FOUND`.
  */
 export const A2A_ERROR_UNSUPPORTED_OPERATION = -32004;
+
+/** A2A `ContentTypeNotSupportedError` for a non-JSON structured data part */
+export const A2A_ERROR_CONTENT_TYPE_NOT_SUPPORTED = -32005;
+
+/** A2A `VersionNotSupportedError` when the requested major.minor is unsupported */
+export const A2A_ERROR_VERSION_NOT_SUPPORTED = -32009;
+
+// Use the A2A error name without its `Error` suffix as the ErrorInfo reason.
+// Standard JSON-RPC codes carry no A2A error detail.
+const A2A_ERROR_REASONS: ReadonlyMap<number, string> = new Map([
+  [A2A_ERROR_TASK_NOT_FOUND, 'TASK_NOT_FOUND'],
+  [A2A_ERROR_PUSH_NOTIFICATION_NOT_SUPPORTED, 'PUSH_NOTIFICATION_NOT_SUPPORTED'],
+  [A2A_ERROR_UNSUPPORTED_OPERATION, 'UNSUPPORTED_OPERATION'],
+  [A2A_ERROR_CONTENT_TYPE_NOT_SUPPORTED, 'CONTENT_TYPE_NOT_SUPPORTED'],
+  [A2A_ERROR_VERSION_NOT_SUPPORTED, 'VERSION_NOT_SUPPORTED'],
+]);
 
 /** An id may legally be a string, a number or null; anything else is not one */
 export type JsonRpcId = string | number | null;
@@ -33,6 +54,7 @@ export type JsonRpcId = string | number | null;
 export interface JsonRpcErrorBody {
   readonly code: number;
   readonly message: string;
+  readonly data?: readonly Record<string, unknown>[];
 }
 
 export interface JsonRpcRequest {
@@ -55,12 +77,31 @@ export function jsonRpcResult(id: JsonRpcId, result: unknown): Record<string, un
   return { jsonrpc: '2.0', id, result };
 }
 
+/**
+ * Add `google.rpc.ErrorInfo` to the detail array for A2A-specific errors.
+ */
 export function jsonRpcError(
   id: JsonRpcId,
   code: number,
   message: string,
 ): Record<string, unknown> {
-  return { jsonrpc: '2.0', id, error: { code, message } };
+  const reason = A2A_ERROR_REASONS.get(code);
+  const error: JsonRpcErrorBody = {
+    code,
+    message,
+    ...(reason !== undefined
+      ? {
+          data: [
+            {
+              '@type': 'type.googleapis.com/google.rpc.ErrorInfo',
+              reason,
+              domain: 'a2a-protocol.org',
+            },
+          ],
+        }
+      : {}),
+  };
+  return { jsonrpc: '2.0', id, error };
 }
 
 export function parseJsonRpcRequest(rawBody: string): JsonRpcParseResult {
@@ -92,6 +133,17 @@ export function parseJsonRpcRequest(rawBody: string): JsonRpcParseResult {
   }
 
   const id = readId(payload['id']);
+  // Notifications have no reply. Reject them before they can run or charge.
+  if (payload['id'] === undefined) {
+    return {
+      ok: false,
+      id,
+      error: {
+        code: JSONRPC_INVALID_REQUEST,
+        message: 'Request must include an "id"; notifications are unsupported.',
+      },
+    };
+  }
   if (payload['jsonrpc'] !== '2.0') {
     return {
       ok: false,

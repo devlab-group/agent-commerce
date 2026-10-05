@@ -19,13 +19,21 @@ function envelope(data: unknown, overrides: Record<string, unknown> = {}): unkno
   };
 }
 
-function expectRejected(params: unknown, code: 'INPUT_INVALID' | 'PROTOCOL_UNSUPPORTED'): void {
+// Check the specific A2A error code when the mapper supplies one
+function expectRejected(
+  params: unknown,
+  code: 'INPUT_INVALID' | 'PROTOCOL_UNSUPPORTED',
+  a2aErrorCode?: number,
+): void {
   try {
     parseInvocation(params);
     expect.unreachable();
   } catch (error) {
     expect(isCommerceError(error)).toBe(true);
-    if (isCommerceError(error)) expect(error.code).toBe(code);
+    if (isCommerceError(error)) {
+      expect(error.code).toBe(code);
+      expect(error.details?.['a2aErrorCode']).toBe(a2aErrorCode);
+    }
   }
 }
 
@@ -59,13 +67,10 @@ describe('parseInvocation: accepted envelope', () => {
   });
 
   it('accepts a part with no declared media type', () => {
-    const params = { message: { role: 'ROLE_USER', parts: [{ data: { resource: 'ping' } }] } };
+    const params = {
+      message: { role: 'ROLE_USER', messageId: 'msg-1', parts: [{ data: { resource: 'ping' } }] },
+    };
     expect(parseInvocation(params).resourceId).toBe('ping');
-  });
-
-  it('omits messageId when the client sent none', () => {
-    const params = { message: { role: 'ROLE_USER', parts: [{ data: { resource: 'ping' } }] } };
-    expect(parseInvocation(params)).not.toHaveProperty('messageId');
   });
 });
 
@@ -79,8 +84,18 @@ describe('parseInvocation: malformed envelopes', () => {
     expectRejected(params, 'INPUT_INVALID');
   });
 
+  it.each([
+    ['no messageId', undefined],
+    ['an empty messageId', ''],
+  ])('rejects a message with %s', (_label, messageId) => {
+    expectRejected(envelope({ resource: 'ping' }, { messageId }), 'INPUT_INVALID');
+  });
+
   it('rejects an empty parts array', () => {
-    expectRejected({ message: { role: 'ROLE_USER', parts: [] } }, 'INPUT_INVALID');
+    expectRejected(
+      { message: { role: 'ROLE_USER', messageId: 'msg-1', parts: [] } },
+      'INPUT_INVALID',
+    );
   });
 
   it('rejects a part whose data is not an object', () => {
@@ -118,25 +133,43 @@ describe('parseInvocation: malformed envelopes', () => {
 describe('parseInvocation: legal A2A this adapter does not serve', () => {
   it('rejects a file part', () => {
     const params = {
-      message: { role: 'ROLE_USER', parts: [{ file: { uri: 'https://example.com/a.pdf' } }] },
+      message: {
+        role: 'ROLE_USER',
+        messageId: 'msg-1',
+        parts: [{ file: { uri: 'https://example.com/a.pdf' } }],
+      },
     };
-    expectRejected(params, 'PROTOCOL_UNSUPPORTED');
+    expectRejected(params, 'PROTOCOL_UNSUPPORTED', -32005);
   });
 
   it('rejects a raw binary file part', () => {
-    const params = { message: { role: 'ROLE_USER', parts: [{ file: { bytes: 'AAAA' } }] } };
-    expectRejected(params, 'PROTOCOL_UNSUPPORTED');
+    const params = {
+      message: { role: 'ROLE_USER', messageId: 'msg-1', parts: [{ file: { bytes: 'AAAA' } }] },
+    };
+    expectRejected(params, 'PROTOCOL_UNSUPPORTED', -32005);
   });
 
   it('rejects a text part', () => {
-    const params = { message: { role: 'ROLE_USER', parts: [{ text: 'get me the report' }] } };
-    expectRejected(params, 'PROTOCOL_UNSUPPORTED');
+    const params = {
+      message: { role: 'ROLE_USER', messageId: 'msg-1', parts: [{ text: 'get me the report' }] },
+    };
+    expectRejected(params, 'PROTOCOL_UNSUPPORTED', -32005);
+  });
+
+  it.each([
+    ['a text part', { text: 'get me the report' }],
+    ['a file part', { url: 'https://example.com/a.pdf' }],
+  ])('names the call shape when it refuses %s', (_label, part) => {
+    expect(() =>
+      parseInvocation({ message: { role: 'ROLE_USER', messageId: 'msg-1', parts: [part] } }),
+    ).toThrow('send one data part {"resource": "<skill id>", "input": {...}}');
   });
 
   it('rejects multiple input parts rather than picking one', () => {
     const params = {
       message: {
         role: 'ROLE_USER',
+        messageId: 'msg-1',
         parts: [
           { data: { resource: 'weather_basic', input: {} } },
           { data: { resource: 'market_report', input: {} } },
@@ -150,6 +183,7 @@ describe('parseInvocation: legal A2A this adapter does not serve', () => {
     const params = {
       message: {
         role: 'ROLE_USER',
+        messageId: 'msg-1',
         parts: [{ text: 'please' }, { data: { resource: 'market_report' } }],
       },
     };
@@ -160,28 +194,31 @@ describe('parseInvocation: legal A2A this adapter does not serve', () => {
     const params = {
       message: {
         role: 'ROLE_USER',
+        messageId: 'msg-1',
         parts: [{ data: { resource: 'ping' }, mediaType: 'application/xml' }],
       },
     };
-    expectRejected(params, 'PROTOCOL_UNSUPPORTED');
+    expectRejected(params, 'PROTOCOL_UNSUPPORTED', -32005);
   });
 
+  // Every supplied task id is unknown to this stateless adapter
   it.each([
-    ['a params-level taskId', { taskId: 'task-1' }],
-    ['a params-level contextId', { contextId: 'ctx-1' }],
-  ])('rejects %s', (_label, extra) => {
+    ['a params-level taskId', { taskId: 'task-1' }, -32001],
+    ['a params-level contextId', { contextId: 'ctx-1' }, undefined],
+  ])('rejects %s', (_label, extra, a2aErrorCode) => {
     expectRejected(
       { ...(envelope({ resource: 'ping' }) as object), ...extra },
       'PROTOCOL_UNSUPPORTED',
+      a2aErrorCode,
     );
   });
 
   it.each([
-    ['a message-level taskId', { taskId: 'task-1' }],
-    ['a message-level contextId', { contextId: 'ctx-1' }],
-    ['referenced tasks', { referenceTaskIds: ['task-1'] }],
-  ])('rejects %s', (_label, overrides) => {
-    expectRejected(envelope({ resource: 'ping' }, overrides), 'PROTOCOL_UNSUPPORTED');
+    ['a message-level taskId', { taskId: 'task-1' }, -32001],
+    ['a message-level contextId', { contextId: 'ctx-1' }, undefined],
+    ['referenced tasks', { referenceTaskIds: ['task-1'] }, undefined],
+  ])('rejects %s', (_label, overrides, a2aErrorCode) => {
+    expectRejected(envelope({ resource: 'ping' }, overrides), 'PROTOCOL_UNSUPPORTED', a2aErrorCode);
   });
 
   it('accepts an empty referenceTaskIds array, which continues nothing', () => {
@@ -201,6 +238,10 @@ describe('parseInvocation: A2A v1 part spellings', () => {
     ['inline bytes', { raw: 'QUFBQQ==', filename: 'a.bin', mediaType: 'application/octet-stream' }],
     ['a url part', { url: 'https://example.com/a.pdf', mediaType: 'application/pdf' }],
   ])('rejects %s', (_label, part) => {
-    expectRejected({ message: { role: 'ROLE_USER', parts: [part] } }, 'PROTOCOL_UNSUPPORTED');
+    expectRejected(
+      { message: { role: 'ROLE_USER', messageId: 'msg-1', parts: [part] } },
+      'PROTOCOL_UNSUPPORTED',
+      -32005,
+    );
   });
 });

@@ -59,12 +59,18 @@ This table is for navigation, not enumeration.
 4. `PaymentProvider.verify` does not move funds. `settle` runs only after
    verification returns `verified` with a non-empty `replayKey`, any required
    authorization is verified and reserved, and `reservePaymentAttempt` succeeds.
+   A provider that sets `PaymentRequirement.metadata.settleAfterBackend` to
+   `true` has `settle` run after a successful backend call instead of before
+   it; the `authorization` flow of x402 and MPP does. A backend failure then
+   settles nothing. A rejected or unconfirmed settlement withholds the response.
 5. `EventSink.emit` and event persistence must not fail a commerce flow.
 6. `HttpBackendExecutor` is the only built-in outbound HTTP path to merchant
    backends and always applies a timeout. A custom `GatewayOptions.backend`
    replaces it and must enforce its own timeout.
-7. Amounts are decimal strings in display units, such as `"0.01"`. Payment
-   providers convert them to base units.
+7. Payment amounts are decimal strings in display units, such as `"0.01"`.
+   Providers convert them to base units. If a settled result includes
+   `metadata.amountBaseUnits`, the HTTP route uses that value for
+   `PAYMENT-RESPONSE.amount`.
 8. `exactOptionalPropertyTypes` is enabled. Add optional properties
    conditionally instead of assigning `undefined`.
 9. Preserve `AuthorizationSubmission.payload` byte-for-byte as opaque provider
@@ -79,7 +85,8 @@ This table is for navigation, not enumeration.
 first method with an enabled provider and does not retry another method after
 a rejection. `createGateway` lists each resource's provider-backed methods
 first, keeping declared order, so every ingress path labels a proof with the
-method the pipeline selects; `GET /api/resources` shows that order.
+method the pipeline selects. `GET /api/resources` lists only those
+provider-backed methods, so its first entry is the rail a challenge offers.
 
 ## Store no secrets
 
@@ -123,6 +130,17 @@ persistence must not fail the commerce flow.
   static header of the same name from backend config. Two clients using the same
   key for one deployment and endpoint share both the derived key and the local
   claim; key uniqueness remains the client's responsibility.
+- `CanonicalRequest.backendHeaders` and `BackendRequest.backendHeaders` are
+  optional: headers an adapter asks the backend executor to forward. The pipeline
+  passes them through unchanged. In the HTTP backend, a header from backend
+  config wins over a forwarded header of the same name, and so do the derived
+  `Idempotency-Key` and the executor's `Content-Type`. The HTTP backend never
+  forwards `Authorization`, `Cookie`, `Set-Cookie`, `Host`, `Content-Length`,
+  `Content-Type`, `Idempotency-Key`, `Connection`, `Keep-Alive`, `TE`,
+  `Trailer`, `Transfer-Encoding`, `Upgrade` or any `Proxy-*` header. An illegal
+  forwarded name or value is `INPUT_INVALID` before pricing. ACP is the only
+  adapter that sets the field. A custom `BackendExecutor` that ignores it
+  forwards nothing.
 
 ### Protocols and gateway
 
@@ -163,7 +181,9 @@ persistence must not fail the commerce flow.
   optional authorization fields on requests, resources, 402 outcomes, and
   receipts. Authorization is neither a transport nor a payment rail.
 - The pipeline verifies and reserves authorization before payment replay
-  reservation, then consumes, releases, or marks it uncertain after settlement.
+  reservation. It consumes, releases, or marks the reservation uncertain based
+  on the outcome. If the backend fails before settlement, it releases the
+  reservation without settling.
   Receipts store an `AuthorizationRecord`, not the live reservation handle or
   proof. An uncertain settlement moves the mandate to `uncertain`; only
   `released` mandates can be presented again, so an uncertain mandate cannot
@@ -193,6 +213,9 @@ persistence must not fail the commerce flow.
   the pinned profile metadata and descriptor. The provider runs local checks,
   then verifies and settles through the x402 facilitator named in its options,
   using x402-compatible replay keys.
+- `MppProviderOptions` and `GatewayConfig.payments.mpp` accept optional
+  `paymentFlow` and `resourcePaymentFlows`. They use the x402 flow values and
+  default to `authorization`, which settles after a successful backend call.
 
 ## Published entry points
 
@@ -200,7 +223,7 @@ persistence must not fail the commerce flow.
 | ----------------------------------- | ------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
 | `@devlab.group/agent-commerce`      | Core contract, config, gateway, receipt store, A2A and ACP adapters | None                                                                                    |
 | `@devlab.group/agent-commerce/ap2`  | AP2 verification and checkout signing                               | `jose`, `@sd-jwt/core`, `canonicalize`                                                  |
-| `@devlab.group/agent-commerce/mcp`  | MCP adapter                                                         | `@modelcontextprotocol/sdk`                                                             |
+| `@devlab.group/agent-commerce/mcp`  | MCP adapter                                                         | `@modelcontextprotocol/server`                                                          |
 | `@devlab.group/agent-commerce/mpp`  | MPP provider and profile metadata                                   | `@coinbase/x402` (only for `auth.type: cdp`), `@x402/core`, `@x402/evm`, `mppx`, `viem` |
 | `@devlab.group/agent-commerce/x402` | x402 provider and client proof helper                               | `@coinbase/x402` (only for `auth.type: cdp`), `@x402/core`, `@x402/evm`, `viem`         |
 
@@ -228,8 +251,12 @@ export function createSqliteReceiptStore(
 ): ReceiptStore;
 ```
 
-`reservePaymentAttempt` is atomic and throws
-`CommerceError('PAYMENT_REPLAYED', …)` for a duplicate `replayKey`.
+`reservePaymentAttempt` atomically claims a `replayKey`. On a duplicate, it
+throws `CommerceError('PAYMENT_REPLAYED', …)` with the existing attempt's
+status in `details.attemptStatus` if the store can read it. The pipeline
+returns 402 and a fresh challenge if that status is `settled` or `rejected`.
+It returns 409 for any other status or when the status is unavailable. That
+includes the legacy `failed`, which may hide a settlement with no verdict.
 
 ## x402
 
@@ -246,6 +273,10 @@ export interface X402ProviderOptions {
   /** Merchant-controlled settlement destination. */
   readonly payTo: `0x${string}`;
   readonly maxTimeoutSeconds?: number;
+  /** 'authorization' (default) settles after a successful backend call; 'upfront' first */
+  readonly paymentFlow?: X402PaymentFlow;
+  /** Per-resource overrides of `paymentFlow`, keyed by resource id */
+  readonly resourcePaymentFlows?: Readonly<Record<string, X402PaymentFlow>>;
   readonly facilitator: X402FacilitatorConfig;
   /** Must be true before mainnet settlement. */
   readonly allowMainnet?: boolean;
@@ -316,6 +347,10 @@ export interface MppProviderOptions {
   readonly challengeTtlSeconds?: number; // default 300
   /** CAIP-2 network: 'eip155:84532' (default) or 'eip155:8453' */
   readonly network?: string;
+  /** 'authorization' (default) settles after a successful backend call; 'upfront' first */
+  readonly paymentFlow?: X402PaymentFlow;
+  /** Per-resource overrides of `paymentFlow`, keyed by resource id */
+  readonly resourcePaymentFlows?: Readonly<Record<string, X402PaymentFlow>>;
   readonly clock?: Clock;
   readonly ids?: IdGenerator;
 }
@@ -345,10 +380,12 @@ the pipeline records `settlement-uncertain` and returns
 `PAYMENT_SETTLEMENT_FAILED`. Returned results name `mpp`; `health` returns the
 internal x402 provider's health unchanged.
 
-`PaymentSubmission.payload` is the serialized credential: the value of an
-`Authorization: Payment ...` header, scheme included. `PaymentChallenge.envelope`
-is `{ wwwAuthenticate }`, the challenge as a `WWW-Authenticate` value, and a
-settled result's `metadata.receipt` is the `Payment-Receipt` value.
+`PaymentSubmission.payload` accepts either the full
+`Authorization: Payment ...` value, including its scheme, or a JSON string
+containing the credential object from MPP's MCP `_meta` carrier.
+`PaymentChallenge.envelope` contains `wwwAuthenticate` for the HTTP header
+and `challenges` for the MCP carrier. A settled result with a transaction
+reference carries the `Payment-Receipt` value in `metadata.receipt`.
 
 ## AP2
 
@@ -381,6 +418,8 @@ export type Ap2AuthorizationConfig =
         readonly checkoutIssuers: readonly Ap2TrustedIssuer[];
       };
       readonly clockSkewSeconds: number;
+      readonly requireMandateAudience?: boolean;
+      readonly requireMandateExpiry?: boolean;
       readonly replay: { readonly path: string };
     };
 
@@ -555,6 +594,8 @@ export interface GatewayConfig {
       readonly assetDecimals: number;
       readonly payTo: string;
       readonly maxTimeoutSeconds: number;
+      readonly paymentFlow?: X402PaymentFlow; // default 'authorization'
+      readonly resourcePaymentFlows?: Readonly<Record<string, X402PaymentFlow>>;
       readonly facilitator: X402FacilitatorConfig;
       readonly allowMainnet?: boolean;
       readonly allowUnauthenticatedFacilitator?: boolean;
@@ -570,6 +611,8 @@ export interface GatewayConfig {
       readonly realm: string;
       readonly challengeSecret: string;
       readonly challengeTtlSeconds?: number;
+      readonly paymentFlow?: X402PaymentFlow; // default 'authorization'
+      readonly resourcePaymentFlows?: Readonly<Record<string, X402PaymentFlow>>;
       readonly facilitator: X402FacilitatorConfig;
       readonly allowMainnet?: boolean;
       readonly allowUnauthenticatedFacilitator?: boolean;
@@ -589,7 +632,7 @@ unset `adminToken` makes operator routes return 404; an empty
 
 | Route                             | Behavior                                                                                                                                                              |
 | --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET /health`                     | Returns 200 after the Host check and, when present, the Origin check pass; a rejected Host or Origin returns 403.                                                       |
+| `GET /health`                     | Returns 200 after the Host check and, when present, the Origin check pass; a rejected Host or Origin returns 403.                                                     |
 | `GET /ready`                      | Returns 503 if the store, an adapter, or either provider kind reports `fail`; `warn` remains ready. Results are briefly cached and concurrent probes share one check. |
 | `GET /.well-known/agent-commerce` | Publishes merchant and sanitized adapter, provider, store, and protocol metadata.                                                                                     |
 | `GET /api/resources`              | Lists canonical resources without secrets.                                                                                                                            |

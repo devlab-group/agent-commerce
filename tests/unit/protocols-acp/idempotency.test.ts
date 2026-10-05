@@ -179,6 +179,21 @@ describe('ACP idempotency store', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  it('frees an orphaned claim on reopen when releaseOrphans is enabled', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'oac-acp-idem-'));
+    const path = join(dir, 'acp-idempotency.sqlite');
+
+    const first = createAcpIdempotencyStore({ path, retentionHours: 24 });
+    expect(first.claim(SCOPE, FINGERPRINT)).toEqual({ kind: 'reserved' });
+    first.close();
+
+    const second = createAcpIdempotencyStore({ path, retentionHours: 24, releaseOrphans: true });
+    expect(second.claim(SCOPE, FINGERPRINT)).toEqual({ kind: 'reserved' });
+    second.close();
+
+    rmSync(dir, { recursive: true, force: true });
+  });
+
   it('discards a v1 database rather than carrying keys it cannot translate', () => {
     const dir = mkdtempSync(join(tmpdir(), 'oac-acp-v1-'));
     const path = join(dir, 'acp-idempotency.sqlite');

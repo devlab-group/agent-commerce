@@ -1,13 +1,12 @@
 /**
  * Builds AP2 Direct Checkout Mandate presentations for the verifier tests.
  *
- * PROVENANCE: these are NOT golden vectors from the AP2 repository. They are
- * built here to the closed Checkout Mandate shape of AP2 v0.2.0, the release
- * tagged 2026-04-28 at commit b4587ac, with real ES256 keys and real
- * signatures from `jose`. So they show the verifier enforces the
- * rules as this repository reads them; they do not show interoperability with
- * a mandate the reference implementation minted. Upstream vectors, with the
- * commit recorded, belong here before anyone calls this stable.
+ * These follow the Trusted Agent Provider shape of AP2 v0.2.0 (tag 2026-04-28,
+ * commit b4587ac): an issuer-signed SD-JWT whose one `delegate_payload`
+ * element, disclosed, is the closed Checkout Mandate. They carry top-level
+ * `iss`, `aud`, `iat` and `exp`, so each check can be varied on its own.
+ * Reference SDK vectors, including one without those top-level claims, are
+ * in tests/fixtures/ap2/v0.2.0.
  *
  * Keys are generated per run and never written down.
  */
@@ -80,6 +79,11 @@ export function disclosure(salt: string, name: string, value: unknown): string {
   return Buffer.from(JSON.stringify([salt, name, value]), 'utf8').toString('base64url');
 }
 
+/** One SD-JWT disclosure for an array element: `[salt, value]` */
+export function elementDisclosure(salt: string, value: unknown): string {
+  return Buffer.from(JSON.stringify([salt, value]), 'utf8').toString('base64url');
+}
+
 /** A merchant checkout JWT payload, with the Agent Commerce profile under `agent_commerce` */
 export function checkoutPayload(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -113,16 +117,23 @@ export async function signCheckoutJwt(
 export interface MandateOptions {
   /** Replaces the compact checkout JWT after `checkout_hash` has been computed */
   readonly checkoutJwtOverride?: string;
+  /** Top-level claims of the issuer-signed JWT. `undefined` removes one */
   readonly payloadOverrides?: Record<string, unknown>;
+  /** Claims of the mandate itself, the disclosed `delegate_payload` element */
+  readonly mandateOverrides?: Record<string, unknown>;
   readonly header?: Record<string, unknown>;
   /** Extra disclosure strings appended to the presentation */
   readonly extraDisclosures?: readonly string[];
-  /** Extra claims committed to in `_sd`, disclosable independently */
+  /** Extra mandate claims committed to in its `_sd`, disclosable independently */
   readonly disclosable?: Readonly<Record<string, unknown>>;
   /** Which of {@link MandateOptions.disclosable} to actually present */
   readonly present?: readonly string[];
   /** Omit the disclosure that carries the checkout JWT */
   readonly withholdCheckoutDisclosure?: boolean;
+  /** Omit the disclosure of the mandate element itself */
+  readonly withholdMandateDisclosure?: boolean;
+  /** Further `delegate_payload` elements, signed inline after the mandate */
+  readonly extraDelegateElements?: readonly unknown[];
 }
 
 /**
@@ -132,6 +143,8 @@ export interface MandateOptions {
  */
 export interface MandateParts {
   readonly signedToken: string;
+  /** The `delegate_payload` element, the mandate itself */
+  readonly mandateDisclosure: string;
   readonly checkoutDisclosure: string;
   /** Encoded disclosure per optional claim name */
   readonly optional: Readonly<Record<string, string>>;
@@ -153,6 +166,7 @@ export async function mintMandate(
 ): Promise<string> {
   const parts = await mintMandateParts(mandateSigner, checkoutJwt, options);
   const presented = [
+    ...(options.withholdMandateDisclosure ? [] : [parts.mandateDisclosure]),
     ...(options.withholdCheckoutDisclosure ? [] : [parts.checkoutDisclosure]),
     ...Object.entries(parts.optional)
       .filter(([name]) => options.present === undefined || options.present.includes(name))
@@ -174,15 +188,22 @@ export async function mintMandateParts(
     encoded: disclosure(`salt-${name}`, name, value),
   }));
   const optionalDigests = await Promise.all(optional.map((entry) => sha256(entry.encoded)));
-  const payload: Record<string, unknown> = {
+  const mandateDisclosure = elementDisclosure('salt-mandate', {
     vct: AP2_CHECKOUT_MANDATE_VCT,
+    checkout_hash: await sha256(checkoutJwt),
+    _sd: [await sha256(checkoutDisclosure), ...optionalDigests],
+    ...options.mandateOverrides,
+  });
+  const payload: Record<string, unknown> = {
     iss: MANDATE_ISSUER,
     aud: MANDATE_AUDIENCE,
     iat: NOW_SECONDS - 10,
     exp: NOW_SECONDS + 300,
-    checkout_hash: await sha256(checkoutJwt),
+    delegate_payload: [
+      { '...': await sha256(mandateDisclosure) },
+      ...(options.extraDelegateElements ?? []),
+    ],
     _sd_alg: 'sha-256',
-    _sd: [await sha256(checkoutDisclosure), ...optionalDigests],
     ...options.payloadOverrides,
   };
 
@@ -192,6 +213,7 @@ export async function mintMandateParts(
 
   return {
     signedToken: jws,
+    mandateDisclosure,
     checkoutDisclosure:
       options.checkoutJwtOverride !== undefined
         ? disclosure('salt-checkout', 'checkout_jwt', options.checkoutJwtOverride)

@@ -1,7 +1,6 @@
 /**
- * The MCP protocol revision the pinned SDK negotiates, its
- * `LATEST_PROTOCOL_VERSION`. The SDK client always requests that revision and
- * the SDK server echoes any version it supports, so a client and server built
- * from this SDK settle on it. The conformance suite also asserts it live.
+ * Revisions negotiated by the two conformance clients. The v1 client uses
+ * the SDK's latest 2025-era revision; the v2 client pins `2026-07-28`.
  */
 export const EXPECTED_MCP_PROTOCOL_REVISION = '2025-11-25';
+export const EXPECTED_MCP_MODERN_PROTOCOL_REVISION = '2026-07-28';

@@ -2,13 +2,13 @@
  * A2A pins, kept in one place so nothing infers one version from another.
  *
  * The specification revision and the negotiation version look alike but
- * differ: `1.0.0` names the document this adapter was written against, `1.0`
+ * differ: `1.0.1` names the document this adapter was written against, `1.0`
  * is what a client negotiates on the wire. Neither is this package's version
  * (`PACKAGE_VERSION`).
  */
 
 /** A2A specification revision this adapter targets */
-export const A2A_SPEC_VERSION = '1.0.0';
+export const A2A_SPEC_VERSION = '1.0.1';
 
 /** Protocol negotiation version carried on the wire */
 export const A2A_PROTOCOL_VERSION = '1.0';
@@ -33,9 +33,8 @@ export const A2A_JSON_MEDIA_TYPE = 'application/json';
 export const A2A_DEFAULT_AGENT_NAME = 'agent-commerce';
 
 /**
- * Version negotiation header. A2A v1 carries the protocol version out of band,
- * so a request without it comes from an older convention and is refused as
- * unsupported.
+ * Version negotiation header. An absent or empty value means `0.3`, which
+ * this adapter does not serve.
  */
 export const A2A_VERSION_HEADER = 'a2a-version';
 
@@ -43,9 +42,21 @@ export const A2A_VERSION_HEADER = 'a2a-version';
 export const A2A_METHOD_SEND_MESSAGE = 'SendMessage';
 
 /**
+ * Push notification configuration methods. The card declares no push
+ * support, so these return `PushNotificationNotSupportedError`.
+ */
+export const A2A_PUSH_CONFIG_METHODS: readonly string[] = [
+  'CreateTaskPushNotificationConfig',
+  'GetTaskPushNotificationConfig',
+  'ListTaskPushNotificationConfigs',
+  'DeleteTaskPushNotificationConfig',
+];
+
+/**
  * A2A methods that exist and are not served here, kept apart from unknown
  * methods so a caller learns whether it hit a refused method or a typo. The
  * descriptor and the transport both read this one list.
+ * `A2A_TASK_LOOKUP_METHODS` get a different error code on the wire.
  */
 export const A2A_UNSUPPORTED_METHODS: readonly string[] = [
   'SendStreamingMessage',
@@ -53,17 +64,26 @@ export const A2A_UNSUPPORTED_METHODS: readonly string[] = [
   'ListTasks',
   'CancelTask',
   'SubscribeToTask',
-  'CreateTaskPushNotificationConfig',
-  'GetTaskPushNotificationConfig',
-  'ListTaskPushNotificationConfigs',
-  'DeleteTaskPushNotificationConfig',
+  ...A2A_PUSH_CONFIG_METHODS,
   'GetExtendedAgentCard',
 ];
 
 /**
- * Terminal task states. Only these two are ever returned: a synchronous
- * execution is finished by the time the response is written, and no task
- * store exists for a caller to poll a non-terminal one against.
+ * Methods A2A gives an agent no capability flag to decline. No task can be
+ * read back or canceled, so they answer `TaskNotFoundError`.
+ */
+export const A2A_TASK_LOOKUP_METHODS: readonly string[] = ['GetTask', 'CancelTask'];
+
+/**
+ * Terminal states for completed and failed calls. An unpaid x402 extension
+ * task instead waits in `TASK_STATE_INPUT_REQUIRED`. `GetTask` finds no task
+ * in any state.
  */
 export const A2A_TASK_STATE_COMPLETED = 'TASK_STATE_COMPLETED';
 export const A2A_TASK_STATE_FAILED = 'TASK_STATE_FAILED';
+
+/** An unpaid x402 extension task waiting for a payment message */
+export const A2A_TASK_STATE_INPUT_REQUIRED = 'TASK_STATE_INPUT_REQUIRED';
+
+/** Extension activation header, a comma-separated list of extension URIs */
+export const A2A_EXTENSIONS_HEADER = 'a2a-extensions';

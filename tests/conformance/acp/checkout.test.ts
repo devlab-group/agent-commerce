@@ -81,6 +81,17 @@ describe('getCheckoutSession', () => {
       body: undefined,
     });
   });
+
+  it('forwards an encoded merchant session id as one path segment', async () => {
+    const id = encodeURIComponent('gid://shop/Checkout/1');
+    const result = await acpFetch(stack, `/acp/checkout_sessions/${id}`, {
+      method: 'GET',
+      headers: acpHeaders({ 'content-type': '' }),
+    });
+
+    expect(result.status).toBe(200);
+    expect(stack.calls[0]?.path).toBe(`/checkout_sessions/${id}`);
+  });
 });
 
 describe('completeCheckoutSession', () => {
@@ -142,5 +153,59 @@ describe('one request, one merchant call', () => {
       'GET /checkout_sessions/cs_1',
       'POST /checkout_sessions/cs_1/cancel',
     ]);
+  });
+});
+
+describe('unknown capability values', () => {
+  const withInterventions = (document: unknown, interventions: Record<string, unknown>) => {
+    const draft = structuredClone(document) as Record<string, unknown>;
+    draft['capabilities'] = {
+      ...(draft['capabilities'] as Record<string, unknown>),
+      interventions,
+    };
+    return draft;
+  };
+
+  it('passes an intervention this snapshot does not list on to the merchant', async () => {
+    const body = withInterventions(CREATE_REQUEST, { supported: ['3ds', 'passkey'] });
+    const result = await acpFetch(stack, '/acp/checkout_sessions', { body });
+
+    expect(result.status).toBe(201);
+    expect(stack.calls[0]?.body).toEqual(body);
+  });
+
+  it('relays a merchant session that carries one', async () => {
+    const session = withInterventions(ACP_EXAMPLES['create_checkout_session_response'], {
+      supported: ['passkey'],
+      required: ['passkey'],
+    });
+    stack.nextReply({ status: 201, body: session });
+    const result = await acpFetch(stack, '/acp/checkout_sessions', { body: CREATE_REQUEST });
+
+    expect(result.status).toBe(201);
+    expect(result.body).toEqual(session);
+  });
+
+  it('still refuses an unknown capability field from the agent, before the merchant', async () => {
+    const body = withInterventions(CREATE_REQUEST, { supported: [], passkeys: true });
+    const result = await acpFetch(stack, '/acp/checkout_sessions', { body });
+
+    expect(result.status).toBe(400);
+    expect(result.body['param']).toBe('$.capabilities.interventions.passkeys');
+    expect(stack.calls).toHaveLength(0);
+  });
+
+  it('still refuses an unknown capability field from the merchant', async () => {
+    stack.nextReply({
+      status: 201,
+      body: withInterventions(ACP_EXAMPLES['create_checkout_session_response'], {
+        supported: [],
+        passkeys: true,
+      }),
+    });
+    const result = await acpFetch(stack, '/acp/checkout_sessions', { body: CREATE_REQUEST });
+
+    expect(result.status).toBe(500);
+    expect(result.body['type']).toBe('processing_error');
   });
 });

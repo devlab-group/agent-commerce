@@ -27,6 +27,7 @@ import {
   MANDATE_ISSUER,
   mintMandate,
   NOW,
+  NOW_SECONDS,
   type Party,
   sha256Base64url,
   signCheckoutJwt,
@@ -212,6 +213,31 @@ describe('signature and trust', () => {
     await expectRefused(verifier.verify(presentation), 'unknown_key');
   });
 
+  it('selects the issuer by kid when the mandate names none', async () => {
+    const presentation = await mintMandate(parties.mandateSigner, checkoutJwt, {
+      payloadOverrides: { iss: undefined },
+    });
+    expect((await verifier.verify(presentation)).mandateIssuer).toBe(MANDATE_ISSUER);
+  });
+
+  it('refuses an issuerless mandate whose kid two trusted issuers share', async () => {
+    const shared = configFor(parties, {
+      trust: {
+        mandateIssuers: [
+          ...parties.mandateIssuers,
+          trustedIssuer('https://second-surface.example', MANDATE_AUDIENCE, parties.mandateSigner),
+        ],
+        checkoutIssuers: parties.checkoutIssuers,
+      },
+    });
+    const presentation = await mintMandate(parties.mandateSigner, checkoutJwt, {
+      payloadOverrides: { iss: undefined },
+    });
+    await expectRefused(verifierFor(shared).verify(presentation), 'unknown_key');
+    // With `iss` present the same configuration is unambiguous
+    await expect(verifierFor(shared).verify(validPresentation)).resolves.toBeDefined();
+  });
+
   it('refuses a presentation with no kid rather than guessing the only key', async () => {
     const presentation = await mintMandate(parties.mandateSigner, checkoutJwt, {
       header: { kid: undefined },
@@ -264,9 +290,16 @@ describe('mandate claims', () => {
     ['a prefix extension', 'mandate.checkout.1x'],
   ])('refuses %s', async (_label, vct) => {
     const presentation = await mintMandate(parties.mandateSigner, checkoutJwt, {
-      payloadOverrides: { vct },
+      mandateOverrides: { vct },
     });
     await expectRefused(verifier.verify(presentation), 'unsupported_mandate_type');
+  });
+
+  it('reads the mandate type from the delegated element, not the credential type above it', async () => {
+    const presentation = await mintMandate(parties.mandateSigner, checkoutJwt, {
+      payloadOverrides: { vct: 'com.example.agent_mandate' },
+    });
+    await expect(verifier.verify(presentation)).resolves.toBeDefined();
   });
 
   it('refuses a mandate addressed to a different merchant', async () => {
@@ -290,16 +323,55 @@ describe('mandate claims', () => {
     await expectRefused(verifier.verify(presentation), 'expired');
   });
 
-  it('refuses a mandate with no exp, which would otherwise never expire', async () => {
+  // AP2 makes `aud`, `iat` and `exp` optional; the reference SDK mints none
+  it.each([
+    ['aud', { aud: undefined }],
+    ['iat', { iat: undefined }],
+    ['exp', { exp: undefined }],
+  ])('accepts a mandate with no %s by default', async (_claim, payloadOverrides) => {
+    const presentation = await mintMandate(parties.mandateSigner, checkoutJwt, {
+      payloadOverrides,
+    });
+    await expect(verifier.verify(presentation)).resolves.toBeDefined();
+  });
+
+  it('refuses a mandate with no aud when the operator requires one', async () => {
+    const presentation = await mintMandate(parties.mandateSigner, checkoutJwt, {
+      payloadOverrides: { aud: undefined },
+    });
+    const strict = verifierFor(configFor(parties, { requireMandateAudience: true }));
+    await expectRefused(strict.verify(presentation), 'invalid_claims');
+    await expect(strict.verify(validPresentation)).resolves.toBeDefined();
+  });
+
+  it('refuses a mandate with no exp anywhere when the operator requires one', async () => {
+    const strict = verifierFor(configFor(parties, { requireMandateExpiry: true }));
     const presentation = await mintMandate(parties.mandateSigner, checkoutJwt, {
       payloadOverrides: { exp: undefined },
     });
-    await expectRefused(verifier.verify(presentation), 'invalid_claims');
+    await expectRefused(strict.verify(presentation), 'invalid_claims');
+
+    // The mandate content's own `exp` satisfies the requirement
+    const inContent = await mintMandate(parties.mandateSigner, checkoutJwt, {
+      payloadOverrides: { exp: undefined },
+      mandateOverrides: { exp: Math.floor(NOW.getTime() / 1000) + 300 },
+    });
+    await expect(strict.verify(inContent)).resolves.toBeDefined();
   });
 
-  it('refuses a mandate with no iat, which would skip the issued-in-the-future check', async () => {
+  it.each([
+    ['an expired exp', { exp: Math.floor(NOW.getTime() / 1000) - 600 }],
+    ['an iat in the future', { iat: Math.floor(NOW.getTime() / 1000) + 600 }],
+  ])('refuses %s inside the mandate content', async (_label, mandateOverrides) => {
     const presentation = await mintMandate(parties.mandateSigner, checkoutJwt, {
-      payloadOverrides: { iat: undefined },
+      mandateOverrides,
+    });
+    await expectRefused(verifier.verify(presentation), 'expired');
+  });
+
+  it('refuses a non-numeric exp inside the mandate content', async () => {
+    const presentation = await mintMandate(parties.mandateSigner, checkoutJwt, {
+      mandateOverrides: { exp: 'tomorrow' },
     });
     await expectRefused(verifier.verify(presentation), 'invalid_claims');
   });
@@ -331,6 +403,84 @@ describe('mandate claims', () => {
       'unsupported_mandate_type',
     );
   });
+
+  it.each([
+    ['mandate', { mandateOverrides: { cnf: { jwk: { kty: 'EC' } } } }],
+    ['token', { payloadOverrides: { cnf: { jwk: { kty: 'EC' } } } }],
+  ])('rejects an unsupported cnf binding in the %s', async (_label, opts) => {
+    const presentation = await mintMandate(parties.mandateSigner, checkoutJwt, opts);
+    await expectRefused(verifier.verify(presentation), 'unsupported_mandate_type');
+  });
+
+  it.each([
+    ['a key-bound typ', { header: { typ: 'kb+sd-jwt' } }],
+    ['the renamed key-bound typ', { header: { typ: 'kb-sd-jwt+kb' } }],
+    ['an sd_hash', { payloadOverrides: { sd_hash: 'x' } }],
+    ['an issuer_jwt_hash', { payloadOverrides: { issuer_jwt_hash: 'x' } }],
+  ])('refuses a delegation hop presented alone, marked by %s', async (_label, opts) => {
+    const presentation = await mintMandate(parties.mandateSigner, checkoutJwt, opts);
+    await expectRefused(verifier.verify(presentation), 'unsupported_mandate_type');
+  });
+
+  it('refuses a closed mandate that carries constraints', async () => {
+    const presentation = await mintMandate(parties.mandateSigner, checkoutJwt, {
+      mandateOverrides: { constraints: [{ type: 'unknown' }] },
+    });
+    await expectRefused(verifier.verify(presentation), 'unsupported_mandate_type');
+  });
+
+  it('refuses a mandate whose own nbf is in the future', async () => {
+    const presentation = await mintMandate(parties.mandateSigner, checkoutJwt, {
+      mandateOverrides: { nbf: NOW_SECONDS + 3600 },
+    });
+    await expectRefused(verifier.verify(presentation), 'expired');
+  });
+
+  it('reports a non-numeric token exp as invalid claims, not as expired', async () => {
+    const presentation = await mintMandate(parties.mandateSigner, checkoutJwt, {
+      payloadOverrides: { exp: 'soon' },
+    });
+    await expectRefused(verifier.verify(presentation), 'invalid_claims');
+  });
+
+  it('refuses a delegation chain outside Direct mode', async () => {
+    await expectRefused(
+      verifier.verify(`${validPresentation}~${validPresentation}`),
+      'unsupported_mandate_type',
+    );
+  });
+});
+
+describe('the delegated mandate', () => {
+  it('refuses mandate claims at the top level with no delegate_payload', async () => {
+    // Legacy shape with mandate claims at the top level
+    const checkoutDisclosure = disclosure('salt-checkout', 'checkout_jwt', checkoutJwt);
+    const presentation = await mintMandate(parties.mandateSigner, checkoutJwt, {
+      payloadOverrides: {
+        delegate_payload: undefined,
+        vct: 'mandate.checkout.1',
+        checkout_hash: await sha256Base64url(checkoutJwt),
+        _sd: [await sha256Base64url(checkoutDisclosure)],
+      },
+      withholdMandateDisclosure: true,
+    });
+    await expectRefused(verifier.verify(presentation), 'unsupported_mandate_type');
+  });
+
+  it('refuses a presentation that discloses no mandate', async () => {
+    const presentation = await mintMandate(parties.mandateSigner, checkoutJwt, {
+      withholdMandateDisclosure: true,
+      withholdCheckoutDisclosure: true,
+    });
+    await expectRefused(verifier.verify(presentation), 'invalid_claims');
+  });
+
+  it('refuses two delegated elements rather than choosing one', async () => {
+    const presentation = await mintMandate(parties.mandateSigner, checkoutJwt, {
+      extraDelegateElements: [{ vct: 'mandate.payment.1' }],
+    });
+    await expectRefused(verifier.verify(presentation), 'invalid_claims');
+  });
 });
 
 describe('the merchant checkout JWT', () => {
@@ -357,14 +507,14 @@ describe('the merchant checkout JWT', () => {
 
   it('refuses a checkout_hash that does not match the bound document', async () => {
     const presentation = await mintMandate(parties.mandateSigner, checkoutJwt, {
-      payloadOverrides: { checkout_hash: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' },
+      mandateOverrides: { checkout_hash: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' },
     });
     await expectRefused(verifier.verify(presentation), 'checkout_binding_failed');
   });
 
   it('refuses a mandate carrying no checkout_hash at all', async () => {
     const presentation = await mintMandate(parties.mandateSigner, checkoutJwt, {
-      payloadOverrides: { checkout_hash: undefined },
+      mandateOverrides: { checkout_hash: undefined },
     });
     await expectRefused(verifier.verify(presentation), 'invalid_claims');
   });
@@ -435,7 +585,7 @@ describe('the merchant checkout JWT', () => {
       checkoutPayload({ jti: 'checkout_UNRELATED' }),
     );
     const presentation = await mintMandate(parties.mandateSigner, checkoutJwt, {
-      payloadOverrides: { checkout_hash: await sha256Base64url(unrelated) },
+      mandateOverrides: { checkout_hash: await sha256Base64url(unrelated) },
     });
     await expectRefused(verifier.verify(presentation), 'checkout_binding_failed');
   });

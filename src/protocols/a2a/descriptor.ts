@@ -1,7 +1,7 @@
 /**
  * Adapter self-description.
  *
- * `supportedSpec` is the A2A specification revision (`1.0.0`), never the
+ * `supportedSpec` is the A2A specification revision (`1.0.1`), never the
  * negotiation version (`1.0`) and never this package's version. Status is
  * `experimental` while the adapter lacks the features in the unsupported list
  * below; an entry leaves that list only when its feature is implemented.
@@ -10,7 +10,13 @@ import type { AdapterDescriptor } from '../../core';
 import { A2A_SPEC_VERSION, A2A_UNSUPPORTED_METHODS } from './constants';
 
 // What this adapter implements
-const A2A_CAPABILITIES: readonly string[] = ['agent-card', 'jsonrpc', 'SendMessage'];
+const A2A_CAPABILITIES: readonly string[] = [
+  'agent-card',
+  'jsonrpc',
+  'SendMessage',
+  // The x402 A2A transport, opt-in per request
+  'x402-extension',
+];
 
 /**
  * Major A2A features this adapter does not implement, served on
@@ -26,12 +32,14 @@ export const A2A_UNSUPPORTED: readonly string[] = [
   // Behaviors
   'SSE',
   'long-running task persistence',
-  'task resumption',
+  'task resumption other than an x402 extension payment',
   'push notifications',
   'multi-turn conversational continuation',
   'authenticated extended agent cards',
   'A2A authentication schemes',
   'artifact types beyond Agent Commerce outcome data',
+  // Pending x402 payments live in process memory
+  'x402 extension payments across gateway restarts or instances',
 ];
 
 export function buildDescriptor(implementationVersion: string): AdapterDescriptor {

@@ -138,6 +138,23 @@ describe('A2A agent card over the real gateway', () => {
     expect(card).not.toHaveProperty('url');
   });
 
+  it('revalidates the card through the gateway with its ETag', async () => {
+    const gw = await startGateway();
+    const url = '/.well-known/agent-card.json';
+
+    const first = await gw.server.inject({ method: 'GET', url });
+    const etag = String(first.headers['etag']);
+    expect(first.headers['cache-control']).toMatch(/max-age=\d+/);
+
+    const revalidated = await gw.server.inject({
+      method: 'GET',
+      url,
+      headers: { 'if-none-match': etag },
+    });
+    expect(revalidated.statusCode).toBe(304);
+    expect(revalidated.body).toBe('');
+  });
+
   it('leaves the gateway own well-known document and the MCP mount untouched', async () => {
     const gw = await startGateway();
 
@@ -200,7 +217,8 @@ describe('A2A JSON-RPC transport over the real gateway', () => {
 
   it.each([
     ['a known but unsupported operation', 'SendStreamingMessage', -32004],
-    ['another unsupported operation', 'GetTask', -32004],
+    ['a task lookup, which finds no retained task', 'GetTask', -32001],
+    ['a task cancellation', 'CancelTask', -32001],
     ['a completely unknown method', 'DoSomething', -32601],
   ])('distinguishes %s', async (_label, method, code) => {
     const gw = await startGateway();
@@ -243,24 +261,29 @@ describe('A2A JSON-RPC transport over the real gateway', () => {
       id: 'req-1',
       method: 'SendMessage',
       params: {
-        message: { role: 'ROLE_USER', parts: [{ text: 'give me the weather' }] },
+        message: {
+          role: 'ROLE_USER',
+          messageId: 'msg-1',
+          parts: [{ text: 'give me the weather' }],
+        },
       },
     });
-    expect(body.error?.code).toBe(-32004);
+    expect(body.error?.code).toBe(-32005);
   });
 
   it.each([
     ['a missing version header', {}],
     ['an older version', { 'a2a-version': '0.3' }],
     ['an unknown version', { 'a2a-version': '2.0' }],
-  ])('refuses %s', async (_label, headers) => {
+  ])('returns VersionNotSupportedError with the request id for %s', async (_label, headers) => {
     const gw = await startGateway();
     const { statusCode, body } = await rpc(gw, sendMessage({ resource: 'weather_basic' }), {
       'content-type': 'application/json',
       ...headers,
     });
     expect(statusCode).toBe(200);
-    expect(body.error?.code).toBe(-32004);
+    expect(body.id).toBe('req-1');
+    expect(body.error?.code).toBe(-32009);
     expect(body.error?.message).toContain('1.0');
   });
 
@@ -307,7 +330,7 @@ describe('A2A in gateway discovery', () => {
 
     const a2a = doc.adapters.find((adapter) => adapter.name === 'a2a');
     expect(a2a?.status).toBe('experimental');
-    expect(a2a?.supportedSpec).toBe('1.0.0');
+    expect(a2a?.supportedSpec).toBe('1.0.1');
     expect(a2a?.unsupported).toContain('SendStreamingMessage');
     expect(a2a?.health.status).toBe('pass');
     expect(doc.protocols['a2a']).toEqual({ enabled: true, mountPath: '/a2a' });

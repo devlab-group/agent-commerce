@@ -186,7 +186,7 @@ describe('provider - SDK-boundary branches (mocked x402/facilitator)', () => {
       submission: { method: 'x402', payload: tampered },
     });
     expect(result.status).toBe('rejected');
-    expect(result.rejectionReason).toBe('malformed_payment_payload');
+    expect(result.rejectionReason).toBe('invalid_payload');
   });
 
   it('verify() returns verified with a replayKey when the SDK reports isValid', async () => {
@@ -223,9 +223,14 @@ describe('provider - SDK-boundary branches (mocked x402/facilitator)', () => {
       buyerPrivateKey: BUYER_PRIVATE_KEY,
       accepts: offered,
     });
-    // Another token and price in `accepted`, with the signed authorization unchanged
+    // Differences verify() tolerates in `accepted`: a mismatch in a compared
+    // field is refused before the facilitator is called
     const decoded = JSON.parse(Buffer.from(proof, 'base64').toString('utf8'));
-    decoded.accepted = { ...decoded.accepted, asset: `0x${'dd'.repeat(20)}`, amount: '1' };
+    decoded.accepted = {
+      ...decoded.accepted,
+      maxTimeoutSeconds: 9999,
+      extra: { ...decoded.accepted.extra, clientNote: 'added by the client' },
+    };
     const payload = Buffer.from(JSON.stringify(decoded)).toString('base64');
     verifyMock.mockResolvedValueOnce({ isValid: true });
     settleMock.mockResolvedValueOnce({
@@ -250,6 +255,45 @@ describe('provider - SDK-boundary branches (mocked x402/facilitator)', () => {
 
     expect(verifyMock.mock.calls[0]?.[1]).toEqual(offered);
     expect(settleMock.mock.calls[0]?.[1]).toEqual(offered);
+  });
+
+  it('forwards the payload without the resource the buyer echoed back', async () => {
+    const provider = makeProvider();
+    const requirement = await provider.createRequirement(paymentContext());
+    const proof = await createPaymentProof({
+      buyerPrivateKey: BUYER_PRIVATE_KEY,
+      accepts: requirement.challenge.accepts[0] as Record<string, unknown>,
+    });
+    // SDK clients echo the challenge's `resource`, a `resource://` URL
+    const decoded = JSON.parse(Buffer.from(proof, 'base64').toString('utf8'));
+    decoded.resource = (requirement.challenge.envelope as { resource: unknown }).resource;
+    const payload = Buffer.from(JSON.stringify(decoded)).toString('base64');
+    verifyMock.mockResolvedValueOnce({ isValid: true });
+    settleMock.mockResolvedValueOnce({
+      success: true,
+      transaction: `0x${'ab'.repeat(32)}`,
+      network: 'eip155:84532',
+    });
+
+    const verification = await provider.verify({
+      requestId: 'req-1',
+      resource: RESOURCE,
+      requirement,
+      submission: { method: 'x402', payload },
+    });
+    await provider.settle({
+      requestId: 'req-1',
+      resource: RESOURCE,
+      requirement,
+      submission: { method: 'x402', payload },
+      verification,
+    });
+
+    expect(verification.status).toBe('verified');
+    for (const call of [verifyMock.mock.calls[0], settleMock.mock.calls[0]]) {
+      expect(call?.[0]).not.toHaveProperty('resource');
+      expect(call?.[0]).toMatchObject({ x402Version: 2, payload: decoded.payload });
+    }
   });
 
   it('verify() falls back to "invalid_payment" when the SDK gives no invalidReason', async () => {

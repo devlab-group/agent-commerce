@@ -3,6 +3,7 @@
  * Adapter mounting (e.g. `/mcp`) is handled separately in adapters.ts.
  */
 
+import { Transform } from 'node:stream';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { GatewayConfig } from '../config';
 import {
@@ -26,11 +27,22 @@ import {
   toPaymentRequiredEnvelope,
 } from '../core';
 import { isRecord } from '../core/is-record';
+import { mppProblem, mppProblemDetail } from '../payments/mpp/problems';
+import { CONTENT_DIGEST_METADATA_KEY, contentDigest } from '../payments/mpp/transport';
+import {
+  settlementFailure,
+  settlementResponse,
+  settlementResponseFromDetails,
+  x402ErrorCode,
+} from '../payments/x402/transport';
 import { buildOperatorTokenHook } from './access-control';
 import type { AdapterRuntime } from './adapters';
 import { toPublicResource } from './public-resource';
 import { createReadinessProbe } from './readiness';
 import { buildWellKnownDocument } from './well-known';
+
+// Legacy x402 proof header; this gateway accepts v2 only
+const X402_V1_PAYMENT_HEADER = 'x-payment';
 
 export interface RegisterRoutesOptions {
   readonly server: FastifyInstance;
@@ -77,13 +89,23 @@ export function registerRoutes(options: RegisterRoutesOptions): void {
     }),
   );
 
+  // List provider-backed rails in challenge order
+  const backed = (method: string) =>
+    options.paymentProviders.some((provider) => provider.name === method);
   server.get('/api/resources', async () => ({
-    resources: options.resources.list().map(toPublicResource),
+    resources: options.resources.list().map((resource) => {
+      const listed = toPublicResource(resource);
+      return { ...listed, paymentMethods: listed.paymentMethods.filter(backed) };
+    }),
   }));
 
-  server.post('/api/resources/:id/invoke', async (request, reply) => {
-    await handleInvoke(request, reply, options);
-  });
+  server.post(
+    '/api/resources/:id/invoke',
+    { preParsing: async (request, _reply, payload) => payload.pipe(digestingStream(request)) },
+    async (request, reply) => {
+      await handleInvoke(request, reply, options);
+    },
+  );
 
   // The admin token gate is per route, not global; access-control.ts says why
   const tokenHook = buildOperatorTokenHook(options.config.server.adminToken);
@@ -98,6 +120,24 @@ export function registerRoutes(options: RegisterRoutesOptions): void {
     { onRequest: tokenHook },
     ledgerHandler('events', (list) => options.store.listEvents(list)),
   );
+}
+
+// Keep a digest of each invoke body's original bytes through parsing.
+const bodyDigests = new WeakMap<FastifyRequest, string>();
+
+// Forward each body chunk unchanged and record the digest at the end.
+function digestingStream(request: FastifyRequest): Transform {
+  const chunks: Buffer[] = [];
+  return new Transform({
+    transform(chunk: Buffer, _encoding, callback) {
+      chunks.push(chunk);
+      callback(null, chunk);
+    },
+    flush(callback) {
+      if (chunks.length > 0) bodyDigests.set(request, contentDigest(Buffer.concat(chunks)));
+      callback();
+    },
+  });
 }
 
 // `GET /api/receipts` and `GET /api/events`: one page of a ledger
@@ -123,6 +163,8 @@ async function handleInvoke(
   options: RegisterRoutesOptions,
 ): Promise<void> {
   const resourceId = (request.params as { id: string }).id;
+  // Track the selected rail so errors use its payment headers
+  let paymentMethod: PaymentMethodName | undefined;
 
   try {
     const resource = options.resources.get(resourceId);
@@ -136,7 +178,7 @@ async function handleInvoke(
     // createGateway puts provider-backed methods first, so this label matches
     // the rail selected by the pipeline. Without a method, drop the proof
     // instead of inventing a rail; the pipeline receives an unpaid request.
-    const paymentMethod = resource.paymentMethods[0];
+    paymentMethod = resource.paymentMethods[0];
     const paymentValue = paymentProof(request, paymentMethod);
     const payment =
       paymentValue !== undefined && paymentMethod !== undefined
@@ -151,6 +193,7 @@ async function handleInvoke(
       request.id,
     );
 
+    const digest = bodyDigests.get(request);
     const canonicalRequest: CanonicalRequest = {
       requestId: request.id,
       resourceId,
@@ -159,6 +202,7 @@ async function handleInvoke(
       receivedAt: options.clock.nowIso(),
       ...(payment !== undefined ? { payment } : {}),
       ...(authorization !== undefined ? { authorization } : {}),
+      ...(digest !== undefined ? { metadata: { [CONTENT_DIGEST_METADATA_KEY]: digest } } : {}),
     };
 
     const outcome = await options.pipeline.execute(canonicalRequest);
@@ -169,48 +213,121 @@ async function handleInvoke(
         const challenge = envelope.payment.envelope?.['wwwAuthenticate'];
         if (typeof challenge === 'string') reply.header('www-authenticate', challenge);
       } else if (envelope.payment.envelope !== undefined) {
-        // x402 v2 clients read the challenge from this header and ignore the
-        // body, which still carries the full envelope
-        reply.header(PAYMENT_REQUIRED_HEADER, encodeHeaderDocument(envelope.payment.envelope));
+        // v2 clients read this header. A v1-only proof gets a challenge
+        // naming the unsupported version; the body keeps the full envelope.
+        const v1Only =
+          request.headers[X402_V1_PAYMENT_HEADER] !== undefined &&
+          request.headers[PAYMENT_HEADER] === undefined;
+        reply.header(
+          PAYMENT_REQUIRED_HEADER,
+          encodeHeaderDocument(
+            v1Only
+              ? { ...envelope.payment.envelope, error: 'invalid_x402_version' }
+              : envelope.payment.envelope,
+          ),
+        );
       }
       // A challenge is per-request (fresh nonce window, fresh expiry). Caching
       // one would hand a later buyer an expired offer.
       reply.header('cache-control', 'no-store');
+      if (envelope.payment.provider === 'mpp') {
+        // Use Problem Details for unpaid MPP requests and refusals
+        const { status: _envelopeStatus, ...members } = envelope;
+        reply
+          .header('content-type', 'application/problem+json')
+          .status(402)
+          .send({
+            ...mppProblem(envelope.code, 402),
+            status: 402,
+            detail: envelope.message,
+            ...members,
+          });
+        return;
+      }
       reply.status(402).send(envelope);
       return;
     }
 
     if (outcome.payment) {
-      reply.header(PAYMENT_RESPONSE_HEADER, encodePaymentSummary(outcome.payment));
+      reply.header(
+        PAYMENT_RESPONSE_HEADER,
+        encodeHeaderDocument(settlementResponse(outcome.payment)),
+      );
       const receipt = outcome.payment.metadata?.['receipt'];
       if (outcome.payment.provider === 'mpp' && typeof receipt === 'string') {
         reply.header('payment-receipt', receipt);
       }
+      // Payment headers identify this buyer's payment; MPP also requires
+      // private caching for responses carrying `Payment-Receipt`
+      reply.header('cache-control', 'private');
     }
     reply.status(outcome.backendStatus).send(outcome.body);
   } catch (error) {
-    const commerceError = toCommerceError(error);
-    // A backend failure after settlement carries the payment summary in
-    // details.payment. Send the success path's headers so the buyer still
-    // learns what they paid.
-    const settledPayment = errorPaymentSummary(commerceError);
-    if (settledPayment !== undefined) {
-      reply.header(PAYMENT_RESPONSE_HEADER, encodePaymentSummary(settledPayment));
-      if (settledPayment.provider === 'mpp' && settledPayment.receipt !== undefined) {
-        reply.header('payment-receipt', settledPayment.receipt);
-      }
-    }
-    // An MPP client pays again only from a fresh WWW-Authenticate challenge
-    const challenge = commerceError.details?.['challenge'] as Record<string, unknown> | undefined;
-    if (
-      commerceError.code === 'PAYMENT_INVALID' &&
-      typeof challenge?.['wwwAuthenticate'] === 'string'
-    ) {
-      reply.header('www-authenticate', challenge['wwwAuthenticate']);
-      reply.header('cache-control', 'no-store');
-    }
-    reply.status(commerceError.httpStatus).send(toErrorEnvelope(commerceError));
+    sendInvokeError(reply, toCommerceError(error), paymentMethod);
   }
+}
+
+// Codes whose MPP response body is a Problem Details document
+const MPP_PROBLEM_CODES: ReadonlySet<string> = new Set([
+  'PAYMENT_INVALID',
+  'PAYMENT_REPLAYED',
+  'PAYMENT_SETTLEMENT_FAILED',
+  'PAYMENT_PROVIDER_UNAVAILABLE',
+]);
+
+function sendInvokeError(
+  reply: FastifyReply,
+  error: CommerceError,
+  paymentMethod: PaymentMethodName | undefined,
+): void {
+  const details = error.details;
+  // Report a settled payment even if backend delivery fails. MPP forbids a
+  // `Payment-Receipt` header on error responses, so send only this summary
+  const settled = settlementResponseFromDetails(details);
+  if (settled !== undefined) {
+    reply.header(PAYMENT_RESPONSE_HEADER, encodeHeaderDocument(settled));
+  }
+  if (error.code === 'PAYMENT_SETTLEMENT_FAILED') {
+    reply.header(PAYMENT_RESPONSE_HEADER, encodeHeaderDocument(settlementFailure(details)));
+  }
+  // Attach a fresh challenge to a 402 when the rail provides one
+  const challenge = details?.['challenge'];
+  if (error.httpStatus === 402 && isRecord(challenge)) {
+    if (paymentMethod === 'mpp' && typeof challenge['wwwAuthenticate'] === 'string') {
+      reply.header('www-authenticate', challenge['wwwAuthenticate']);
+    } else if (paymentMethod === 'x402' && error.code !== 'PAYMENT_SETTLEMENT_FAILED') {
+      // x402 includes the reason in the challenge; settlement refusals use
+      // `PAYMENT-RESPONSE` alone
+      reply.header(
+        PAYMENT_REQUIRED_HEADER,
+        encodeHeaderDocument({
+          ...challenge,
+          error: x402ErrorCode(error.code, details?.['reason']),
+        }),
+      );
+    }
+    reply.header('cache-control', 'no-store');
+  }
+
+  const envelope = toErrorEnvelope(error);
+  if (paymentMethod === 'mpp' && MPP_PROBLEM_CODES.has(error.code)) {
+    // RFC 9457 `status` is the HTTP status, so it replaces the envelope's
+    // `status: 'error'`; the other envelope fields stay as extension members
+    const { status: _envelopeStatus, ...members } = envelope;
+    const reason = typeof details?.['reason'] === 'string' ? details['reason'] : undefined;
+    reply
+      .header('content-type', 'application/problem+json')
+      .status(error.httpStatus)
+      .send({
+        ...mppProblem(error.code, error.httpStatus, reason),
+        status: error.httpStatus,
+        // The reason token stays in `message` and `details.reason`
+        detail: mppProblemDetail(reason, error.message),
+        ...members,
+      });
+    return;
+  }
+  reply.status(error.httpStatus).send(envelope);
 }
 
 // Each rail has its own proof header. MPP uses HTTP authentication, and an
@@ -227,42 +344,6 @@ function paymentProof(
   return Array.isArray(value) ? value[0] : value;
 }
 
-interface PaymentSummary {
-  readonly status: string;
-  readonly provider: string;
-  readonly amount: string;
-  readonly currency: string;
-  readonly network?: string;
-  readonly externalReference?: string;
-  // Serialized MPP `Payment-Receipt`, when the provider issued one
-  readonly receipt?: string;
-}
-
-function errorPaymentSummary(
-  error: ReturnType<typeof toCommerceError>,
-): PaymentSummary | undefined {
-  const payment = error.details?.['payment'];
-  if (!isRecord(payment)) return undefined;
-  const { status, provider, amount, currency, network, externalReference, receipt } = payment;
-  if (
-    typeof status !== 'string' ||
-    typeof provider !== 'string' ||
-    typeof amount !== 'string' ||
-    typeof currency !== 'string'
-  ) {
-    return undefined;
-  }
-  return {
-    status,
-    provider,
-    amount,
-    currency,
-    ...(typeof network === 'string' ? { network } : {}),
-    ...(typeof externalReference === 'string' ? { externalReference } : {}),
-    ...(typeof receipt === 'string' ? { receipt } : {}),
-  };
-}
-
 /**
  * Base64 of a JSON document, the encoding every x402 v2 payment header uses.
  * Not imported from the x402 SDK: this module is reachable from the main
@@ -270,26 +351,6 @@ function errorPaymentSummary(
  */
 function encodeHeaderDocument(document: unknown): string {
   return Buffer.from(JSON.stringify(document), 'utf8').toString('base64');
-}
-
-/**
- * The settlement result in the `SettleResponse` shape an x402 v2 client
- * decodes from `PAYMENT-RESPONSE`. `status`, `provider`, `amount`, `currency`
- * and `externalReference` are ours; a v2 client ignores fields it does not know.
- */
-function encodePaymentSummary(payment: PaymentSummary): string {
-  return encodeHeaderDocument({
-    success: payment.status === 'settled',
-    transaction: payment.externalReference ?? '',
-    network: payment.network ?? '',
-    status: payment.status,
-    provider: payment.provider,
-    amount: payment.amount,
-    currency: payment.currency,
-    ...(payment.externalReference !== undefined
-      ? { externalReference: payment.externalReference }
-      : {}),
-  });
 }
 
 // Undefined when absent or unparseable, so the store applies its default. A

@@ -88,7 +88,7 @@ describe('configs without AP2', () => {
 });
 
 describe('authorization.ap2 trust policy', () => {
-  it('normalizes an enabled block, defaulting the version, mode and skew', () => {
+  it('normalizes an enabled block, defaulting the version, mode, skew and mandate claim policy', () => {
     const config = parseConfig(withAp2(), {});
     const ap2 = config.authorization?.ap2;
     expect(ap2).toMatchObject({
@@ -96,6 +96,9 @@ describe('authorization.ap2 trust policy', () => {
       specVersion: '0.2.0',
       mode: 'direct',
       clockSkewSeconds: 60,
+      // AP2 makes both claims optional
+      requireMandateAudience: false,
+      requireMandateExpiry: false,
       replay: { path: './data/ap2-authorizations.sqlite' },
     });
   });
@@ -198,6 +201,22 @@ describe('authorization.ap2 trust policy', () => {
     const ap2 = parseConfig(withAp2({ clockSkewSeconds: 120 }), {}).authorization?.ap2;
     if (ap2?.enabled !== true) return expect.unreachable();
     expect(ap2.clockSkewSeconds).toBe(120);
+  });
+
+  it('lets the operator require a mandate audience and expiry', () => {
+    const ap2 = parseConfig(
+      withAp2({ requireMandateAudience: true, requireMandateExpiry: 'true' }),
+      {},
+    ).authorization?.ap2;
+    if (ap2?.enabled !== true) return expect.unreachable();
+    expect(ap2.requireMandateAudience).toBe(true);
+    expect(ap2.requireMandateExpiry).toBe(true);
+  });
+
+  it('rejects a require flag that is not a boolean', () => {
+    expect(expectRejected(withAp2({ requireMandateExpiry: 'yes' }))).toContain(
+      'authorization.ap2.requireMandateExpiry',
+    );
   });
 });
 

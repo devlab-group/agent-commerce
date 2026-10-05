@@ -2,11 +2,10 @@
  * The Direct Checkout Mandate verifier: mandate signature first, then the
  * merchant checkout JWT it binds. Either stage failing is a refusal.
  *
- * What this proves is narrow. A trusted issuer signed this mandate, it has not
- * expired, it is addressed to us, and it binds a checkout document the
- * merchant signed. It does NOT prove the mandate authorizes the purchase in
- * front of us: that is `bindMandateToPurchase`, and a caller treating this as
- * permission to settle has skipped it.
+ * Verification establishes that a trusted issuer signed the mandate, its
+ * supplied time and audience claims pass policy, and it binds a checkout JWT
+ * signed by a trusted merchant issuer. `bindMandateToPurchase` separately
+ * checks the purchase before settlement.
  */
 import type { Clock } from '../../core';
 import { verifyCheckoutJwt } from './checkout-jwt';
@@ -41,6 +40,12 @@ export function createAp2MandateVerifier(options: Ap2VerifierOptions): Ap2Mandat
   const mandateTrust = createTrustStore(options.config.trust.mandateIssuers);
   const checkoutTrust = createTrustStore(options.config.trust.checkoutIssuers);
   const deps = { clock: options.clock, clockSkewSeconds: options.config.clockSkewSeconds };
+  const mandatePolicy = {
+    ...deps,
+    trust: mandateTrust,
+    requireAudience: options.config.requireMandateAudience === true,
+    requireExpiry: options.config.requireMandateExpiry === true,
+  };
 
   return {
     async verify(
@@ -51,7 +56,7 @@ export function createAp2MandateVerifier(options: Ap2VerifierOptions): Ap2Mandat
         throw ap2Rejected('malformed_presentation', context);
       }
 
-      const mandate = await verifyMandate(presentation, { ...deps, trust: mandateTrust }, context);
+      const mandate = await verifyMandate(presentation, mandatePolicy, context);
       const checkout = await verifyCheckoutJwt(
         mandate.claims,
         { ...deps, trust: checkoutTrust },

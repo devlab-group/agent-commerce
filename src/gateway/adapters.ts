@@ -8,8 +8,8 @@
  * sends no second response.
  *
  * Fastify enforces `bodyLimit` inside the content-type parser, so a no-op
- * parser enforces none, and the MCP SDK buffers the whole body with no cap of
- * its own. The mount counts bytes on the socket's 'data' events instead and
+ * parser enforces none, and the MCP SDK's own 4 MB cap is far looser than
+ * this one. The mount counts bytes on the socket's 'data' events instead and
  * destroys the connection past MOUNT_BODY_LIMIT_BYTES; `Content-Length` alone
  * would miss a chunked body. Node's HTTP parser already keeps the socket
  * flowing, so the extra listener only observes bytes and never takes one the
@@ -33,8 +33,8 @@ import {
 /**
  * Body cap for adapter mounts, also used by `server.ts` as Fastify's
  * `bodyLimit`, so both surfaces enforce one number. MCP tool payloads could
- * justify more, but the SDK parses a whole JSON-RPC batch before any adapter
- * code runs, and this cap is the only bound on that parse's memory spike.
+ * justify more, but a whole JSON-RPC batch is parsed in memory, and this cap
+ * bounds that spike.
  */
 export const MOUNT_BODY_LIMIT_BYTES = 256 * 1024;
 

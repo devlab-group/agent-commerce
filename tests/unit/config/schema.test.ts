@@ -1386,10 +1386,16 @@ describe('protocols.mcp.mountPath', () => {
 });
 
 describe('protocols.a2a', () => {
+  // Give enabled adapters a resource so tests reach their intended config rule
   function withA2a(a2a: unknown): Record<string, unknown> {
     const raw = validRawConfig();
     if (a2a === undefined) delete (raw['protocols'] as Record<string, unknown>)['a2a'];
     else (raw['protocols'] as Record<string, unknown>)['a2a'] = a2a;
+    if ((a2a as { enabled?: unknown } | undefined)?.enabled === true) {
+      (raw['resources'] as { weather_basic: { expose: string[] } }).weather_basic.expose.push(
+        'a2a',
+      );
+    }
     return raw;
   }
 
@@ -1455,6 +1461,16 @@ describe('protocols.a2a', () => {
       'http',
       'a2a',
     ]);
+  });
+
+  it('rejects enabled A2A when no resource would appear as a card skill', () => {
+    const raw = withA2a({ enabled: true });
+    (raw['resources'] as { weather_basic: { expose: string[] } }).weather_basic.expose = ['http'];
+    expectConfigInvalid(
+      () => parseConfig(raw, {}),
+      'protocols.a2a.enabled',
+      'no resource lists "a2a"',
+    );
   });
 
   it('rejects expose: [a2a] when protocols.a2a.enabled is false', () => {
@@ -1577,7 +1593,11 @@ describe('protocols.acp', () => {
       enabled: true,
       mountPath: '/acp',
       auth: { type: 'bearer', token: 'secret-token' },
-      idempotency: { path: './acp-idempotency.sqlite', retentionHours: 24 },
+      idempotency: {
+        path: './acp-idempotency.sqlite',
+        retentionHours: 24,
+        merchantIdempotent: false,
+      },
       checkout: { operations: OPERATIONS },
     });
   });
@@ -2250,5 +2270,92 @@ describe('payments.mpp', () => {
       currency: 'USDC',
     };
     expectConfigInvalid(() => parseConfig(raw, {}), 'resources.market_report.pricing.amount');
+  });
+
+  describe('paymentFlow', () => {
+    it('defaults to authorization, as the x402 rail does', () => {
+      expect(parseConfig(mppConfig(), {}).payments.mpp?.paymentFlow).toBe('authorization');
+    });
+
+    it('accepts upfront for the rail', () => {
+      const config = parseConfig(mppConfig({ paymentFlow: 'upfront' }), {});
+      expect(config.payments.mpp?.paymentFlow).toBe('upfront');
+      expect(config.payments.mpp?.resourcePaymentFlows).toBeUndefined();
+    });
+
+    it('rejects a flow the gateway does not run', () => {
+      expectConfigInvalid(
+        () => parseConfig(mppConfig({ paymentFlow: 'escrow' }), {}),
+        'payments.mpp.paymentFlow',
+      );
+    });
+
+    it('carries a per-resource override to the MPP rail without an x402 block', () => {
+      const raw = mppConfig();
+      (raw['resources'] as Record<string, Record<string, unknown>>)['market_report'] = {
+        ...(raw['resources'] as Record<string, Record<string, unknown>>)['market_report'],
+        paymentFlow: 'upfront',
+      };
+      expect(parseConfig(raw, {}).payments.mpp?.resourcePaymentFlows).toEqual({
+        market_report: 'upfront',
+      });
+    });
+
+    it('carries one override to both rails when the resource names both', () => {
+      const raw = mppConfig();
+      const mpp = (raw['payments'] as Record<string, unknown>)['mpp'];
+      raw['payments'] = { ...(validRawConfig()['payments'] as Record<string, unknown>), mpp };
+      (raw['resources'] as Record<string, Record<string, unknown>>)['market_report'] = {
+        ...(raw['resources'] as Record<string, Record<string, unknown>>)['market_report'],
+        payments: ['x402', 'mpp'],
+        paymentFlow: 'upfront',
+      };
+      const { payments } = parseConfig(raw, {});
+      expect(payments.x402?.resourcePaymentFlows).toEqual({ market_report: 'upfront' });
+      expect(payments.mpp?.resourcePaymentFlows).toEqual({ market_report: 'upfront' });
+    });
+  });
+});
+
+describe('x402 payment flow', () => {
+  function resourceEntry(raw: Record<string, unknown>, id: string): Record<string, unknown> {
+    return (raw['resources'] as Record<string, Record<string, unknown>>)[id] as Record<
+      string,
+      unknown
+    >;
+  }
+
+  it('defaults to the x402 authorization flow', () => {
+    expect(parseConfig(validRawConfig(), {}).payments.x402?.paymentFlow).toBe('authorization');
+  });
+
+  it('accepts upfront for the rail', () => {
+    const raw = validRawConfig();
+    (raw['payments'] as { x402: Record<string, unknown> }).x402['paymentFlow'] = 'upfront';
+    expect(parseConfig(raw, {}).payments.x402?.paymentFlow).toBe('upfront');
+  });
+
+  it('rejects a flow the gateway does not run', () => {
+    const raw = validRawConfig();
+    (raw['payments'] as { x402: Record<string, unknown> }).x402['paymentFlow'] = 'escrow';
+    expectConfigInvalid(() => parseConfig(raw, {}), 'payments.x402.paymentFlow');
+  });
+
+  it('carries a per-resource override to the x402 rail', () => {
+    const raw = validRawConfig();
+    resourceEntry(raw, 'market_report')['paymentFlow'] = 'upfront';
+    expect(parseConfig(raw, {}).payments.x402?.resourcePaymentFlows).toEqual({
+      market_report: 'upfront',
+    });
+  });
+
+  it('rejects a payment-flow override on a free resource', () => {
+    const raw = validRawConfig();
+    resourceEntry(raw, 'weather_basic')['paymentFlow'] = 'upfront';
+    expectConfigInvalid(
+      () => parseConfig(raw, {}),
+      'resources.weather_basic.paymentFlow',
+      'requires fixed pricing',
+    );
   });
 });

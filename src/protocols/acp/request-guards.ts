@@ -10,11 +10,13 @@ import { readCappedBody } from '../http';
 import {
   ACP_API_VERSION,
   ACP_API_VERSION_HEADER,
+  ACP_FORWARDED_HEADERS,
   ACP_IDEMPOTENCY_KEY_HEADER,
+  ACP_MAX_FORWARDED_HEADER_LENGTH,
   ACP_MAX_REQUEST_ID_LENGTH,
   ACP_REQUEST_ID_HEADER,
 } from './constants';
-import { type AcpFailure, acpFailure } from './errors';
+import { type AcpFailure, type AcpResponseHeaders, acpFailure } from './errors';
 import { ACP_MAX_IDEMPOTENCY_KEY_LENGTH } from './idempotency/store';
 import { type AcpRouteMatch, matchAcpRoute } from './router';
 import { type AcpDefinition, validateAcpDocument } from './validation';
@@ -41,11 +43,17 @@ export interface AcpGuardedRequest {
   readonly requestId?: string;
   /** Present on every body-bearing route, where ACP makes it mandatory */
   readonly idempotencyKey?: string;
+  /**
+   * Usable caller headers for the merchant. `Signature` and `Timestamp` pass
+   * through unverified. The gateway re-serializes JSON, so raw-byte signatures
+   * will not survive; canonical JSON signatures may.
+   */
+  readonly forwardedHeaders?: Readonly<Record<string, string>>;
 }
 
 export type AcpGuardResult =
   | { readonly ok: true; readonly value: AcpGuardedRequest }
-  | ({ readonly ok: false } & AcpFailure);
+  | ({ readonly ok: false; readonly headers: AcpResponseHeaders } & AcpFailure);
 
 export interface AcpGuardOptions {
   readonly mountPath: string;
@@ -54,10 +62,33 @@ export interface AcpGuardOptions {
   readonly maxBodyBytes?: number;
 }
 
+/**
+ * The correlation headers a checkout response echoes: a filtered `Request-Id`,
+ * and on a POST an `Idempotency-Key` that passes its own syntax check. Read
+ * from the raw request, so a refusal before or outside the guard can echo them.
+ */
+export function acpEchoHeaders(req: IncomingMessage): AcpResponseHeaders {
+  const echo: Record<string, string> = {};
+  const presentedRequestId = normalizeRequestId(header(req, ACP_REQUEST_ID_HEADER));
+  if (presentedRequestId !== undefined) echo[ACP_REQUEST_ID_HEADER] = presentedRequestId;
+  const presentedKey = header(req, ACP_IDEMPOTENCY_KEY_HEADER)?.trim();
+  if (req.method === 'POST' && presentedKey !== undefined && isUsableIdempotencyKey(presentedKey)) {
+    echo[ACP_IDEMPOTENCY_KEY_HEADER] = presentedKey;
+  }
+  return echo;
+}
+
 export async function guardAcpRequest(
   req: IncomingMessage,
   options: AcpGuardOptions,
 ): Promise<AcpGuardResult> {
+  const echo = acpEchoHeaders(req);
+  const failed = (failure: AcpFailure, extra: AcpResponseHeaders = {}): AcpGuardResult => ({
+    ok: false,
+    ...failure,
+    headers: { ...echo, ...extra },
+  });
+
   const matched = matchAcpRoute(req.method, req.url, options.mountPath);
   if (matched.kind === 'not-found') {
     return failed(acpFailure(404, 'invalid_request', 'not_found', 'Unknown ACP route.'));
@@ -70,6 +101,7 @@ export async function guardAcpRequest(
         'method_not_allowed',
         `This ACP route accepts ${matched.allow.join(', ')}.`,
       ),
+      { allow: matched.allow.join(', ') },
     );
   }
   const route = matched.route;
@@ -85,6 +117,8 @@ export async function guardAcpRequest(
         'unauthorized',
         'A valid "Authorization: Bearer <token>" header is required.',
       ),
+      // RFC 9110 requires a challenge on every 401
+      { 'www-authenticate': 'Bearer' },
     );
   }
 
@@ -118,8 +152,8 @@ export async function guardAcpRequest(
   // executed, so reading its body would be wasted work
   let idempotencyKey: string | undefined;
   if (route.acceptsBody) {
-    const presented = header(req, ACP_IDEMPOTENCY_KEY_HEADER)?.trim();
-    if (presented === undefined || presented.length === 0) {
+    const presentedKey = header(req, ACP_IDEMPOTENCY_KEY_HEADER)?.trim();
+    if (presentedKey === undefined || presentedKey.length === 0) {
       return failed(
         acpFailure(
           400,
@@ -131,7 +165,7 @@ export async function guardAcpRequest(
     }
     // Bounded and printable ASCII like Request-Id: the key is echoed in a
     // response header, where a CRLF would split the response
-    if (presented.length > ACP_MAX_IDEMPOTENCY_KEY_LENGTH || !isVisibleAscii(presented)) {
+    if (!isUsableIdempotencyKey(presentedKey)) {
       return failed(
         acpFailure(
           400,
@@ -141,7 +175,7 @@ export async function guardAcpRequest(
         ),
       );
     }
-    idempotencyKey = presented;
+    idempotencyKey = presentedKey;
   }
 
   const read = await readCappedBody(req, options.maxBodyBytes ?? ACP_MAX_REQUEST_BODY_BYTES);
@@ -245,12 +279,36 @@ function ok(
       body,
       ...(requestId !== undefined ? { requestId } : {}),
       ...(idempotencyKey !== undefined ? { idempotencyKey } : {}),
+      forwardedHeaders: forwardedHeaders(req, requestId),
     },
   };
 }
 
-function failed(failure: AcpFailure): AcpGuardResult {
-  return { ok: false, ...failure };
+// Forward only bounded, printable caller headers. Request-Id is filtered
+// for echoing; API-Version has already passed validation.
+function forwardedHeaders(
+  req: IncomingMessage,
+  requestId: string | undefined,
+): Readonly<Record<string, string>> {
+  const forwarded: Record<string, string> = {};
+  for (const name of ACP_FORWARDED_HEADERS) {
+    const value = name === ACP_REQUEST_ID_HEADER ? requestId : header(req, name)?.trim();
+    if (
+      value !== undefined &&
+      value.length > 0 &&
+      value.length <= ACP_MAX_FORWARDED_HEADER_LENGTH &&
+      isVisibleAscii(value)
+    ) {
+      forwarded[name] = value;
+    }
+  }
+  return forwarded;
+}
+
+function isUsableIdempotencyKey(value: string): boolean {
+  return (
+    value.length > 0 && value.length <= ACP_MAX_IDEMPOTENCY_KEY_LENGTH && isVisibleAscii(value)
+  );
 }
 
 /**

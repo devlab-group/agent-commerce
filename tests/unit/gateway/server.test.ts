@@ -112,6 +112,43 @@ async function buildGateway(
   return gateway;
 }
 
+// Give the fake x402 provider a challenge envelope for refusal responses
+function x402Provider(overrides: Parameters<typeof createFakePaymentProvider>[0] = {}) {
+  return createFakePaymentProvider({
+    createRequirement: async (ctx) => ({
+      id: 'requirement-1',
+      requestId: ctx.requestId,
+      resourceId: ctx.resource.id,
+      provider: 'x402',
+      amount: ctx.amount,
+      currency: ctx.currency,
+      destination: '0xMERCHANT',
+      network: 'eip155:84532',
+      challenge: {
+        provider: 'x402',
+        version: '2',
+        accepts: [{ scheme: 'exact' }],
+        envelope: { x402Version: 2, accepts: [{ scheme: 'exact' }] },
+      },
+    }),
+    ...overrides,
+  });
+}
+
+function decodeHeader(value: unknown): Record<string, unknown> {
+  expect(typeof value).toBe('string');
+  return JSON.parse(Buffer.from(value as string, 'base64').toString('utf8'));
+}
+
+async function invokePaid(gateway: GatewayInstance) {
+  return gateway.server.inject({
+    method: 'POST',
+    url: '/api/resources/market_report/invoke',
+    headers: { [PAYMENT_HEADER]: 'proof' },
+    payload: {},
+  });
+}
+
 afterEach(async () => {
   await Promise.all(gateways.map((g) => g.close().catch(() => {})));
   gateways = [];
@@ -460,6 +497,20 @@ describe('createGateway HTTP surface', () => {
     expect(res.headers['cache-control']).toBe('no-store');
     expect(res.headers[PAYMENT_RESPONSE_HEADER]).toBeUndefined();
 
+    // A v1 client's `X-PAYMENT` proof is not read; the challenge names why
+    const v1 = await gateway.server.inject({
+      method: 'POST',
+      url: '/api/resources/market_report/invoke',
+      headers: { 'x-payment': 'v1-proof' },
+      payload: {},
+    });
+    expect(v1.statusCode).toBe(402);
+    expect(decodeHeader(v1.headers[PAYMENT_REQUIRED_HEADER])).toEqual({
+      ...challengeEnvelope,
+      error: 'invalid_x402_version',
+    });
+    expect(backendCalls).toBe(0);
+
     // Control: the same backend is reachable once a proof is attached
     const paid = await gateway.server.inject({
       method: 'POST',
@@ -471,19 +522,33 @@ describe('createGateway HTTP surface', () => {
     expect(backendCalls).toBe(1);
   });
 
-  it('invoking a paid resource with a valid proof returns 200 and sets X-PAYMENT-RESPONSE', async () => {
-    const gateway = await buildGateway({ paymentProviders: [createFakePaymentProvider()] });
-    const res = await gateway.server.inject({
-      method: 'POST',
-      url: '/api/resources/market_report/invoke',
-      headers: { [PAYMENT_HEADER]: 'proof-payload' },
-      payload: {},
+  it('returns 200 and a base-unit PAYMENT-RESPONSE for a valid proof', async () => {
+    const provider = createFakePaymentProvider({
+      settle: async () => ({
+        status: 'settled',
+        provider: 'x402',
+        amount: '0.01',
+        currency: 'USDC',
+        network: 'eip155:84532',
+        payer: '0xBUYER',
+        externalReference: 'tx-1',
+        metadata: { amountBaseUnits: '10000' },
+      }),
     });
+    const gateway = await buildGateway({ paymentProviders: [provider] });
+    const res = await invokePaid(gateway);
     expect(res.statusCode).toBe(200);
-    const header = res.headers[PAYMENT_RESPONSE_HEADER];
-    expect(typeof header).toBe('string');
-    const decoded = JSON.parse(Buffer.from(header as string, 'base64').toString('utf8'));
-    expect(decoded.status).toBe('settled');
+    expect(decodeHeader(res.headers[PAYMENT_RESPONSE_HEADER])).toMatchObject({
+      success: true,
+      transaction: 'tx-1',
+      network: 'eip155:84532',
+      payer: '0xBUYER',
+      // The x402 settlement amount uses base units
+      amount: '10000',
+      status: 'settled',
+    });
+    // Paid responses need private cache control
+    expect(res.headers['cache-control']).toBe('private');
   });
 
   it("derives the payment method from the resource's paymentMethods instead of hard-coding x402", async () => {
@@ -528,12 +593,14 @@ describe('createGateway HTTP surface', () => {
     expect(res.statusCode).toBe(200);
     expect(captured[0]?.payment).toEqual({ method: 'x402', payload: 'proof-payload' });
     // MCP and A2A read the same ordered registry
+    expect(gateway.resources.get('market_report')?.paymentMethods).toEqual(['x402', 'mpp']);
+    // The public listing names only rails a provider backs
     const listed = (await gateway.server.inject({ method: 'GET', url: '/api/resources' })).json();
     const report = listed.resources.find((r: { id: string }) => r.id === 'market_report');
-    expect(report.paymentMethods).toEqual(['x402', 'mpp']);
+    expect(report.paymentMethods).toEqual(['x402']);
   });
 
-  it('drops an X-PAYMENT proof for a resource with no configured payment methods rather than inventing a rail', async () => {
+  it('drops a proof when no payment rail is configured', async () => {
     const gateway = await buildGateway();
     const captured = spyOnPipelineExecute(gateway);
 
@@ -663,45 +730,76 @@ describe('createGateway HTTP surface', () => {
     expect(res.statusCode).toBe(504);
   });
 
-  it('maps a rejected payment verification to 402 PAYMENT_INVALID', async () => {
-    const provider = createFakePaymentProvider({
+  it('returns 402 with a new PAYMENT-REQUIRED and refusal reason', async () => {
+    const provider = x402Provider({
       verify: async () => ({
         status: 'rejected',
         provider: 'x402',
         amount: '0.01',
         currency: 'USDC',
-        rejectionReason: 'bad-sig',
+        rejectionReason: 'invalid_exact_evm_payload_signature',
       }),
     });
     const gateway = await buildGateway({ paymentProviders: [provider] });
-    const res = await gateway.server.inject({
-      method: 'POST',
-      url: '/api/resources/market_report/invoke',
-      headers: { [PAYMENT_HEADER]: 'proof' },
-      payload: {},
-    });
+    const res = await invokePaid(gateway);
     expect(res.statusCode).toBe(402);
     expect(res.json().code).toBe('PAYMENT_INVALID');
+    expect(decodeHeader(res.headers[PAYMENT_REQUIRED_HEADER])).toEqual({
+      x402Version: 2,
+      accepts: [{ scheme: 'exact' }],
+      error: 'invalid_exact_evm_payload_signature',
+    });
+    expect(res.headers['cache-control']).toBe('no-store');
   });
 
-  it('maps a settlement failure to 502 PAYMENT_SETTLEMENT_FAILED', async () => {
-    const provider = createFakePaymentProvider({
+  it('returns 402 and a failed PAYMENT-RESPONSE for refused settlement', async () => {
+    const provider = x402Provider({
       settle: async () => ({
         status: 'rejected',
         provider: 'x402',
         amount: '0.01',
         currency: 'USDC',
+        network: 'eip155:84532',
+        payer: '0xBUYER',
+        rejectionReason: 'insufficient_funds',
       }),
     });
     const gateway = await buildGateway({ paymentProviders: [provider] });
-    const res = await gateway.server.inject({
-      method: 'POST',
-      url: '/api/resources/market_report/invoke',
-      headers: { [PAYMENT_HEADER]: 'proof' },
-      payload: {},
-    });
-    expect(res.statusCode).toBe(502);
+    const res = await invokePaid(gateway);
+    expect(res.statusCode).toBe(402);
     expect(res.json().code).toBe('PAYMENT_SETTLEMENT_FAILED');
+    expect(decodeHeader(res.headers[PAYMENT_RESPONSE_HEADER])).toEqual({
+      success: false,
+      errorReason: 'insufficient_funds',
+      transaction: '',
+      network: 'eip155:84532',
+      payer: '0xBUYER',
+    });
+    // x402 answers a refused settlement with PAYMENT-RESPONSE alone
+    expect(res.headers[PAYMENT_REQUIRED_HEADER]).toBeUndefined();
+    expect(res.headers['cache-control']).toBe('no-store');
+  });
+
+  it('returns 502 and settlement_pending when settlement is unconfirmed', async () => {
+    const { CommerceError } = await import('../../../src/core');
+    const provider = x402Provider({
+      settle: async () => {
+        throw new CommerceError('PAYMENT_PROVIDER_UNAVAILABLE', 'broadcast, not confirmed', {
+          details: { transactionHash: '0xabc' },
+        });
+      },
+    });
+    const gateway = await buildGateway({ paymentProviders: [provider] });
+    const res = await invokePaid(gateway);
+    // A 502 avoids inviting another payment while the first may still land
+    expect(res.statusCode).toBe(502);
+    expect(decodeHeader(res.headers[PAYMENT_RESPONSE_HEADER])).toEqual({
+      success: false,
+      errorReason: 'settlement_pending',
+      transaction: '0xabc',
+      network: 'eip155:84532',
+    });
+    expect(res.headers[PAYMENT_REQUIRED_HEADER]).toBeUndefined();
   });
 
   it('maps PAYMENT_PROVIDER_UNAVAILABLE (no matching provider) to 503', async () => {
@@ -715,24 +813,40 @@ describe('createGateway HTTP surface', () => {
     expect(res.json().code).toBe('PAYMENT_PROVIDER_UNAVAILABLE');
   });
 
-  it('a replayed payment maps to 409 PAYMENT_REPLAYED', async () => {
-    const provider = createFakePaymentProvider();
-    const gateway = await buildGateway({ paymentProviders: [provider] });
-    const first = await gateway.server.inject({
-      method: 'POST',
-      url: '/api/resources/market_report/invoke',
-      headers: { [PAYMENT_HEADER]: 'proof' },
-      payload: {},
+  it('returns 402 and a spent-nonce challenge for a settled replay', async () => {
+    const gateway = await buildGateway({ paymentProviders: [x402Provider()] });
+    expect((await invokePaid(gateway)).statusCode).toBe(200);
+
+    const replay = await invokePaid(gateway);
+    expect(replay.statusCode).toBe(402);
+    expect(replay.json().code).toBe('PAYMENT_REPLAYED');
+    expect(decodeHeader(replay.headers[PAYMENT_REQUIRED_HEADER])).toMatchObject({
+      x402Version: 2,
+      error: 'invalid_exact_evm_nonce_already_used',
     });
-    expect(first.statusCode).toBe(200);
-    const second = await gateway.server.inject({
-      method: 'POST',
-      url: '/api/resources/market_report/invoke',
-      headers: { [PAYMENT_HEADER]: 'proof' },
-      payload: {},
+  });
+
+  it('returns 409 when the first payment attempt is unfinished', async () => {
+    const store = createFakeStore();
+    store.attempts.set('replay-key-1', {
+      id: 'attempt-0',
+      requestId: 'req-0',
+      resourceId: 'market_report',
+      provider: 'x402',
+      replayKey: 'replay-key-1',
+      status: 'reserved',
+      amount: '0.01',
+      currency: 'USDC',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
     });
-    expect(second.statusCode).toBe(409);
-    expect(second.json().code).toBe('PAYMENT_REPLAYED');
+    const gateway = await buildGateway({ store, paymentProviders: [x402Provider()] });
+
+    const replay = await invokePaid(gateway);
+    // No new challenge: the first payment may still settle
+    expect(replay.statusCode).toBe(409);
+    expect(replay.json().code).toBe('PAYMENT_REPLAYED');
+    expect(replay.headers[PAYMENT_REQUIRED_HEADER]).toBeUndefined();
   });
 
   it('GET /api/receipts and /api/events are closed (404) with no adminToken configured', async () => {

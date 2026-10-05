@@ -404,8 +404,8 @@ describe('runDoctor: degraded scenarios report the failure', () => {
       expect(check?.detail).toMatch(/charge\/evm\/authorization/);
       expect(check?.detail).toContain('TESTNET on Base Sepolia (eip155:84532)');
       expect(check?.detail).toContain('facilitator=remote (auth=bearer)');
-      expect(check?.detail).toMatch(/draft-httpauth-payment-00@806fdb8/);
-      expect(check?.detail).toMatch(/mppx 0\.10\.1/);
+      expect(check?.detail).toMatch(/draft-httpauth-payment-01@806fdb8/);
+      expect(check?.detail).toMatch(/mppx 0\.13\.1/);
       expect(check?.detail).not.toContain(MPP_CONFIG.recipient);
     });
 
@@ -537,6 +537,21 @@ describe('runDoctor: degraded scenarios report the failure', () => {
     ])('names where x402 settles with %s', async (_label, x402, where) => {
       const [payments] = await checksFor({ x402 }, 'Payments');
       expect(payments?.detail).toContain(`x402 v2 (scheme=exact) enabled - ${where}`);
+      expect(payments?.detail).toContain('paymentFlow=authorization');
+    });
+
+    it('names an upfront payment flow and counts resource overrides', async () => {
+      const [payments] = await checksFor(
+        {
+          x402: {
+            ...mainnetX402({ type: 'bearer', token: 'T' }),
+            paymentFlow: 'upfront',
+            resourcePaymentFlows: { report: 'authorization' },
+          },
+        },
+        'Payments',
+      );
+      expect(payments?.detail).toContain('paymentFlow=upfront (1 resource override)');
     });
 
     it('reports x402 on mainnet, and WARNs for an unauthenticated facilitator', async () => {
@@ -1153,7 +1168,7 @@ describe('runDoctor: A2A', () => {
     expect(a2a?.status).toBe('PASS');
     // Spec revision and negotiation version are different values that look
     // alike; both must appear, named
-    expect(a2a?.detail).toContain('spec 1.0.0');
+    expect(a2a?.detail).toContain('spec 1.0.1');
     expect(a2a?.detail).toContain('protocol 1.0');
     expect(a2a?.detail).toContain('binding JSONRPC');
     expect(a2a?.detail).toContain('mount /agents/a2a');
@@ -1448,6 +1463,17 @@ describe('runDoctor: AP2', () => {
     expect(ap2?.detail).toContain('mandate.checkout.1');
     expect(ap2?.detail).toContain('agent-commerce/ap2/checkout/v1');
     expect(ap2?.detail).toContain('clock skew 60s');
+    expect(ap2?.detail).toContain('mandate aud optional · mandate exp optional');
+  });
+
+  it('reports a mandate audience and expiry the operator requires', async () => {
+    const report = await ap2Report(
+      enabledAp2({ requireMandateAudience: true, requireMandateExpiry: true }),
+    );
+
+    expect(report.checks.find((c) => c.name === 'AP2')?.detail).toContain(
+      'mandate aud required · mandate exp required',
+    );
   });
 
   it('names the trusted issuers and how many keys each has, never a key', async () => {

@@ -23,9 +23,13 @@ export const MPP_DESCRIPTOR: AdapterDescriptor = {
     ...MPP_NETWORKS.map((network) => `network=${network}`),
     `asset=${MPP_PROFILE.assetSymbol}`,
     'verify-before-settle',
+    'authorization-flow',
+    'upfront-flow',
     'payment-receipt',
+    // HTTP request bodies only; MCP and A2A carry the proof in the body
+    'challenge-digest-binding',
   ],
-  // The pinned specs are -00 drafts and mppx is pre-1.0, so the wire format can still change
+  // The pinned specs are drafts and mppx is pre-1.0; the wire format may change
   status: 'experimental',
   unsupported: [
     // Name other methods as a class instead of maintaining a second list

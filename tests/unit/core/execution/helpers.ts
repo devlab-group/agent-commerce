@@ -83,12 +83,13 @@ export function createFakeStore(options: FakeStoreOptions = {}): FakeStore {
   const attempts = new Map<string, PaymentAttempt>();
 
   const defaultReserve: ReceiptStore['reservePaymentAttempt'] = async (reservation) => {
-    if (attempts.has(reservation.replayKey)) {
+    const existing = attempts.get(reservation.replayKey);
+    if (existing) {
       throw new CommerceError(
         'PAYMENT_REPLAYED',
         `replay key "${reservation.replayKey}" already reserved`,
         {
-          details: { replayKey: reservation.replayKey },
+          details: { replayKey: reservation.replayKey, attemptStatus: existing.status },
         },
       );
     }
@@ -201,6 +202,8 @@ export interface FakePaymentProviderOptions {
   readonly name?: PaymentMethodName;
   /** Sets `challenge.envelope` on the default requirement */
   readonly challengeEnvelope?: Readonly<Record<string, unknown>>;
+  /** Sets `metadata` on the default requirement */
+  readonly requirementMetadata?: Readonly<Record<string, unknown>>;
   readonly createRequirement?: (ctx: PaymentContext) => Promise<PaymentRequirement>;
   readonly verify?: (ctx: PaymentVerificationContext) => Promise<PaymentResult>;
   readonly settle?: (ctx: PaymentSettlementContext) => Promise<PaymentResult>;
@@ -231,6 +234,9 @@ export function createFakePaymentProvider(
             ? { envelope: options.challengeEnvelope }
             : {}),
         },
+        ...(options.requirementMetadata !== undefined
+          ? { metadata: options.requirementMetadata }
+          : {}),
       })),
     verify:
       options.verify ??

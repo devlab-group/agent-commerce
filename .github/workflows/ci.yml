@@ -141,7 +141,7 @@ jobs:
           done
           npx agent-commerce --help
           npx agent-commerce --version
-          npx agent-commerce version | grep -q '@modelcontextprotocol/sdk'
+          npx agent-commerce version | grep -q '@modelcontextprotocol/server'
           npx agent-commerce init --yes
           npx agent-commerce validate
           # The main entry must compose and serve without optional peers
@@ -165,7 +165,7 @@ jobs:
       - name: Install package with optional peers
         run: |
           cd "$RUNNER_TEMP/bare"
-          npm install @modelcontextprotocol/sdk@1.30.0 @x402/core@2.23.0 @x402/evm@2.23.0 viem@2.55.18
+          npm install @modelcontextprotocol/server@2.3.0 @x402/core@2.25.0 @x402/evm@2.25.0 viem@2.57.1
           node --input-type=module -e "
             import { createGateway, loadConfig, receipts, CommerceError } from '@devlab.group/agent-commerce';
             import { mcp } from '@devlab.group/agent-commerce/mcp';

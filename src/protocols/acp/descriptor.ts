@@ -14,7 +14,9 @@ const ACP_CAPABILITIES: readonly string[] = [
   'rest transport',
   'well-known discovery',
   'bearer authentication',
-  'API-Version negotiation',
+  'API-Version enforcement',
+  // Forwarded as received: the gateway verifies neither signature header
+  'request header forwarding to the merchant',
   'checkout service',
   ...ACP_CHECKOUT_OPERATIONS,
 ];

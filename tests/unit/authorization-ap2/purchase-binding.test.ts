@@ -272,10 +272,14 @@ describe('the replay identity of a mandate', () => {
       disclosable: { buyer_note: 'hello' },
     });
     const withNote = assemblePresentation(parts.signedToken, [
+      parts.mandateDisclosure,
       parts.checkoutDisclosure,
       parts.optional['buyer_note'] as string,
     ]);
-    const withoutNote = assemblePresentation(parts.signedToken, [parts.checkoutDisclosure]);
+    const withoutNote = assemblePresentation(parts.signedToken, [
+      parts.mandateDisclosure,
+      parts.checkoutDisclosure,
+    ]);
 
     expect(withNote).not.toBe(withoutNote);
     const a = await verifier.verify(withNote);
@@ -346,10 +350,14 @@ describe('verify, bind and reserve together', () => {
       disclosable: { buyer_note: 'hello' },
     });
     const full = assemblePresentation(parts.signedToken, [
+      parts.mandateDisclosure,
       parts.checkoutDisclosure,
       parts.optional['buyer_note'] as string,
     ]);
-    const trimmed = assemblePresentation(parts.signedToken, [parts.checkoutDisclosure]);
+    const trimmed = assemblePresentation(parts.signedToken, [
+      parts.mandateDisclosure,
+      parts.checkoutDisclosure,
+    ]);
 
     const a = await verifier.verify(full);
     store.reserve({

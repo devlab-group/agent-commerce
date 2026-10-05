@@ -42,6 +42,7 @@ import {
   systemClock,
 } from '../../core';
 import { redactedErrorText } from '../../core/errors';
+import { SETTLE_AFTER_BACKEND_METADATA_KEY } from '../../core/execution/settlement-order';
 import { PACKAGE_VERSION } from '../../version';
 import { parseCanonicalAmount } from './amount';
 import {
@@ -57,7 +58,13 @@ import {
 } from './facilitator';
 import { resolveX402Deployment, type X402FacilitatorConfig } from './guardrails';
 import { describeDeploymentMode } from './networks';
-import { decodePaymentSubmission, isExactEvmPayload } from './payload';
+import {
+  declaredX402Version,
+  decodePaymentSubmission,
+  isExactEvmPayload,
+  withoutResource,
+} from './payload';
+import { X402_DEFAULT_PAYMENT_FLOW, type X402PaymentFlow } from './payment-flow';
 import { computeReplayKey } from './replay-key';
 
 const X402_VERSION = 2;
@@ -108,6 +115,14 @@ export interface X402ProviderOptions {
   /** Merchant-controlled settlement destination. Never a gateway-owned wallet */
   readonly payTo: `0x${string}`;
   readonly maxTimeoutSeconds?: number;
+  /**
+   * When the payment settles relative to the backend call. Defaults to
+   * `authorization`, the x402 default: settle only after the backend succeeds.
+   * `upfront` settles before the backend call.
+   */
+  readonly paymentFlow?: X402PaymentFlow;
+  /** Per-resource overrides of `paymentFlow`, keyed by resource id */
+  readonly resourcePaymentFlows?: Readonly<Record<string, X402PaymentFlow>>;
   /**
    * Which facilitator verifies and broadcasts. `local` runs one in this process
    * against a dev chain, and its `signerPrivateKey` pays gas there, usually
@@ -220,13 +235,25 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
       'eip-3009',
       'caip-2',
       `mode=${mode}`,
+      'authorization-flow',
+      'upfront-flow',
     ],
     status: 'stable',
-    unsupported: ['svm', 'permit2', 'upto scheme', 'deferred scheme'],
+    unsupported: [
+      'svm',
+      'permit2',
+      'upto scheme',
+      'batch-settlement scheme',
+      'auth-capture scheme',
+    ],
   };
 
   async function createRequirement(context: PaymentContext): Promise<PaymentRequirement> {
     const amount = parseCanonicalAmount(context.amount, options.assetDecimals).toString();
+    const paymentFlow =
+      options.resourcePaymentFlows?.[context.resource.id] ??
+      options.paymentFlow ??
+      X402_DEFAULT_PAYMENT_FLOW;
 
     const requirements: PaymentRequirements = {
       scheme: 'exact',
@@ -239,10 +266,13 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
       // EIP-712 domain without calling `version()` on the token.
       // `assetTransferMethod` names the one method this provider settles, so a
       // conforming client never picks the `exact` scheme's Permit2 path.
+      // x402 requires an explicit non-default flow. Omit the default
+      // `authorization` flow here.
       extra: {
         name: options.assetName,
         version: options.assetVersion,
         assetTransferMethod: 'eip3009',
+        ...(paymentFlow === 'upfront' ? { paymentFlow } : {}),
       },
     };
 
@@ -250,10 +280,8 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
     // base64-encodes it into `PAYMENT-REQUIRED` and MCP passes it through, so
     // both surfaces offer the same challenge.
     //
-    // `resource.url` is descriptive: the EIP-3009 authorization does not cover
-    // it and nothing verifies against it. It carries `network` and `payTo`,
-    // both already public in the challenge, because other x402 servers may use
-    // the `agent-commerce` authority too.
+    // `resource.url` is outside the EIP-3009 signature. Include public
+    // network and payee terms so the buyer's echo can identify this offer.
     const envelope: PaymentRequired = {
       x402Version: X402_VERSION,
       resource: {
@@ -283,17 +311,18 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
         accepts: [requirements as unknown as Record<string, unknown>],
         envelope: envelope as unknown as Record<string, unknown>,
       },
+      metadata: { [SETTLE_AFTER_BACKEND_METADATA_KEY]: paymentFlow === 'authorization' },
     };
   }
 
   /**
    * Checks a submission against the requirement this provider built, never
-   * against `payload.accepted`, the copy the client echoes back.
+   * against `payload.accepted`, the copy the client echoes back. That copy
+   * must itself match the offer, or the proof is refused.
    *
-   * The amount must match exactly. The pinned `@x402/evm` exact/EVM scheme
-   * rejects any other value as
-   * `invalid_exact_evm_payload_authorization_value_mismatch`, so an
-   * overpayment is refused here as `wrong_amount`, a reason the buyer can act on.
+   * The `exact` scheme requires the authorized amount to match exactly,
+   * including when the buyer offers more. Local refusals use x402 error codes
+   * where available.
    */
   async function verify(context: PaymentVerificationContext): Promise<PaymentResult> {
     const { requirement, submission } = context;
@@ -339,10 +368,15 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
 
     const payload = decodePaymentSubmission(submission.payload);
     if (!payload) {
-      return rejected('malformed_payment_payload');
+      const version = declaredX402Version(submission.payload);
+      return rejected(
+        typeof version === 'number' && version !== X402_VERSION
+          ? 'invalid_x402_version'
+          : 'invalid_payload',
+      );
     }
     if (payload.x402Version !== X402_VERSION) {
-      return rejected('unsupported_x402_version');
+      return rejected('invalid_x402_version');
     }
     if (!isExactEvmPayload(payload)) {
       return rejected('unsupported_scheme');
@@ -351,15 +385,25 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
     const { authorization } = payload.payload;
 
     if (!isAddress(authorization.from) || !isAddress(authorization.to)) {
-      return rejected('malformed_payment_payload');
+      return rejected('invalid_payload');
     }
     // `accepted.network` names the chain the buyer signed for, so a mismatch
     // means a signature bound to a chain we do not settle on
     if (payload.accepted.network !== options.network) {
-      return rejected('wrong_network');
+      return rejected('invalid_network');
+    }
+    // The signature omits flow and resource. Check the echoed offer;
+    // `resource` is optional, but must match when present.
+    const offeredUrl = (requirement.challenge.envelope as PaymentRequired | undefined)?.resource
+      ?.url;
+    if (
+      !acceptedMatchesOffer(requirements, payload.accepted) ||
+      (payload.resource !== undefined && payload.resource.url !== offeredUrl)
+    ) {
+      return rejected('invalid_payment_requirements');
     }
     if (getAddress(authorization.to) !== getAddress(options.payTo)) {
-      return rejected('wrong_recipient');
+      return rejected('invalid_exact_evm_payload_recipient_mismatch');
     }
     let authorizedValue: bigint;
     let required: bigint;
@@ -367,16 +411,16 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
       authorizedValue = BigInt(authorization.value);
       required = BigInt(requirements.amount);
     } catch {
-      return rejected('malformed_payment_payload');
+      return rejected('invalid_payload');
     }
     if (authorizedValue !== required) {
-      return rejected('wrong_amount');
+      return rejected('invalid_exact_evm_payload_authorization_value_mismatch');
     }
 
     const scope = binding.open();
     let sdkResult: VerifyResponse;
     try {
-      sdkResult = await scope.verify(payload, requirements);
+      sdkResult = await scope.verify(withoutResource(payload), requirements);
     } catch (err) {
       // A throw means no verdict was obtained, so it is never held against the
       // buyer. Only an unclassified one is logged, as it may be an SDK fault.
@@ -477,7 +521,7 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
     const scope = binding.open();
     let sdkResult: SettleResponse;
     try {
-      sdkResult = await scope.settle(payload, requirements);
+      sdkResult = await scope.settle(withoutResource(payload), requirements);
     } catch (err) {
       if (isProviderUnavailableError(err) || scope.transportFailed()) {
         throw new CommerceError(
@@ -566,6 +610,8 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
       ...(verification.asset !== undefined ? { asset: verification.asset } : {}),
       ...(verification.replayKey !== undefined ? { replayKey: verification.replayKey } : {}),
       settledAt: clock.nowIso(),
+      // `amount` is the display value; x402's settlement response reports base units
+      metadata: { amountBaseUnits: payload.payload.authorization.value },
     };
   }
 
@@ -695,6 +741,31 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
     settle,
     health,
   };
+}
+
+/**
+ * Match echoed terms against the offer. Extra client keys and
+ * `maxTimeoutSeconds` do not matter; addresses ignore case. Compare effective
+ * payment flows so an upfront proof cannot pay a default authorization offer.
+ */
+function acceptedMatchesOffer(
+  offered: PaymentRequirements,
+  accepted: PaymentRequirements,
+): boolean {
+  const sameAddress = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+  const offeredExtra = offered.extra ?? {};
+  const acceptedExtra = accepted.extra ?? {};
+  const flow = (extra: Record<string, unknown>) =>
+    extra['paymentFlow'] ?? X402_DEFAULT_PAYMENT_FLOW;
+  return (
+    accepted.scheme === offered.scheme &&
+    accepted.network === offered.network &&
+    accepted.amount === offered.amount &&
+    sameAddress(accepted.asset, offered.asset) &&
+    sameAddress(accepted.payTo, offered.payTo) &&
+    Object.entries(offeredExtra).every(([key, value]) => acceptedExtra[key] === value) &&
+    flow(acceptedExtra) === flow(offeredExtra)
+  );
 }
 
 // viem wraps every failed contract call in ContractFunctionExecutionError, so

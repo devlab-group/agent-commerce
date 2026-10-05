@@ -74,6 +74,16 @@ describe('reservePaymentAttempt', () => {
     ).rejects.toSatisfy((err: unknown) => isCommerceError(err) && err.code === 'PAYMENT_REPLAYED');
   });
 
+  it('includes the existing attempt status in a duplicate reservation error', async () => {
+    await store.reservePaymentAttempt(makeReservation({ replayKey: 'dup' }));
+    const duplicate = () =>
+      store.reservePaymentAttempt(makeReservation({ replayKey: 'dup', requestId: 'req_2' }));
+
+    await expect(duplicate()).rejects.toMatchObject({ details: { attemptStatus: 'reserved' } });
+    await store.updatePaymentAttempt({ replayKey: 'dup', status: 'settled' });
+    await expect(duplicate()).rejects.toMatchObject({ details: { attemptStatus: 'settled' } });
+  });
+
   it('rejects a duplicate replayKey even when the second reservation targets a different request', async () => {
     // The replay key comes from the authorization, never the request id, so
     // the same authorization must collide across requests (docs/contracts.md,

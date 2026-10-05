@@ -42,8 +42,9 @@ function assertNothingLeaked(body: Record<string, unknown>): void {
   expect(serialized).not.toContain('cluster.local');
   expect(serialized).not.toContain(ACP_TOKEN);
   expect(serialized).not.toContain('acp_checkout_');
-  // The ACP Error object carries these three fields and nothing else
-  expect(Object.keys(body).sort()).toEqual(['code', 'message', 'type']);
+  // Accept the optional `param` field, but no other response fields
+  const keys = 'param' in body ? ['code', 'message', 'param', 'type'] : ['code', 'message', 'type'];
+  expect(Object.keys(body).sort()).toEqual(keys);
 }
 
 async function createWith(reply: {
@@ -64,9 +65,11 @@ describe('merchant failures', () => {
   it.each([
     ['a 404', 404, 404, 'checkout_session_not_found'],
     ['a 409', 409, 409, 'checkout_session_conflict'],
+    ['a 400', 400, 400, 'invalid_request_body'],
     ['a 422', 422, 422, 'invalid_request_body'],
     ['a 500', 500, 502, 'processing_error'],
-    ['a 503', 503, 502, 'processing_error'],
+    ['a 429', 429, 503, 'service_unavailable'],
+    ['a 503', 503, 503, 'service_unavailable'],
     // Relaying this would tell the agent its own bearer token failed
     ['a 401', 401, 502, 'processing_error'],
   ])('maps %s to an ACP error that carries nothing of it', async (_label, from, to, code) => {
@@ -76,6 +79,76 @@ describe('merchant failures', () => {
     expect(result.body['code']).toBe(code);
     expect(validateAcpDocument('error', result.body)).toBeUndefined();
     assertNothingLeaked(result.body);
+  });
+
+  it('uses a merchant ACP error type, code and param without forwarding its message', async () => {
+    const result = await createWith({
+      status: 400,
+      body: {
+        type: 'invalid_request',
+        code: 'requires_3ds',
+        // Merchant free text must not become the gateway's error message
+        message: LEAKY_BODY.error,
+        param: '$.authentication_result',
+      },
+    });
+
+    // On the merchant's own status: the snapshot's 3DS refusal is a 400
+    expect(result.status).toBe(400);
+    expect(result.body).toMatchObject({
+      type: 'invalid_request',
+      code: 'requires_3ds',
+      param: '$.authentication_result',
+    });
+    expect(validateAcpDocument('error', result.body)).toBeUndefined();
+    assertNothingLeaked(result.body);
+  });
+
+  it.each([
+    ['an invalid code', { code: 'Requires 3DS!' }],
+    ['a non-ACP error body', { code: 'requires_3ds', extra: true }],
+    // Only the gateway speaks about the caller's Idempotency-Key
+    ['a code the gateway reserves', { code: 'idempotency_conflict' }],
+  ])('uses gateway error mapping for %s', async (_label, patch) => {
+    const result = await createWith({
+      status: 422,
+      body: { type: 'invalid_request', message: 'm', ...patch },
+    });
+
+    expect(result.status).toBe(422);
+    expect(result.body['code']).toBe('invalid_request_body');
+  });
+
+  it.each([
+    ['whole seconds', '30', '30'],
+    ['a delay beyond the cap', '86400', '300'],
+    ['an HTTP date', 'Wed, 21 Oct 2026 07:28:00 GMT', '5'],
+    ['no Retry-After at all', undefined, '5'],
+  ])('answers a merchant 429 with a bounded Retry-After for %s', async (_label, sent, expected) => {
+    stack = await startAcpStack();
+    stack.nextReply({
+      status: 429,
+      body: LEAKY_BODY,
+      ...(sent !== undefined ? { headers: { 'retry-after': sent } } : {}),
+    });
+    const result = await acpFetch(stack, '/acp/checkout_sessions', {
+      headers: acpHeaders(),
+      body: CREATE_REQUEST,
+    });
+
+    expect(result.status).toBe(503);
+    expect(result.body['type']).toBe('service_unavailable');
+    expect(result.headers.get('retry-after')).toBe(expected);
+  });
+
+  it('uses gateway error mapping for an unrelayed merchant status', async () => {
+    const result = await createWith({
+      status: 500,
+      body: { type: 'processing_error', code: 'database_down', message: LEAKY_BODY.error },
+    });
+
+    expect(result.status).toBe(502);
+    expect(result.body['code']).toBe('processing_error');
   });
 
   it('maps a merchant that never answers to a service_unavailable', async () => {
@@ -95,6 +168,24 @@ describe('merchant failures', () => {
     expect(result.status).toBe(500);
     expect(result.body['type']).toBe('processing_error');
     assertNothingLeaked(result.body);
+  });
+
+  it.each([
+    ['a tag', 'Ships <b>today</b>', 500],
+    ['an HTML comment', 'Ships today<!-- internal -->', 500],
+    ['a tag inside a code span, which is text', 'Use the `<b>` element', 201],
+    ['an autolink, which is not HTML', 'See <https://shop.example/terms>', 201],
+  ])('%s in merchant markdown', async (_label, content, status) => {
+    const result = await createWith({
+      status: 201,
+      body: {
+        ...ACP_EXAMPLES['create_checkout_session_response'],
+        messages: [{ type: 'info', content_type: 'markdown', content }],
+      },
+    });
+
+    // Reject tags and comments; retain code spans and autolinks as text
+    expect(result.status).toBe(status);
   });
 
   // Relabeling the merchant's status as the one ACP expects would present a

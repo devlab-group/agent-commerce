@@ -24,6 +24,8 @@ export interface AcpError {
 export interface AcpFailure {
   readonly status: number;
   readonly error: AcpError;
+  /** Seconds for `Retry-After`, where the failure invites a retry */
+  readonly retryAfterSeconds?: number;
 }
 
 export function acpFailure(
@@ -50,7 +52,8 @@ export function acpFailure(
 /**
  * Response headers the adapter may set. Merchant backend headers are never
  * proxied: a backend's `Set-Cookie` or tracing header belongs to the
- * merchant's domain, not to the ACP client.
+ * merchant's domain, not to the ACP client. `Retry-After` is rebuilt from a
+ * parsed and capped number, not copied.
  */
 export type AcpResponseHeaders = Readonly<Record<string, string>>;
 

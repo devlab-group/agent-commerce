@@ -88,15 +88,18 @@ async function cardFrom(
 async function callCardRoute(
   adapter: ReturnType<typeof createA2aAdapter>,
   method = 'GET',
-): Promise<{ status: number; body: string }> {
+  requestHeaders: Record<string, string> = {},
+): Promise<{ status: number; body: string; headers: Record<string, string> }> {
   const route = adapter.additionalHttpRoutes[0];
   if (route === undefined) throw new Error('no agent card route declared');
   let body = '';
   let status = 0;
+  let headers: Record<string, string> = {};
   const res = {
     headersSent: false,
-    writeHead(code: number) {
+    writeHead(code: number, written: Record<string, string> = {}) {
       status = code;
+      headers = written;
       return res;
     },
     end(chunk?: string) {
@@ -105,10 +108,10 @@ async function callCardRoute(
     },
   };
   await route.handleHttp(
-    { method } as never,
+    { method, headers: requestHeaders } as never,
     res as unknown as Parameters<typeof route.handleHttp>[1],
   );
-  return { status, body };
+  return { status, body, headers };
 }
 
 describe('A2A agent card', () => {
@@ -156,6 +159,7 @@ describe('A2A agent card', () => {
     expect(card.skills[0]).not.toHaveProperty('inputSchema');
     expect(Object.keys(card.skills[0] ?? {}).sort()).toEqual([
       'description',
+      'examples',
       'id',
       'inputModes',
       'name',
@@ -173,6 +177,76 @@ describe('A2A agent card', () => {
       pushNotifications: false,
       extendedAgentCard: false,
     });
+  });
+
+  it('declares the optional x402 extension when a skill selects x402', async () => {
+    const card = await cardFrom([resource(), paid]);
+    expect(card.capabilities.extensions).toEqual([
+      expect.objectContaining({
+        uri: 'https://github.com/google-a2a/a2a-x402/v0.1',
+        required: false,
+        params: { x402Version: 2 },
+      }),
+    ]);
+    const mppOnly = await cardFrom([{ ...paid, paymentMethods: ['mpp'] }]);
+    expect(mppOnly.capabilities).not.toHaveProperty('extensions');
+  });
+
+  it('gives each skill one example call built from its required input', async () => {
+    const card = await cardFrom([
+      resource(),
+      resource({
+        id: 'typed',
+        inputSchema: {
+          type: 'object',
+          required: ['city', 'days', 'units', 'tags', 'where', 'detailed', '_payment'],
+          properties: {
+            city: { type: 'string' },
+            days: { type: 'integer', default: 3 },
+            units: { type: 'string', enum: ['metric', 'imperial'] },
+            tags: { type: 'array', items: { type: 'string', examples: ['rain'] } },
+            where: { type: 'object', required: ['lat'], properties: { lat: { type: 'number' } } },
+            detailed: { type: ['boolean', 'null'] },
+            optional: { type: 'string' },
+          },
+        },
+      }),
+      resource({ id: 'no_schema', inputSchema: undefined as never }),
+    ]);
+
+    expect(card.skills.map((skill) => skill.examples.map((text) => JSON.parse(text)))).toEqual([
+      [{ resource: 'weather_basic', input: {} }],
+      [
+        {
+          resource: 'typed',
+          input: {
+            city: '<city>',
+            days: 3,
+            units: 'metric',
+            tags: ['rain'],
+            where: { lat: 0 },
+            detailed: false,
+          },
+        },
+      ],
+      [{ resource: 'no_schema', input: {} }],
+    ]);
+    // Deterministic, so the card's ETag changes only with the configuration
+    expect(await cardFrom([paid])).toEqual(await cardFrom([paid]));
+  });
+
+  it('describes the call shape, where the schemas are and how a paid skill is paid', async () => {
+    const free = await cardFrom([resource()]);
+    expect(free.description).toContain(
+      'one data part {"resource": "<skill id>", "input": {...}} with media type application/json',
+    );
+    expect(free.description).toContain('https://gateway.example.com/api/resources');
+    expect(free.description).not.toContain('_payment');
+    expect(free).not.toHaveProperty('documentationUrl');
+
+    const withPaid = await cardFrom([resource(), paid]);
+    expect(withPaid.description).toContain('"input._payment"');
+    expect(withPaid.skills[1]?.examples[0]).not.toMatch(/_payment|_authorization/);
   });
 
   it('marks a paid skill as paid and names its price', async () => {
@@ -207,9 +281,14 @@ describe('A2A adapter lifecycle', () => {
   it('reports the pinned spec revision, experimental status and a complete unsupported list', () => {
     const { descriptor } = createA2aAdapter();
     expect(descriptor.name).toBe('a2a');
-    expect(descriptor.supportedSpec).toBe('1.0.0');
+    expect(descriptor.supportedSpec).toBe('1.0.1');
     expect(descriptor.status).toBe('experimental');
-    expect(descriptor.capabilities).toEqual(['agent-card', 'jsonrpc', 'SendMessage']);
+    expect(descriptor.capabilities).toEqual([
+      'agent-card',
+      'jsonrpc',
+      'SendMessage',
+      'x402-extension',
+    ]);
     // Every A2A feature the project scope leaves out is named, so no client
     // reads the descriptor as full protocol support
     expect(descriptor.unsupported).toEqual(
@@ -246,6 +325,33 @@ describe('A2A adapter lifecycle', () => {
     const res = await callCardRoute(adapter);
     expect(res.status).toBe(503);
     expect(res.body).not.toContain('weather_basic');
+  });
+
+  it('sends cache headers and returns 304 for a matching If-None-Match', async () => {
+    const adapter = createA2aAdapter();
+    await adapter.start(context([resource()]));
+    const first = await callCardRoute(adapter);
+    const etag = first.headers['etag'] ?? '';
+
+    expect(first.headers['cache-control']).toMatch(/max-age=\d+/);
+    expect(etag).toMatch(/^"[^"]+"$/);
+
+    for (const ifNoneMatch of [etag, `W/${etag}`, `"other", ${etag}`, '*']) {
+      const revalidated = await callCardRoute(adapter, 'GET', { 'if-none-match': ifNoneMatch });
+      expect(revalidated.status).toBe(304);
+      expect(revalidated.body).toBe('');
+      expect(revalidated.headers['etag']).toBe(etag);
+    }
+    expect((await callCardRoute(adapter, 'GET', { 'if-none-match': '"stale"' })).status).toBe(200);
+  });
+
+  it('updates the ETag when the adapter starts with a different card', async () => {
+    const adapter = createA2aAdapter();
+    await adapter.start(context([resource()]));
+    const before = (await callCardRoute(adapter)).headers['etag'];
+    await adapter.start(context([resource(), paid]));
+
+    expect((await callCardRoute(adapter)).headers['etag']).not.toBe(before);
   });
 
   it('refuses a non-GET on the card route', async () => {

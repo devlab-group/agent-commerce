@@ -101,7 +101,7 @@ free HTTP resources does not install MCP, EVM, JOSE or SD-JWT packages.
 | You want                                | Install                            | Import                                     |
 | --------------------------------------- | ---------------------------------- | ------------------------------------------ |
 | gateway, config, receipts, A2A/ACP, CLI | `@devlab.group/agent-commerce`     | `from '@devlab.group/agent-commerce'`      |
-| expose resources as MCP tools           | `+ @modelcontextprotocol/sdk`      | `from '@devlab.group/agent-commerce/mcp'`  |
+| expose resources as MCP tools           | `+ @modelcontextprotocol/server`   | `from '@devlab.group/agent-commerce/mcp'`  |
 | accept x402 payments                    | `+ @x402/core @x402/evm viem`      | `from '@devlab.group/agent-commerce/x402'` |
 | accept MPP payments                     | `+ mppx viem @x402/core @x402/evm` | `from '@devlab.group/agent-commerce/mpp'`  |
 | verify AP2 mandates, sign checkout JWTs | `+ jose @sd-jwt/core canonicalize` | `from '@devlab.group/agent-commerce/ap2'`  |
@@ -111,7 +111,7 @@ MPP settles through an x402 facilitator, so its entry also needs the x402
 peers.
 
 ```bash
-npm install @devlab.group/agent-commerce @modelcontextprotocol/sdk @x402/core @x402/evm viem
+npm install @devlab.group/agent-commerce @modelcontextprotocol/server @x402/core @x402/evm viem
 ```
 
 ```ts
@@ -234,10 +234,10 @@ See [docs/configuration.md](docs/configuration.md).
 | Protocol | Status       | Pinned revision                                                           |
 | -------- | ------------ | ------------------------------------------------------------------------- |
 | **HTTP** | Supported    | native routes                                                             |
-| **MCP**  | Supported    | `@modelcontextprotocol/sdk@1.30.0`                                        |
+| **MCP**  | Supported    | `2026-07-28` and `2025-11-25`, `@modelcontextprotocol/server@2.3.0`       |
 | **x402** | Supported    | x402 v2 (`@x402/core`, `@x402/evm`), scheme `exact`, EVM                  |
-| **MPP**  | Experimental | `mppx@0.10.1`, `charge` + `evm` + EIP-3009, USDC on Base Sepolia and Base |
-| **A2A**  | Experimental | A2A v1.0.0, binding `JSONRPC`, method `SendMessage`                       |
+| **MPP**  | Experimental | `mppx@0.13.1`, `charge` + `evm` + EIP-3009, USDC on Base Sepolia and Base |
+| **A2A**  | Experimental | A2A v1.0.1, binding `JSONRPC`, method `SendMessage`, x402 extension       |
 | **ACP**  | Experimental | ACP `2026-04-17`, REST checkout + discovery                               |
 | **AP2**  | Experimental | AP2 `v0.2.0`, Direct Checkout Mandate verification                        |
 | UCP      | Planned      | no implementation                                                         |
@@ -435,7 +435,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 ## Roadmap
 
 **Now** - MCP, x402 v2, settlement on the local chain, Base Sepolia and Base
-mainnet, receipts, doctor, deterministic demo, experimental A2A v1.0.0 and ACP
+mainnet, receipts, doctor, deterministic demo, experimental A2A v1.0.1 and ACP
 `2026-04-17` checkout adapters, experimental AP2 v0.2.0 mandate verification,
 experimental MPP `charge` payments, and experimental OpenAPI import.
 

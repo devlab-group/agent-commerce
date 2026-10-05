@@ -90,3 +90,20 @@ export const ACP_IN_FLIGHT_RETRY_AFTER_SECONDS = 1;
  * bounded and filtered before it is ever written into a response header.
  */
 export const ACP_MAX_REQUEST_ID_LENGTH = 128;
+
+/** Caller headers forwarded to the merchant; the bearer token stays at the gateway */
+export const ACP_FORWARDED_HEADERS = [
+  'accept-language',
+  'user-agent',
+  ACP_REQUEST_ID_HEADER,
+  ACP_API_VERSION_HEADER,
+  'signature',
+  'timestamp',
+] as const;
+
+/** Maximum forwarded header value length; longer values are dropped */
+export const ACP_MAX_FORWARDED_HEADER_LENGTH = 2048;
+
+/** Fallback and maximum `Retry-After` seconds for merchant 429 or 503 */
+export const ACP_MERCHANT_RETRY_AFTER_DEFAULT_SECONDS = 5;
+export const ACP_MERCHANT_RETRY_AFTER_MAX_SECONDS = 300;

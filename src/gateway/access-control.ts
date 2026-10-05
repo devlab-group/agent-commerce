@@ -16,19 +16,40 @@ import { AUTHORIZATION_HEADER, PAYMENT_HEADER } from '../core';
 import { createBearerCheck } from '../protocols/http';
 
 const CORS_METHODS = 'GET,POST,OPTIONS';
-// `authorization` carries bearer tokens (admin, ACP) and MPP credentials; the
-// AP2 mandate travels in its own header
+// Allow payment and protocol headers in browser preflights. The gateway does
+// not verify ACP `signature` or `timestamp`. x402 fetch and axios clients also
+// send `access-control-expose-headers` on paid retries.
 const CORS_HEADERS = [
   'content-type',
   PAYMENT_HEADER,
   AUTHORIZATION_HEADER,
   'x-request-id',
   'authorization',
+  'mcp-protocol-version',
+  'mcp-method',
+  'mcp-name',
+  'a2a-version',
+  'a2a-extensions',
+  'api-version',
+  'idempotency-key',
+  'request-id',
+  'signature',
+  'timestamp',
+  'access-control-expose-headers',
 ].join(',');
 // Cross-origin JS sees only CORS-safelisted response headers unless they are
-// named here, so a browser client could read neither the challenge nor the
-// settlement result
-const CORS_EXPOSED_HEADERS = 'payment-required,payment-response,www-authenticate,payment-receipt';
+// named here, so a browser client could read neither the challenge, the
+// settlement result, nor ACP's echoed correlation and replay headers
+const CORS_EXPOSED_HEADERS = [
+  'payment-required',
+  'payment-response',
+  'www-authenticate',
+  'payment-receipt',
+  'idempotency-key',
+  'request-id',
+  'idempotent-replayed',
+  'retry-after',
+].join(',');
 
 export interface AccessControlOptions {
   readonly publicBaseUrl: string;

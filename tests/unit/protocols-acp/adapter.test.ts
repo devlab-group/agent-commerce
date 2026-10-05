@@ -13,7 +13,7 @@ import { guardAcpRequest } from '../../../src/protocols/acp/request-guards';
 import { matchAcpRoute } from '../../../src/protocols/acp/router';
 import { validateAcpDocument } from '../../../src/protocols/acp/validation';
 import { createBearerCheck } from '../../../src/protocols/http';
-import { adapterOptions, deliveredFor, MOUNT, setup, TOKEN } from './fixtures';
+import { adapterOptions, deliveredFor, firstRequest, MOUNT, setup, TOKEN } from './fixtures';
 
 interface HttpResult {
   status: number;
@@ -187,6 +187,7 @@ describe('ACP discovery', () => {
     const { req, res, result } = fakeExchange({ method: 'POST', url: ACP_WELL_KNOWN_PATH });
     await adapter.handleDiscovery(req as never, res as never);
     expect(result().status).toBe(405);
+    expect(result().headers['allow']).toBe('GET');
   });
 
   it('serves nothing before start and reports its own health', async () => {
@@ -305,6 +306,8 @@ describe('ACP request guards', () => {
     const result = await checkout(context, { method, url, headers: goodHeaders() });
 
     expect(result.status).toBe(status);
+    // RFC 9110 requires Allow on a 405
+    if (status === 405) expect(result.headers['allow']).toBeDefined();
     expect(execute).not.toHaveBeenCalled();
   });
 
@@ -437,9 +440,118 @@ describe('ACP request guards', () => {
     expect(dropped.headers['request-id']).toBeUndefined();
   });
 
-  it('never echoes a Request-Id on a guard failure', async () => {
+  it('echoes safe request and idempotency ids on POST refusals', async () => {
     const { context } = setup();
     const headers = goodHeaders({ 'request-id': 'req_abc-123' });
+    delete headers['authorization'];
+    const unauthorized = await checkout(context, { headers, body: VALID_CREATE });
+
+    expect(unauthorized.status).toBe(401);
+    expect(unauthorized.headers['request-id']).toBe('req_abc-123');
+    expect(unauthorized.headers['idempotency-key']).toBe(goodHeaders()['idempotency-key']);
+    expect(unauthorized.headers['www-authenticate']).toBe('Bearer');
+
+    for (const version of [undefined, '2025-09-29']) {
+      const versionHeaders = goodHeaders();
+      delete versionHeaders['api-version'];
+      if (version !== undefined) versionHeaders['api-version'] = version;
+      const refused = await checkout(context, { headers: versionHeaders, body: VALID_CREATE });
+      expect(refused.status).toBe(400);
+      expect(refused.headers['idempotency-key']).toBe(goodHeaders()['idempotency-key']);
+    }
+
+    // A key that fails its own syntax check is never written into a response
+    const badKey = goodHeaders({ 'idempotency-key': 'k'.repeat(256) });
+    delete badKey['authorization'];
+    const unechoed = await checkout(context, { headers: badKey, body: VALID_CREATE });
+    expect(unechoed.status).toBe(401);
+    expect(unechoed.headers['idempotency-key']).toBeUndefined();
+
+    const invalidBody = await checkout(context, {
+      headers: goodHeaders({ 'request-id': 'req_abc-123' }),
+      body: '{',
+    });
+    expect(invalidBody.status).toBe(400);
+    expect(invalidBody.headers['request-id']).toBe('req_abc-123');
+    expect(invalidBody.headers['idempotency-key']).toBe(goodHeaders()['idempotency-key']);
+  });
+
+  it('echoes the ids on the 503 before start and on an unexpected 500', async () => {
+    const headers = goodHeaders({ 'request-id': 'req_abc-123' });
+
+    // Shutdown stops adapters before the server, so this 503 is reachable
+    const stopped = createAcpAdapter(adapterOptions());
+    const before = fakeExchange({ headers, body: VALID_CREATE });
+    await stopped.handleHttp(before.req as never, before.res as never);
+    expect(before.result().status).toBe(503);
+    expect(before.result().headers['request-id']).toBe('req_abc-123');
+    expect(before.result().headers['idempotency-key']).toBe(headers['idempotency-key']);
+
+    const { context } = setup();
+    const broken: ProtocolAdapterContext = {
+      ...context,
+      ids: {
+        next: () => {
+          throw new Error('id source failed');
+        },
+      },
+    };
+    const failed = await checkout(broken, { headers, body: VALID_CREATE });
+    expect(failed.status).toBe(500);
+    expect(failed.body).toMatchObject({ code: 'internal_error' });
+    expect(failed.headers['request-id']).toBe('req_abc-123');
+    expect(failed.headers['idempotency-key']).toBe(headers['idempotency-key']);
+  });
+
+  it('forwards only the six allowed caller headers', async () => {
+    const { context, execute } = setup(deliveredFor('createCheckoutSession'));
+    const result = await checkout(context, {
+      headers: goodHeaders({
+        'accept-language': 'en-US',
+        'user-agent': 'agent/1.0',
+        'request-id': 'req_abc-123',
+        signature: 'c2ln',
+        timestamp: '2026-10-05T10:00:00Z',
+        cookie: 'session=1',
+        'x-api-key': 'caller-key',
+      }),
+      body: VALID_CREATE,
+    });
+
+    expect(result.status).toBe(201);
+    // No Authorization, Idempotency-Key, Content-Type or unlisted header
+    expect(firstRequest(execute).backendHeaders).toEqual({
+      'accept-language': 'en-US',
+      'user-agent': 'agent/1.0',
+      'request-id': 'req_abc-123',
+      'api-version': ACP_SPEC_VERSION,
+      signature: 'c2ln',
+      timestamp: '2026-10-05T10:00:00Z',
+    });
+  });
+
+  it('drops invalid forwarded header values without failing', async () => {
+    const { context, execute } = setup(deliveredFor('createCheckoutSession'));
+    const result = await checkout(context, {
+      headers: goodHeaders({
+        signature: 's'.repeat(2049),
+        'user-agent': 'agent\r\nx-injected: 1',
+        'accept-language': 'en\u00e9',
+        timestamp: '2026-10-05T10:00:00Z',
+      }),
+      body: VALID_CREATE,
+    });
+
+    expect(result.status).toBe(201);
+    expect(firstRequest(execute).backendHeaders).toEqual({
+      'api-version': ACP_SPEC_VERSION,
+      timestamp: '2026-10-05T10:00:00Z',
+    });
+  });
+
+  it('drops a Request-Id that is not printable ASCII, even on a guard failure', async () => {
+    const { context } = setup();
+    const headers = goodHeaders({ 'request-id': 'req\u00e9' });
     delete headers['authorization'];
     const result = await checkout(context, { headers, body: VALID_CREATE });
 
@@ -520,11 +632,44 @@ describe('ACP route matching', () => {
     }
   });
 
-  // A percent-encoded separator must not become an extra path segment, and an
-  // id is a single opaque segment - not a place to hide a path
+  // Encoded separators stay inside the session id and remain encoded in the
+  // canonical endpoint path used for idempotency.
   it.each([
-    ['an encoded separator in the id', '/acp/checkout_sessions/cs%2F1/complete'],
-    ['an encoded separator smuggling an action', '/acp/checkout_sessions/cs_1%2Fcomplete'],
+    [
+      'an encoded separator in the id',
+      '/acp/checkout_sessions/cs%2F1/complete',
+      'completeCheckoutSession',
+      'cs/1',
+      '/acp/checkout_sessions/cs%2F1/complete',
+    ],
+    [
+      'an encoded separator that only looks like an action',
+      '/acp/checkout_sessions/cs_1%2Fcomplete',
+      'updateCheckoutSession',
+      'cs_1/complete',
+      '/acp/checkout_sessions/cs_1%2Fcomplete',
+    ],
+    [
+      'a global id',
+      '/acp/checkout_sessions/gid%3A%2F%2Fshop%2FCheckout%2F1',
+      'updateCheckoutSession',
+      'gid://shop/Checkout/1',
+      '/acp/checkout_sessions/gid%3A%2F%2Fshop%2FCheckout%2F1',
+    ],
+    [
+      'an id with a space',
+      '/acp/checkout_sessions/cs%201',
+      'updateCheckoutSession',
+      'cs 1',
+      '/acp/checkout_sessions/cs%201',
+    ],
+  ])('routes %s as one session id', (_label, url, operation, sessionId, path) => {
+    const matched = matchAcpRoute('POST', url, MOUNT);
+    expect(matched).toMatchObject({ kind: 'match', route: { operation, sessionId, path } });
+  });
+
+  it.each([
+    ['a control character in the id', '/acp/checkout_sessions/cs%001/complete'],
     ['a malformed escape', '/acp/checkout_sessions/%zz'],
     ['a mount prefix that only looks like ours', '/acpx/checkout_sessions'],
     ['the bare mount', '/acp'],

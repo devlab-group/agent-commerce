@@ -225,3 +225,41 @@ describe('response headers', () => {
     expect(result.headers.get('request-id')).toBeNull();
   });
 });
+
+describe('request headers passed on to the merchant', () => {
+  it('forwards the six seller-facing headers and never the bearer token', async () => {
+    const sent = {
+      'accept-language': 'de-DE',
+      'user-agent': 'conformance-agent/1.0',
+      'request-id': 'req-forward-1',
+      signature: 'c2lnbmF0dXJl',
+      timestamp: '2026-10-05T10:00:00Z',
+    };
+    const result = await acpFetch(stack, '/acp/checkout_sessions', {
+      headers: acpHeaders(sent),
+      body: CREATE_REQUEST,
+    });
+
+    expect(result.status).toBe(201);
+    const received = stack.calls[0]?.headers ?? {};
+    expect(received).toMatchObject({ ...sent, 'api-version': '2026-04-17' });
+    expect(received['authorization']).toBeUndefined();
+    expect(JSON.stringify(received)).not.toContain(ACP_TOKEN);
+    // The merchant gets the derived operation key, not the caller's own
+    expect(received['idempotency-key']).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('forwards them on a GET as well', async () => {
+    await acpFetch(stack, '/acp/checkout_sessions/cs_abc123', {
+      method: 'GET',
+      headers: {
+        authorization: `Bearer ${ACP_TOKEN}`,
+        'api-version': '2026-04-17',
+        'accept-language': 'fr-FR',
+      },
+    });
+
+    expect(stack.calls[0]?.headers['accept-language']).toBe('fr-FR');
+    expect(stack.calls[0]?.headers['authorization']).toBeUndefined();
+  });
+});

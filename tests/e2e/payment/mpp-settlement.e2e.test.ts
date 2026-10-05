@@ -31,6 +31,7 @@ import {
   assertBalanceDelta,
   expectRealSettlement,
   readBalances,
+  waitForBalances,
 } from '../../fixtures/x402/settlement';
 
 const PORT = 18792;
@@ -43,6 +44,7 @@ type EvmChallenge = Parameters<ReturnType<typeof clientCharge>['createCredential
 interface GatewayOptions {
   readonly x402?: boolean;
   readonly mpp?: Record<string, unknown>;
+  readonly backend?: BackendExecutor;
 }
 
 interface Running {
@@ -60,6 +62,13 @@ const backend: BackendExecutor = {
   async call() {
     backendCalls += 1;
     return { status: 200, body: { report: 'ok' }, headers: {}, durationMs: 1 };
+  },
+};
+
+const failingBackend: BackendExecutor = {
+  async call() {
+    backendCalls += 1;
+    throw new Error('backend down');
   },
 };
 
@@ -124,7 +133,7 @@ async function startGateway(options: GatewayOptions = {}): Promise<Running> {
     store,
     paymentProviders: createConfiguredPaymentProviders(config.payments, NOOP_LOGGER),
     protocolAdapters: [],
-    backend,
+    backend: options.backend ?? backend,
   });
   const started = { gateway, store };
   running.push(started);
@@ -182,13 +191,17 @@ function altered(credential: string, change: (copy: MutableCredential) => void):
   return Credential.serialize(Credential.from(copy as unknown as Credential.Credential));
 }
 
-async function balances() {
-  return readBalances({
+function balanceQuery() {
+  return {
     rpcUrl: anvil.rpcUrl,
     asset: deployment.asset,
     buyer: deployment.buyer.address,
     merchant: deployment.merchant.address,
-  });
+  };
+}
+
+async function balances() {
+  return readBalances(balanceQuery());
 }
 
 // A refused payment: no delivery and no balance change on chain
@@ -384,6 +397,9 @@ describe('MPP settlement - real local chain', () => {
     // chain; the gateway's replay reservation covers a concurrent second copy
     expect(replayed.statusCode).toBe(402);
     expect(replayed.body['code']).toBe('PAYMENT_INVALID');
+    expect(replayed.body['message']).toBe('challenge_already_used');
+    expect(replayed.body['type']).toBe('https://paymentauth.org/problems/invalid-challenge');
+    expect(replayed.headers['www-authenticate']).toMatch(/^Payment /);
     const after = await balances();
     expect(before.buyer - after.buyer).toBe(ONE_USDC);
     expect(after.merchant - before.merchant).toBe(ONE_USDC);
@@ -416,7 +432,7 @@ describe('MPP settlement - real local chain', () => {
     expect(refused.headers['www-authenticate']).toMatch(/^Payment /);
   });
 
-  it('7. a broadcast that is never confirmed is reported as uncertain, and the transfer lands once mined', async () => {
+  it('7. withholds delivery after an unconfirmed broadcast that later lands', async () => {
     const { gateway } = await startGateway();
     const credential = await mppCredential(gateway);
     const chain = createTestClient({ mode: 'anvil', transport: http(anvil.rpcUrl) });
@@ -438,7 +454,10 @@ describe('MPP settlement - real local chain', () => {
     expect(uncertain.body['code']).toBe('PAYMENT_SETTLEMENT_FAILED');
     const details = uncertain.body['details'] as Record<string, unknown>;
     expect(details['settlementUncertain']).toBe(true);
-    expect(backendCalls).toBe(callsBefore);
+    // The default flow runs the backend first; its response is not delivered
+    expect(backendCalls).toBe(callsBefore + 1);
+    expect(uncertain.body).not.toHaveProperty('report');
+    expect(uncertain.headers['payment-receipt']).toBeUndefined();
     // Not "failed": the broadcast was pending, with nothing moved yet
     expect(pending).toEqual(before);
 
@@ -468,13 +487,75 @@ describe('MPP settlement - real local chain', () => {
       expect(uncertain.body['code']).toBe('PAYMENT_SETTLEMENT_FAILED');
       const details = uncertain.body['details'] as Record<string, unknown>;
       expect(details['settlementUncertain']).toBe(true);
-      expect(backendCalls).toBe(callsBefore);
+      expect(backendCalls).toBe(callsBefore + 1);
+      expect(uncertain.body).not.toHaveProperty('report');
       const [attempt] = await store.listPaymentAttempts();
       expect(attempt?.status).toBe('settlement-uncertain');
-      // The recorded outcome is unknown, but the money did move
-      assertBalanceDelta(before, await balances(), ONE_USDC);
+      // The transfer may land after the 502 because the response was lost.
+      // Poll balances to confirm the payment despite the uncertain attempt.
+      const after = await waitForBalances(balanceQuery(), (s) => s.buyer < before.buyer, 30_000);
+      assertBalanceDelta(before, after, ONE_USDC);
     } finally {
       await rpc.close();
     }
+  });
+
+  it('9. backend failure under authorization leaves funds untouched and bars replay', async () => {
+    const { gateway, store } = await startGateway({ backend: failingBackend });
+    const credential = await mppCredential(gateway);
+    const before = await balances();
+    const callsBefore = backendCalls;
+
+    const failed = await invoke(gateway, { authorization: credential });
+
+    expect(failed.statusCode).toBe(502);
+    expect(failed.body['code']).toBe('BACKEND_ERROR');
+    expect(backendCalls).toBe(callsBefore + 1);
+    expect(failed.headers['payment-receipt']).toBeUndefined();
+    expect(failed.headers['payment-response']).toBeUndefined();
+    const [attempt] = await store.listPaymentAttempts();
+    expect(attempt).toMatchObject({ status: 'rejected', rejectionReason: 'backend_failed' });
+    expect(await balances()).toEqual(before);
+
+    // The nonce is unspent on chain, so only the gateway's reservation refuses it
+    const again = await invoke(gateway, { authorization: credential });
+
+    expect(again.statusCode).toBe(402);
+    expect(again.body['code']).toBe('PAYMENT_REPLAYED');
+    expect(again.body['type']).toBe('https://paymentauth.org/problems/invalid-challenge');
+    expect(again.headers['www-authenticate']).toMatch(/^Payment /);
+    expect(backendCalls).toBe(callsBefore + 1);
+    expect(await balances()).toEqual(before);
+  });
+
+  it('10. a backend failure under upfront leaves the payment settled on chain', async () => {
+    const { gateway, store } = await startGateway({
+      mpp: { paymentFlow: 'upfront' },
+      backend: failingBackend,
+    });
+    const credential = await mppCredential(gateway);
+    const before = await balances();
+    const callsBefore = backendCalls;
+
+    const failed = await invoke(gateway, { authorization: credential });
+
+    expect(failed.statusCode).toBe(502);
+    expect(failed.body['code']).toBe('BACKEND_ERROR');
+    expect(backendCalls).toBe(callsBefore + 1);
+    // MPP forbids the receipt header on an error response
+    expect(failed.headers['payment-receipt']).toBeUndefined();
+    expect(failed.headers['payment-response']).toBeDefined();
+    const [attempt] = await store.listPaymentAttempts();
+    expect(attempt?.status).toBe('settled');
+    await expectRealSettlement({
+      rpcUrl: anvil.rpcUrl,
+      asset: deployment.asset,
+      buyer: deployment.buyer.address,
+      merchant: deployment.merchant.address,
+      before,
+      after: await balances(),
+      amountBaseUnits: ONE_USDC,
+      txHash: attempt?.externalReference as string,
+    });
   });
 });

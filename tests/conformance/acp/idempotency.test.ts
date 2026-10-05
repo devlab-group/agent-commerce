@@ -106,9 +106,93 @@ describe('completion replay', () => {
     // The merchant was reached and its outcome is unknown, so the answer is
     // neither replayed (we have none to give) nor re-run (it could order twice)
     expect(retry.status).toBe(409);
-    expect(retry.body['code']).toBe('idempotency_unresolved');
+    expect(retry.body).toMatchObject({ type: 'invalid_request', code: 'idempotency_unresolved' });
     expect(retry.headers.get('idempotent-replayed')).toBeNull();
     expect(stack.calls).toHaveLength(1);
+  });
+
+  it('runs a retry with the same key after a merchant 429, which processed nothing', async () => {
+    stack.nextReply({ status: 429, body: { error: 'slow down' }, headers: { 'retry-after': '2' } });
+    const limited = await complete('idem-complete-429');
+    const retry = await complete('idem-complete-429');
+
+    expect(limited.status).toBe(503);
+    expect(limited.headers.get('retry-after')).toBe('2');
+    expect(retry.status).toBe(200);
+    expect(retry.headers.get('idempotent-replayed')).toBeNull();
+    expect(stack.calls).toHaveLength(2);
+    // The merchant sees one operation name across both attempts
+    expect(stack.calls[1]?.headers['idempotency-key']).toBe(
+      stack.calls[0]?.headers['idempotency-key'],
+    );
+  });
+
+  it('holds the key after a merchant 503, which may follow partial work', async () => {
+    stack.nextReply({ status: 503, body: { error: 'overloaded' } });
+    const failed = await complete('idem-complete-503');
+    const retry = await complete('idem-complete-503');
+
+    expect(failed.status).toBe(503);
+    expect(failed.body['type']).toBe('service_unavailable');
+    expect(failed.headers.get('retry-after')).toBe('5');
+    expect(retry.status).toBe(409);
+    expect(retry.body['code']).toBe('idempotency_unresolved');
+    expect(stack.calls).toHaveLength(1);
+  });
+
+  it('replays a completion to a retry that changed only its forwarded headers', async () => {
+    const send = (userAgent: string) =>
+      acpFetch(stack, COMPLETE_PATH, {
+        headers: acpHeaders({
+          'idempotency-key': 'idem-complete-headers',
+          'user-agent': userAgent,
+          timestamp: userAgent === 'agent/1' ? '2026-10-05T10:00:00Z' : '2026-10-05T10:00:09Z',
+        }),
+        body: COMPLETE_REQUEST,
+      });
+    const first = await send('agent/1');
+    const retry = await send('agent/2');
+
+    expect(first.status).toBe(200);
+    expect(retry.headers.get('idempotent-replayed')).toBe('true');
+    expect(stack.calls).toHaveLength(1);
+  });
+
+  it('retries after a merchant 503 when merchant idempotency is enabled', async () => {
+    const dedup = await startAcpStack({ merchantIdempotent: true });
+    try {
+      dedup.nextReply({ status: 503, body: { error: 'overloaded' } });
+      const headers = acpHeaders({ 'idempotency-key': 'idem-dedup-503' });
+      const failed = await acpFetch(dedup, COMPLETE_PATH, { headers, body: COMPLETE_REQUEST });
+      const retry = await acpFetch(dedup, COMPLETE_PATH, { headers, body: COMPLETE_REQUEST });
+
+      expect(failed.status).toBe(503);
+      expect(retry.status).toBe(200);
+      expect(dedup.calls).toHaveLength(2);
+    } finally {
+      await dedup.close();
+    }
+  });
+
+  it('retries after a merchant 5xx when merchant idempotency is enabled', async () => {
+    const dedup = await startAcpStack({ merchantIdempotent: true });
+    try {
+      dedup.nextReply({ status: 500, body: { error: 'merchant exploded' } });
+      const headers = acpHeaders({ 'idempotency-key': 'idem-dedup-5' });
+      const failed = await acpFetch(dedup, COMPLETE_PATH, { headers, body: COMPLETE_REQUEST });
+      const retry = await acpFetch(dedup, COMPLETE_PATH, { headers, body: COMPLETE_REQUEST });
+
+      expect(failed.status).toBe(502);
+      // The gateway retries with the same derived key; the merchant must
+      // deduplicate the operation in this mode
+      expect(retry.status).toBe(200);
+      expect(dedup.calls).toHaveLength(2);
+      expect(dedup.calls[1]?.headers['idempotency-key']).toBe(
+        dedup.calls[0]?.headers['idempotency-key'],
+      );
+    } finally {
+      await dedup.close();
+    }
   });
 
   it('places one order when the merchant acts and the answer arrives too late', async () => {

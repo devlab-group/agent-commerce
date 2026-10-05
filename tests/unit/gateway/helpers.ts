@@ -52,10 +52,12 @@ export function createFakeStore(): FakeStore {
       events.push(event);
     },
     async reservePaymentAttempt(reservation) {
-      if (attempts.has(reservation.replayKey)) {
+      const existing = attempts.get(reservation.replayKey);
+      if (existing) {
         throw new CommerceError(
           'PAYMENT_REPLAYED',
           `replay key "${reservation.replayKey}" already reserved`,
+          { details: { attemptStatus: existing.status } },
         );
       }
       const attempt: PaymentAttempt = {

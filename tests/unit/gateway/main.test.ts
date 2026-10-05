@@ -143,6 +143,7 @@ function fullConfig(dir: string) {
     acp_cancel: acpResource(['path'], ['body']),
   });
   const report = config.resources['market_report'] as Section;
+  report['expose'] = ['http', 'mcp', 'a2a'];
   report['payments'] = ['x402', 'mpp'];
   report['authorization'] = { required: ['ap2'] };
   config.payments['mpp'] = {

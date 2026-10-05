@@ -11,7 +11,11 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
-import { type CallToolResult, LATEST_PROTOCOL_VERSION } from '@modelcontextprotocol/sdk/types.js';
+import {
+  type CallToolResult,
+  ErrorCode,
+  LATEST_PROTOCOL_VERSION,
+} from '@modelcontextprotocol/sdk/types.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   type CanonicalRequest,
@@ -33,7 +37,10 @@ import {
   PAID_NO_METHOD_RESOURCE,
   PAID_WEATHER_RESOURCE,
 } from './fixtures';
-import { EXPECTED_MCP_PROTOCOL_REVISION } from './protocol-revision.fixture';
+import {
+  EXPECTED_MCP_MODERN_PROTOCOL_REVISION,
+  EXPECTED_MCP_PROTOCOL_REVISION,
+} from './protocol-revision.fixture';
 import { type RunningAdapterServer, startAdapterServer } from './support';
 
 interface Harness {
@@ -56,8 +63,8 @@ async function setup(
   const server = await startAdapterServer(adapter);
   const client = new Client({ name: 'conformance-client', version: '0.0.0-test' });
   const transport = new StreamableHTTPClientTransport(new URL(`${server.url}${adapter.mountPath}`));
-  // The same exactOptionalPropertyTypes mismatch with the SDK's accessor typing
-  // as on the server side (see src/protocols/mcp/adapter.ts)
+  // The v1 transport's `onclose`/`onerror` are typed `T | undefined`, which
+  // exactOptionalPropertyTypes rejects for the bare optional `T` in `Transport`
   await client.connect(transport as Transport);
 
   const harness: Harness = { adapter, pipeline, server, client, transport };
@@ -92,6 +99,16 @@ function structured(result: CallToolResult): Record<string, unknown> {
   return result.structuredContent as Record<string, unknown>;
 }
 
+// MCP makes an unknown tool a protocol error (-32602), not a tool result
+async function expectUnknownTool(client: Client, name: string): Promise<Error> {
+  const error = await callTool(client, { name, arguments: {} }).then(
+    () => undefined,
+    (e: unknown) => e,
+  );
+  expect(error).toMatchObject({ code: ErrorCode.InvalidParams });
+  return error as Error;
+}
+
 function firstText(result: CallToolResult): string {
   const first = result.content?.[0];
   expect(first).toBeDefined();
@@ -112,9 +129,12 @@ describe('mcp adapter: descriptor and support matrix', () => {
     expect(adapter.descriptor.unsupported ?? []).toEqual(
       expect.arrayContaining(['resources', 'prompts', 'sampling', 'dns-rebinding-protection']),
     );
-    // The negotiated revision, the fixture and the SDK constant must all agree
-    expect(adapter.descriptor.supportedSpec).toBe(LATEST_PROTOCOL_VERSION);
-    expect(adapter.descriptor.supportedSpec).toBe(EXPECTED_MCP_PROTOCOL_REVISION);
+    // The descriptor names both served revisions
+    expect(adapter.descriptor.supportedSpec).toBe(
+      `${EXPECTED_MCP_MODERN_PROTOCOL_REVISION}, ${EXPECTED_MCP_PROTOCOL_REVISION}`,
+    );
+    // The v1 client's revision is the newest 2025-era one the server serves
+    expect(LATEST_PROTOCOL_VERSION).toBe(EXPECTED_MCP_PROTOCOL_REVISION);
   });
 
   it('actually negotiates the expected protocol revision over a live connection', async () => {
@@ -234,12 +254,9 @@ describe('mcp adapter: invocation', () => {
       throw new Error('must not be called for an unregistered tool name');
     };
 
-    const result = await callTool(h.client, { name: 'does-not-exist', arguments: {} });
+    await expectUnknownTool(h.client, 'does-not-exist');
 
     expect(h.pipeline.requests).toHaveLength(0);
-    expect(result.isError).toBe(true);
-    const sc = structured(result);
-    expect(sc.code).toBe('RESOURCE_NOT_FOUND');
   });
 
   it('hides an http-only resource from tools/list and refuses a crafted tools/call for it', async () => {
@@ -251,14 +268,11 @@ describe('mcp adapter: invocation', () => {
     const { tools } = await h.client.listTools();
     expect(tools.map((t) => t.name)).not.toContain('internal-report');
 
-    const result = await callTool(h.client, { name: 'internal-report', arguments: {} });
+    const error = await expectUnknownTool(h.client, 'internal-report');
 
     expect(h.pipeline.requests).toHaveLength(0);
-    expect(result.isError).toBe(true);
-    const sc = structured(result);
-    expect(sc.code).toBe('RESOURCE_NOT_FOUND');
     // Must not reveal that the resource exists but is scoped to another protocol
-    expect(JSON.stringify(sc).toLowerCase()).not.toContain('http');
+    expect(error.message.toLowerCase()).not.toContain('http');
   });
 
   it('gates tools/call on a skipped illegal-tool-name resource: guessing its raw id is rejected', async () => {
@@ -267,11 +281,9 @@ describe('mcp adapter: invocation', () => {
       throw new Error('must not be called for a resource skipped at start()');
     };
 
-    const result = await callTool(h.client, { name: 'bad tool id!', arguments: {} });
+    await expectUnknownTool(h.client, 'bad tool id!');
 
     expect(h.pipeline.requests).toHaveLength(0);
-    expect(result.isError).toBe(true);
-    expect(structured(result).code).toBe('RESOURCE_NOT_FOUND');
   });
 
   it('returns isError plus a valid PaymentRequiredEnvelope (with accepts[0]) when a paid resource is called without a proof', async () => {
@@ -316,10 +328,13 @@ describe('mcp adapter: invocation', () => {
       payTo: '0xMerchantWallet',
     });
 
-    const text = firstText(result);
-    expect(text).toMatch(/0\.05/);
-    expect(text).toContain('USDC');
-    expect(text).toContain('0xMerchantWallet');
+    // The first text block repeats structuredContent as JSON; the second
+    // explains the payment to a reader
+    expect(JSON.parse(firstText(result))).toEqual(result.structuredContent);
+    const sentence = String((result.content[1] as { text: string }).text);
+    expect(sentence).toMatch(/0\.05/);
+    expect(sentence).toContain('USDC');
+    expect(sentence).toContain('0xMerchantWallet');
   });
 
   it('forwards a supplied _payment proof as payment:{method:x402,payload} and maps the delivered result', async () => {
@@ -624,6 +639,9 @@ describe('mcp adapter: batch fan-out', () => {
   const EXPECTED_CONCURRENCY_CAP = 8;
   const EXPECTED_QUEUE_CAP = 64;
   const EXPECTED_TOTAL_ADMITTED = EXPECTED_CONCURRENCY_CAP + EXPECTED_QUEUE_CAP;
+  // The SDK returns 400 for batches over MAX_BATCH_SIZE before dispatch;
+  // 100 calls still exceed the concurrency limit plus the queue capacity
+  const SDK_MAX_BATCH_SIZE = 100;
 
   function deliveredOutcome(request: CanonicalRequest): ExecutionOutcome {
     return {
@@ -671,9 +689,36 @@ describe('mcp adapter: batch fan-out', () => {
     });
   }
 
+  it('accepts batches only under MCP 2025-03-26', async () => {
+    const h = await setup([FREE_ECHO_RESOURCE]);
+    h.pipeline.handler = deliveredOutcome;
+    const post = (version: string) =>
+      fetch(`${h.server.url}${h.adapter.mountPath}`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          accept: 'application/json, text/event-stream',
+          'mcp-protocol-version': version,
+        },
+        body: JSON.stringify(rawBatch('echo', 2)),
+      });
+
+    for (const version of ['2025-06-18', '2025-11-25']) {
+      const refused = await post(version);
+      expect(refused.status).toBe(400);
+      expect(await refused.json()).toMatchObject({ error: { code: -32600 }, id: null });
+    }
+    expect(h.pipeline.requests).toHaveLength(0);
+
+    const served = await post('2025-03-26');
+    expect(served.status).toBe(200);
+    await served.text();
+    expect(h.pipeline.requests).toHaveLength(2);
+  });
+
   it('never runs more than the concurrency cap at once, and never admits more than cap+queue total, for an oversized JSON-RPC batch', async () => {
     const h = await setup([FREE_ECHO_RESOURCE]);
-    const BATCH_SIZE = 1000;
+    const BATCH_SIZE = SDK_MAX_BATCH_SIZE;
 
     let inFlight = 0;
     let peak = 0;
@@ -691,7 +736,7 @@ describe('mcp adapter: batch fan-out', () => {
     expect(res.status).toBe(200);
     await res.text(); // drain the SSE stream; resolves once every response is sent
 
-    // Of 1000 requested calls only cap + queue (72) reach the pipeline; the
+    // Of 100 requested calls only cap + queue (72) reach the pipeline; the
     // rest are rejected at once without touching pipeline.execute()
     expect(h.pipeline.requests.length).toBe(EXPECTED_TOTAL_ADMITTED);
     // No more than EXPECTED_CONCURRENCY_CAP of those 72 ever ran at once
@@ -711,7 +756,11 @@ describe('mcp adapter: batch fan-out', () => {
     const controller = new AbortController();
     // Fills concurrency and queue with room to spare, so however the abort
     // lands relative to dispatch, more work is admitted than could finish
-    const fetchPromise = postBatch(h, rawBatch('echo', 300), controller.signal).catch(
+    const fetchPromise = postBatch(
+      h,
+      rawBatch('echo', SDK_MAX_BATCH_SIZE),
+      controller.signal,
+    ).catch(
       () => undefined, // aborting rejects the client's own fetch; only server-side behavior matters here
     );
 
@@ -729,7 +778,7 @@ describe('mcp adapter: batch fan-out', () => {
     const second = h.pipeline.requests.length;
 
     expect(second).toBe(first); // stable: nothing new started in this window
-    expect(second).toBeLessThan(300); // and nowhere near the full batch
+    expect(second).toBeLessThan(SDK_MAX_BATCH_SIZE); // and nowhere near the full batch
   });
 
   it('the queue-full rejection carries a wire envelope that is retryable (GATEWAY_BUSY, HTTP 503)', async () => {
@@ -745,8 +794,8 @@ describe('mcp adapter: batch fan-out', () => {
       return deliveredOutcome(request);
     };
 
-    // Saturate concurrency (8) + queue (64) = 72 with plenty to spare
-    const batch = postBatch(h, rawBatch('echo', 500)).then((r) => r.text());
+    // Saturate concurrency (8) + queue (64) = 72 with room to spare
+    const batch = postBatch(h, rawBatch('echo', SDK_MAX_BATCH_SIZE)).then((r) => r.text());
     // The transport dispatches a whole batch before any call reaches the
     // pipeline, so a full concurrency slot means a full queue
     await vi.waitFor(() => expect(h.pipeline.requests).toHaveLength(EXPECTED_CONCURRENCY_CAP), {
@@ -775,9 +824,49 @@ describe('mcp adapter: transport and lifecycle', () => {
     const h = await setup([FREE_ECHO_RESOURCE]);
     const res = await fetch(`${h.server.url}${h.adapter.mountPath}`, { method: 'GET' });
     expect(res.status).toBe(405);
-    const body = (await res.json()) as { jsonrpc: string; error: { message: string } };
+    expect(res.headers.get('allow')).toBe('POST');
+    const body = (await res.json()) as {
+      jsonrpc: string;
+      error: { code: number; message: string };
+    };
     expect(body.jsonrpc).toBe('2.0');
+    expect(body.error.code).toBe(-32600);
     expect(body.error.message.toLowerCase()).toContain('method not allowed');
+  });
+
+  // The gateway mount enforces the same cap first; this is the adapter's own
+  it('answers a body over its own cap with 413 and runs nothing', async () => {
+    const h = await setup([FREE_ECHO_RESOURCE]);
+    const oversized = JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name: 'echo', arguments: { text: 'x'.repeat(300 * 1024) } },
+    });
+
+    const res = await fetch(`${h.server.url}${h.adapter.mountPath}`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+      },
+      body: oversized,
+    });
+
+    expect(res.status).toBe(413);
+    expect(await res.json()).toMatchObject({
+      jsonrpc: '2.0',
+      id: null,
+      error: { code: -32600, message: expect.stringContaining('byte limit') },
+    });
+    expect(h.pipeline.requests).toHaveLength(0);
+  });
+
+  it('refuses tools/list with a cursor, since the server issues none', async () => {
+    const h = await setup([FREE_ECHO_RESOURCE]);
+
+    await expect(h.client.listTools({ cursor: 'page-2' })).rejects.toMatchObject({ code: -32602 });
+    expect((await h.client.listTools()).tools).toHaveLength(1);
   });
 
   it('answers 503 before start() and after stop(), and reports health to match', async () => {
@@ -801,7 +890,9 @@ describe('mcp adapter: transport and lifecycle', () => {
 
     try {
       expect((await adapter.health()).status).toBe('fail');
-      expect((await callEcho()).status).toBe(503);
+      const notRunning = await callEcho();
+      expect(notRunning.status).toBe(503);
+      expect(await notRunning.json()).toMatchObject({ error: { code: -32603 } });
 
       await adapter.start(context);
       const after = await adapter.health();
@@ -864,5 +955,57 @@ describe('mcp adapter: transport and lifecycle', () => {
     await client.close();
     await adapter.stop();
     await server.close();
+  });
+});
+
+describe('mcp adapter: malformed tools/call params', () => {
+  async function postToolCall(h: Harness, params: unknown): Promise<Record<string, unknown>> {
+    const res = await fetch(`${h.server.url}${h.adapter.mountPath}`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 'bad-1', method: 'tools/call', params }),
+    });
+    expect(res.status).toBe(200);
+    return (await res.json()) as Record<string, unknown>;
+  }
+
+  // The SDK's own refusal carries its schema validator's issue list
+  it.each([
+    ['params that are not an object', 'nope', 'params must be an object'],
+    ['a non-string name', { name: 7 }, '"name" must be a string'],
+    ['non-object arguments', { name: 'echo', arguments: 'x' }, '"arguments" must be an object'],
+    ['array arguments', { name: 'echo', arguments: [] }, '"arguments" must be an object'],
+    ['a non-object _meta', { name: 'echo', _meta: 1 }, '"_meta" must be an object'],
+  ])('refuses %s with -32602 and one short sentence', async (_label, params, problem) => {
+    const h = await setup([FREE_ECHO_RESOURCE]);
+
+    const body = await postToolCall(h, params);
+
+    expect(body).toEqual({
+      jsonrpc: '2.0',
+      id: 'bad-1',
+      error: { code: -32602, message: `Invalid tools/call params: ${problem}.` },
+    });
+    expect(h.pipeline.requests).toHaveLength(0);
+  });
+
+  it('lets the SDK reject an unsupported protocol version', async () => {
+    const h = await setup([FREE_ECHO_RESOURCE]);
+
+    const res = await fetch(`${h.server.url}${h.adapter.mountPath}`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+        'mcp-protocol-version': '2099-01-01',
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 7 } }),
+    });
+
+    expect(res.status).toBe(400);
+    expect(h.pipeline.requests).toHaveLength(0);
   });
 });

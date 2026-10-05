@@ -135,13 +135,27 @@ describe('buildAccessControlHook (Host and CORS only)', () => {
     expect(reply.headers['vary']).toBe('Origin');
     // No gateway surface serves DELETE, so a preflight must not advertise it
     expect(reply.headers['access-control-allow-methods']).toBe('GET,POST,OPTIONS');
-    // The request headers a browser client sends for payment and authorization
+    // Browser requests for payment, authorization and protocol calls need
+    // these headers on the preflight allowlist
     const allowed = String(reply.headers['access-control-allow-headers']).split(',');
     expect(allowed).toEqual(
-      expect.arrayContaining(['payment-signature', 'agent-authorization', 'authorization']),
+      expect.arrayContaining([
+        'payment-signature',
+        'agent-authorization',
+        'authorization',
+        'mcp-protocol-version',
+        'mcp-method',
+        'mcp-name',
+        'a2a-version',
+        'a2a-extensions',
+        'api-version',
+        'idempotency-key',
+        'request-id',
+        'access-control-expose-headers',
+      ]),
     );
     // Browser code can read only the response headers named here: the
-    // challenge and the settlement result
+    // challenge, the settlement result and ACP's echoed headers
     const exposed = String(reply.headers['access-control-expose-headers']).split(',');
     expect(exposed).toEqual(
       expect.arrayContaining([
@@ -149,6 +163,10 @@ describe('buildAccessControlHook (Host and CORS only)', () => {
         'payment-response',
         'www-authenticate',
         'payment-receipt',
+        'idempotency-key',
+        'request-id',
+        'idempotent-replayed',
+        'retry-after',
       ]),
     );
   });

@@ -43,11 +43,11 @@ protocols:
   mcp:
     enabled: true
     mountPath: /mcp
-  # A2A (Agent2Agent) v1.0.0 - experimental, off by default.
-  # Enabling it serves JSON-RPC `SendMessage` at mountPath and the
-  # specification-fixed Agent Card at /.well-known/agent-card.json. Clients must
-  # send `A2A-Version: 1.0`. Streaming, task persistence and push notifications
-  # are not implemented; see docs/protocols.md#a2a.
+  # A2A (Agent2Agent) v1.0.1 - experimental, off by default.
+  # Serves JSON-RPC `SendMessage` at mountPath and the Agent Card at
+  # /.well-known/agent-card.json. Enable at least one resource with
+  # `expose: [a2a]`. Clients send `A2A-Version: 1.0`.
+  # See docs/protocols.md#a2a for supported features.
   a2a:
     enabled: false
     mountPath: /a2a
@@ -121,6 +121,10 @@ payments:
     payTo: ${MERCHANT_WALLET}
     # Seconds a payment challenge stays valid
     maxTimeoutSeconds: 120
+    # Settlement order: authorization (the default) calls the backend first
+    # and settles only if it succeeds; upfront settles first. A paid resource
+    # can set its own paymentFlow, which applies to the rail that serves it.
+    # paymentFlow: authorization
     # Who verifies the authorization and broadcasts the transfer.
     #
     # mode: local   the facilitator runs in this process and signs with
@@ -173,6 +177,10 @@ payments:
   #   recipient: ${MERCHANT_WALLET}
   #   realm: localhost
   #   challengeSecret: ${MPP_CHALLENGE_SECRET} # at least 32 characters
+  #   # Same values and default as x402 above. Under authorization, the
+  #   # backend must answer before the challenge expires, by default 300 s
+  #   # after it was issued (challengeTtlSeconds).
+  #   paymentFlow: authorization
   #   facilitator:
   #     mode: local
   #     signerPrivateKey: ${X402_FACILITATOR_PRIVATE_KEY}
@@ -198,6 +206,10 @@ payments:
 #     specVersion: "0.2.0"     # the only supported value
 #     mode: direct             # the only supported mode
 #     clockSkewSeconds: 60     # default; 300 is the ceiling
+#     # AP2 makes a mandate's `aud` and `exp` optional. Set these to refuse
+#     # mandates without them; the checkout JWT requires both regardless.
+#     requireMandateAudience: false
+#     requireMandateExpiry: false
 #     replay:
 #       # Its own file. An authorization replay is not a payment replay, and a
 #       # spent mandate must stay spent for as long as you can be asked what

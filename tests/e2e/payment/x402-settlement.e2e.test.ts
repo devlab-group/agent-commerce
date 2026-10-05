@@ -9,7 +9,7 @@
  * refusal stopped a payment that would otherwise have moved funds.
  */
 
-import { x402Client } from '@x402/core/client';
+import { x402Client, x402HTTPClient } from '@x402/core/client';
 import type { PaymentRequired } from '@x402/core/types';
 import { registerExactEvmScheme } from '@x402/evm/exact/client';
 import { privateKeyToAccount } from 'viem/accounts';
@@ -30,6 +30,9 @@ import { createGateway, type GatewayInstance } from '../../../src/gateway';
 import { createConfiguredPaymentProviders } from '../../../src/gateway/payment-providers';
 import { createPaymentProof, createX402PaymentProvider } from '../../../src/payments/x402';
 import { type AnvilHandle, deployLocalChain, startAnvil } from '../../../src/payments/x402/testing';
+import { createA2aAdapter } from '../../../src/protocols/a2a';
+import type { A2aTask } from '../../../src/protocols/a2a/types';
+import { A2A_X402_EXTENSION_URI } from '../../../src/protocols/a2a/x402-extension';
 import { createSqliteReceiptStore } from '../../../src/storage/receipts';
 import { startLossyRpc, unreachableRpcUrl } from '../../fixtures/x402/lossy-rpc';
 import {
@@ -40,6 +43,8 @@ import {
 
 const PORT = 18790;
 const RESOURCE_ID = 'market_report';
+// The same resource under the `upfront` flow, which settles before the backend
+const UPFRONT_RESOURCE_ID = 'market_report_upfront';
 
 const RESOURCE: CommerceResource = {
   id: 'demo.report',
@@ -85,14 +90,26 @@ async function startGateway(): Promise<void> {
       merchant: { id: 'x402-e2e', name: 'x402 E2E', publicBaseUrl: 'http://127.0.0.1:8080' },
       server: { port: 8080, host: '127.0.0.1', allowedOrigins: [] },
       storage: { receipts: { driver: 'sqlite', path: ':memory:' } },
-      protocols: { http: { enabled: true }, mcp: { enabled: false, mountPath: '/mcp' } },
+      protocols: {
+        http: { enabled: true },
+        mcp: { enabled: false, mountPath: '/mcp' },
+        a2a: { enabled: true, mountPath: '/a2a' },
+      },
       resources: {
         [RESOURCE_ID]: {
           name: 'Market report',
           backend: { type: 'http', method: 'GET', url: 'http://merchant.invalid/api/report' },
           pricing: { type: 'fixed', amount: '1.00', currency: 'USDC' },
+          expose: ['http', 'a2a'],
+          payments: ['x402'],
+        },
+        [UPFRONT_RESOURCE_ID]: {
+          name: 'Market report, paid upfront',
+          backend: { type: 'http', method: 'GET', url: 'http://merchant.invalid/api/report' },
+          pricing: { type: 'fixed', amount: '1.00', currency: 'USDC' },
           expose: ['http'],
           payments: ['x402'],
+          paymentFlow: 'upfront',
         },
       },
       payments: {
@@ -118,7 +135,7 @@ async function startGateway(): Promise<void> {
     config,
     store,
     paymentProviders: createConfiguredPaymentProviders(config.payments, NOOP_LOGGER),
-    protocolAdapters: [],
+    protocolAdapters: [createA2aAdapter()],
     backend,
   });
 }
@@ -129,10 +146,13 @@ interface Invocation {
   readonly body: Record<string, unknown>;
 }
 
-async function invoke(headers: Record<string, string> = {}): Promise<Invocation> {
+async function invoke(
+  headers: Record<string, string> = {},
+  resourceId = RESOURCE_ID,
+): Promise<Invocation> {
   const res = await gateway.server.inject({
     method: 'POST',
-    url: `/api/resources/${RESOURCE_ID}/invoke`,
+    url: `/api/resources/${resourceId}/invoke`,
     headers: { 'content-type': 'application/json', ...headers },
     payload: {},
   });
@@ -142,8 +162,9 @@ async function invoke(headers: Record<string, string> = {}): Promise<Invocation>
 // Asks the gateway for the resource unpaid and signs the challenge it returns
 async function gatewayProof(
   overrides?: Parameters<typeof createPaymentProof>[0]['overrides'],
+  resourceId = RESOURCE_ID,
 ): Promise<string> {
-  const challenged = await invoke();
+  const challenged = await invoke({}, resourceId);
   expect(challenged.statusCode).toBe(402);
   const payment = challenged.body['payment'] as { accepts: Record<string, unknown>[] };
   return createPaymentProof({
@@ -175,6 +196,10 @@ async function expectRefused(proof: string, reason: string): Promise<void> {
   expect(refused.statusCode).toBe(402);
   expect(refused.body['code']).toBe('PAYMENT_INVALID');
   expect(refused.body['message']).toBe(reason);
+  // The x402 client reads the refusal reason from the new challenge
+  const header = (name: string) => refused.headers[name.toLowerCase()] as string | undefined;
+  const challenge = new x402HTTPClient(new x402Client()).getPaymentRequiredResponse(header);
+  expect(challenge.error).toBe(reason);
   expect(backendCalls).toBe(callsBefore);
   expect(await balances()).toEqual(before);
 }
@@ -271,6 +296,15 @@ describe('x402 settlement - real local chain', () => {
     expect(backendCalls).toBe(callsBefore + 1);
     const [receipt] = await store.listReceipts({ limit: 1 });
     expect(receipt?.payment).toMatchObject({ provider: 'x402', status: 'settled' });
+    // Check that the SDK client reads the base-unit amount and payer
+    const header = (name: string) => paid.headers[name.toLowerCase()] as string | undefined;
+    const settlement = new x402HTTPClient(new x402Client()).getPaymentSettleResponse(header);
+    expect(settlement).toMatchObject({
+      success: true,
+      transaction: receipt?.payment?.externalReference,
+      amount: '1000000',
+      payer: deployment.buyer.address,
+    });
     await expectRealSettlement({
       rpcUrl: anvil.rpcUrl,
       asset: deployment.asset,
@@ -314,7 +348,7 @@ describe('x402 settlement - real local chain', () => {
         submission: { method: 'x402', payload },
       });
       expect(result.status).toBe('rejected');
-      expect(result.rejectionReason).toBe('malformed_payment_payload');
+      expect(result.rejectionReason).toBe('invalid_payload');
     }
   });
 
@@ -340,13 +374,19 @@ describe('x402 settlement - real local chain', () => {
   it.each(['999999', '1000001'])(
     '4. an authorized value other than the price is refused before settlement: %s',
     async (value) => {
-      await expectRefused(await gatewayProof({ value }), 'wrong_amount');
+      await expectRefused(
+        await gatewayProof({ value }),
+        'invalid_exact_evm_payload_authorization_value_mismatch',
+      );
     },
   );
 
   it('5. a proof paying another recipient is refused before settlement', async () => {
     // A valid address, just not the merchant
-    await expectRefused(await gatewayProof({ payTo: deployment.buyer.address }), 'wrong_recipient');
+    await expectRefused(
+      await gatewayProof({ payTo: deployment.buyer.address }),
+      'invalid_exact_evm_payload_recipient_mismatch',
+    );
   });
 
   it('6. a proof for another network is refused before settlement', async () => {
@@ -354,7 +394,7 @@ describe('x402 settlement - real local chain', () => {
     const proof = altered(await gatewayProof(), (d) => {
       d.accepted['network'] = 'eip155:8453';
     });
-    await expectRefused(proof, 'wrong_network');
+    await expectRefused(proof, 'invalid_network');
   });
 
   it('7. another deployed token is refused in the requirement or the buyer proof', async () => {
@@ -388,11 +428,13 @@ describe('x402 settlement - real local chain', () => {
     const challenged = await invoke();
     const offered = (challenged.body['payment'] as { accepts: Record<string, unknown>[] })
       .accepts[0];
+    // The proof echoes the other token in `accepted`, so it is refused before
+    // the facilitator sees it
     const proofForOtherAsset = await createPaymentProof({
       buyerPrivateKey: deployment.buyer.privateKey,
       accepts: { ...offered, asset: otherToken.asset },
     });
-    await expectRefused(proofForOtherAsset, 'invalid_exact_evm_signature');
+    await expectRefused(proofForOtherAsset, 'invalid_payment_requirements');
   });
 
   it('8. replay: replayKey is stable across presentations, the second settlement moves no funds', async () => {
@@ -617,14 +659,14 @@ describe('x402 settlement - real local chain', () => {
     });
   });
 
-  it('13. a backend failure after settlement tells the payer what settled and records the payment undelivered', async () => {
-    const proof = await gatewayProof();
+  it('13. reports a settled upfront payment after backend failure', async () => {
+    const proof = await gatewayProof(undefined, UPFRONT_RESOURCE_ID);
     const before = await balances();
 
     backendFails = true;
     let failed: Invocation;
     try {
-      failed = await invoke({ [PAYMENT_HEADER]: proof });
+      failed = await invoke({ [PAYMENT_HEADER]: proof }, UPFRONT_RESOURCE_ID);
     } finally {
       backendFails = false;
     }
@@ -648,5 +690,95 @@ describe('x402 settlement - real local chain', () => {
       amountBaseUnits: 1_000_000n,
       txHash,
     });
+  });
+
+  it('14. settles an A2A x402 payment on the local chain', async () => {
+    async function sendMessage(message: Record<string, unknown>): Promise<A2aTask> {
+      const res = await gateway.server.inject({
+        method: 'POST',
+        url: '/a2a',
+        headers: {
+          'content-type': 'application/json',
+          'a2a-version': '1.0',
+          'a2a-extensions': A2A_X402_EXTENSION_URI,
+        },
+        payload: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'SendMessage',
+          params: { message },
+        }),
+      });
+      return res.json<{ result: { task: A2aTask } }>().result.task;
+    }
+    const callsBefore = backendCalls;
+
+    const waiting = await sendMessage({
+      role: 'ROLE_USER',
+      messageId: 'msg-buy',
+      parts: [{ data: { resource: RESOURCE_ID }, mediaType: 'application/json' }],
+    });
+    expect(waiting.status.state).toBe('TASK_STATE_INPUT_REQUIRED');
+    expect(backendCalls).toBe(callsBefore);
+
+    const client = new x402Client();
+    registerExactEvmScheme(client, {
+      signer: privateKeyToAccount(deployment.buyer.privateKey),
+      networks: ['eip155:84532'],
+    });
+    client.setSpendControls(false); // MockUSDC is not in the SDK's asset list
+    const payload = await client.createPaymentPayload(
+      waiting.status.message?.metadata?.['x402.payment.required'] as PaymentRequired,
+    );
+
+    const before = await balances();
+    const paid = await sendMessage({
+      role: 'ROLE_USER',
+      messageId: 'msg-pay',
+      taskId: waiting.id,
+      contextId: waiting.contextId,
+      parts: [{ text: 'Here is the payment authorization.' }],
+      metadata: { 'x402.payment.status': 'payment-submitted', 'x402.payment.payload': payload },
+    });
+    const after = await balances();
+
+    expect(paid.status.state).toBe('TASK_STATE_COMPLETED');
+    const [receipt] = (paid.status.message?.metadata?.['x402.payment.receipts'] ?? []) as {
+      success: boolean;
+      transaction: string;
+    }[];
+    expect(receipt?.success).toBe(true);
+    expect(backendCalls).toBe(callsBefore + 1);
+    await expectRealSettlement({
+      rpcUrl: anvil.rpcUrl,
+      asset: deployment.asset,
+      buyer: deployment.buyer.address,
+      merchant: deployment.merchant.address,
+      before,
+      after,
+      amountBaseUnits: 1_000_000n,
+      txHash: receipt?.transaction as string,
+    });
+  });
+
+  it('15. leaves funds untouched when the backend fails before settlement', async () => {
+    const proof = await gatewayProof();
+    const receiptsBefore = (await store.listReceipts()).length;
+    const before = await balances();
+
+    backendFails = true;
+    let failed: Invocation;
+    try {
+      failed = await invoke({ [PAYMENT_HEADER]: proof });
+    } finally {
+      backendFails = false;
+    }
+
+    expect(failed.body['code']).toBe('BACKEND_ERROR');
+    expect(failed.headers['payment-response']).toBeUndefined();
+    const after = await balances();
+    expect(after.buyer).toBe(before.buyer);
+    expect(after.merchant).toBe(before.merchant);
+    expect(await store.listReceipts()).toHaveLength(receiptsBefore);
   });
 });

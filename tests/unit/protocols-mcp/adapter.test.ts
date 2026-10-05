@@ -105,6 +105,7 @@ interface ToolCallInternals {
   handleToolCall(
     name: string,
     args: Record<string, unknown>,
+    meta: Record<string, unknown> | undefined,
     signal: AbortSignal,
   ): Promise<unknown>;
 }
@@ -118,7 +119,7 @@ describe('MCP tool call whose client has disconnected', () => {
     const gone = new AbortController();
     gone.abort();
 
-    const result = await calls.handleToolCall('echo', { message: 'hi' }, gone.signal);
+    const result = await calls.handleToolCall('echo', { message: 'hi' }, undefined, gone.signal);
 
     expect(pipeline.requests).toHaveLength(0);
     expect(result).toMatchObject({
@@ -127,7 +128,7 @@ describe('MCP tool call whose client has disconnected', () => {
     });
 
     // The same call from a connected client does reach the pipeline
-    await calls.handleToolCall('echo', { message: 'hi' }, new AbortController().signal);
+    await calls.handleToolCall('echo', { message: 'hi' }, undefined, new AbortController().signal);
     expect(pipeline.requests).toHaveLength(1);
   });
 });

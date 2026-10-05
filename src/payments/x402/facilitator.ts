@@ -15,6 +15,7 @@ import {
   type Network,
   type PaymentPayload,
   type PaymentRequirements,
+  SettleError,
   type SettleResponse,
   VerifyError,
   type VerifyResponse,
@@ -32,7 +33,7 @@ export interface FacilitatorSession {
   /**
    * True when the call produced no verdict: the local binding sets it when an
    * RPC call to the chain fails in transport, the remote binding on every
-   * throw other than a 400 refusal.
+   * throw other than a 400 refusal of a verify or a settle.
    *
    * The SDK's `exact`/EVM scheme reports its own RPC errors as ordinary
    * verification failures: an unreachable node comes back as
@@ -200,6 +201,30 @@ function verdictFromVerifyError(err: unknown): VerifyResponse {
 }
 
 /**
+ * Treat a remote 400 as a refusal only when it names a reason and no
+ * transaction. A transaction may have broadcast; other errors have no
+ * verdict. `SettleError` does not retain the response's `success`.
+ */
+function verdictFromSettleError(err: unknown, network: Network): SettleResponse {
+  if (
+    err instanceof SettleError &&
+    err.statusCode === 400 &&
+    typeof err.errorReason === 'string' &&
+    err.errorReason !== '' &&
+    !err.transaction
+  ) {
+    return {
+      success: false,
+      errorReason: err.errorReason,
+      transaction: '',
+      network: err.network ?? network,
+      ...(err.payer !== undefined ? { payer: err.payer } : {}),
+    };
+  }
+  throw err;
+}
+
+/**
  * An HTTP facilitator. The SDK client produces the auth headers per request;
  * this module never logs them, and they appear neither in `/.well-known` nor
  * in `describe`.
@@ -234,14 +259,9 @@ export function createRemoteFacilitatorBinding(
         try {
           return await call();
         } catch (err) {
-          // A throw here means no verdict (`verdictFromVerifyError` has already
-          // turned a 400 refusal into one): the client could not reach or
-          // authenticate to the facilitator, got another non-2xx, or could not
-          // parse the body. None of that may be recorded against the payer.
-          // Every throw counts, whatever its type: the SDK can report a 401 as a
-          // bare `Error`, so no type singles out a credential failure. For
-          // settle(), the facilitator may have settled after we stopped waiting,
-          // so the outcome stays unknown.
+          // After known 400 refusals, a throw gives no verdict. It may be
+          // transport or authentication failure; settlement may have broadcast.
+          // Do not record it as a payer refusal.
           failed = true;
           throw err;
         }
@@ -249,7 +269,12 @@ export function createRemoteFacilitatorBinding(
       return {
         verify: (payload, requirements) =>
           watch(() => client.verify(payload, requirements).catch(verdictFromVerifyError)),
-        settle: (payload, requirements) => watch(() => client.settle(payload, requirements)),
+        settle: (payload, requirements) =>
+          watch(() =>
+            client
+              .settle(payload, requirements)
+              .catch((err: unknown) => verdictFromSettleError(err, requirements.network)),
+          ),
         transportFailed: () => failed,
       };
     },

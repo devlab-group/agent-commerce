@@ -96,4 +96,27 @@ describe('createConfiguredPaymentProviders', () => {
     });
     expect(requirement.expiresAt).toBe('2026-01-01T00:01:00.000Z');
   });
+
+  it.each([
+    ['the rail', { paymentFlow: 'upfront' as const }],
+    ['the resource', { resourcePaymentFlows: { market_report: 'upfront' as const } }],
+  ])('passes an MPP upfront flow set on %s to the provider', async (_label, flow) => {
+    const resource = makeGatewayConfig().resources.find((r) => r.id === 'market_report');
+    if (resource === undefined) throw new Error('fixture missing');
+    const settleAfterBackend = async (mpp: Mpp): Promise<unknown> => {
+      const [provider] = createConfiguredPaymentProviders({ mpp }, NOOP_LOGGER);
+      if (provider === undefined) throw new Error('no provider');
+      const requirement = await provider.createRequirement({
+        requestId: 'req-1',
+        resource: { ...resource, paymentMethods: ['mpp'] },
+        amount: '0.01',
+        currency: 'USDC',
+        requestedAt: '2026-01-01T00:00:00.000Z',
+      });
+      return requirement.metadata?.['settleAfterBackend'];
+    };
+
+    expect(await settleAfterBackend(MAINNET_MPP)).toBe(true);
+    expect(await settleAfterBackend({ ...MAINNET_MPP, ...flow })).toBe(false);
+  });
 });

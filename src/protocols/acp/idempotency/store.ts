@@ -7,14 +7,13 @@
  * request with the same key finds the claim instead of starting a second
  * checkout.
  *
- * A merchant call over HTTP and a SQLite commit are not one transaction. An
- * attempt that reached the merchant and ended in a timeout, a merchant status
- * ACP cannot relay or a non-ACP reply is marked `unresolved`: the merchant may
- * have acted, so every retry of the key is refused rather than re-run, which
- * could charge a buyer twice. A row still `in_flight` when the store opens was
- * never finalized by an earlier process, which crashed or failed to write the
- * outcome, so it is marked `unresolved` too. That assumes one gateway process
- * per database file.
+ * A merchant call over HTTP and a SQLite commit are not one transaction. By
+ * default, an attempt with an uncertain merchant outcome is marked
+ * `unresolved` so a retry cannot repeat the operation. A row still
+ * `in_flight` when the store opens is also marked unresolved: the earlier
+ * process may have crashed before recording the outcome. With
+ * `releaseOrphans`, the store frees these rows for a merchant configured to
+ * deduplicate by the derived key. This assumes one gateway process per file.
  *
  * Only `completed` rows expire. Deleting an unresolved one would hand the next
  * retry a clean key; clearing it is an operator's decision, taken against the
@@ -76,9 +75,8 @@ export interface AcpIdempotencyStore {
    */
   markUnresolved(scope: AcpIdempotencyScope): void;
   /**
-   * Drop the claim so a clean retry can run. Only for an attempt that provably
-   * never reached the merchant: after an ambiguous failure, one operation
-   * could happen twice.
+   * Drop the claim so a retry can run. The caller must establish that no
+   * merchant call ran or that the merchant deduplicates by the derived key.
    */
   release(scope: AcpIdempotencyScope): void;
   close(): void;
@@ -89,6 +87,11 @@ export interface AcpIdempotencyStoreOptions {
   readonly path: string;
   /** Never below 24 hours; config enforces the floor */
   readonly retentionHours: number;
+  /**
+   * Free claims left in flight by an earlier process. Enable only when the
+   * merchant deduplicates by the derived key.
+   */
+  readonly releaseOrphans?: boolean;
   readonly logger?: Logger;
   /** Injectable for tests that need to move time */
   readonly now?: () => number;
@@ -114,7 +117,7 @@ export function createAcpIdempotencyStore(
     logger,
   });
   migrate(db, logger);
-  resolveOrphanedClaims(db, logger);
+  resolveOrphanedClaims(db, logger, options.releaseOrphans === true);
 
   const selectStmt = db.prepare<[string, string, string], ClaimRow>(
     `SELECT state, fingerprint, status, body_json FROM acp_idempotency
@@ -212,7 +215,17 @@ export function createAcpIdempotencyStore(
 // Runs when the store opens, before this process claims anything, so an
 // `in_flight` row outlived the process that claimed it and would otherwise
 // answer "retry later" forever
-function resolveOrphanedClaims(db: Database, logger: Logger): void {
+function resolveOrphanedClaims(db: Database, logger: Logger, release: boolean): void {
+  if (release) {
+    const { changes } = db.prepare("DELETE FROM acp_idempotency WHERE state = 'in_flight'").run();
+    if (changes > 0) {
+      logger.warn(
+        { released: changes },
+        'acp idempotency: freed claims left in flight by an earlier process; merchant deduplication is enabled',
+      );
+    }
+    return;
+  }
   const { changes } = db
     .prepare("UPDATE acp_idempotency SET state = 'unresolved' WHERE state = 'in_flight'")
     .run();

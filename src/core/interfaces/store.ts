@@ -38,9 +38,10 @@ export interface ReceiptStore {
   appendEvent(event: CommerceEvent): Promise<void>;
 
   /**
-   * Atomically claim a payment authorization before settlement: the gateway's
-   * replay defense, run for every paid request. Throws
-   * `CommerceError('PAYMENT_REPLAYED')` if `replayKey` was already reserved.
+   * Atomically reserve a payment authorization before settlement. If its
+   * `replayKey` is already reserved, throws `CommerceError('PAYMENT_REPLAYED')`
+   * with the existing attempt's `PaymentAttempt.status` in
+   * `details.attemptStatus` when available.
    */
   reservePaymentAttempt(reservation: PaymentAttemptReservation): Promise<PaymentAttempt>;
 

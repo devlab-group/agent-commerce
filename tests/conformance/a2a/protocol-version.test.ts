@@ -22,7 +22,7 @@ interface JsonRpcResponse {
   readonly jsonrpc?: string;
   readonly id?: string | number | null;
   readonly result?: unknown;
-  readonly error?: { code: number; message: string };
+  readonly error?: { code: number; message: string; data?: Record<string, unknown>[] };
 }
 
 async function post(body: string, headers: Record<string, string>): Promise<JsonRpcResponse> {
@@ -57,17 +57,47 @@ describe('A2A protocol version negotiation', () => {
     expect(body.error).toBeUndefined();
   });
 
+  // Accept patch suffixes while negotiating the same major.minor version
+  it.each(['1.0.0', '1.0.1'])('accepts %s as 1.0', async (version) => {
+    const body = await post(SEND_MESSAGE, { 'A2A-Version': version });
+    expect(body.error).toBeUndefined();
+  });
+
   it.each([
-    ['a missing header', {}],
+    ['a missing header, which means 0.3', {}],
+    ['an empty header, which means 0.3', { 'A2A-Version': '' }],
     ['the previous revision', { 'A2A-Version': '0.3' }],
-    ['an unreleased revision', { 'A2A-Version': '2.0' }],
+    ['an unsupported minor version', { 'A2A-Version': '1.1' }],
+    ['a different major version', { 'A2A-Version': '2.0' }],
     ['a non-version string', { 'A2A-Version': 'latest' }],
-  ])('refuses %s as an unsupported operation', async (_label, headers) => {
+  ])('refuses %s with VersionNotSupportedError', async (_label, headers) => {
     const body = await post(SEND_MESSAGE, headers);
 
-    expect(body.error?.code).toBe(-32004);
+    expect(body.id).toBe('v-1');
+    expect(body.error?.code).toBe(-32009);
     expect(body.error?.message).toContain('1.0');
+    expect(body.error?.data).toEqual([
+      {
+        '@type': 'type.googleapis.com/google.rpc.ErrorInfo',
+        reason: 'VERSION_NOT_SUPPORTED',
+        domain: 'a2a-protocol.org',
+      },
+    ]);
     expect(body.result).toBeUndefined();
+  });
+
+  it('reads the A2A-Version parameter when the header is absent', async () => {
+    const send = async (query: string): Promise<{ error?: { code: number } }> => {
+      const response = await fetch(`${running.url}/a2a?${query}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: SEND_MESSAGE,
+      });
+      return (await response.json()) as { error?: { code: number } };
+    };
+
+    expect((await send('A2A-Version=1.0')).error).toBeUndefined();
+    expect((await send('A2A-Version=0.3')).error?.code).toBe(-32009);
   });
 
   it('matches the header case-insensitively, as HTTP requires', async () => {

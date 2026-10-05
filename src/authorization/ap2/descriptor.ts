@@ -16,6 +16,7 @@ import {
 /** What this provider actually verifies */
 export const AP2_CAPABILITIES: readonly string[] = [
   'direct-mode',
+  'trusted-agent-provider',
   AP2_CHECKOUT_MANDATE_VCT,
   'sd-jwt-presentation',
   AP2_SIGNING_ALGORITHM,
@@ -36,10 +37,12 @@ export const AP2_UNSUPPORTED: readonly string[] = [
   // Mandate kinds. Open mandates are refused: see AP2_CHECKOUT_MANDATE_VCT
   'autonomous mode',
   'open checkout mandates (mandate.checkout.open.1)',
-  'intent mandates',
-  'cart mandates',
+  'payment mandates (mandate.payment.1)',
   'spending constraint evaluation',
   'cnf-bound agent keys',
+  // Delegation models other than a trusted agent provider
+  'user credential delegation (OpenID4VP)',
+  'delegation chains and key-binding JWTs',
   // Key handling. Every key is written into config by an operator
   'JWKS and any key discovery by URL (jku, x5u)',
   'issuer metadata fetching',
@@ -49,6 +52,7 @@ export const AP2_UNSUPPORTED: readonly string[] = [
   'digest algorithms other than sha-256',
   // Roles this gateway does not play
   'mandate issuance',
+  'checkout receipts',
   'AP2 over the ACP checkout adapter',
 ];
 
