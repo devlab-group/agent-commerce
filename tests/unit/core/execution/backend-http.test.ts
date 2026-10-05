@@ -946,3 +946,112 @@ describe('HttpBackendExecutor explicit inputBindings', () => {
     ).not.toThrow();
   });
 });
+
+describe('HttpBackendExecutor - forwarded headers', () => {
+  const handler: BackendHandler = {
+    type: 'http',
+    method: 'POST',
+    url: 'http://backend.local/api/orders',
+    headers: { 'X-Api-Key': 'operator-key', 'User-Agent': 'operator-agent' },
+  };
+
+  async function sent(
+    backendHeaders: Record<string, string>,
+    target: BackendHandler = handler,
+  ): Promise<Record<string, string>> {
+    let captured: Record<string, string> = {};
+    const fetchImpl = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      captured = Object.fromEntries(new Headers(init?.headers).entries());
+      return jsonResponse(200, {});
+    });
+    const executor = new HttpBackendExecutor({ fetchImpl: fetchImpl as unknown as typeof fetch });
+    await executor.call(target, {
+      requestId: 'r',
+      resourceId: 'res',
+      input: { sku: 'abc' },
+      idempotencyKey: 'derived-key',
+      backendHeaders,
+    });
+    return captured;
+  }
+
+  it('sends a forwarded header the operator did not configure', async () => {
+    const headers = await sent({ 'accept-language': 'en-US', signature: 'c2ln' });
+
+    expect(headers['accept-language']).toBe('en-US');
+    expect(headers['signature']).toBe('c2ln');
+    expect(headers['x-api-key']).toBe('operator-key');
+  });
+
+  it('keeps a configured header over a forwarded one, whatever its casing', async () => {
+    const headers = await sent({ 'x-api-key': 'caller-key', 'USER-AGENT': 'caller-agent' });
+
+    expect(headers['x-api-key']).toBe('operator-key');
+    expect(headers['user-agent']).toBe('operator-agent');
+  });
+
+  it('keeps the derived Idempotency-Key and its own content-type', async () => {
+    const headers = await sent({ 'idempotency-key': 'caller-key', 'content-type': 'text/plain' });
+
+    expect(headers['idempotency-key']).toBe('derived-key');
+    expect(headers['content-type']).toBe('application/json');
+  });
+
+  it.each([
+    'authorization',
+    'Authorization',
+    'cookie',
+    'set-cookie',
+    'host',
+    'content-length',
+    'connection',
+    'keep-alive',
+    'te',
+    'trailer',
+    'transfer-encoding',
+    'upgrade',
+    'proxy-authorization',
+    'proxy-connection',
+  ])('never forwards %s', async (name) => {
+    const headers = await sent(
+      { [name]: 'caller-value' },
+      { type: 'http', method: 'POST', url: 'http://backend.local/api/orders' },
+    );
+
+    expect(JSON.stringify(headers)).not.toContain('caller-value');
+  });
+
+  it.each([
+    ['an illegal value', { 'accept-language': 'en\r\nx-injected: 1' }],
+    ['an illegal name', { 'bad name': 'v' }],
+  ])('refuses %s as INPUT_INVALID before any I/O, without quoting it', async (_label, bad) => {
+    const fetchImpl = vi.fn(async () => jsonResponse(200, {}));
+    const executor = new HttpBackendExecutor({ fetchImpl: fetchImpl as unknown as typeof fetch });
+
+    for (const attempt of [
+      () => executor.call(handler, { ...shapeContext, input: {}, backendHeaders: bad }),
+      async () => validateBackendRequestShape(handler, {}, shapeContext, bad),
+    ]) {
+      const error = await attempt().then(
+        () => undefined,
+        (e: unknown) => e,
+      );
+      expect(isCommerceError(error) && error.code).toBe('INPUT_INVALID');
+      expect(JSON.stringify(error)).not.toContain('x-injected');
+      expect((error as Error).cause).toBeUndefined();
+    }
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('attaches the response headers of a non-2xx answer to the error cause', async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse(429, {}, { 'Retry-After': '7' }));
+    const executor = new HttpBackendExecutor({ fetchImpl: fetchImpl as unknown as typeof fetch });
+
+    const error = await executor.call(handler, { ...shapeContext, input: {} }).then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    const cause = (error as Error).cause as { headers?: Record<string, string> };
+    expect(cause.headers?.['retry-after']).toBe('7');
+  });
+});

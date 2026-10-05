@@ -101,6 +101,63 @@ describe('createExecutionPipeline', () => {
     );
   });
 
+  it('hands the adapter-requested backend headers to the backend executor', async () => {
+    const resource = makeResource({ id: 'res-1', pricing: { type: 'free' } });
+    const store = createFakeStore();
+    const seen: unknown[] = [];
+    const pipeline = createExecutionPipeline({
+      resources: createResourceRegistry([resource]),
+      paymentProviders: [],
+      store,
+      backend: createFakeBackendExecutor(async (_handler, request) => {
+        seen.push(request.backendHeaders);
+        return { status: 200, headers: {}, body: { ok: true }, durationMs: 1 };
+      }),
+      events: store,
+      logger: createCapturingLogger(),
+      clock: createFakeClock(),
+      ids: createFakeIdGenerator(),
+    });
+
+    await pipeline.execute(makeRequest({ backendHeaders: { 'accept-language': 'en-US' } }));
+    await pipeline.execute(makeRequest({ requestId: 'req-2' }));
+
+    expect(seen).toEqual([{ 'accept-language': 'en-US' }, undefined]);
+  });
+
+  it('refuses an illegal forwarded header before payment', async () => {
+    const resource = makeResource({
+      id: 'res-1',
+      pricing: { type: 'fixed', amount: '0.01', currency: 'USDC' },
+      paymentMethods: ['x402'],
+    });
+    const store = createFakeStore();
+    let providerCalled = false;
+    const provider = createFakePaymentProvider({
+      createRequirement: async () => {
+        providerCalled = true;
+        throw new Error('unreachable');
+      },
+    });
+    const pipeline = createExecutionPipeline({
+      resources: createResourceRegistry([resource]),
+      paymentProviders: [provider],
+      store,
+      backend: createFakeBackendExecutor(),
+      events: store,
+      logger: createCapturingLogger(),
+      clock: createFakeClock(),
+      ids: createFakeIdGenerator(),
+    });
+
+    await expect(
+      pipeline.execute(makeRequest({ backendHeaders: { 'accept-language': 'en\nx-injected: 1' } })),
+    ).rejects.toSatisfy(
+      (error: unknown) => isCommerceError(error) && error.code === 'INPUT_INVALID',
+    );
+    expect(providerCalled).toBe(false);
+  });
+
   it('rejects a paid http-only resource invoked over mcp before any payment provider call', async () => {
     const resource = makeResource({
       id: 'res-1',

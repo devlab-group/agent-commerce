@@ -22,6 +22,9 @@ const MAX_BODY_SNIPPET_LENGTH = 512;
 // How a merchant recognizes a repeat of an operation. The de facto standard
 // name, and the one ACP requires inbound.
 const IDEMPOTENCY_KEY_HEADER = 'idempotency-key';
+// Never forward credentials, transport headers or fields set by the executor
+const NEVER_FORWARDED_HEADER =
+  /^(authorization|cookie|set-cookie|host|content-length|content-type|connection|keep-alive|te|trailer|transfer-encoding|upgrade|idempotency-key|proxy-.*)$/;
 // The one `{param}` grammar, shared by substitution, config, `doctor` and the
 // OpenAPI importer. It admits `-` and `.` because
 // `/report/{report-id}` is ordinary REST. Config refuses any other brace
@@ -39,15 +42,15 @@ export interface HttpBackendExecutorOptions {
 }
 
 /**
- * A merchant's non-2xx response, attached to `BACKEND_ERROR` as its cause.
- * An adapter can inspect the body when its protocol defines an error format.
- * `CommerceError.toInfo()` omits the cause from client responses; the backend
- * executor logs a truncated body snippet at debug level.
+ * Merchant non-2xx response attached as the `BACKEND_ERROR` cause. Adapters
+ * can inspect its body and headers; client errors omit the cause.
  */
 export class BackendErrorResponse {
   constructor(
     readonly status: number,
     readonly body: unknown,
+    /** Lowercase names, as `Headers` yields them */
+    readonly headers: Readonly<Record<string, string>> = {},
   ) {}
 }
 
@@ -92,7 +95,7 @@ export class HttpBackendExecutor implements BackendExecutor {
       );
     }
 
-    const headers = buildHeaders(handler, context);
+    const headers = buildHeaders(handler, context, request.backendHeaders);
     // Replaces a configured header of the same name, unlike content-type below:
     // a static key would make every request look like a retry of the first
     if (request.idempotencyKey !== undefined) {
@@ -201,7 +204,7 @@ export class HttpBackendExecutor implements BackendExecutor {
         requestId: request.requestId,
         resourceId: request.resourceId,
         details: { status: response.status },
-        cause: new BackendErrorResponse(response.status, parsedBody),
+        cause: new BackendErrorResponse(response.status, parsedBody, responseHeaders),
       });
     }
 
@@ -241,18 +244,16 @@ export function findUnparsedBraceToken(url: string): string | undefined {
 }
 
 /**
- * Runs the traversal, query-collision and header checks that `call()` repeats,
- * so the pipeline can run them after schema validation and before pricing.
- * Schema validation cannot catch these: `inputSchema` knows nothing about the
- * URL template. Found only inside `call()`, after settlement, a bad value such
- * as `{ city: "" }` for a paid, path-templated resource would take payment
- * without delivery. Throws INPUT_INVALID for the input, BACKEND_ERROR for an
- * illegal configured header, and does no I/O.
+ * Check path values, query collisions and headers before pricing. `call()`
+ * repeats these checks. Invalid input or forwarded headers raise
+ * `INPUT_INVALID`; invalid configured headers raise `BACKEND_ERROR`.
+ * An unparseable URL remains a call-time error. Does no I/O.
  */
 export function validateBackendRequestShape(
   handler: BackendHandler,
   input: unknown,
   context: ShapeContext,
+  backendHeaders?: Readonly<Record<string, string>>,
 ): void {
   const inputRecord = isRecord(input) ? input : {};
 
@@ -260,7 +261,7 @@ export function validateBackendRequestShape(
   // not an object) throws INPUT_INVALID here
   const parts = buildBackendRequestParts(handler, inputRecord, context);
   // Config refuses a bad header at load; this covers a hand-built resource
-  buildHeaders(handler, context);
+  buildHeaders(handler, context, backendHeaders);
 
   let target: URL;
   try {
@@ -414,12 +415,30 @@ function stringifyPrimitive(value: unknown): string {
 // `Headers` throws a TypeError on an illegal name or value. The error is
 // rethrown typed and without `cause`: the TypeError quotes the value, which may
 // be a credential.
-function buildHeaders(handler: BackendHandler, context: ShapeContext): Headers {
+function buildHeaders(
+  handler: BackendHandler,
+  context: ShapeContext,
+  forwarded: Readonly<Record<string, string>> = {},
+): Headers {
+  let headers: Headers;
   try {
-    return new Headers(handler.headers);
+    headers = new Headers(handler.headers);
   } catch {
     throw invalidHeaderError(context);
   }
+  // Caller headers cannot replace operator-configured backend credentials
+  for (const [name, value] of Object.entries(forwarded)) {
+    if (NEVER_FORWARDED_HEADER.test(name.toLowerCase())) continue;
+    try {
+      if (!headers.has(name)) headers.set(name, value);
+    } catch {
+      throw new CommerceError('INPUT_INVALID', 'A forwarded request header is invalid', {
+        ...context,
+        details: { reason: 'invalid-forwarded-header' },
+      });
+    }
+  }
+  return headers;
 }
 
 function setHeader(headers: Headers, name: string, value: string, context: ShapeContext): void {

@@ -426,10 +426,12 @@ export function createExecutionPipeline(
 
     // Before pricing, so a request the backend cannot receive fails before
     // payment (see validateBackendRequestShape)
-    validateBackendRequestShape(resource.handler, validInput, {
-      requestId: request.requestId,
-      resourceId: resource.id,
-    });
+    validateBackendRequestShape(
+      resource.handler,
+      validInput,
+      { requestId: request.requestId, resourceId: resource.id },
+      request.backendHeaders,
+    );
 
     // 3. resolve price
     if (resource.pricing.type === 'dynamic') {
@@ -685,6 +687,7 @@ export function createExecutionPipeline(
         resourceId: resource.id,
         input: validInput,
         ...(request.idempotencyKey !== undefined ? { idempotencyKey: request.idempotencyKey } : {}),
+        ...(request.backendHeaders !== undefined ? { backendHeaders: request.backendHeaders } : {}),
       });
     } catch (error) {
       const commerceError = toCommerceError(error, 'BACKEND_ERROR', 'Backend call failed');

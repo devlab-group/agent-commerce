@@ -21,6 +21,12 @@ export interface BackendRequest {
    * when absent, the executor adds none.
    */
   readonly idempotencyKey?: string;
+  /**
+   * Adapter-supplied headers for the backend. Configured and executor-set
+   * headers take precedence. The HTTP executor filters sensitive and transport
+   * headers and rejects invalid names or values with `INPUT_INVALID`.
+   */
+  readonly backendHeaders?: Readonly<Record<string, string>>;
 }
 
 export interface BackendResponse {

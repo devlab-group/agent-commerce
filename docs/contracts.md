@@ -129,6 +129,17 @@ persistence must not fail the commerce flow.
   static header of the same name from backend config. Two clients using the same
   key for one deployment and endpoint share both the derived key and the local
   claim; key uniqueness remains the client's responsibility.
+- `CanonicalRequest.backendHeaders` and `BackendRequest.backendHeaders` are
+  optional: headers an adapter asks the backend executor to forward. The pipeline
+  passes them through unchanged. In the HTTP backend, a header from backend
+  config wins over a forwarded header of the same name, and so do the derived
+  `Idempotency-Key` and the executor's `Content-Type`. The HTTP backend never
+  forwards `Authorization`, `Cookie`, `Set-Cookie`, `Host`, `Content-Length`,
+  `Content-Type`, `Idempotency-Key`, `Connection`, `Keep-Alive`, `TE`,
+  `Trailer`, `Transfer-Encoding`, `Upgrade` or any `Proxy-*` header. An illegal
+  forwarded name or value is `INPUT_INVALID` before pricing. ACP is the only
+  adapter that sets the field. A custom `BackendExecutor` that ignores it
+  forwards nothing.
 
 ### Protocols and gateway
 

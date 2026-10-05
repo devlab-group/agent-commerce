@@ -31,6 +31,8 @@ export interface CanonicalRequest {
    * Passed on as `BackendRequest.idempotencyKey`.
    */
   readonly idempotencyKey?: string;
+  /** Adapter headers passed to the backend; configured headers take precedence */
+  readonly backendHeaders?: Readonly<Record<string, string>>;
   /** Non-secret transport metadata, such as client id or user agent */
   readonly metadata?: Readonly<Record<string, unknown>>;
 }
