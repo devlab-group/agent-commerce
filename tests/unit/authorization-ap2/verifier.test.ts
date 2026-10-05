@@ -403,6 +403,14 @@ describe('mandate claims', () => {
     );
   });
 
+  it.each([
+    ['mandate', { mandateOverrides: { cnf: { jwk: { kty: 'EC' } } } }],
+    ['token', { payloadOverrides: { cnf: { jwk: { kty: 'EC' } } } }],
+  ])('rejects an unsupported cnf binding in the %s', async (_label, opts) => {
+    const presentation = await mintMandate(parties.mandateSigner, checkoutJwt, opts);
+    await expectRefused(verifier.verify(presentation), 'unsupported_mandate_type');
+  });
+
   it('refuses a delegation chain outside Direct mode', async () => {
     await expectRefused(
       verifier.verify(`${validPresentation}~${validPresentation}`),

@@ -126,6 +126,11 @@ export async function verifyMandate(
   }
 
   const mandate = delegatedMandate(claims, context);
+  // This verifier rejects KB-JWTs, so it cannot check a `cnf` holder-key
+  // binding. Reject the mandate rather than ignore the binding.
+  if (claims['cnf'] !== undefined || mandate['cnf'] !== undefined) {
+    throw ap2Rejected('unsupported_mandate_type', context);
+  }
   requireClosedCheckoutMandate(mandate, context);
   requireFreshness([verifiedPayload, mandate], deps, context);
 

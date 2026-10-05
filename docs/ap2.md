@@ -100,9 +100,10 @@ Claims of the mandate, the disclosed element:
 
 A top-level `vct`, such as `com.example.agent_mandate`, names the credential
 type; the verifier reads the mandate's `vct` instead. It refuses top-level
-mandate claims without `delegate_payload`, presentations with a KB-JWT, and
-`~~`-joined delegation chains as `unsupported_mandate_type`. It does not
-inspect `cnf`.
+mandate claims without `delegate_payload`, presentations with a KB-JWT,
+`~~`-joined delegation chains, and mandates carrying `cnf` as
+`unsupported_mandate_type`. The gateway cannot verify a `cnf` holder-key
+binding because it does not accept KB-JWTs.
 
 AP2 makes the token's `aud`, `iat` and `exp` optional. One reference SDK vector
 omits all three. The verifier checks these claims when present. Operators can
