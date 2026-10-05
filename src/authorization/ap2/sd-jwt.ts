@@ -45,6 +45,14 @@ function hasher(data: string | ArrayBuffer, algorithm: string): Uint8Array {
  * returns. `kid` and `iss` are read before that only to pick which configured
  * key to try, and picking wrong just makes the signature fail.
  */
+// Both spellings of the renamed Delegate SD-JWT hop types
+const KEY_BOUND_TYPES: ReadonlySet<string> = new Set([
+  'kb+sd-jwt',
+  'kb-sd-jwt',
+  'kb+sd-jwt+kb',
+  'kb-sd-jwt+kb',
+]);
+
 export async function verifyMandate(
   presentation: string,
   deps: MandatePolicy,
@@ -77,6 +85,16 @@ export async function verifyMandate(
   const header = decoded.jwt.header;
   if (!isRecord(rawPayload) || !isRecord(header)) {
     throw ap2Rejected('malformed_presentation', context);
+  }
+
+  // Reject a delegation hop presented without its mandate. Its type or
+  // preceding-token hash identifies it.
+  if (
+    KEY_BOUND_TYPES.has(String(header['typ'])) ||
+    rawPayload['sd_hash'] !== undefined ||
+    rawPayload['issuer_jwt_hash'] !== undefined
+  ) {
+    throw ap2Rejected('unsupported_mandate_type', context);
   }
 
   const { issuer, key } = await deps.trust.resolve(rawPayload['iss'], header['kid'], context);
@@ -132,6 +150,10 @@ export async function verifyMandate(
     throw ap2Rejected('unsupported_mandate_type', context);
   }
   requireClosedCheckoutMandate(mandate, context);
+  // Closed mandates cannot carry constraints this verifier does not evaluate
+  if (mandate['constraints'] !== undefined) {
+    throw ap2Rejected('unsupported_mandate_type', context);
+  }
   requireFreshness([verifiedPayload, mandate], deps, context);
 
   return { issuer: issuer.issuer, claims: mandate, signedToken: encodedJws };
@@ -171,21 +193,25 @@ function delegatedMandate(
  * "expired" versus "did not verify"; anything finer describes our checks back
  * to whoever is probing them.
  */
-function classifyJoseFailure(cause: unknown): 'expired' | 'wrong_audience' | 'invalid_signature' {
+function classifyJoseFailure(
+  cause: unknown,
+): 'expired' | 'wrong_audience' | 'invalid_claims' | 'invalid_signature' {
   const code = (cause as { code?: unknown })?.code;
   if (code === 'ERR_JWT_EXPIRED') return 'expired';
   if (code === 'ERR_JWT_CLAIM_VALIDATION_FAILED') {
-    const claim = (cause as { claim?: unknown }).claim;
+    const { claim, reason } = cause as { claim?: unknown; reason?: unknown };
     if (claim === 'aud') return 'wrong_audience';
-    if (claim === 'nbf' || claim === 'exp') return 'expired';
+    // `invalid` is jose's reason for a time claim that is not a number
+    if (claim === 'nbf' || claim === 'exp')
+      return reason === 'invalid' ? 'invalid_claims' : 'expired';
   }
   return 'invalid_signature';
 }
 
 /**
- * Check `exp` and `iat` on the signed token and disclosed mandate. `jose`
- * checks only the token's time claims. AP2 makes both optional; policy can
- * require `exp` in either location.
+ * Check `exp`, `nbf` and `iat` on the signed token and the disclosed mandate.
+ * `jose` checks only the token's time claims. AP2 requires none of them;
+ * policy can require `exp` in either location.
  */
 function requireFreshness(
   sources: readonly Record<string, unknown>[],
@@ -201,6 +227,11 @@ function requireFreshness(
       if (typeof exp !== 'number') throw ap2Rejected('invalid_claims', context);
       if (exp <= nowSeconds - deps.clockSkewSeconds) throw ap2Rejected('expired', context);
       expires = true;
+    }
+    const nbf = claims['nbf'];
+    if (nbf !== undefined) {
+      if (typeof nbf !== 'number') throw ap2Rejected('invalid_claims', context);
+      if (nbf > nowSeconds + deps.clockSkewSeconds) throw ap2Rejected('expired', context);
     }
     if (iat !== undefined) {
       if (typeof iat !== 'number') throw ap2Rejected('invalid_claims', context);

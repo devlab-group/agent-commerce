@@ -27,6 +27,7 @@ import {
   MANDATE_ISSUER,
   mintMandate,
   NOW,
+  NOW_SECONDS,
   type Party,
   sha256Base64url,
   signCheckoutJwt,
@@ -409,6 +410,37 @@ describe('mandate claims', () => {
   ])('rejects an unsupported cnf binding in the %s', async (_label, opts) => {
     const presentation = await mintMandate(parties.mandateSigner, checkoutJwt, opts);
     await expectRefused(verifier.verify(presentation), 'unsupported_mandate_type');
+  });
+
+  it.each([
+    ['a key-bound typ', { header: { typ: 'kb+sd-jwt' } }],
+    ['the renamed key-bound typ', { header: { typ: 'kb-sd-jwt+kb' } }],
+    ['an sd_hash', { payloadOverrides: { sd_hash: 'x' } }],
+    ['an issuer_jwt_hash', { payloadOverrides: { issuer_jwt_hash: 'x' } }],
+  ])('refuses a delegation hop presented alone, marked by %s', async (_label, opts) => {
+    const presentation = await mintMandate(parties.mandateSigner, checkoutJwt, opts);
+    await expectRefused(verifier.verify(presentation), 'unsupported_mandate_type');
+  });
+
+  it('refuses a closed mandate that carries constraints', async () => {
+    const presentation = await mintMandate(parties.mandateSigner, checkoutJwt, {
+      mandateOverrides: { constraints: [{ type: 'unknown' }] },
+    });
+    await expectRefused(verifier.verify(presentation), 'unsupported_mandate_type');
+  });
+
+  it('refuses a mandate whose own nbf is in the future', async () => {
+    const presentation = await mintMandate(parties.mandateSigner, checkoutJwt, {
+      mandateOverrides: { nbf: NOW_SECONDS + 3600 },
+    });
+    await expectRefused(verifier.verify(presentation), 'expired');
+  });
+
+  it('reports a non-numeric token exp as invalid claims, not as expired', async () => {
+    const presentation = await mintMandate(parties.mandateSigner, checkoutJwt, {
+      payloadOverrides: { exp: 'soon' },
+    });
+    await expectRefused(verifier.verify(presentation), 'invalid_claims');
   });
 
   it('refuses a delegation chain outside Direct mode', async () => {
