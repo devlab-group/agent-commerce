@@ -45,9 +45,11 @@ Resources with `expose: [mcp]` become MCP tools:
   for a paid resource and an optional `_authorization` object
   (`{ method, payload }`) for a resource that requires authorization.
 
-Calling an unknown tool returns JSON-RPC error `-32602`. Malformed
-`tools/call` params, such as a non-string `name` or non-object `arguments`,
-return the same code with a short message.
+Calling an unknown tool returns JSON-RPC error `-32602`. For requests
+without modern MCP headers, malformed `tools/call` params such as a non-string
+`name` or non-object `arguments` return the same code with a short message.
+The SDK handles batches and requests carrying `Mcp-Method` or a
+`MCP-Protocol-Version` of `2026-07-28` or later.
 
 ### Payment over MCP
 

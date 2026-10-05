@@ -52,7 +52,7 @@ import { MPP_MCP_CREDENTIAL_META_KEY } from '../../payments/mpp/transport';
 import { X402_MCP_PAYMENT_META_KEY } from '../../payments/x402/transport';
 import { PACKAGE_VERSION } from '../../version';
 import { readCappedBody } from '../http';
-import { MCP_TOOL_NAME_PATTERN } from './constants';
+import { MCP_MODERN_PROTOCOL_REVISION, MCP_TOOL_NAME_PATTERN } from './constants';
 import { buildDescriptor } from './descriptor';
 import { errorResult, mapOutcome } from './result-mapping';
 import { buildInputSchema, buildToolDescription, isValidToolName } from './tool-mapping';
@@ -227,7 +227,7 @@ class McpProtocolAdapter implements HttpProtocolAdapter {
         this.writeJsonRpcError(res, 400, 'Could not read the request body.');
         return;
       }
-      const malformed = malformedToolCall(read.text);
+      const malformed = isModernRequest(req) ? undefined : malformedToolCall(read.text);
       if (malformed !== undefined) {
         this.writeJsonRpcError(res, 200, malformed.message, -32602, malformed.id);
         return;
@@ -423,10 +423,17 @@ function toWebRequest(req: IncomingMessage, body: string, signal: AbortSignal): 
 }
 
 /**
- * Check malformed `tools/call` params before passing them to the SDK so the
- * response uses a short -32602 message. The SDK handles other requests,
- * including malformed JSON, batches and notifications.
+ * Let the SDK validate requests with `Mcp-Method` or a modern version header;
+ * malformed headers and `_meta` may require an HTTP 400 response.
  */
+function isModernRequest(req: IncomingMessage): boolean {
+  if (req.headers['mcp-method'] !== undefined) return true;
+  const version = req.headers['mcp-protocol-version'];
+  // ISO revision dates sort lexically.
+  return typeof version === 'string' && version >= MCP_MODERN_PROTOCOL_REVISION;
+}
+
+/** Give malformed tool calls without modern headers a short -32602 response. */
 function malformedToolCall(body: string): { id: string | number; message: string } | undefined {
   let message: unknown;
   try {

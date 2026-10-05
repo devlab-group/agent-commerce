@@ -923,4 +923,21 @@ describe('mcp adapter: malformed tools/call params', () => {
     });
     expect(h.pipeline.requests).toHaveLength(0);
   });
+
+  it('lets the SDK reject an unsupported protocol version', async () => {
+    const h = await setup([FREE_ECHO_RESOURCE]);
+
+    const res = await fetch(`${h.server.url}${h.adapter.mountPath}`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+        'mcp-protocol-version': '2099-01-01',
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 7 } }),
+    });
+
+    expect(res.status).toBe(400);
+    expect(h.pipeline.requests).toHaveLength(0);
+  });
 });
