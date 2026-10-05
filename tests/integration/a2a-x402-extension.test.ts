@@ -310,6 +310,20 @@ describe('x402 A2A extension', () => {
     expect(body.result?.task.status.state).toBe('TASK_STATE_COMPLETED');
   });
 
+  it('refuses a payment with another contextId and keeps the task', async () => {
+    const task = await challenged();
+    const submitted = {
+      'x402.payment.status': 'payment-submitted',
+      'x402.payment.payload': await paymentPayload(task),
+    };
+
+    const mismatched = await rpc(pay({ ...task, contextId: 'another-context' }, submitted));
+    expect(mismatched.body.error?.code).toBe(-32602);
+
+    const { body } = await rpc(pay(task, submitted));
+    expect(body.result?.task.status.state).toBe('TASK_STATE_COMPLETED');
+  });
+
   it('answers a task id it never issued with TaskNotFoundError', async () => {
     const { body } = await rpc(
       pay(

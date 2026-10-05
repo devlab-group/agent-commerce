@@ -441,6 +441,15 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
         'Message must carry a non-empty "messageId".',
       );
     }
+    // Reject a mismatched context without consuming the pending task.
+    const contextId = isRecord(message) ? message['contextId'] : undefined;
+    if (contextId !== undefined && contextId !== pending.contextId) {
+      return jsonRpcError(
+        id,
+        JSONRPC_INVALID_PARAMS,
+        'Message "contextId" does not match the task.',
+      );
+    }
     const submission = readPaymentSubmission(message);
     if (submission === undefined) {
       // The task stays pending, so a corrected message can still pay it

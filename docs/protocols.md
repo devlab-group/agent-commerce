@@ -211,8 +211,11 @@ requirement expires, for no longer than one hour. If the requirement has no
 expiry, the task waits ten minutes. When 256 tasks are pending, the oldest is
 evicted. A restart or a payment routed to another instance loses the task;
 the client receives `TaskNotFoundError` and must start a new purchase. A
-malformed payment message returns `-32602` without consuming the task. This
-extension applies only to x402; an MPP resource still returns a terminal task.
+malformed payment message, or one whose `contextId` differs from the task's,
+returns `-32602` without consuming the task. Clients published for this
+extension URI send x402 v1 payloads over A2A 0.x; the gateway refuses them.
+The extension applies only to x402. An MPP resource still returns a terminal
+task.
 
 ### Results
 
