@@ -1,6 +1,6 @@
 # Security Policy
 
-> **No commissioned security audit.** The `v1.x` line commits to a stable
+> **No commissioned security audit.** The `v2.x` line commits to a stable
 > public API and wire contract; it makes no assurance claim about the payment
 > path. There is no third-party audit report to point you at, for any release.
 > Weigh that before putting production funds through it.
