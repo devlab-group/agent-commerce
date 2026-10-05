@@ -9,7 +9,7 @@ import { registerExactEvmScheme } from '@x402/evm/exact/client';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { GatewayConfig } from '../../src/config';
-import type { CommerceResource, PaymentMethodName } from '../../src/core';
+import type { CanonicalRequest, CommerceResource, PaymentMethodName } from '../../src/core';
 import { createGateway, type GatewayInstance } from '../../src/gateway';
 import { createMppPaymentProvider } from '../../src/payments/mpp/provider';
 import { createX402PaymentProvider } from '../../src/payments/x402/provider';
@@ -133,7 +133,11 @@ interface RpcResult {
   };
 }
 
-async function rpc(message: Record<string, unknown>, extension = true): Promise<RpcResult> {
+async function call(
+  method: string,
+  params: Record<string, unknown>,
+  extension = true,
+): Promise<RpcResult> {
   const res = await gateway.server.inject({
     method: 'POST',
     url: '/a2a',
@@ -142,15 +146,27 @@ async function rpc(message: Record<string, unknown>, extension = true): Promise<
       'a2a-version': '1.0',
       ...(extension ? { 'a2a-extensions': A2A_X402_EXTENSION_URI } : {}),
     },
-    payload: JSON.stringify({
-      jsonrpc: '2.0',
-      id: 'req-1',
-      method: 'SendMessage',
-      params: { message },
-    }),
+    payload: JSON.stringify({ jsonrpc: '2.0', id: 'req-1', method, params }),
   });
   return { headers: res.headers, body: res.json() };
 }
+
+function rpc(message: Record<string, unknown>, extension = true): Promise<RpcResult> {
+  return call('SendMessage', { message }, extension);
+}
+
+// The requests the adapter hands the pipeline
+function spyOnPipeline(): CanonicalRequest[] {
+  const captured: CanonicalRequest[] = [];
+  const original = gateway.pipeline.execute.bind(gateway.pipeline);
+  (gateway.pipeline as { execute: typeof original }).execute = async (request) => {
+    captured.push(request);
+    return original(request);
+  };
+  return captured;
+}
+
+const MANDATE = { method: 'ap2', payload: 'eyJhbGciOiJFUzI1NiJ9.checkout-mandate~disclosure-0~' };
 
 function buy(resourceId: string): Record<string, unknown> {
   return {
@@ -196,7 +212,11 @@ describe('x402 A2A extension', () => {
   it('advertises the optional extension in the Agent Card', async () => {
     const res = await gateway.server.inject({ method: 'GET', url: '/.well-known/agent-card.json' });
     expect(res.json<A2aAgentCard>().capabilities.extensions).toEqual([
-      expect.objectContaining({ uri: A2A_X402_EXTENSION_URI, required: false }),
+      expect.objectContaining({
+        uri: A2A_X402_EXTENSION_URI,
+        required: false,
+        params: { x402Version: 2 },
+      }),
     ]);
   });
 
@@ -208,6 +228,9 @@ describe('x402 A2A extension', () => {
     expect(task?.status.state).toBe('TASK_STATE_INPUT_REQUIRED');
     expect(task?.status.message).toMatchObject({
       role: 'ROLE_AGENT',
+      taskId: task?.id,
+      contextId: task?.contextId,
+      extensions: [A2A_X402_EXTENSION_URI],
       metadata: {
         'x402.payment.status': 'payment-required',
         'x402.payment.required': {
@@ -232,6 +255,11 @@ describe('x402 A2A extension', () => {
     const paid = body.result?.task;
     expect(paid).toMatchObject({ id: task.id, contextId: task.contextId });
     expect(paid?.status.state).toBe('TASK_STATE_COMPLETED');
+    expect(paid?.status.message).toMatchObject({
+      taskId: task.id,
+      contextId: task.contextId,
+      extensions: [A2A_X402_EXTENSION_URI],
+    });
     expect(paid?.status.message?.metadata).toMatchObject({
       'x402.payment.status': 'payment-completed',
       'x402.payment.receipts': [
@@ -276,7 +304,9 @@ describe('x402 A2A extension', () => {
     expect(failed?.status.message?.metadata).toMatchObject({
       'x402.payment.status': 'payment-failed',
       'x402.payment.error': 'insufficient_funds',
-      'x402.payment.receipts': [expect.objectContaining({ success: false })],
+      'x402.payment.receipts': [
+        expect.objectContaining({ success: false, network: 'eip155:84532' }),
+      ],
     });
     expect(backendCalls).toBe(0);
     expect(facilitator.settle).not.toHaveBeenCalled();
@@ -350,7 +380,165 @@ describe('x402 A2A extension', () => {
 
     const task = body.result?.task;
     expect(task?.status.state).toBe('TASK_STATE_FAILED');
-    expect(task?.status.message).toBeUndefined();
-    expect(headers['a2a-extensions']).toBe(extension ? A2A_X402_EXTENSION_URI : undefined);
+    // A plain reason, with nothing from the extension and no echoed header
+    expect(task?.status.message?.parts[0]?.text).toContain('Payment of 0.01 USDC is required');
+    expect(task?.status.message).not.toHaveProperty('metadata');
+    expect(task?.status.message).not.toHaveProperty('extensions');
+    expect(headers['a2a-extensions']).toBeUndefined();
+  });
+
+  it('echoes the extension header on a follow-up sent without it', async () => {
+    const task = await challenged();
+
+    const { headers, body } = await rpc(
+      pay(task, {
+        'x402.payment.status': 'payment-submitted',
+        'x402.payment.payload': await paymentPayload(task),
+      }),
+      false,
+    );
+
+    expect(body.result?.task.status.state).toBe('TASK_STATE_COMPLETED');
+    expect(headers['a2a-extensions']).toBe(A2A_X402_EXTENSION_URI);
+  });
+
+  it('names the version when the payload is x402 v1', async () => {
+    const task = await challenged();
+
+    const { body } = await rpc(
+      pay(task, {
+        'x402.payment.status': 'payment-submitted',
+        'x402.payment.payload': {
+          x402Version: 1,
+          scheme: 'exact',
+          network: 'base-sepolia',
+          payload: {},
+        },
+      }),
+    );
+
+    expect(body.result?.task.status.message?.metadata).toMatchObject({
+      'x402.payment.status': 'payment-failed',
+      'x402.payment.error': 'invalid_x402_version',
+    });
+    expect(facilitator.verify).not.toHaveBeenCalled();
+    expect(backendCalls).toBe(0);
+  });
+
+  it('refuses a follow-up in the A2A 0.x shape and keeps the task', async () => {
+    const task = await challenged();
+    const submitted = {
+      'x402.payment.status': 'payment-submitted',
+      'x402.payment.payload': await paymentPayload(task),
+    };
+
+    const legacy = await rpc({
+      ...pay(task, submitted),
+      role: 'user',
+      parts: [{ kind: 'text', text: 'Here is the payment authorization.' }],
+    });
+    expect(legacy.body.error).toMatchObject({
+      code: -32602,
+      message: 'Unsupported message role "user": only ROLE_USER is accepted.',
+    });
+    expect(facilitator.verify).not.toHaveBeenCalled();
+
+    const { body } = await rpc(pay(task, submitted));
+    expect(body.result?.task.status.state).toBe('TASK_STATE_COMPLETED');
+  });
+
+  it.each(['GetTask', 'CancelTask'])(
+    'answers %s on a pending task with TaskNotFoundError and keeps it payable',
+    async (method) => {
+      const task = await challenged();
+
+      const lookup = await call(method, { id: task.id });
+      expect(lookup.body.error?.code).toBe(-32001);
+      expect(lookup.headers['a2a-extensions']).toBeUndefined();
+
+      const { body } = await rpc(
+        pay(task, {
+          'x402.payment.status': 'payment-submitted',
+          'x402.payment.payload': await paymentPayload(task),
+        }),
+      );
+      expect(body.result?.task.status.state).toBe('TASK_STATE_COMPLETED');
+    },
+  );
+});
+
+describe('an AP2 mandate sent with the x402 extension payment', () => {
+  // Another resource and input beside the mandate, which must not be used
+  function mandatePart(authorization: unknown): Record<string, unknown> {
+    return {
+      data: {
+        resource: 'mpp_report',
+        input: { symbol: 'BTC', _authorization: authorization },
+      },
+      mediaType: 'application/json',
+    };
+  }
+
+  async function submitted(task: A2aTask): Promise<Record<string, unknown>> {
+    return {
+      'x402.payment.status': 'payment-submitted',
+      'x402.payment.payload': await paymentPayload(task),
+    };
+  }
+
+  it('reaches the pipeline with the stored purchase', async () => {
+    const task = await challenged();
+    const requests = spyOnPipeline();
+
+    const { body } = await rpc({
+      ...pay(task, await submitted(task)),
+      parts: [{ text: 'Payment and mandate.' }, mandatePart(MANDATE)],
+    });
+
+    expect(body.result?.task.status.state).toBe('TASK_STATE_COMPLETED');
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({
+      resourceId: 'x402_report',
+      input: { symbol: 'ETH' },
+      authorization: MANDATE,
+    });
+  });
+
+  it('keeps the mandate stored from the first message', async () => {
+    const first = buy('x402_report');
+    const { body: challenge } = await rpc({
+      ...first,
+      parts: [
+        {
+          data: { resource: 'x402_report', input: { symbol: 'ETH', _authorization: MANDATE } },
+          mediaType: 'application/json',
+        },
+      ],
+    });
+    const task = challenge.result?.task as A2aTask;
+    const requests = spyOnPipeline();
+
+    await rpc({
+      ...pay(task, await submitted(task)),
+      parts: [mandatePart({ method: 'ap2', payload: 'another-mandate~' })],
+    });
+
+    expect(requests[0]?.authorization).toEqual(MANDATE);
+  });
+
+  it('refuses a malformed mandate and keeps the task payable', async () => {
+    const task = await challenged();
+    const requests = spyOnPipeline();
+
+    const malformed = await rpc({
+      ...pay(task, await submitted(task)),
+      parts: [mandatePart({ method: 'unknown', payload: 'x' })],
+    });
+    expect(malformed.body.error?.code).toBe(-32602);
+    expect(malformed.body.error?.message).toContain('Malformed authorization');
+    expect(requests).toHaveLength(0);
+
+    const { body } = await rpc(pay(task, await submitted(task)));
+    expect(body.result?.task.status.state).toBe('TASK_STATE_COMPLETED');
   });
 });

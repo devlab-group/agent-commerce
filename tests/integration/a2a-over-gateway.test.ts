@@ -217,7 +217,8 @@ describe('A2A JSON-RPC transport over the real gateway', () => {
 
   it.each([
     ['a known but unsupported operation', 'SendStreamingMessage', -32004],
-    ['another unsupported operation', 'GetTask', -32004],
+    ['a task lookup, which finds no retained task', 'GetTask', -32001],
+    ['a task cancellation', 'CancelTask', -32001],
     ['a completely unknown method', 'DoSomething', -32601],
   ])('distinguishes %s', async (_label, method, code) => {
     const gw = await startGateway();

@@ -159,6 +159,7 @@ describe('A2A agent card', () => {
     expect(card.skills[0]).not.toHaveProperty('inputSchema');
     expect(Object.keys(card.skills[0] ?? {}).sort()).toEqual([
       'description',
+      'examples',
       'id',
       'inputModes',
       'name',
@@ -184,10 +185,68 @@ describe('A2A agent card', () => {
       expect.objectContaining({
         uri: 'https://github.com/google-a2a/a2a-x402/v0.1',
         required: false,
+        params: { x402Version: 2 },
       }),
     ]);
     const mppOnly = await cardFrom([{ ...paid, paymentMethods: ['mpp'] }]);
     expect(mppOnly.capabilities).not.toHaveProperty('extensions');
+  });
+
+  it('gives each skill one example call built from its required input', async () => {
+    const card = await cardFrom([
+      resource(),
+      resource({
+        id: 'typed',
+        inputSchema: {
+          type: 'object',
+          required: ['city', 'days', 'units', 'tags', 'where', 'detailed', '_payment'],
+          properties: {
+            city: { type: 'string' },
+            days: { type: 'integer', default: 3 },
+            units: { type: 'string', enum: ['metric', 'imperial'] },
+            tags: { type: 'array', items: { type: 'string', examples: ['rain'] } },
+            where: { type: 'object', required: ['lat'], properties: { lat: { type: 'number' } } },
+            detailed: { type: ['boolean', 'null'] },
+            optional: { type: 'string' },
+          },
+        },
+      }),
+      resource({ id: 'no_schema', inputSchema: undefined as never }),
+    ]);
+
+    expect(card.skills.map((skill) => skill.examples.map((text) => JSON.parse(text)))).toEqual([
+      [{ resource: 'weather_basic', input: {} }],
+      [
+        {
+          resource: 'typed',
+          input: {
+            city: '<city>',
+            days: 3,
+            units: 'metric',
+            tags: ['rain'],
+            where: { lat: 0 },
+            detailed: false,
+          },
+        },
+      ],
+      [{ resource: 'no_schema', input: {} }],
+    ]);
+    // Deterministic, so the card's ETag changes only with the configuration
+    expect(await cardFrom([paid])).toEqual(await cardFrom([paid]));
+  });
+
+  it('describes the call shape, where the schemas are and how a paid skill is paid', async () => {
+    const free = await cardFrom([resource()]);
+    expect(free.description).toContain(
+      'one data part {"resource": "<skill id>", "input": {...}} with media type application/json',
+    );
+    expect(free.description).toContain('https://gateway.example.com/api/resources');
+    expect(free.description).not.toContain('_payment');
+    expect(free).not.toHaveProperty('documentationUrl');
+
+    const withPaid = await cardFrom([resource(), paid]);
+    expect(withPaid.description).toContain('"input._payment"');
+    expect(withPaid.skills[1]?.examples[0]).not.toMatch(/_payment|_authorization/);
   });
 
   it('marks a paid skill as paid and names its price', async () => {

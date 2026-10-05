@@ -86,6 +86,20 @@ describe('A2A protocol version negotiation', () => {
     expect(body.result).toBeUndefined();
   });
 
+  it('reads the A2A-Version parameter when the header is absent', async () => {
+    const send = async (query: string): Promise<{ error?: { code: number } }> => {
+      const response = await fetch(`${running.url}/a2a?${query}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: SEND_MESSAGE,
+      });
+      return (await response.json()) as { error?: { code: number } };
+    };
+
+    expect((await send('A2A-Version=1.0')).error).toBeUndefined();
+    expect((await send('A2A-Version=0.3')).error?.code).toBe(-32009);
+  });
+
   it('matches the header case-insensitively, as HTTP requires', async () => {
     const body = await post(SEND_MESSAGE, { 'a2a-VERSION': '1.0' });
     expect(body.error).toBeUndefined();

@@ -4,6 +4,7 @@ import {
   A2A_X402_EXTENSION_URI,
   createPendingPayments,
   paymentFailureMetadata,
+  readFollowUpAuthorization,
   readPaymentSubmission,
   requestsX402Extension,
 } from '../../../src/protocols/a2a/x402-extension';
@@ -120,5 +121,48 @@ describe('payment messages', () => {
       'x402.payment.status': 'payment-failed',
       'x402.payment.receipts': [{ success: false, errorReason: 'settlement_pending' }],
     });
+  });
+
+  it('fills an empty receipt network from the requirement and keeps one the error names', () => {
+    const refused = new CommerceError('PAYMENT_INVALID', 'Refused', {
+      details: { reason: 'insufficient_funds' },
+    });
+    expect(paymentFailureMetadata(refused, 'eip155:84532')).toMatchObject({
+      'x402.payment.receipts': [{ success: false, network: 'eip155:84532' }],
+    });
+
+    const named = new CommerceError('PAYMENT_SETTLEMENT_FAILED', 'Refused', {
+      details: { reason: 'unexpected_settle_error', network: 'eip155:8453' },
+    });
+    expect(paymentFailureMetadata(named, 'eip155:84532')).toMatchObject({
+      'x402.payment.receipts': [{ network: 'eip155:8453' }],
+    });
+  });
+});
+
+describe('readFollowUpAuthorization', () => {
+  const envelope = { method: 'ap2', payload: 'mandate~' };
+
+  it('reads input._authorization from a data part and ignores the rest of the part', () => {
+    const message = {
+      parts: [
+        { text: 'Here is the payment.' },
+        { data: { resource: 'another', input: { city: 'Oslo', _authorization: envelope } } },
+      ],
+    };
+    expect(readFollowUpAuthorization(message)).toEqual(envelope);
+  });
+
+  it('returns undefined when no part carries one', () => {
+    expect(readFollowUpAuthorization({ parts: [{ text: 'pay' }, { data: { input: {} } }] })).toBe(
+      undefined,
+    );
+    expect(readFollowUpAuthorization({})).toBe(undefined);
+  });
+
+  it('throws AUTHORIZATION_INVALID for a malformed envelope', () => {
+    expect(() =>
+      readFollowUpAuthorization({ parts: [{ data: { input: { _authorization: 'nope' } } }] }),
+    ).toThrow(expect.objectContaining({ code: 'AUTHORIZATION_INVALID' }));
   });
 });

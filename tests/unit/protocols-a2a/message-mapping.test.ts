@@ -156,6 +156,15 @@ describe('parseInvocation: legal A2A this adapter does not serve', () => {
     expectRejected(params, 'PROTOCOL_UNSUPPORTED', -32005);
   });
 
+  it.each([
+    ['a text part', { text: 'get me the report' }],
+    ['a file part', { url: 'https://example.com/a.pdf' }],
+  ])('names the call shape when it refuses %s', (_label, part) => {
+    expect(() =>
+      parseInvocation({ message: { role: 'ROLE_USER', messageId: 'msg-1', parts: [part] } }),
+    ).toThrow('send one data part {"resource": "<skill id>", "input": {...}}');
+  });
+
   it('rejects multiple input parts rather than picking one', () => {
     const params = {
       message: {

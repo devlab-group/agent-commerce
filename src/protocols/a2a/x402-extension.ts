@@ -4,7 +4,14 @@
  * This adapter uses A2A 1.0 states, roles, parts and extension headers.
  * Clients that do not activate the extension use `_payment` on a new task.
  */
-import type { AuthorizationSubmission, Clock, CommerceError, PaymentResult } from '../../core';
+import {
+  AUTHORIZATION_INPUT_FIELD,
+  type AuthorizationSubmission,
+  type Clock,
+  type CommerceError,
+  type PaymentResult,
+  parseAuthorizationSubmission,
+} from '../../core';
 import { isRecord } from '../../core/is-record';
 import {
   settlementFailure,
@@ -15,6 +22,9 @@ import {
 
 /** The URI the x402 A2A transport declares for the extension */
 export const A2A_X402_EXTENSION_URI = 'https://github.com/google-a2a/a2a-x402/v0.1';
+
+/** The x402 protocol version of every document the extension carries */
+export const A2A_X402_PROTOCOL_VERSION = 2;
 
 export const X402_PAYMENT_STATUS_KEY = 'x402.payment.status';
 export const X402_PAYMENT_REQUIRED_KEY = 'x402.payment.required';
@@ -47,6 +57,8 @@ export interface PendingPayment {
   /** Validated by the pipeline again when the payment arrives */
   readonly input: Record<string, unknown>;
   readonly authorization?: AuthorizationSubmission;
+  /** Network of the requirement, for a failure receipt whose error names none */
+  readonly network?: string;
   readonly expiresAtMs: number;
 }
 
@@ -122,6 +134,24 @@ export function readPaymentSubmission(message: unknown): PaymentSubmissionMessag
   return undefined;
 }
 
+/**
+ * Read `input._authorization` from a payment message. Ignore other input;
+ * the task already holds the purchase. Malformed mandates raise
+ * `AUTHORIZATION_INVALID`.
+ */
+export function readFollowUpAuthorization(message: unknown): AuthorizationSubmission | undefined {
+  const parts = isRecord(message) ? message['parts'] : undefined;
+  if (!Array.isArray(parts)) return undefined;
+  for (const part of parts) {
+    const data: unknown = isRecord(part) ? part['data'] : undefined;
+    const input = isRecord(data) ? data['input'] : undefined;
+    if (isRecord(input) && input[AUTHORIZATION_INPUT_FIELD] !== undefined) {
+      return parseAuthorizationSubmission(input[AUTHORIZATION_INPUT_FIELD]);
+    }
+  }
+  return undefined;
+}
+
 export function paymentRequiredMetadata(
   envelope: Record<string, unknown>,
 ): Record<string, unknown> {
@@ -141,8 +171,12 @@ export function paymentCompletedMetadata(payment: PaymentResult): Record<string,
 /**
  * A failure after a payment submission. A backend failure after settlement
  * still reports the payment as completed, with its receipt: the money moved.
+ * `network` is the requirement's.
  */
-export function paymentFailureMetadata(error: CommerceError): Record<string, unknown> {
+export function paymentFailureMetadata(
+  error: CommerceError,
+  network?: string,
+): Record<string, unknown> {
   const settled = settlementResponseFromDetails(error.details);
   if (settled !== undefined && settled['success'] === true) {
     return {
@@ -154,7 +188,9 @@ export function paymentFailureMetadata(error: CommerceError): Record<string, unk
   const code = error.code.startsWith('PAYMENT_')
     ? x402ErrorCode(error.code, error.details?.['reason'])
     : error.code.toLowerCase();
-  const receipt = settlementFailure(error.details);
+  const failure = settlementFailure(error.details);
+  const receipt =
+    failure['network'] === '' && network !== undefined ? { ...failure, network } : failure;
   return {
     [X402_PAYMENT_STATUS_KEY]: 'payment-failed',
     [X402_PAYMENT_ERROR_KEY]: code,

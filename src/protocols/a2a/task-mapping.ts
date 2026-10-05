@@ -31,6 +31,7 @@ import {
   A2A_TASK_STATE_INPUT_REQUIRED,
 } from './constants';
 import type { A2aArtifact, A2aTask } from './types';
+import { A2A_X402_EXTENSION_URI } from './x402-extension';
 
 export interface TaskIdentity {
   /** Gateway request id, reused so a task correlates with receipts and events */
@@ -38,6 +39,8 @@ export interface TaskIdentity {
   /** Fresh for each purchase; a pending x402 payment keeps this context */
   readonly contextId: string;
   readonly artifactId: string;
+  /** Id of the agent message on the task status */
+  readonly statusMessageId: string;
   readonly timestamp: string;
 }
 
@@ -82,10 +85,15 @@ export function paymentRequiredTask(
   outcome: PaymentRequiredOutcome,
   identity: TaskIdentity,
 ): A2aTask {
-  return task(identity, A2A_TASK_STATE_FAILED, {
-    name: outcome.resourceId,
-    parts: [{ data: { ...toPaymentRequiredEnvelope(outcome) }, mediaType: A2A_JSON_MEDIA_TYPE }],
-  });
+  const envelope = toPaymentRequiredEnvelope(outcome);
+  return withStatusMessage(
+    task(identity, A2A_TASK_STATE_FAILED, {
+      name: outcome.resourceId,
+      parts: [{ data: { ...envelope }, mediaType: A2A_JSON_MEDIA_TYPE }],
+    }),
+    envelope.message,
+    identity.statusMessageId,
+  );
 }
 
 /** The same task waiting for payment, with the extension's metadata on its status message */
@@ -97,29 +105,42 @@ export function inputRequired(
   return withStatusMessage(
     { ...base, status: { ...base.status, state: A2A_TASK_STATE_INPUT_REQUIRED } },
     'Payment is required. Send the x402 payment payload on this task.',
-    metadata,
     messageId,
+    metadata,
   );
 }
 
-/** Attaches an agent status message carrying extension metadata */
+/** Set the agent status message; metadata marks x402 extension use */
 export function withStatusMessage(
   base: A2aTask,
   text: string,
-  metadata: Record<string, unknown>,
   messageId: string,
+  metadata?: Record<string, unknown>,
 ): A2aTask {
   return {
     ...base,
     status: {
       ...base.status,
-      message: { role: 'ROLE_AGENT', messageId, parts: [{ text }], metadata },
+      message: {
+        role: 'ROLE_AGENT',
+        messageId,
+        contextId: base.contextId,
+        taskId: base.id,
+        parts: [{ text }],
+        ...(metadata !== undefined ? { metadata, extensions: [A2A_X402_EXTENSION_URI] } : {}),
+      },
     },
   };
 }
 
+/** Put the error envelope in the artifact and its message in task status */
 export function failedTask(error: CommerceError, identity: TaskIdentity): A2aTask {
-  return task(identity, A2A_TASK_STATE_FAILED, {
-    parts: [{ data: { ...toErrorEnvelope(error) }, mediaType: A2A_JSON_MEDIA_TYPE }],
-  });
+  const envelope = toErrorEnvelope(error);
+  return withStatusMessage(
+    task(identity, A2A_TASK_STATE_FAILED, {
+      parts: [{ data: { ...envelope }, mediaType: A2A_JSON_MEDIA_TYPE }],
+    }),
+    envelope.message,
+    identity.statusMessageId,
+  );
 }

@@ -23,6 +23,7 @@ export interface A2aAgentExtension {
   readonly uri: string;
   readonly description: string;
   readonly required: boolean;
+  readonly params?: Record<string, unknown>;
 }
 
 export interface A2aAgentCapabilities {
@@ -39,13 +40,16 @@ export interface A2aAgentCapabilities {
  *
  * Core A2A v1 `AgentSkill` has no input-schema field, and none is invented: a
  * non-standard property would be ignored by conformant clients and would
- * suggest the card carries more than the protocol defines.
+ * suggest the card carries more than the protocol defines. `examples` shows
+ * the call shape instead.
  */
 export interface A2aAgentSkill {
   readonly id: string;
   readonly name: string;
   readonly description: string;
   readonly tags: readonly string[];
+  /** One JSON string: the `data` value of a call's data part */
+  readonly examples: readonly string[];
   readonly inputModes: readonly string[];
   readonly outputModes: readonly string[];
 }
@@ -73,12 +77,16 @@ export interface A2aTextPart {
   readonly text: string;
 }
 
-/** The agent's message on a task status, which carries extension metadata */
+/** Agent status text and optional x402 extension metadata */
 export interface A2aMessage {
   readonly role: 'ROLE_AGENT';
   readonly messageId: string;
+  readonly contextId: string;
+  readonly taskId: string;
   readonly parts: readonly A2aTextPart[];
   readonly metadata?: Record<string, unknown>;
+  /** URIs of the extensions that contributed to this message */
+  readonly extensions?: readonly string[];
 }
 
 export interface A2aArtifact {
@@ -95,8 +103,8 @@ export interface A2aTaskStatus {
 }
 
 /**
- * A task with no `history`. `GetTask` is unsupported; a pending x402 task
- * can only be resumed with a payment message that names its id.
+ * A task with no `history`. `GetTask` finds none; a pending x402 task can
+ * only be resumed with a payment message that names its id.
  */
 export interface A2aTask {
   readonly id: string;

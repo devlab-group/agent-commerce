@@ -78,18 +78,22 @@ describe('method routing', () => {
     expect(body.error?.code).toBe(-32601);
   });
 
-  it.each([
-    'GetTask',
-    'ListTasks',
-    'CancelTask',
-    'SendStreamingMessage',
-    'SubscribeToTask',
-    'GetExtendedAgentCard',
-  ])('returns UnsupportedOperationError for known method %s', async (method) => {
-    const { body } = await post({ jsonrpc: '2.0', id: 1, method, params: {} });
-    expect(body.error?.code).toBe(-32004);
-    expect(body.error?.message).toContain(method);
-    expect(body.error?.data).toEqual(errorInfo('UNSUPPORTED_OPERATION'));
+  it.each(['ListTasks', 'SendStreamingMessage', 'SubscribeToTask', 'GetExtendedAgentCard'])(
+    'returns UnsupportedOperationError for known method %s',
+    async (method) => {
+      const { body } = await post({ jsonrpc: '2.0', id: 1, method, params: {} });
+      expect(body.error?.code).toBe(-32004);
+      expect(body.error?.message).toContain(method);
+      expect(body.error?.data).toEqual(errorInfo('UNSUPPORTED_OPERATION'));
+    },
+  );
+
+  // A2A has no capability flag for declining these two
+  it.each(['GetTask', 'CancelTask'])('returns TaskNotFoundError for %s', async (method) => {
+    const { body } = await post({ jsonrpc: '2.0', id: 1, method, params: { id: 'task-1' } });
+    expect(body.error?.code).toBe(-32001);
+    expect(body.error?.message).toContain('not retained');
+    expect(body.error?.data).toEqual(errorInfo('TASK_NOT_FOUND'));
   });
 
   // Push configuration methods return -32003 when the card disables them
@@ -193,9 +197,20 @@ describe('commerce outcomes are never JSON-RPC errors', () => {
     );
 
     expect(body.error).toBeUndefined();
-    const task = (body.result as { task: { status: { state: string }; artifacts: unknown[] } })
-      .task;
-    expect(task.status.state).toBe('TASK_STATE_FAILED');
+    const task = (
+      body.result as {
+        task: { id: string; contextId: string; status: Record<string, unknown> };
+      }
+    ).task;
+    expect(task.status['state']).toBe('TASK_STATE_FAILED');
+    // The reason a generic client shows, without reading the artifact
+    expect(task.status['message']).toMatchObject({
+      role: 'ROLE_AGENT',
+      taskId: task.id,
+      contextId: task.contextId,
+      parts: [{ text: 'Unknown canonical resource "no_such_resource".' }],
+    });
+    expect(task.status['message']).not.toHaveProperty('extensions');
   });
 });
 

@@ -5,7 +5,7 @@
  * lives, and the specification-fixed `/.well-known/agent-card.json`, declared
  * through `additionalHttpRoutes` so the gateway needs no A2A-specific routing.
  *
- * Only the synchronous `SendMessage` path is in scope; every other A2A method
+ * Only the synchronous `SendMessage` path is served; every other A2A method
  * is listed in `descriptor.unsupported`. This adapter maps reserved payment
  * fields but leaves verification, settlement and merchant calls to the
  * pipeline.
@@ -39,6 +39,7 @@ import {
   A2A_METHOD_SEND_MESSAGE,
   A2A_PROTOCOL_VERSION,
   A2A_PUSH_CONFIG_METHODS,
+  A2A_TASK_LOOKUP_METHODS,
   A2A_TASK_STATE_FAILED,
   A2A_UNSUPPORTED_METHODS,
   A2A_VERSION_HEADER,
@@ -46,6 +47,7 @@ import {
 import { buildDescriptor } from './descriptor';
 import {
   A2A_ERROR_PUSH_NOTIFICATION_NOT_SUPPORTED,
+  A2A_ERROR_TASK_NOT_FOUND,
   A2A_ERROR_UNSUPPORTED_OPERATION,
   A2A_ERROR_VERSION_NOT_SUPPORTED,
   JSONRPC_INTERNAL_ERROR,
@@ -58,7 +60,7 @@ import {
   jsonRpcResult,
   parseJsonRpcRequest,
 } from './jsonrpc';
-import { type A2aInvocation, parseInvocation } from './message-mapping';
+import { type A2aInvocation, parseInvocation, userRoleProblem } from './message-mapping';
 import {
   completedTask,
   failedTask,
@@ -77,6 +79,7 @@ import {
   paymentFailureMetadata,
   paymentRejectedMetadata,
   paymentRequiredMetadata,
+  readFollowUpAuthorization,
   readPaymentSubmission,
   requestsX402Extension,
   X402_PAYMENT_PAYLOAD_KEY,
@@ -89,6 +92,9 @@ const MAX_REQUEST_BODY_BYTES = 256 * 1024;
 
 // Accept patch suffixes; only major.minor determines the protocol version
 const VERSION_PATTERN = /^(\d+\.\d+)(?:\.\d+)?$/;
+
+// A2A version parameter; the header is matched case-insensitively
+const A2A_VERSION_PARAMETER = 'A2A-Version';
 
 // Cache the card until the adapter starts again with new configuration
 const AGENT_CARD_CACHE_CONTROL = 'public, max-age=300';
@@ -243,10 +249,12 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
         return;
       }
 
-      // Parse first so a version error can echo the request id. A missing
-      // header represents `0.3`, which this adapter does not serve.
+      // Parse first to echo the request id on version errors. The query
+      // parameter substitutes for an absent version header.
       const version = req.headers[A2A_VERSION_HEADER];
-      const declared = Array.isArray(version) ? version[0] : version;
+      const declared =
+        (Array.isArray(version) ? version[0] : version) ??
+        new URL(req.url ?? '/', 'http://localhost').searchParams.get(A2A_VERSION_PARAMETER);
       if (declared?.match(VERSION_PATTERN)?.[1] !== A2A_PROTOCOL_VERSION) {
         this.writeJson(
           res,
@@ -254,24 +262,25 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
           jsonRpcError(
             parsed.request.id,
             A2A_ERROR_VERSION_NOT_SUPPORTED,
-            `Unsupported A2A protocol version. Send the ${A2A_VERSION_HEADER} header with "${A2A_PROTOCOL_VERSION}".`,
+            `Unsupported A2A protocol version. Send the ${A2A_VERSION_PARAMETER} header with "${A2A_PROTOCOL_VERSION}".`,
           ),
         );
         return;
       }
 
-      // Echoed when activated, as A2A asks of a server that activates an extension
-      const x402Extension = requestsX402Extension(req.headers[A2A_EXTENSIONS_HEADER]);
+      const response = await this.dispatch(
+        parsed.request.id,
+        parsed.request.method,
+        parsed.request.params,
+        requestsX402Extension(req.headers[A2A_EXTENSIONS_HEADER]),
+      );
+      // Echo the extension when it shaped the task, even without the
+      // request header on a payment follow-up
       this.writeJson(
         res,
         200,
-        await this.dispatch(
-          parsed.request.id,
-          parsed.request.method,
-          parsed.request.params,
-          x402Extension,
-        ),
-        x402Extension ? { [A2A_EXTENSIONS_HEADER]: A2A_X402_EXTENSION_URI } : {},
+        response,
+        usesX402Extension(response) ? { [A2A_EXTENSIONS_HEADER]: A2A_X402_EXTENSION_URI } : {},
       );
     } catch (err) {
       // Nothing from `err` reaches the client
@@ -295,6 +304,13 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
         id,
         A2A_ERROR_PUSH_NOTIFICATION_NOT_SUPPORTED,
         `A2A method "${method}" is not supported: this agent does not support push notifications.`,
+      );
+    }
+    if (A2A_TASK_LOOKUP_METHODS.includes(method)) {
+      return jsonRpcError(
+        id,
+        A2A_ERROR_TASK_NOT_FOUND,
+        'Task not found. Finished tasks are not retained; continue a pending payment with SendMessage.',
       );
     }
     if (A2A_UNSUPPORTED_METHODS.includes(method)) {
@@ -389,6 +405,7 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
       if (!x402Extension || outcome.requirement.provider !== 'x402' || !isRecord(envelope)) {
         return this.taskResult(id, task);
       }
+      const network = outcome.requirement.network;
       this.pendingPayments?.put(
         identity.taskId,
         {
@@ -396,12 +413,13 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
           resourceId: invocation.resourceId,
           input,
           ...(authorization !== undefined ? { authorization } : {}),
+          ...(network !== undefined ? { network } : {}),
         },
         outcome.requirement.expiresAt,
       );
       return this.taskResult(
         id,
-        inputRequired(task, paymentRequiredMetadata(envelope), context.ids.next('a2a-msg')),
+        inputRequired(task, paymentRequiredMetadata(envelope), identity.statusMessageId),
       );
     } catch (err) {
       // A downstream failure is the caller's answer, not a broken frame.
@@ -441,6 +459,9 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
         'Message must carry a non-empty "messageId".',
       );
     }
+    // Apply the same role check as a new purchase
+    const roleProblem = userRoleProblem(isRecord(message) ? message['role'] : undefined);
+    if (roleProblem !== undefined) return jsonRpcError(id, JSONRPC_INVALID_PARAMS, roleProblem);
     // Reject a mismatched context without consuming the pending task.
     const contextId = isRecord(message) ? message['contextId'] : undefined;
     if (contextId !== undefined && contextId !== pending.contextId) {
@@ -459,16 +480,27 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
         `For a pending task, set "${X402_PAYMENT_STATUS_KEY}" to "payment-submitted" and provide a "${X402_PAYMENT_PAYLOAD_KEY}" object, or set it to "payment-rejected".`,
       );
     }
+    // A mandate stored with the purchase wins. One sent here is verified
+    // against the stored resource and input, like the payment.
+    let authorization = pending.authorization;
+    if (authorization === undefined && submission.kind === 'submitted') {
+      try {
+        authorization = readFollowUpAuthorization(message);
+      } catch (err) {
+        return jsonRpcError(id, JSONRPC_INVALID_PARAMS, toCommerceError(err).message);
+      }
+    }
     // Taken before execution, so a second payment message for the task finds
     // nothing and cannot run the purchase twice
     this.pendingPayments?.delete(taskId);
+    const statusMessageId = context.ids.next('a2a-msg');
     const identity: TaskIdentity = {
       taskId,
       contextId: pending.contextId,
       artifactId: context.ids.next('a2a-artifact'),
+      statusMessageId,
       timestamp: context.clock.nowIso(),
     };
-    const statusMessageId = context.ids.next('a2a-msg');
 
     if (submission.kind === 'rejected') {
       const declined: A2aTask = {
@@ -482,14 +514,19 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
         withStatusMessage(
           declined,
           'Payment was declined.',
-          paymentRejectedMetadata(),
           statusMessageId,
+          paymentRejectedMetadata(),
         ),
       );
     }
     return this.taskResult(
       id,
-      await this.payPending(context, pending, submission.payload, identity, statusMessageId),
+      await this.payPending(
+        context,
+        { ...pending, ...(authorization !== undefined ? { authorization } : {}) },
+        submission.payload,
+        identity,
+      ),
     );
   }
 
@@ -499,7 +536,6 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
     pending: PendingPayment,
     payload: Record<string, unknown>,
     identity: TaskIdentity,
-    statusMessageId: string,
   ): Promise<A2aTask> {
     const requestId = context.ids.next('a2a');
     const request: CanonicalRequest = {
@@ -522,8 +558,8 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
         return withStatusMessage(
           completedTask(outcome, identity),
           'Payment settled.',
+          identity.statusMessageId,
           paymentCompletedMetadata(outcome.payment),
-          statusMessageId,
         );
       }
       // A proof was sent, so neither a free delivery nor a new challenge is a
@@ -536,14 +572,14 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
         'a2a adapter: x402 extension payment failed',
       );
     }
-    const metadata = paymentFailureMetadata(error);
+    const metadata = paymentFailureMetadata(error, pending.network);
     let text = 'Payment failed.';
     if (metadata[X402_PAYMENT_STATUS_KEY] === 'payment-completed') {
       text = 'Payment settled, but the resource could not be delivered.';
     } else if (!error.code.startsWith('PAYMENT_')) {
       text = 'The resource could not be delivered.';
     }
-    return withStatusMessage(failedTask(error, identity), text, metadata, statusMessageId);
+    return withStatusMessage(failedTask(error, identity), text, identity.statusMessageId, metadata);
   }
 
   private taskIdentity(context: ProtocolAdapterContext, requestId: string): TaskIdentity {
@@ -551,6 +587,7 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
       taskId: requestId,
       contextId: context.ids.next('a2a-ctx'),
       artifactId: context.ids.next('a2a-artifact'),
+      statusMessageId: context.ids.next('a2a-msg'),
       timestamp: context.clock.nowIso(),
     };
   }
@@ -589,6 +626,12 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
     res.writeHead(status, { 'content-type': A2A_JSON_MEDIA_TYPE, ...headers });
     res.end(JSON.stringify(body));
   }
+}
+
+// True when the response is a task whose status message lists the extension
+function usesX402Extension(response: Record<string, unknown>): boolean {
+  const result = response['result'] as { readonly task?: A2aTask } | undefined;
+  return result?.task?.status.message?.extensions?.includes(A2A_X402_EXTENSION_URI) === true;
 }
 
 // Compare entity tags weakly; `*` matches any current card

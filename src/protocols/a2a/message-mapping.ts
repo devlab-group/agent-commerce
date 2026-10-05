@@ -33,6 +33,19 @@ import { A2A_ERROR_CONTENT_TYPE_NOT_SUPPORTED, A2A_ERROR_TASK_NOT_FOUND } from '
 // The only role a request message may carry. A2A v1 spells roles this way
 const A2A_USER_ROLE = 'ROLE_USER';
 
+/** The one message shape that calls a skill, as refusals and the Agent Card name it */
+export const A2A_CALL_SHAPE = 'one data part {"resource": "<skill id>", "input": {...}}';
+
+/**
+ * The refusal for a role other than `ROLE_USER`, or undefined. An A2A 0.x
+ * client sends `user`, so this is what turns its messages away.
+ */
+export function userRoleProblem(role: unknown): string | undefined {
+  return role === A2A_USER_ROLE
+    ? undefined
+    : `Unsupported message role "${String(role)}": only ${A2A_USER_ROLE} is accepted.`;
+}
+
 /** What a supported envelope reduces to. Nothing protocol-shaped survives */
 export interface A2aInvocation {
   readonly resourceId: string;
@@ -110,13 +123,13 @@ function assertNoContinuation(params: z.infer<typeof ParamsSchema>): void {
 function assertSupportedPart(part: Record<string, unknown>): void {
   if ('file' in part || 'raw' in part || 'url' in part) {
     throw unsupported(
-      'File and URL parts are not supported: send a structured data part.',
+      `File and URL parts are not supported: send ${A2A_CALL_SHAPE}.`,
       A2A_ERROR_CONTENT_TYPE_NOT_SUPPORTED,
     );
   }
   if ('text' in part) {
     throw unsupported(
-      'Text parts are not supported: send a structured data part.',
+      `Text parts are not supported: send ${A2A_CALL_SHAPE}.`,
       A2A_ERROR_CONTENT_TYPE_NOT_SUPPORTED,
     );
   }
@@ -153,9 +166,8 @@ export function parseInvocation(rawParams: unknown): A2aInvocation {
 
   assertNoContinuation(params);
 
-  if (message.role !== A2A_USER_ROLE) {
-    throw invalid(`Unsupported message role "${message.role}": only ${A2A_USER_ROLE} is accepted.`);
-  }
+  const roleProblem = userRoleProblem(message.role);
+  if (roleProblem !== undefined) throw invalid(roleProblem);
   if (message.parts.length === 0) {
     throw invalid('Message carries no parts: send exactly one structured data part.');
   }

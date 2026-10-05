@@ -56,6 +56,7 @@ export const A2A_PUSH_CONFIG_METHODS: readonly string[] = [
  * A2A methods that exist and are not served here, kept apart from unknown
  * methods so a caller learns whether it hit a refused method or a typo. The
  * descriptor and the transport both read this one list.
+ * `A2A_TASK_LOOKUP_METHODS` get a different error code on the wire.
  */
 export const A2A_UNSUPPORTED_METHODS: readonly string[] = [
   'SendStreamingMessage',
@@ -68,8 +69,15 @@ export const A2A_UNSUPPORTED_METHODS: readonly string[] = [
 ];
 
 /**
+ * Methods A2A gives an agent no capability flag to decline. No task can be
+ * read back or canceled, so they answer `TaskNotFoundError`.
+ */
+export const A2A_TASK_LOOKUP_METHODS: readonly string[] = ['GetTask', 'CancelTask'];
+
+/**
  * Terminal states for completed and failed calls. An unpaid x402 extension
- * task instead waits in `TASK_STATE_INPUT_REQUIRED`. `GetTask` is unsupported.
+ * task instead waits in `TASK_STATE_INPUT_REQUIRED`. `GetTask` finds no task
+ * in any state.
  */
 export const A2A_TASK_STATE_COMPLETED = 'TASK_STATE_COMPLETED';
 export const A2A_TASK_STATE_FAILED = 'TASK_STATE_FAILED';

@@ -26,8 +26,8 @@ describe('A2A agent card, resolved by the official SDK', () => {
     expect(card.name).toBe('Demo Weather Store');
     expect(card.version).toBeTruthy();
     // No agentDescription is configured, so this is the published default
-    expect(card.description).toBe(
-      'Agent Commerce Gateway: canonical commerce resources exposed as A2A skills.',
+    expect(card.description).toMatch(
+      /^Agent Commerce Gateway: canonical commerce resources exposed as A2A skills\. Call a skill /,
     );
   });
 
