@@ -90,7 +90,8 @@ authorization, payment and receipt behavior.
 CanonicalRequest
   │
   ├─ resolve resource ─────────────────────► RESOURCE_NOT_FOUND
-  ├─ validate input ───────────────────────► INPUT_INVALID
+  ├─ validate input and the backend
+  │  request shape ────────────────────────► INPUT_INVALID / BACKEND_ERROR
   ├─ resolve price
   │
   ├─ free ───────────────────────────────────────────────────┐
@@ -102,23 +103,26 @@ CanonicalRequest
        ├─ authorize + reserve ────────► AUTHORIZATION_*      │
        ├─ reserve replayKey ──────────► PAYMENT_REPLAYED     │
        │                          or STORAGE_ERROR           │
-       ├─ settle ───────────► PAYMENT_SETTLEMENT_FAILED      │
-       └─ consume, release or mark authorization             │
+       └─ upfront flow: settle ► PAYMENT_SETTLEMENT_FAILED   │
                                                              │
   ┌──────────────────────────────────────────────────────────┘
   ├─ call merchant backend ────────────────► BACKEND_TIMEOUT / BACKEND_ERROR
+  ├─ authorization flow (default): settle ─► PAYMENT_SETTLEMENT_FAILED
   ├─ store receipt + events ───────────────► logged on failure, never thrown
   └─ ExecutionOutcome (delivered)
 ```
 
 `verify` never moves money; only `settle` does. The replay reservation sits
 deliberately **between** them: a duplicate authorization is rejected before any
-funds move.
+funds move. The provider's requirement chooses the flow: x402 and MPP settle
+after a successful backend call by default, and before it under `upfront`.
+Under the default flow, a backend failure settles nothing.
 
 Authorization is optional per resource. When required, its reservation sits
-between payment verification and settlement and is released only when a
-failure proves that no money moved. See
-[ap2.md](ap2.md#pipeline-position).
+between payment verification and settlement. It is consumed when the payment
+settles, marked when the outcome is unknown, and released when no money moved:
+a rejected settlement, a failed replay reservation, or a backend failure before
+settlement. See [ap2.md](ap2.md#pipeline-position).
 
 ## Correlation
 
@@ -129,9 +133,17 @@ one invocation.
 Event sequence for a successful paid request:
 
 ```text
-resource.requested → payment.required → payment.verified → payment.settled
-                   → backend.called → resource.delivered
+authorization flow (default)
+  resource.requested → payment.verified → backend.called → payment.settled
+                     → resource.delivered
+
+upfront flow
+  resource.requested → payment.verified → payment.settled → backend.called
+                     → resource.delivered
 ```
+
+The challenge before it is a separate request with its own `requestId`:
+`resource.requested → payment.required`.
 
 A resource requiring authorization adds `authorization.verified` (or
 `authorization.rejected`) between the request and the payment events. The event
