@@ -134,9 +134,9 @@ describe('invocation envelope refusals', () => {
     ['an inline-bytes part', { raw: 'QUFBQQ==', filename: 'a.bin' }],
     ['a url part', { url: 'https://example.com/a.pdf' }],
     ['a v0.3 file part', { file: { uri: 'https://example.com/a.pdf' } }],
-  ])('refuses %s as an unsupported part representation', async (_label, part) => {
+  ])('refuses %s with ContentTypeNotSupportedError', async (_label, part) => {
     const { body } = await post(sendMessage(message([part])));
-    expect(body.error?.code).toBe(-32004);
+    expect(body.error?.code).toBe(-32005);
   });
 
   it('refuses multiple parts rather than choosing one', async () => {
@@ -165,6 +165,17 @@ describe('invocation envelope refusals', () => {
     );
     expect(body.error?.code).toBe(-32005);
     expect(body.error?.data).toEqual(errorInfo('CONTENT_TYPE_NOT_SUPPORTED'));
+  });
+
+  it('refuses a request without an id and runs nothing', async () => {
+    const { body } = await post({
+      jsonrpc: '2.0',
+      method: 'SendMessage',
+      params: message([{ data: { resource: 'weather_basic', input: { city: 'Berlin' } } }]),
+    });
+    expect(body.error?.code).toBe(-32600);
+    expect(body.id).toBeNull();
+    expect(body.result).toBeUndefined();
   });
 
   it('returns invalid params when messageId is missing', async () => {

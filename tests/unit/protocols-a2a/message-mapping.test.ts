@@ -139,21 +139,21 @@ describe('parseInvocation: legal A2A this adapter does not serve', () => {
         parts: [{ file: { uri: 'https://example.com/a.pdf' } }],
       },
     };
-    expectRejected(params, 'PROTOCOL_UNSUPPORTED');
+    expectRejected(params, 'PROTOCOL_UNSUPPORTED', -32005);
   });
 
   it('rejects a raw binary file part', () => {
     const params = {
       message: { role: 'ROLE_USER', messageId: 'msg-1', parts: [{ file: { bytes: 'AAAA' } }] },
     };
-    expectRejected(params, 'PROTOCOL_UNSUPPORTED');
+    expectRejected(params, 'PROTOCOL_UNSUPPORTED', -32005);
   });
 
   it('rejects a text part', () => {
     const params = {
       message: { role: 'ROLE_USER', messageId: 'msg-1', parts: [{ text: 'get me the report' }] },
     };
-    expectRejected(params, 'PROTOCOL_UNSUPPORTED');
+    expectRejected(params, 'PROTOCOL_UNSUPPORTED', -32005);
   });
 
   it('rejects multiple input parts rather than picking one', () => {
@@ -232,6 +232,7 @@ describe('parseInvocation: A2A v1 part spellings', () => {
     expectRejected(
       { message: { role: 'ROLE_USER', messageId: 'msg-1', parts: [part] } },
       'PROTOCOL_UNSUPPORTED',
+      -32005,
     );
   });
 });

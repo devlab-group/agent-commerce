@@ -133,6 +133,17 @@ export function parseJsonRpcRequest(rawBody: string): JsonRpcParseResult {
   }
 
   const id = readId(payload['id']);
+  // Notifications have no reply. Reject them before they can run or charge.
+  if (payload['id'] === undefined) {
+    return {
+      ok: false,
+      id,
+      error: {
+        code: JSONRPC_INVALID_REQUEST,
+        message: 'Request must include an "id"; notifications are unsupported.',
+      },
+    };
+  }
   if (payload['jsonrpc'] !== '2.0') {
     return {
       ok: false,

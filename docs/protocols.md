@@ -241,12 +241,12 @@ uses these A2A codes:
 | `-32001` | `TaskNotFoundError`                 | an unknown, expired or completed `taskId`                             |
 | `-32003` | `PushNotificationNotSupportedError` | the four push notification configuration methods                      |
 | `-32004` | `UnsupportedOperationError`         | other unsupported methods and message features listed below           |
-| `-32005` | `ContentTypeNotSupportedError`      | a structured data part with a non-JSON `mediaType`                    |
+| `-32005` | `ContentTypeNotSupportedError`      | a text, file, inline-byte or URL part, or a non-JSON `mediaType`      |
 | `-32009` | `VersionNotSupportedError`          | an unsupported version; a missing or empty header is treated as `0.3` |
 
-The `-32004` message features are text, file, inline-byte and URL parts,
-multipart messages, a `contextId` and non-empty `referenceTaskIds`. A missing
-`messageId` and a non-user role are `-32602`. Each A2A error carries a
+Multipart messages, a `contextId` and non-empty `referenceTaskIds` return
+`-32004`. Missing `messageId` or a non-user role returns `-32602`. A request
+without an `id` returns `-32600` without running. Each A2A error carries a
 `google.rpc.ErrorInfo` in `error.data`, with a reason such as
 `VERSION_NOT_SUPPORTED` and the domain `a2a-protocol.org`.
 

@@ -109,10 +109,16 @@ function assertNoContinuation(params: z.infer<typeof ParamsSchema>): void {
  */
 function assertSupportedPart(part: Record<string, unknown>): void {
   if ('file' in part || 'raw' in part || 'url' in part) {
-    throw unsupported('File and URL parts are not supported: send a structured data part.');
+    throw unsupported(
+      'File and URL parts are not supported: send a structured data part.',
+      A2A_ERROR_CONTENT_TYPE_NOT_SUPPORTED,
+    );
   }
   if ('text' in part) {
-    throw unsupported('Text parts are not supported: send a structured data part.');
+    throw unsupported(
+      'Text parts are not supported: send a structured data part.',
+      A2A_ERROR_CONTENT_TYPE_NOT_SUPPORTED,
+    );
   }
   if (!('data' in part)) {
     throw invalid('Message part carries no "data": send a structured data part.');

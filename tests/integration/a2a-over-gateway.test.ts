@@ -267,7 +267,7 @@ describe('A2A JSON-RPC transport over the real gateway', () => {
         },
       },
     });
-    expect(body.error?.code).toBe(-32004);
+    expect(body.error?.code).toBe(-32005);
   });
 
   it.each([
