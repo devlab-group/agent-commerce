@@ -537,6 +537,21 @@ describe('runDoctor: degraded scenarios report the failure', () => {
     ])('names where x402 settles with %s', async (_label, x402, where) => {
       const [payments] = await checksFor({ x402 }, 'Payments');
       expect(payments?.detail).toContain(`x402 v2 (scheme=exact) enabled - ${where}`);
+      expect(payments?.detail).toContain('paymentFlow=authorization');
+    });
+
+    it('names an upfront payment flow and counts resource overrides', async () => {
+      const [payments] = await checksFor(
+        {
+          x402: {
+            ...mainnetX402({ type: 'bearer', token: 'T' }),
+            paymentFlow: 'upfront',
+            resourcePaymentFlows: { report: 'authorization' },
+          },
+        },
+        'Payments',
+      );
+      expect(payments?.detail).toContain('paymentFlow=upfront (1 resource override)');
     });
 
     it('reports x402 on mainnet, and WARNs for an unauthenticated facilitator', async () => {

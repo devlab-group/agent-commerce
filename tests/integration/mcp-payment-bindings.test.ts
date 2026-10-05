@@ -183,7 +183,9 @@ describe('x402 MCP transport', () => {
     expect(challenged.isError).toBe(true);
     expect(challenged.structuredContent).toMatchObject({
       x402Version: 2,
-      accepts: [{ scheme: 'exact', extra: { paymentFlow: 'upfront' } }],
+      accepts: [
+        { scheme: 'exact', extra: expect.not.objectContaining({ paymentFlow: 'upfront' }) },
+      ],
       code: 'PAYMENT_REQUIRED',
     });
     expect(JSON.parse(firstText(challenged))).toEqual(challenged.structuredContent);

@@ -528,10 +528,12 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
       );
     }
     const metadata = paymentFailureMetadata(error);
-    const text =
-      metadata[X402_PAYMENT_STATUS_KEY] === 'payment-completed'
-        ? 'Payment settled, but the resource could not be delivered.'
-        : 'Payment failed.';
+    let text = 'Payment failed.';
+    if (metadata[X402_PAYMENT_STATUS_KEY] === 'payment-completed') {
+      text = 'Payment settled, but the resource could not be delivered.';
+    } else if (!error.code.startsWith('PAYMENT_')) {
+      text = 'The resource could not be delivered.';
+    }
     return withStatusMessage(failedTask(error, identity), text, metadata, statusMessageId);
   }
 

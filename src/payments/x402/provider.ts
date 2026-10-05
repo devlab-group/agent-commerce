@@ -42,6 +42,7 @@ import {
   systemClock,
 } from '../../core';
 import { redactedErrorText } from '../../core/errors';
+import { SETTLE_AFTER_BACKEND_METADATA_KEY } from '../../core/execution/settlement-order';
 import { PACKAGE_VERSION } from '../../version';
 import { parseCanonicalAmount } from './amount';
 import {
@@ -58,6 +59,7 @@ import {
 import { resolveX402Deployment, type X402FacilitatorConfig } from './guardrails';
 import { describeDeploymentMode } from './networks';
 import { decodePaymentSubmission, isExactEvmPayload } from './payload';
+import { X402_DEFAULT_PAYMENT_FLOW, type X402PaymentFlow } from './payment-flow';
 import { computeReplayKey } from './replay-key';
 
 const X402_VERSION = 2;
@@ -108,6 +110,14 @@ export interface X402ProviderOptions {
   /** Merchant-controlled settlement destination. Never a gateway-owned wallet */
   readonly payTo: `0x${string}`;
   readonly maxTimeoutSeconds?: number;
+  /**
+   * When the payment settles relative to the backend call. Defaults to
+   * `authorization`, the x402 default: settle only after the backend succeeds.
+   * `upfront` settles before the backend call.
+   */
+  readonly paymentFlow?: X402PaymentFlow;
+  /** Per-resource overrides of `paymentFlow`, keyed by resource id */
+  readonly resourcePaymentFlows?: Readonly<Record<string, X402PaymentFlow>>;
   /**
    * Which facilitator verifies and broadcasts. `local` runs one in this process
    * against a dev chain, and its `signerPrivateKey` pays gas there, usually
@@ -220,6 +230,8 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
       'eip-3009',
       'caip-2',
       `mode=${mode}`,
+      'authorization-flow',
+      'upfront-flow',
     ],
     status: 'stable',
     unsupported: ['svm', 'permit2', 'upto scheme', 'deferred scheme'],
@@ -227,6 +239,10 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
 
   async function createRequirement(context: PaymentContext): Promise<PaymentRequirement> {
     const amount = parseCanonicalAmount(context.amount, options.assetDecimals).toString();
+    const paymentFlow =
+      options.resourcePaymentFlows?.[context.resource.id] ??
+      options.paymentFlow ??
+      X402_DEFAULT_PAYMENT_FLOW;
 
     const requirements: PaymentRequirements = {
       scheme: 'exact',
@@ -239,13 +255,13 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
       // EIP-712 domain without calling `version()` on the token.
       // `assetTransferMethod` names the one method this provider settles, so a
       // conforming client never picks the `exact` scheme's Permit2 path.
-      // The pipeline settles before calling the backend, so declare the
-      // non-default `upfront` flow: backend failure can follow payment
+      // x402 requires an explicit non-default flow. Omit the default
+      // `authorization` flow here.
       extra: {
         name: options.assetName,
         version: options.assetVersion,
         assetTransferMethod: 'eip3009',
-        paymentFlow: 'upfront',
+        ...(paymentFlow === 'upfront' ? { paymentFlow } : {}),
       },
     };
 
@@ -286,6 +302,7 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
         accepts: [requirements as unknown as Record<string, unknown>],
         envelope: envelope as unknown as Record<string, unknown>,
       },
+      metadata: { [SETTLE_AFTER_BACKEND_METADATA_KEY]: paymentFlow === 'authorization' },
     };
   }
 

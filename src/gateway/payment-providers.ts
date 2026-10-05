@@ -25,6 +25,10 @@ export function createConfiguredPaymentProviders(
         assetDecimals: x402.assetDecimals,
         payTo: x402.payTo as `0x${string}`,
         maxTimeoutSeconds: x402.maxTimeoutSeconds,
+        ...(x402.paymentFlow !== undefined ? { paymentFlow: x402.paymentFlow } : {}),
+        ...(x402.resourcePaymentFlows !== undefined
+          ? { resourcePaymentFlows: x402.resourcePaymentFlows }
+          : {}),
         facilitator: x402.facilitator,
         ...(x402.allowMainnet !== undefined ? { allowMainnet: x402.allowMainnet } : {}),
         ...(x402.allowUnauthenticatedFacilitator !== undefined

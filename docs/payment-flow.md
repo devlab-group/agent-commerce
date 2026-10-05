@@ -17,6 +17,12 @@ the facilitator signer in the gateway process;
 
 ## The x402 round trip
 
+The diagram shows the default `authorization` flow: the backend answers before
+the payment settles, so a backend failure settles nothing, and a refused
+settlement withholds the backend's response. Under the `upfront` flow,
+configured per rail or per resource, `settle` moves above the backend call; see
+[protocols.md](protocols.md#x402).
+
 ```text
  buyer                           gateway                         chain / backend
    │                                │                                   │
@@ -42,12 +48,12 @@ the facilitator signer in the gateway process;
    │                                │               payer, nonce)       │
    │                                │ reservePaymentAttempt(replayKey)  │
    │                                │   duplicate ⇒ PAYMENT_REPLAYED    │
-   │                                │ settle                            │
-   │                                ├──────────────────────────────────►│ chain: transferWithAuthorization
-   │                                │◄──────────────────────────────────┤ chain: tx receipt
    │                                │ call merchant backend             │
    │                                ├──────────────────────────────────►│ backend: GET /api/report
    │                                │◄──────────────────────────────────┤ backend: 200 + body
+   │                                │ settle                            │
+   │                                ├──────────────────────────────────►│ chain: transferWithAuthorization
+   │                                │◄──────────────────────────────────┤ chain: tx receipt
    │                                │ saveReceipt(txHash)               │
    │                                │                                   │
    │◄───────────────────────────────┤                                   │
@@ -64,7 +70,7 @@ also accepts the x402 extension's task metadata; see
 
 ### MPP
 
-An MPP payment takes the same path, with three differences:
+MPP uses the same verification and replay checks, with these differences:
 
 - The challenge is HMAC-bound to its terms and resource, and the buyer's
   EIP-3009 nonce must equal the challenge hash, so an authorization answers
@@ -74,6 +80,7 @@ An MPP payment takes the same path, with three differences:
   replay key, and neither broadcasts the payment.
 - Settlement uses an x402 facilitator. MPP derives the same replay key as x402,
   so one receipt store cannot reserve the authorization through both rails.
+- Settlement always runs before the backend call, as in the x402 `upfront` flow.
 
 Over HTTP, MPP uses `WWW-Authenticate`, `Authorization: Payment ...` and
 `Payment-Receipt`. See the complete [HTTP header table](protocols.md#http-surface).
@@ -106,12 +113,12 @@ to redirect them.
 | copy reaches gateway reservation before the original settles | `PAYMENT_REPLAYED`                       | no                                    |
 | provider/RPC unavailable during verification                 | `PAYMENT_PROVIDER_UNAVAILABLE`           | no                                    |
 | settlement transaction fails                                 | `PAYMENT_SETTLEMENT_FAILED`              | no                                    |
-| backend fails **after** settlement                           | `BACKEND_ERROR` / `BACKEND_TIMEOUT`      | no; payment recorded, delivery failed |
+| backend fails before settlement (`authorization` flow)       | `BACKEND_ERROR` / `BACKEND_TIMEOUT`      | no; no payment settled                |
+| backend fails after settlement (`upfront` flow or MPP)       | `BACKEND_ERROR` / `BACKEND_TIMEOUT`      | no; payment recorded, delivery failed |
 
-Settlement is final, so a later backend failure is a reconciliation problem,
-not a rollback. It is recorded as a
-`payment_attempt` with status `settled` and a `backend.failed` event sharing the
-same `requestId`.
+After settlement, a backend failure needs reconciliation rather than a
+rollback. The gateway records a `settled` payment attempt and a
+`backend.failed` event with the same `requestId`.
 
 ## Replay: two independent defenses
 

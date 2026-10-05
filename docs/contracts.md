@@ -61,8 +61,8 @@ This table is for navigation, not enumeration.
    authorization is verified and reserved, and `reservePaymentAttempt` succeeds.
    A provider that sets `PaymentRequirement.metadata.settleAfterBackend` to
    `true` has `settle` run after a successful backend call instead of before
-   it. A backend failure then settles nothing. A rejected or unconfirmed
-   settlement withholds the response.
+   it; the x402 `authorization` flow does. A backend failure then settles
+   nothing. A rejected or unconfirmed settlement withholds the response.
 5. `EventSink.emit` and event persistence must not fail a commerce flow.
 6. `HttpBackendExecutor` is the only built-in outbound HTTP path to merchant
    backends and always applies a timeout. A custom `GatewayOptions.backend`

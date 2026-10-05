@@ -43,6 +43,8 @@ import {
 
 const PORT = 18790;
 const RESOURCE_ID = 'market_report';
+// The same resource under the `upfront` flow, which settles before the backend
+const UPFRONT_RESOURCE_ID = 'market_report_upfront';
 
 const RESOURCE: CommerceResource = {
   id: 'demo.report',
@@ -101,6 +103,14 @@ async function startGateway(): Promise<void> {
           expose: ['http', 'a2a'],
           payments: ['x402'],
         },
+        [UPFRONT_RESOURCE_ID]: {
+          name: 'Market report, paid upfront',
+          backend: { type: 'http', method: 'GET', url: 'http://merchant.invalid/api/report' },
+          pricing: { type: 'fixed', amount: '1.00', currency: 'USDC' },
+          expose: ['http'],
+          payments: ['x402'],
+          paymentFlow: 'upfront',
+        },
       },
       payments: {
         x402: {
@@ -136,10 +146,13 @@ interface Invocation {
   readonly body: Record<string, unknown>;
 }
 
-async function invoke(headers: Record<string, string> = {}): Promise<Invocation> {
+async function invoke(
+  headers: Record<string, string> = {},
+  resourceId = RESOURCE_ID,
+): Promise<Invocation> {
   const res = await gateway.server.inject({
     method: 'POST',
-    url: `/api/resources/${RESOURCE_ID}/invoke`,
+    url: `/api/resources/${resourceId}/invoke`,
     headers: { 'content-type': 'application/json', ...headers },
     payload: {},
   });
@@ -149,8 +162,9 @@ async function invoke(headers: Record<string, string> = {}): Promise<Invocation>
 // Asks the gateway for the resource unpaid and signs the challenge it returns
 async function gatewayProof(
   overrides?: Parameters<typeof createPaymentProof>[0]['overrides'],
+  resourceId = RESOURCE_ID,
 ): Promise<string> {
-  const challenged = await invoke();
+  const challenged = await invoke({}, resourceId);
   expect(challenged.statusCode).toBe(402);
   const payment = challenged.body['payment'] as { accepts: Record<string, unknown>[] };
   return createPaymentProof({
@@ -643,14 +657,14 @@ describe('x402 settlement - real local chain', () => {
     });
   });
 
-  it('13. a backend failure after settlement tells the payer what settled and records the payment undelivered', async () => {
-    const proof = await gatewayProof();
+  it('13. reports a settled upfront payment after backend failure', async () => {
+    const proof = await gatewayProof(undefined, UPFRONT_RESOURCE_ID);
     const before = await balances();
 
     backendFails = true;
     let failed: Invocation;
     try {
-      failed = await invoke({ [PAYMENT_HEADER]: proof });
+      failed = await invoke({ [PAYMENT_HEADER]: proof }, UPFRONT_RESOURCE_ID);
     } finally {
       backendFails = false;
     }
@@ -743,5 +757,26 @@ describe('x402 settlement - real local chain', () => {
       amountBaseUnits: 1_000_000n,
       txHash: receipt?.transaction as string,
     });
+  });
+
+  it('15. leaves funds untouched when the backend fails before settlement', async () => {
+    const proof = await gatewayProof();
+    const receiptsBefore = (await store.listReceipts()).length;
+    const before = await balances();
+
+    backendFails = true;
+    let failed: Invocation;
+    try {
+      failed = await invoke({ [PAYMENT_HEADER]: proof });
+    } finally {
+      backendFails = false;
+    }
+
+    expect(failed.body['code']).toBe('BACKEND_ERROR');
+    expect(failed.headers['payment-response']).toBeUndefined();
+    const after = await balances();
+    expect(after.buyer).toBe(before.buyer);
+    expect(after.merchant).toBe(before.merchant);
+    expect(await store.listReceipts()).toHaveLength(receiptsBefore);
   });
 });

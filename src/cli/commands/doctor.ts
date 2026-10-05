@@ -562,7 +562,11 @@ export async function runDoctor(
     checks.push({ name: 'Payments', status: 'INFO', detail: 'x402 not configured' });
   } else {
     const { mode, where, via } = describeSettlement(x402.network, x402.facilitator);
-    const summary = `x402 v2 (scheme=exact) enabled - ${where}, destination=${maskMiddle(x402.payTo)}, facilitator=${via}`;
+    const overrides = Object.keys(x402.resourcePaymentFlows ?? {}).length;
+    const overrideCount =
+      overrides > 0 ? ` (${overrides} resource ${overrides === 1 ? 'override' : 'overrides'})` : '';
+    const flow = `paymentFlow=${x402.paymentFlow ?? 'authorization'}${overrideCount}`;
+    const summary = `x402 v2 (scheme=exact) enabled - ${where}, destination=${maskMiddle(x402.payTo)}, facilitator=${via}, ${flow}`;
     const live = wellKnown?.ok ? extractWellKnownX402(wellKnown.body) : undefined;
     if (sameAddress(x402.asset, PLACEHOLDER_ASSET_ADDRESS)) {
       // `init` writes this placeholder, and the live cross-check below would

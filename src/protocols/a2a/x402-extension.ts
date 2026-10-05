@@ -150,7 +150,10 @@ export function paymentFailureMetadata(error: CommerceError): Record<string, unk
       [X402_PAYMENT_RECEIPTS_KEY]: [settled],
     };
   }
-  const code = x402ErrorCode(error.code, error.details?.['reason']);
+  // A backend failure before settlement keeps its own commerce error code.
+  const code = error.code.startsWith('PAYMENT_')
+    ? x402ErrorCode(error.code, error.details?.['reason'])
+    : error.code.toLowerCase();
   const receipt = settlementFailure(error.details);
   return {
     [X402_PAYMENT_STATUS_KEY]: 'payment-failed',

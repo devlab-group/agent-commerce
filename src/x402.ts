@@ -26,5 +26,6 @@ export {
   type NetworkProfile,
   SUPPORTED_NETWORK_IDS,
   type X402FacilitatorConfig,
+  type X402PaymentFlow,
   type X402ProviderOptions,
 } from './payments/x402';

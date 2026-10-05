@@ -2272,3 +2272,46 @@ describe('payments.mpp', () => {
     expectConfigInvalid(() => parseConfig(raw, {}), 'resources.market_report.pricing.amount');
   });
 });
+
+describe('x402 payment flow', () => {
+  function resourceEntry(raw: Record<string, unknown>, id: string): Record<string, unknown> {
+    return (raw['resources'] as Record<string, Record<string, unknown>>)[id] as Record<
+      string,
+      unknown
+    >;
+  }
+
+  it('defaults to the x402 authorization flow', () => {
+    expect(parseConfig(validRawConfig(), {}).payments.x402?.paymentFlow).toBe('authorization');
+  });
+
+  it('accepts upfront for the rail', () => {
+    const raw = validRawConfig();
+    (raw['payments'] as { x402: Record<string, unknown> }).x402['paymentFlow'] = 'upfront';
+    expect(parseConfig(raw, {}).payments.x402?.paymentFlow).toBe('upfront');
+  });
+
+  it('rejects a flow the gateway does not run', () => {
+    const raw = validRawConfig();
+    (raw['payments'] as { x402: Record<string, unknown> }).x402['paymentFlow'] = 'escrow';
+    expectConfigInvalid(() => parseConfig(raw, {}), 'payments.x402.paymentFlow');
+  });
+
+  it('carries a per-resource override to the x402 rail', () => {
+    const raw = validRawConfig();
+    resourceEntry(raw, 'market_report')['paymentFlow'] = 'upfront';
+    expect(parseConfig(raw, {}).payments.x402?.resourcePaymentFlows).toEqual({
+      market_report: 'upfront',
+    });
+  });
+
+  it('rejects a payment-flow override on a free resource', () => {
+    const raw = validRawConfig();
+    resourceEntry(raw, 'weather_basic')['paymentFlow'] = 'upfront';
+    expectConfigInvalid(
+      () => parseConfig(raw, {}),
+      'resources.weather_basic.paymentFlow',
+      'requires fixed pricing',
+    );
+  });
+});

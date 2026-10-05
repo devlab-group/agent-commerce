@@ -218,11 +218,11 @@ extension applies only to x402; an MPP resource still returns a terminal task.
 
 These outcomes return a terminal task with one artifact:
 
-| Outcome                            | State                  | Artifact data                                            |
-| ---------------------------------- | ---------------------- | -------------------------------------------------------- |
-| Delivered                          | `TASK_STATE_COMPLETED` | Merchant response and `agent-commerce/delivery` metadata |
-| Payment required on terminal path  | `TASK_STATE_FAILED`    | Shared payment-required envelope                         |
-| Commerce failure                   | `TASK_STATE_FAILED`    | Shared error envelope                                    |
+| Outcome                           | State                  | Artifact data                                            |
+| --------------------------------- | ---------------------- | -------------------------------------------------------- |
+| Delivered                         | `TASK_STATE_COMPLETED` | Merchant response and `agent-commerce/delivery` metadata |
+| Payment required on terminal path | `TASK_STATE_FAILED`    | Shared payment-required envelope                         |
+| Commerce failure                  | `TASK_STATE_FAILED`    | Shared error envelope                                    |
 
 With the x402 extension, an unpaid task is `TASK_STATE_INPUT_REQUIRED`; its
 payment terms are in the status message metadata. If the client declines,
@@ -476,9 +476,26 @@ available, such as `invalid_network`. The provider derives a replay key from
 the authorization, which the pipeline reserves before settlement. A successful
 settlement records the transaction hash.
 
-Settlement runs before the backend call, so requirements declare
-`extra.paymentFlow: "upfront"`. A backend failure after settlement leaves the
-buyer charged; the gateway records the receipt as undelivered.
+`payments.x402.paymentFlow` chooses when the payment settles. A resource's
+`paymentFlow` overrides it when x402 is the selected rail:
+
+| Flow                      | Order                                 | Backend fails                                          | Settlement refused after backend |
+| ------------------------- | ------------------------------------- | ------------------------------------------------------ | -------------------------------- |
+| `authorization` (default) | verify, reserve, call backend, settle | no settlement; attempt recorded as rejected            | response withheld; 402           |
+| `upfront`                 | verify, reserve, settle, call backend | payment stays settled; receipt records failed delivery | not applicable                   |
+
+The gateway omits `extra.paymentFlow` for the default `authorization` flow.
+It sets `extra.paymentFlow: "upfront"` for the other flow, as required by
+[x402 v2](https://github.com/x402-foundation/x402/blob/main/specs/x402-specification-v2.md#61-asset-transfer-methods-and-payment-flow-models).
+The gateway verifies the proof before calling the backend in either flow.
+For `upfront`, it adds a read-only check before the x402 v2
+`settle → resource` sequence. Under `authorization`, the backend may finish
+work before settlement. A refusal leaves that work unpaid; an uncertain
+settlement leaves its payment status unknown. In both cases, the gateway
+withholds the backend response. Use `upfront` when backend side effects must
+follow payment. Backend time counts toward `maxTimeoutSeconds`: the payment
+authorization must remain valid at settlement. MPP always settles before the
+backend call.
 
 Unsupported: SVM, Permit2, `upto`, `deferred`, multi-asset routing and
 dynamic pricing.

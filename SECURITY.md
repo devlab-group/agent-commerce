@@ -113,9 +113,9 @@ every checkout route under its mount requires
 `Authorization: Bearer <protocols.acp.auth.token>`, compared in constant time;
 ACP's own discovery document at `/.well-known/acp.json` stays public and
 omits the bearer token, backend URLs and other private configuration. Request
-`Signature` verification is not
-implemented and a `Signature` header never substitutes for the bearer token, so
-ACP must be deployed behind TLS. See [docs/security.md](docs/security.md#acp).
+`Signature` verification is not implemented and a `Signature` header never
+substitutes for the bearer token, so ACP must be deployed behind TLS. See
+[docs/security.md](docs/security.md#acp).
 
 **The operator routes are different.** `GET /api/receipts` and
 `GET /api/events` expose the merchant's commerce ledger: payer and payee
@@ -160,9 +160,14 @@ CORS headers at all.
 - **It does not provide multi-tenancy, RBAC or policy controls.**
 - **It does not defend against a compromised host.** SQLite receipts and process
   memory are as safe as the machine the gateway runs on.
-- **It does not guarantee delivery after settlement.** A backend failure after a
-  successful payment is possible; it is recorded as an event and a payment
-  attempt, and reconciliation is the merchant's responsibility.
+- **Payment and backend delivery can diverge.** With x402 `upfront` or MPP,
+  settlement happens first. If the backend then fails, the payment remains
+  settled; the gateway records the attempt and an event for reconciliation.
+  It does not issue a refund. With the default x402 `authorization` flow,
+  the backend runs first. A backend failure prevents settlement, but a later
+  settlement refusal or uncertain outcome withholds the response even
+  though the backend ran. Use `upfront` when a backend call has side effects
+  that must follow payment.
 - **It cannot always tell you whether a payment settled.** A timeout or
   dropped connection during settlement can leave no verdict, even if a
   transaction was broadcast. The gateway records the attempt as
@@ -176,7 +181,8 @@ CORS headers at all.
   logged. A missing receipt therefore does not prove a resource was not
   delivered.
 - **A reserved payment authorization is never released.** If settlement fails,
-  that authorization cannot be reused at this gateway even when nothing moved
+  or the backend fails before an `authorization`-flow payment settles, that
+  authorization cannot be reused at this gateway even when nothing moved
   on-chain. This is deliberate, since releasing it would reopen a replay
   window, but a buyer hit by a transient error must sign a fresh authorization.
   An AP2 mandate is handed back in the narrower case where settlement provably
@@ -185,12 +191,13 @@ CORS headers at all.
   checks run **before** any payment is taken: missing, empty, `.` and `..` path
   parameters, a bound input group that is not an object, input keys that
   collide with an operator-configured query parameter, and illegal configured
-  headers. Two checks run only when the backend call is made, after settlement:
-  a URL that cannot be parsed, and path parameters that resolve outside the
-  template's literal path prefix. Settlement is final and there are no
-  refunds, so a buyer can pay for a request that is never delivered. The
-  attempt is recorded as `settled` with a `backend.failed` event sharing the
-  same `requestId`, so reconciliation is possible.
+  headers. Two checks run only when the backend call is made: a URL that cannot
+  be parsed, and path parameters that resolve outside the template's literal
+  path prefix. With x402 `upfront` or MPP, the call follows settlement. If
+  either check fails, the buyer may have paid for a response that was never
+  delivered. The gateway records a `settled` attempt and a `backend.failed`
+  event under the same `requestId`. With the default x402 `authorization` flow,
+  a failure at this stage prevents settlement.
 - **It does not rate limit anything.** Free resources are an unauthenticated
   proxy to your backend at whatever rate a caller chooses. Rate limiting,
   quotas and abuse controls belong in your API or your edge.

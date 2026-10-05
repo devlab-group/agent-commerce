@@ -100,13 +100,37 @@ describe('createRequirement', () => {
     expect(accepted['payTo']).toBe(PAY_TO);
     expect(accepted['asset']).toBe(ASSET);
     // Explicit EIP-712 values avoid a token version() call
-    // assetTransferMethod selects EIP-3009; paymentFlow declares settlement before delivery
+    // assetTransferMethod selects EIP-3009; the default `authorization` flow
+    // is not declared, as x402 v2 section 6.1 allows
     expect(accepted['extra']).toEqual({
       name: 'MockUSDC',
       version: '2',
       assetTransferMethod: 'eip3009',
-      paymentFlow: 'upfront',
     });
+    // This marker asks the pipeline to settle after the backend.
+    expect(requirement.metadata).toEqual({ settleAfterBackend: true });
+  });
+
+  it('declares upfront and requests settlement before the backend', async () => {
+    const requirement = await makeProvider({ paymentFlow: 'upfront' }).createRequirement(
+      paymentContext(),
+    );
+
+    const accepted = requirement.challenge.accepts[0] as { extra: Record<string, unknown> };
+    expect(accepted.extra['paymentFlow']).toBe('upfront');
+    expect(requirement.metadata).toEqual({ settleAfterBackend: false });
+  });
+
+  it('lets one resource override the flow', async () => {
+    const provider = makeProvider({ resourcePaymentFlows: { 'demo.report': 'upfront' } });
+
+    const overridden = await provider.createRequirement(paymentContext());
+    const other = await provider.createRequirement(
+      paymentContext({ resource: { ...paymentContext().resource, id: 'other.report' } }),
+    );
+
+    expect(overridden.metadata).toEqual({ settleAfterBackend: false });
+    expect(other.metadata).toEqual({ settleAfterBackend: true });
   });
 
   it('carries the v2 PaymentRequired envelope, matching the accepts it lists', async () => {

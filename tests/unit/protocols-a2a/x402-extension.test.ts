@@ -101,6 +101,16 @@ describe('payment messages', () => {
     });
   });
 
+  it('preserves a backend error code when no payment settled', () => {
+    const error = new CommerceError('BACKEND_ERROR', 'Backend failed');
+
+    expect(paymentFailureMetadata(error)).toMatchObject({
+      'x402.payment.status': 'payment-failed',
+      'x402.payment.error': 'backend_error',
+      'x402.payment.receipts': [{ success: false, errorReason: 'backend_error' }],
+    });
+  });
+
   it('keeps settlement_pending for a settlement without a verdict', () => {
     const error = new CommerceError('PAYMENT_SETTLEMENT_FAILED', 'Settlement unconfirmed', {
       details: { settlementUncertain: true, transactionHash: '0xdef' },

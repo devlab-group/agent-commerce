@@ -46,16 +46,19 @@ CanonicalRequest
   -> verify and reserve mandate        AUTHORIZATION_*
   -> reserve payment replay key        PAYMENT_REPLAYED
        reservation failure -> release mandate
-  -> settle payment
-  -> consume, release or mark the mandate uncertain after settlement
-  -> call merchant backend
+  -> settle payment, then call merchant backend     (x402 upfront, MPP)
+     or call merchant backend, then settle payment  (x402 authorization)
+       backend failure before settlement -> release mandate
+  -> finalize mandate from the payment or backend outcome
   -> store receipt with mandate digest
 ```
 
 Payment verification runs before mandate reservation and must not move funds.
 The mandate is reserved before settlement to block concurrent reuse. If
 recording the payment attempt fails, the pipeline releases the mandate before
-settlement; otherwise the settlement outcome determines its final state.
+settlement. A backend failure under x402 `authorization` also releases the
+mandate because settlement has not started. Otherwise the settlement outcome
+determines its final state.
 
 ## Agent Commerce checkout profile
 
