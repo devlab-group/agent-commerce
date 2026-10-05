@@ -497,6 +497,20 @@ describe('createGateway HTTP surface', () => {
     expect(res.headers['cache-control']).toBe('no-store');
     expect(res.headers[PAYMENT_RESPONSE_HEADER]).toBeUndefined();
 
+    // A v1 client's `X-PAYMENT` proof is not read; the challenge names why
+    const v1 = await gateway.server.inject({
+      method: 'POST',
+      url: '/api/resources/market_report/invoke',
+      headers: { 'x-payment': 'v1-proof' },
+      payload: {},
+    });
+    expect(v1.statusCode).toBe(402);
+    expect(decodeHeader(v1.headers[PAYMENT_REQUIRED_HEADER])).toEqual({
+      ...challengeEnvelope,
+      error: 'invalid_x402_version',
+    });
+    expect(backendCalls).toBe(0);
+
     // Control: the same backend is reachable once a proof is attached
     const paid = await gateway.server.inject({
       method: 'POST',
@@ -579,12 +593,14 @@ describe('createGateway HTTP surface', () => {
     expect(res.statusCode).toBe(200);
     expect(captured[0]?.payment).toEqual({ method: 'x402', payload: 'proof-payload' });
     // MCP and A2A read the same ordered registry
+    expect(gateway.resources.get('market_report')?.paymentMethods).toEqual(['x402', 'mpp']);
+    // The public listing names only rails a provider backs
     const listed = (await gateway.server.inject({ method: 'GET', url: '/api/resources' })).json();
     const report = listed.resources.find((r: { id: string }) => r.id === 'market_report');
-    expect(report.paymentMethods).toEqual(['x402', 'mpp']);
+    expect(report.paymentMethods).toEqual(['x402']);
   });
 
-  it('drops an X-PAYMENT proof for a resource with no configured payment methods rather than inventing a rail', async () => {
+  it('drops a proof when no payment rail is configured', async () => {
     const gateway = await buildGateway();
     const captured = spyOnPipelineExecute(gateway);
 

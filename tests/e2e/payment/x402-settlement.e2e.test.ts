@@ -428,11 +428,13 @@ describe('x402 settlement - real local chain', () => {
     const challenged = await invoke();
     const offered = (challenged.body['payment'] as { accepts: Record<string, unknown>[] })
       .accepts[0];
+    // The proof echoes the other token in `accepted`, so it is refused before
+    // the facilitator sees it
     const proofForOtherAsset = await createPaymentProof({
       buyerPrivateKey: deployment.buyer.privateKey,
       accepts: { ...offered, asset: otherToken.asset },
     });
-    await expectRefused(proofForOtherAsset, 'invalid_exact_evm_signature');
+    await expectRefused(proofForOtherAsset, 'invalid_payment_requirements');
   });
 
   it('8. replay: replayKey is stable across presentations, the second settlement moves no funds', async () => {

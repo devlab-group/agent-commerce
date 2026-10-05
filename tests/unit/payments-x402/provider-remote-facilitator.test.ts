@@ -5,13 +5,19 @@
  * code. The SDK's HTTP transport is not retested.
  */
 
+import { x402Client } from '@x402/core/client';
 import { FacilitatorResponseError } from '@x402/core/http';
-import { VerifyError } from '@x402/core/types';
+import { type PaymentRequired, SettleError, VerifyError } from '@x402/core/types';
+import { registerExactEvmScheme } from '@x402/evm/exact/client';
+import { privateKeyToAccount } from 'viem/accounts';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CommerceResource, PaymentContext } from '../../../src/core';
 import { isCommerceError } from '../../../src/core';
 import { createPaymentProof } from '../../../src/payments/x402/client';
-import { createX402PaymentProvider } from '../../../src/payments/x402/provider';
+import {
+  createX402PaymentProvider,
+  type X402ProviderOptions,
+} from '../../../src/payments/x402/provider';
 
 const verifyMock = vi.fn();
 const settleMock = vi.fn();
@@ -65,8 +71,12 @@ function paymentContext(): PaymentContext {
   };
 }
 
-function makeProvider(auth: { type: 'none' } | { type: 'bearer'; token: string }) {
+function makeProvider(
+  auth: { type: 'none' } | { type: 'bearer'; token: string },
+  overrides: Partial<X402ProviderOptions> = {},
+) {
   return createX402PaymentProvider({
+    ...overrides,
     network: 'eip155:84532',
     rpcUrl: RPC_URL,
     asset: ASSET,
@@ -257,6 +267,77 @@ describe('provider - remote facilitator', () => {
     );
   });
 
+  async function verifiedProof() {
+    const provider = makeProvider({ type: 'none' });
+    const { requirement, payload } = await proofFor(provider);
+    verifyMock.mockResolvedValueOnce({ isValid: true });
+    const verification = await provider.verify({
+      requestId: 'req-1',
+      resource: RESOURCE,
+      requirement,
+      submission: { method: 'x402', payload },
+    });
+    return { provider, requirement, payload, verification };
+  }
+
+  it('rejects a settlement the facilitator refused with a 400 and a reason', async () => {
+    // The SDK throws a non-2xx settle body as `SettleError` instead of returning it
+    const { provider, requirement, payload, verification } = await verifiedProof();
+    settleMock.mockRejectedValueOnce(
+      new SettleError(400, {
+        success: false,
+        errorReason: 'insufficient_funds',
+        transaction: '',
+        network: 'eip155:84532',
+      }),
+    );
+
+    const result = await provider.settle({
+      requestId: 'req-1',
+      resource: RESOURCE,
+      requirement,
+      submission: { method: 'x402', payload },
+      verification,
+    });
+    expect(result.status).toBe('rejected');
+    expect(result.rejectionReason).toBe('insufficient_funds');
+    expect(result.externalReference).toBeUndefined();
+  });
+
+  it.each([
+    [401, 'insufficient_funds', '', 'our credential'],
+    [403, 'insufficient_funds', '', 'our credential'],
+    [429, 'insufficient_funds', '', 'rate limiting'],
+    [500, 'insufficient_funds', '', 'an outage'],
+    [400, undefined, '', 'no reason named'],
+    [400, 'insufficient_funds', `0x${'ab'.repeat(32)}`, 'a transaction that may have moved funds'],
+  ])(
+    'treats a settle %i with reason %s and transaction "%s" as unavailable (%s)',
+    async (status, errorReason, transaction, _why) => {
+      const { provider, requirement, payload, verification } = await verifiedProof();
+      settleMock.mockRejectedValueOnce(
+        new SettleError(status, {
+          success: false,
+          ...(errorReason !== undefined ? { errorReason } : {}),
+          transaction,
+          network: 'eip155:84532',
+        }),
+      );
+
+      await expect(
+        provider.settle({
+          requestId: 'req-1',
+          resource: RESOURCE,
+          requirement,
+          submission: { method: 'x402', payload },
+          verification,
+        }),
+      ).rejects.toSatisfy(
+        (err: unknown) => isCommerceError(err) && err.code === 'PAYMENT_PROVIDER_UNAVAILABLE',
+      );
+    },
+  );
+
   it('still rejects a payment the facilitator judged invalid', async () => {
     const provider = makeProvider({ type: 'none' });
     const { requirement, payload } = await proofFor(provider);
@@ -271,4 +352,164 @@ describe('provider - remote facilitator', () => {
     expect(result.status).toBe('rejected');
     expect(result.rejectionReason).toBe('insufficient_funds');
   });
+});
+
+describe('provider - a proof must echo the offer it pays', () => {
+  beforeEach(() => {
+    verifyMock.mockReset();
+  });
+
+  type Decoded = {
+    accepted: Record<string, unknown> & { extra: Record<string, unknown> };
+    resource?: { url: string };
+  };
+  type Flow = NonNullable<X402ProviderOptions['paymentFlow']>;
+
+  async function verifyTampered(flow: Flow, tamper: (decoded: Decoded) => void) {
+    const provider = makeProvider({ type: 'none' }, { paymentFlow: flow });
+    const { requirement, payload } = await proofFor(provider);
+    const decoded = JSON.parse(Buffer.from(payload, 'base64').toString('utf8')) as Decoded;
+    tamper(decoded);
+    verifyMock.mockResolvedValue({ isValid: true });
+    return provider.verify({
+      requestId: 'req-1',
+      resource: RESOURCE,
+      requirement,
+      submission: {
+        method: 'x402',
+        payload: Buffer.from(JSON.stringify(decoded)).toString('base64'),
+      },
+    });
+  }
+
+  const mismatches: ReadonlyArray<[string, Flow, (decoded: Decoded) => void]> = [
+    [
+      'amount',
+      'authorization',
+      (d) => {
+        d.accepted['amount'] = '9999';
+      },
+    ],
+    [
+      'asset',
+      'authorization',
+      (d) => {
+        d.accepted['asset'] = '0x2222222222222222222222222222222222222222';
+      },
+    ],
+    [
+      'payTo',
+      'authorization',
+      (d) => {
+        d.accepted['payTo'] = '0x2222222222222222222222222222222222222222';
+      },
+    ],
+    [
+      'extra.name',
+      'authorization',
+      (d) => {
+        d.accepted.extra['name'] = 'OtherUSDC';
+      },
+    ],
+    [
+      'extra.assetTransferMethod',
+      'authorization',
+      (d) => {
+        delete d.accepted.extra['assetTransferMethod'];
+      },
+    ],
+    [
+      'extra.paymentFlow of an upfront offer on an authorization resource',
+      'authorization',
+      (d) => {
+        d.accepted.extra['paymentFlow'] = 'upfront';
+      },
+    ],
+    [
+      'extra.paymentFlow of an authorization offer on an upfront resource',
+      'upfront',
+      (d) => {
+        delete d.accepted.extra['paymentFlow'];
+      },
+    ],
+    [
+      'resource.url',
+      'authorization',
+      (d) => {
+        d.resource = { url: 'resource://agent-commerce/other' };
+      },
+    ],
+  ];
+
+  it.each(mismatches)(
+    'refuses a mismatched %s without calling the facilitator',
+    async (_field, flow, tamper) => {
+      const result = await verifyTampered(flow, tamper);
+      expect(result.status).toBe('rejected');
+      expect(result.rejectionReason).toBe('invalid_payment_requirements');
+      expect(verifyMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    [
+      'scheme',
+      'unsupported_scheme',
+      (d: Decoded) => {
+        d.accepted['scheme'] = 'upto';
+      },
+    ],
+    [
+      'network',
+      'invalid_network',
+      (d: Decoded) => {
+        d.accepted['network'] = 'eip155:8453';
+      },
+    ],
+  ])('refuses a mismatched %s without calling the facilitator', async (_field, reason, tamper) => {
+    const result = await verifyTampered('authorization', tamper);
+    expect(result.status).toBe('rejected');
+    expect(result.rejectionReason).toBe(reason);
+    expect(verifyMock).not.toHaveBeenCalled();
+  });
+
+  it('accepts differences the SDK resource server also ignores, and address case', async () => {
+    const result = await verifyTampered('authorization', (d) => {
+      d.accepted['payTo'] = String(d.accepted['payTo']).toLowerCase();
+      d.accepted['asset'] = String(d.accepted['asset']).toLowerCase();
+      d.accepted.extra['clientNote'] = 'added by the client';
+    });
+    expect(result.status).toBe('verified');
+  });
+
+  it.each(['authorization', 'upfront'] as const)(
+    'accepts a payload built by the SDK client under the %s flow',
+    async (flow) => {
+      const provider = makeProvider({ type: 'none' }, { paymentFlow: flow });
+      const requirement = await provider.createRequirement(paymentContext());
+      const client = new x402Client();
+      registerExactEvmScheme(client, {
+        signer: privateKeyToAccount(BUYER_PRIVATE_KEY),
+        networks: ['eip155:84532'],
+      });
+      client.setSpendControls(false); // the test token is not in the SDK's list
+      const sdkPayload = await client.createPaymentPayload(
+        requirement.challenge.envelope as unknown as PaymentRequired,
+      );
+      // The SDK client echoes the challenge's resource
+      expect(sdkPayload.resource?.url).toMatch(/^resource:\/\/agent-commerce\//);
+      verifyMock.mockResolvedValueOnce({ isValid: true });
+
+      const result = await provider.verify({
+        requestId: 'req-1',
+        resource: RESOURCE,
+        requirement,
+        submission: {
+          method: 'x402',
+          payload: Buffer.from(JSON.stringify(sdkPayload)).toString('base64'),
+        },
+      });
+      expect(result.status).toBe('verified');
+    },
+  );
 });

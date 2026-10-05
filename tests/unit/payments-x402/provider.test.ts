@@ -70,7 +70,7 @@ describe('descriptor', () => {
     // What the provider does not implement must be listed
     expect(provider.descriptor.unsupported).toContain('svm');
     expect(provider.descriptor.unsupported).toContain('permit2');
-    expect(provider.descriptor.unsupported).toContain('deferred scheme');
+    expect(provider.descriptor.unsupported).toContain('batch-settlement scheme');
     // The descriptor names the deployment, because chain id 84532 alone cannot
     // tell local from Base Sepolia
     expect(provider.descriptor.capabilities).toContain('local-facilitator');
@@ -417,7 +417,7 @@ describe('verify - rejects before touching the network', () => {
       submission: { method: 'x402', payload: proof },
     });
     expect(result.status).toBe('rejected');
-    expect(result.rejectionReason).toBe('invalid_payload');
+    expect(result.rejectionReason).toBe('invalid_x402_version');
   });
 
   it('rejects a Permit2 payload - the challenge asks for EIP-3009', async () => {

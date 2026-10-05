@@ -41,6 +41,9 @@ import { toPublicResource } from './public-resource';
 import { createReadinessProbe } from './readiness';
 import { buildWellKnownDocument } from './well-known';
 
+// Legacy x402 proof header; this gateway accepts v2 only
+const X402_V1_PAYMENT_HEADER = 'x-payment';
+
 export interface RegisterRoutesOptions {
   readonly server: FastifyInstance;
   readonly config: GatewayConfig;
@@ -86,8 +89,14 @@ export function registerRoutes(options: RegisterRoutesOptions): void {
     }),
   );
 
+  // List provider-backed rails in challenge order
+  const backed = (method: string) =>
+    options.paymentProviders.some((provider) => provider.name === method);
   server.get('/api/resources', async () => ({
-    resources: options.resources.list().map(toPublicResource),
+    resources: options.resources.list().map((resource) => {
+      const listed = toPublicResource(resource);
+      return { ...listed, paymentMethods: listed.paymentMethods.filter(backed) };
+    }),
   }));
 
   server.post(
@@ -204,9 +213,19 @@ async function handleInvoke(
         const challenge = envelope.payment.envelope?.['wwwAuthenticate'];
         if (typeof challenge === 'string') reply.header('www-authenticate', challenge);
       } else if (envelope.payment.envelope !== undefined) {
-        // x402 v2 clients read the challenge from this header and ignore the
-        // body, which still carries the full envelope
-        reply.header(PAYMENT_REQUIRED_HEADER, encodeHeaderDocument(envelope.payment.envelope));
+        // v2 clients read this header. A v1-only proof gets a challenge
+        // naming the unsupported version; the body keeps the full envelope.
+        const v1Only =
+          request.headers[X402_V1_PAYMENT_HEADER] !== undefined &&
+          request.headers[PAYMENT_HEADER] === undefined;
+        reply.header(
+          PAYMENT_REQUIRED_HEADER,
+          encodeHeaderDocument(
+            v1Only
+              ? { ...envelope.payment.envelope, error: 'invalid_x402_version' }
+              : envelope.payment.envelope,
+          ),
+        );
       }
       // A challenge is per-request (fresh nonce window, fresh expiry). Caching
       // one would hand a later buyer an expired offer.

@@ -11,16 +11,37 @@ import type { PaymentPayload } from '@x402/core/types';
 import { type ExactEIP3009Payload, isEIP3009Payload } from '@x402/evm';
 
 export function decodePaymentSubmission(payloadBase64: string): PaymentPayload | undefined {
-  let json: unknown;
+  const json = decodeJson(payloadBase64);
+  if (json === undefined) return undefined;
+  const result = PaymentPayloadV2Schema.safeParse(json);
+  return result.success ? (result.data as PaymentPayload) : undefined;
+}
+
+/** Read the declared version before v2 schema validation */
+export function declaredX402Version(payloadBase64: string): unknown {
+  const json = decodeJson(payloadBase64);
+  return typeof json === 'object' && json !== null
+    ? (json as Record<string, unknown>)['x402Version']
+    : undefined;
+}
+
+/**
+ * The payload as sent to a facilitator. `resource` is optional in v2 and
+ * verify() has already matched it against the offer; hosted facilitators have
+ * settled payloads without it, and none has been shown to accept this
+ * gateway's `resource://` URL
+ */
+export function withoutResource<T extends PaymentPayload>(payload: T): Omit<T, 'resource'> {
+  const { resource: _resource, ...rest } = payload;
+  return rest;
+}
+
+function decodeJson(payloadBase64: string): unknown {
   try {
-    const decoded = Buffer.from(payloadBase64, 'base64').toString('utf8');
-    json = JSON.parse(decoded);
+    return JSON.parse(Buffer.from(payloadBase64, 'base64').toString('utf8'));
   } catch {
     return undefined;
   }
-
-  const result = PaymentPayloadV2Schema.safeParse(json);
-  return result.success ? (result.data as PaymentPayload) : undefined;
 }
 
 /**
