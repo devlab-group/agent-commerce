@@ -16,11 +16,9 @@ import { AUTHORIZATION_HEADER, PAYMENT_HEADER } from '../core';
 import { createBearerCheck } from '../protocols/http';
 
 const CORS_METHODS = 'GET,POST,OPTIONS';
-// `authorization` carries bearer tokens (admin, ACP) and MPP credentials; the
-// AP2 mandate travels in its own header. Browser clients also need the MCP,
-// A2A and ACP protocol headers on the CORS preflight allowlist. ACP's
-// `signature` and `timestamp` are allowed so a signing client is not refused
-// at preflight, not because the gateway verifies them.
+// Allow payment and protocol headers in browser preflights. The gateway does
+// not verify ACP `signature` or `timestamp`. x402 fetch and axios clients also
+// send `access-control-expose-headers` on paid retries.
 const CORS_HEADERS = [
   'content-type',
   PAYMENT_HEADER,
@@ -37,6 +35,7 @@ const CORS_HEADERS = [
   'request-id',
   'signature',
   'timestamp',
+  'access-control-expose-headers',
 ].join(',');
 // Cross-origin JS sees only CORS-safelisted response headers unless they are
 // named here, so a browser client could read neither the challenge, the

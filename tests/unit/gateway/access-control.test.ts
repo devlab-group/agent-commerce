@@ -151,6 +151,7 @@ describe('buildAccessControlHook (Host and CORS only)', () => {
         'api-version',
         'idempotency-key',
         'request-id',
+        'access-control-expose-headers',
       ]),
     );
     // Browser code can read only the response headers named here: the
