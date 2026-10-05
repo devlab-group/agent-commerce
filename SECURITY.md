@@ -160,14 +160,14 @@ CORS headers at all.
 - **It does not provide multi-tenancy, RBAC or policy controls.**
 - **It does not defend against a compromised host.** SQLite receipts and process
   memory are as safe as the machine the gateway runs on.
-- **Payment and backend delivery can diverge.** With x402 `upfront` or MPP,
+- **Payment and backend delivery can diverge.** With the `upfront` flow,
   settlement happens first. If the backend then fails, the payment remains
   settled; the gateway records the attempt and an event for reconciliation.
-  It does not issue a refund. With the default x402 `authorization` flow,
-  the backend runs first. A backend failure prevents settlement, but a later
-  settlement refusal or uncertain outcome withholds the response even
-  though the backend ran. Use `upfront` when a backend call has side effects
-  that must follow payment.
+  It does not issue a refund. With the default `authorization` flow, on x402
+  and MPP alike, the backend runs first. A backend failure prevents
+  settlement, but a later settlement refusal or uncertain outcome withholds
+  the response even though the backend ran. Use `upfront` when a backend call
+  has side effects that must follow payment.
 - **It cannot always tell you whether a payment settled.** A timeout or
   dropped connection during settlement can leave no verdict, even if a
   transaction was broadcast. The gateway records the attempt as
@@ -193,10 +193,10 @@ CORS headers at all.
   collide with an operator-configured query parameter, and illegal configured
   headers. Two checks run only when the backend call is made: a URL that cannot
   be parsed, and path parameters that resolve outside the template's literal
-  path prefix. With x402 `upfront` or MPP, the call follows settlement. If
+  path prefix. With the `upfront` flow, the call follows settlement. If
   either check fails, the buyer may have paid for a response that was never
   delivered. The gateway records a `settled` attempt and a `backend.failed`
-  event under the same `requestId`. With the default x402 `authorization` flow,
+  event under the same `requestId`. With the default `authorization` flow,
   a failure at this stage prevents settlement.
 - **It does not rate limit anything.** Free resources are an unauthenticated
   proxy to your backend at whatever rate a caller chooses. Rate limiting,

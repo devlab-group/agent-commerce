@@ -80,7 +80,9 @@ MPP uses the same verification and replay checks, with these differences:
   replay key, and neither broadcasts the payment.
 - Settlement uses an x402 facilitator. MPP derives the same replay key as x402,
   so one receipt store cannot reserve the authorization through both rails.
-- Settlement always runs before the backend call, as in the x402 `upfront` flow.
+- MPP uses the same flow values and default as x402. Under `authorization`,
+  the backend must respond before the challenge expires; see
+  [MPP](protocols.md#mpp).
 
 Over HTTP, MPP uses `WWW-Authenticate`, `Authorization: Payment ...` and
 `Payment-Receipt`. See the complete [HTTP header table](protocols.md#http-surface).
@@ -114,7 +116,7 @@ to redirect them.
 | provider/RPC unavailable during verification                 | `PAYMENT_PROVIDER_UNAVAILABLE`           | no                                    |
 | settlement transaction fails                                 | `PAYMENT_SETTLEMENT_FAILED`              | no                                    |
 | backend fails before settlement (`authorization` flow)       | `BACKEND_ERROR` / `BACKEND_TIMEOUT`      | no; no payment settled                |
-| backend fails after settlement (`upfront` flow or MPP)       | `BACKEND_ERROR` / `BACKEND_TIMEOUT`      | no; payment recorded, delivery failed |
+| backend fails after settlement (`upfront` flow)              | `BACKEND_ERROR` / `BACKEND_TIMEOUT`      | no; payment recorded, delivery failed |
 
 After settlement, a backend failure needs reconciliation rather than a
 rollback. The gateway records a `settled` payment attempt and a

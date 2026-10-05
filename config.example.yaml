@@ -121,9 +121,9 @@ payments:
     payTo: ${MERCHANT_WALLET}
     # Seconds a payment challenge stays valid
     maxTimeoutSeconds: 120
-    # Settlement order: authorization (the x402 default) calls the backend
-    # first and settles only if it succeeds; upfront settles first. A paid
-    # resource can override it when x402 is the selected rail.
+    # Settlement order: authorization (the default) calls the backend first
+    # and settles only if it succeeds; upfront settles first. A paid resource
+    # can set its own paymentFlow, which applies to the rail that serves it.
     # paymentFlow: authorization
     # Who verifies the authorization and broadcasts the transfer.
     #
@@ -177,6 +177,10 @@ payments:
   #   recipient: ${MERCHANT_WALLET}
   #   realm: localhost
   #   challengeSecret: ${MPP_CHALLENGE_SECRET} # at least 32 characters
+  #   # Same values and default as x402 above. Under authorization, the
+  #   # backend must answer before the challenge expires, by default 300 s
+  #   # after it was issued (challengeTtlSeconds).
+  #   paymentFlow: authorization
   #   facilitator:
   #     mode: local
   #     signerPrivateKey: ${X402_FACILITATOR_PRIVATE_KEY}

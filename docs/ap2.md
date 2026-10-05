@@ -46,8 +46,8 @@ CanonicalRequest
   -> verify and reserve mandate        AUTHORIZATION_*
   -> reserve payment replay key        PAYMENT_REPLAYED
        reservation failure -> release mandate
-  -> settle payment, then call merchant backend     (x402 upfront, MPP)
-     or call merchant backend, then settle payment  (x402 authorization)
+  -> settle payment, then call merchant backend     (upfront)
+     or call merchant backend, then settle payment  (authorization)
        backend failure before settlement -> release mandate
   -> finalize mandate from the payment or backend outcome
   -> store receipt with mandate digest
@@ -56,7 +56,7 @@ CanonicalRequest
 Payment verification runs before mandate reservation and must not move funds.
 The mandate is reserved before settlement to block concurrent reuse. If
 recording the payment attempt fails, the pipeline releases the mandate before
-settlement. A backend failure under x402 `authorization` also releases the
+settlement. A backend failure under the `authorization` flow also releases the
 mandate because settlement has not started. Otherwise the settlement outcome
 determines its final state.
 
@@ -85,6 +85,7 @@ Claims of the issuer-signed token:
 | `iss`              | no                                 | configured mandate issuer; without it, `kid` alone selects the issuer |
 | `aud`              | only with `requireMandateAudience` | issuer's configured audience                                          |
 | `iat`              | no                                 | no further in the future than allowed clock skew                      |
+| `nbf`              | no                                 | no further in the future than allowed clock skew                      |
 | `exp`              | no                                 | checked with allowed clock skew; see `requireMandateExpiry` below     |
 | `_sd_alg`          | when present                       | `sha-256`                                                             |
 
@@ -96,14 +97,22 @@ Claims of the mandate, the disclosed element:
 | `checkout_hash` | yes      | `base64url(SHA-256(compact checkout JWT))`                |
 | `checkout_jwt`  | yes      | compact merchant checkout JWT after disclosure resolution |
 | `iat`           | no       | as on the token                                           |
+| `nbf`           | no       | as on the token                                           |
 | `exp`           | no       | as on the token; also satisfies `requireMandateExpiry`    |
 
 A top-level `vct`, such as `com.example.agent_mandate`, names the credential
-type; the verifier reads the mandate's `vct` instead. It refuses top-level
-mandate claims without `delegate_payload`, presentations with a KB-JWT,
-`~~`-joined delegation chains, and mandates carrying `cnf` as
-`unsupported_mandate_type`. The gateway cannot verify a `cnf` holder-key
-binding because it does not accept KB-JWTs.
+type; the verifier reads the mandate's `vct` instead. It refuses these as
+`unsupported_mandate_type`:
+
+- top-level mandate claims without `delegate_payload`;
+- presentations with a KB-JWT, and `~~`-joined delegation chains;
+- a delegation hop presented alone: a header `typ` of `kb+sd-jwt`,
+  `kb-sd-jwt`, `kb+sd-jwt+kb` or `kb-sd-jwt+kb`, or a top-level `sd_hash` or
+  `issuer_jwt_hash`;
+- mandates carrying `cnf`. The gateway cannot verify a `cnf` holder-key
+  binding because it does not accept KB-JWTs;
+- a closed mandate carrying `constraints`, which only open mandates use and
+  the verifier does not evaluate.
 
 AP2 makes the token's `aud`, `iat` and `exp` optional. One reference SDK vector
 omits all three. The verifier checks these claims when present. Operators can
@@ -219,19 +228,21 @@ a key from config and restarting is the available revocation mechanism.
 
 `clockSkewSeconds` defaults to 60 and cannot exceed 300. It applies to
 `exp`, `nbf` and `iat` on the signed mandate token, and to time claims on the
-checkout JWT. It also applies to `exp` and `iat` in the mandate content. An
-`iat` beyond the permitted future skew is refused. The mandate's time claims
-are optional; the checkout JWT requires `iat` and `exp`.
+checkout JWT. It also applies to `exp`, `nbf` and `iat` in the mandate content.
+An `iat` or `nbf` beyond the permitted future skew is refused as `expired`, and
+a non-numeric `exp` or `nbf`, on the token or in the content, as
+`invalid_claims`. The mandate's time claims are optional; the checkout JWT
+requires `iat` and `exp`.
 
 ## Replay states
 
 AP2 replay state lives in its own SQLite database at
 `authorization.ap2.replay.path`.
 
-The primary replay identity is a digest of the issuer-signed SD-JWT token, not
-the full presentation. Different selective-disclosure presentations therefore
-collide. The checkout JWT `jti` is also reserved, preventing two mandates
-bound to one checkout document from both settling.
+A mandate's replay reference hashes its issuer-signed SD-JWT token, so
+selective-disclosure variants share a reference. Another valid signature can
+produce a different hash for the same claims. The checkout JWT `jti` is also
+reserved, preventing either variant from settling twice.
 
 | State       | Meaning                            | Reusable?                                                     |
 | ----------- | ---------------------------------- | ------------------------------------------------------------- |
@@ -303,9 +314,16 @@ HTTP, MCP and A2A carry this envelope:
 | MCP     | reserved `_authorization` tool argument         |
 | A2A     | reserved `_authorization` input field           |
 
+AP2 v0.2.0 defines no transport carrier, so all three are this gateway's own.
+A mandate sent under another key, such as UCP's `ap2.checkout_mandate`, is not
+read.
+
 The HTTP header is limited to 8192 encoded bytes before decoding. Transport
 adapters preserve `payload` byte for byte. Reserved fields are removed before
 resource validation, hashing and backend execution.
+
+With the A2A x402 extension, a payment message can carry the mandate when the
+first message did not; see [x402 extension](protocols.md#x402-extension).
 
 ## Configuration and lifecycle
 

@@ -65,7 +65,9 @@ which config load checks against MCP's tool-name rule.
 
 Each `backend.headers` entry must be a legal HTTP header name and value. Config
 load refuses one that fetch would reject, such as a value with an embedded
-newline, and the error names the header but never prints its value.
+newline, and the error names the header but never prints its value. A
+configured header wins over the same header that ACP forwards from the agent;
+see [Headers sent to the merchant](protocols.md#headers-sent-to-the-merchant).
 
 `payments` orders the rails a paid resource accepts. The gateway selects the
 first enabled rail in that order; it does not let each request choose a rail or
@@ -137,7 +139,7 @@ OpenAPI importer generates. Config load rejects, before the gateway starts:
 
 At request time the same rules run **before pricing**, so a request that breaks
 them is refused before any payment. Two checks run only at the backend call,
-which follows settlement under the x402 `upfront` flow and MPP: a URL that
+which follows settlement under the `upfront` flow: a URL that
 cannot be parsed, and path parameters that resolve outside the template's
 literal prefix (see
 [SECURITY.md](../SECURITY.md#what-the-gateway-does-not-protect-against)).
@@ -322,13 +324,14 @@ payments:
       signerPrivateKey: ${X402_FACILITATOR_PRIVATE_KEY}
 ```
 
-`paymentFlow` sets the order of an x402 payment and the backend call. The
-default, `authorization`, settles only after the backend succeeds. If the
-backend fails, no payment settles. `upfront` settles first; a later backend
-failure leaves the payment settled. A paid resource can set its own
-`paymentFlow` when it lists `x402`; that setting applies when x402 is selected.
-Configuration rejects the field on other resources. See
-[protocols.md](protocols.md#x402) for the flow details.
+`paymentFlow` sets the order of a payment and the backend call, with the same
+values under `payments.x402` and `payments.mpp`. The default, `authorization`,
+settles only after the backend succeeds. If the backend fails, no payment
+settles. `upfront` settles first; a later backend failure leaves the payment
+settled. A resource with fixed pricing that lists `x402` or `mpp` can set its
+own `paymentFlow`, which applies to whichever rail serves it. Configuration
+rejects the field on other resources. See [protocols.md](protocols.md#x402) for
+the flow details.
 
 Startup rejects a `payTo` that is not a plausible address or is the zero
 address, and the effective destination is printed in a safe, visible form so a
@@ -355,6 +358,7 @@ payments:
     realm: api.example.com # the challenge realm, single line
     challengeSecret: ${MPP_CHALLENGE_SECRET} # minimum length 32
     challengeTtlSeconds: 300 # optional
+    paymentFlow: authorization # default; or upfront
     facilitator:
       mode: remote
       url: ${MPP_FACILITATOR_URL}

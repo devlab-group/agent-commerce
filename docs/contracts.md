@@ -61,8 +61,8 @@ This table is for navigation, not enumeration.
    authorization is verified and reserved, and `reservePaymentAttempt` succeeds.
    A provider that sets `PaymentRequirement.metadata.settleAfterBackend` to
    `true` has `settle` run after a successful backend call instead of before
-   it; the x402 `authorization` flow does. A backend failure then settles
-   nothing. A rejected or unconfirmed settlement withholds the response.
+   it; the `authorization` flow of x402 and MPP does. A backend failure then
+   settles nothing. A rejected or unconfirmed settlement withholds the response.
 5. `EventSink.emit` and event persistence must not fail a commerce flow.
 6. `HttpBackendExecutor` is the only built-in outbound HTTP path to merchant
    backends and always applies a timeout. A custom `GatewayOptions.backend`
@@ -85,7 +85,8 @@ This table is for navigation, not enumeration.
 first method with an enabled provider and does not retry another method after
 a rejection. `createGateway` lists each resource's provider-backed methods
 first, keeping declared order, so every ingress path labels a proof with the
-method the pipeline selects; `GET /api/resources` shows that order.
+method the pipeline selects. `GET /api/resources` lists only those
+provider-backed methods, so its first entry is the rail a challenge offers.
 
 ## Store no secrets
 
@@ -212,6 +213,9 @@ persistence must not fail the commerce flow.
   the pinned profile metadata and descriptor. The provider runs local checks,
   then verifies and settles through the x402 facilitator named in its options,
   using x402-compatible replay keys.
+- `MppProviderOptions` and `GatewayConfig.payments.mpp` accept optional
+  `paymentFlow` and `resourcePaymentFlows`. They use the x402 flow values and
+  default to `authorization`, which settles after a successful backend call.
 
 ## Published entry points
 
@@ -269,6 +273,10 @@ export interface X402ProviderOptions {
   /** Merchant-controlled settlement destination. */
   readonly payTo: `0x${string}`;
   readonly maxTimeoutSeconds?: number;
+  /** 'authorization' (default) settles after a successful backend call; 'upfront' first */
+  readonly paymentFlow?: X402PaymentFlow;
+  /** Per-resource overrides of `paymentFlow`, keyed by resource id */
+  readonly resourcePaymentFlows?: Readonly<Record<string, X402PaymentFlow>>;
   readonly facilitator: X402FacilitatorConfig;
   /** Must be true before mainnet settlement. */
   readonly allowMainnet?: boolean;
@@ -339,6 +347,10 @@ export interface MppProviderOptions {
   readonly challengeTtlSeconds?: number; // default 300
   /** CAIP-2 network: 'eip155:84532' (default) or 'eip155:8453' */
   readonly network?: string;
+  /** 'authorization' (default) settles after a successful backend call; 'upfront' first */
+  readonly paymentFlow?: X402PaymentFlow;
+  /** Per-resource overrides of `paymentFlow`, keyed by resource id */
+  readonly resourcePaymentFlows?: Readonly<Record<string, X402PaymentFlow>>;
   readonly clock?: Clock;
   readonly ids?: IdGenerator;
 }
@@ -582,6 +594,8 @@ export interface GatewayConfig {
       readonly assetDecimals: number;
       readonly payTo: string;
       readonly maxTimeoutSeconds: number;
+      readonly paymentFlow?: X402PaymentFlow; // default 'authorization'
+      readonly resourcePaymentFlows?: Readonly<Record<string, X402PaymentFlow>>;
       readonly facilitator: X402FacilitatorConfig;
       readonly allowMainnet?: boolean;
       readonly allowUnauthenticatedFacilitator?: boolean;
@@ -597,6 +611,8 @@ export interface GatewayConfig {
       readonly realm: string;
       readonly challengeSecret: string;
       readonly challengeTtlSeconds?: number;
+      readonly paymentFlow?: X402PaymentFlow; // default 'authorization'
+      readonly resourcePaymentFlows?: Readonly<Record<string, X402PaymentFlow>>;
       readonly facilitator: X402FacilitatorConfig;
       readonly allowMainnet?: boolean;
       readonly allowUnauthenticatedFacilitator?: boolean;

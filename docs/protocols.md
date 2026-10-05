@@ -48,8 +48,15 @@ Resources with `expose: [mcp]` become MCP tools:
 Calling an unknown tool returns JSON-RPC error `-32602`. For requests
 without modern MCP headers, malformed `tools/call` params such as a non-string
 `name` or non-object `arguments` return the same code with a short message.
-The SDK handles batches and requests carrying `Mcp-Method` or a
-`MCP-Protocol-Version` of `2026-07-28` or later.
+The SDK handles requests carrying `Mcp-Method` or a `MCP-Protocol-Version` of
+`2026-07-28` or later.
+
+Only `2025-03-26` has JSON-RPC batches. A batch whose `MCP-Protocol-Version`
+names another revision gets HTTP 400 and `-32600`; the SDK serves a batch sent
+without that header. `tools/list` is not paginated, so a `cursor` gets
+`-32602`. Under `2026-07-28` the list carries `ttlMs: 60000` and
+`cacheScope: "public"`. The adapter's own transport errors use `-32600` for a
+405 or an unreadable body and `-32603` for a 500 or 503.
 
 ### Payment over MCP
 
@@ -57,14 +64,19 @@ A paid tool accepts a proof in the gateway's `_payment` argument or the
 selected rail's MCP `_meta` carrier. The latter lets x402 and MPP clients
 use their native payment format:
 
-| Rail | Challenge                                                         | Proof                                                      | Delivered result                   |
-| ---- | ----------------------------------------------------------------- | ---------------------------------------------------------- | ---------------------------------- |
-| x402 | v2 `PaymentRequired` in `structuredContent` and `content[0].text` | `_meta["x402/payment"]`, a `PaymentPayload` object         | `_meta["x402/payment-response"]`   |
-| MPP  | `_meta["org.paymentauth/payment-required"]` with the challenges   | `_meta["org.paymentauth/credential"]`, a credential object | `_meta["org.paymentauth/receipt"]` |
+| Rail | Challenge                                                                                | Proof                                                                        | Delivered result                   |
+| ---- | ---------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | ---------------------------------- |
+| x402 | v2 `PaymentRequired` in `structuredContent`, `content[0].text` and `_meta["x402/error"]` | `_meta["x402/payment"]`, a `PaymentPayload` object or its base64 JSON string | `_meta["x402/payment-response"]`   |
+| MPP  | `_meta["org.paymentauth/payment-required"]` with the challenges                          | `_meta["org.paymentauth/credential"]`, a credential object                   | `_meta["org.paymentauth/receipt"]` |
 
-The x402 carrier follows the x402 MCP transport. The MPP credential and
-receipt carriers follow `draft-payment-transport-mcp-00`. If a call supplies
-both `_payment` and `_meta`, `_payment` takes precedence.
+The x402 MCP transport defines an object proof. The gateway also emits challenges in `_meta["x402/error"]` and accepts
+base64 string proofs used by the `cloudflare/agents` client; that client has
+not been tested here. An undecodable string gets `PAYMENT_INVALID` and a fresh challenge. The MPP
+credential and receipt carriers follow `draft-payment-transport-mcp-00`.
+
+If both carriers are present, the rail's `_meta` proof wins. A placeholder
+in `_payment` therefore cannot break a client wrapper's paid retry. Tool
+descriptions and payment-required messages name both carriers.
 
 The MPP draft uses JSON-RPC errors `-32042` for challenges and `-32043` for
 refusals. This gateway puts both in tool-result `_meta`, which `mppx` accepts
@@ -110,10 +122,12 @@ and `envelope.challenges` holds the challenge objects. A `_payment` retry
 carries the complete `Authorization: Payment ...` credential.
 
 When the pipeline supplies a retry challenge, a 402 refusal includes it in
-the rail's format. x402 adds the reason in `error`; MPP adds a `problem` with
-its problem type. An x402 settlement failure or a backend failure after settlement
-also includes `_meta["x402/payment-response"]`. Every failure retains the gateway's
-error envelope in `structuredContent`.
+the rail's format. The x402 challenge carries the reason in `error`, in both
+`structuredContent` and `_meta["x402/error"]`. MPP adds a `problem` with its
+problem type, a `detail` sentence and the reason token in `reason`. An x402
+settlement failure or a backend failure after settlement also includes
+`_meta["x402/payment-response"]`. Every failure retains the gateway's error
+envelope in `structuredContent`.
 
 For payment-required and error results, `content[0].text` is a JSON copy of
 `structuredContent`; `content[1].text` is a sentence for readers. Unexpected
@@ -134,20 +148,22 @@ settle payments or call merchant backends.
 
 **Experimental.** Enable with `protocols.a2a.enabled: true`.
 
-| Property       | Value                                                       |
-| -------------- | ----------------------------------------------------------- |
-| Binding        | JSON-RPC 2.0 over HTTP(S)                                   |
-| Method         | `SendMessage`, not legacy `message/send`                    |
-| Version header | `A2A-Version: 1.0`; patch suffixes are accepted but ignored |
-| Agent Card     | `GET /.well-known/agent-card.json`                          |
-| Default mount  | `/a2a`                                                      |
-| Task model     | synchronous; terminal except an unpaid x402 extension task  |
+| Property      | Value                                                                                                                             |
+| ------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| Binding       | JSON-RPC 2.0 over HTTP(S)                                                                                                         |
+| Method        | `SendMessage`, not legacy `message/send`                                                                                          |
+| Version       | `A2A-Version: 1.0` header, or an `A2A-Version` query parameter when the header is absent; patch suffixes are accepted but ignored |
+| Agent Card    | `GET /.well-known/agent-card.json`                                                                                                |
+| Default mount | `/a2a`                                                                                                                            |
+| Task model    | synchronous; terminal except an unpaid x402 extension task                                                                        |
 
-Resources exposed through A2A become Agent Card skills. The skill id is the
-resource id; paid skills are tagged `paid` and include their price in the
-description. A2A v1.0 `AgentSkill` has no input-schema field, so the canonical
-schema is not embedded in the card. This gateway requires at least one A2A
-resource when the adapter is enabled, so its card publishes a skill.
+Each A2A resource becomes an Agent Card skill. Paid skills have a `paid` tag
+and a price in their description. A2A v1.0 has no input-schema field for
+skills, so each skill includes an illustrative JSON call example with
+required input. The agent description explains the call shape and points to
+`<publicBaseUrl>/api/resources` for input schemas. It also names
+`input._payment` when any skill is paid. Enabling the adapter requires at
+least one A2A resource.
 
 The card has a content-based `ETag` and `Cache-Control: public, max-age=300`.
 A matching `If-None-Match` request receives `304` without a body.
@@ -182,9 +198,13 @@ A paid retry adds the same reserved field used by MCP:
 }
 ```
 
+`_payment` is this gateway's carrier, not part of A2A or of either rail. MPP
+defines no A2A binding, so `_payment` is the only way to pay an MPP skill.
+
 For a new purchase, the adapter refuses text, file, inline-byte and URL
 parts, multipart messages, non-user roles, and task or context continuation.
-A payment message can resume a pending x402 extension task.
+The text and file refusals name the expected part shape. A payment message can
+resume a pending x402 extension task.
 
 ### x402 extension
 
@@ -195,8 +215,15 @@ pay without `_payment`. The gateway uses x402 v2 documents from the
 Its examples use lowercase task states and roles, `kind` on parts, and the
 `X-A2A-Extensions` header. This gateway uses the A2A 1.0 forms:
 `TASK_STATE_INPUT_REQUIRED`, `ROLE_AGENT`, parts without `kind`, and
-`A2A-Extensions`. It echoes the header when activated. The Agent Card advertises the extension as
-optional when x402 is a skill's selected payment rail.
+`A2A-Extensions`. The Agent Card advertises the extension as optional, with
+`params: { "x402Version": 2 }`, when x402 is a skill's selected payment rail.
+
+A response carries the `A2A-Extensions` header when its task status message
+lists the extension: the input-required task, and every task answered to a
+payment message, even one sent without the header. Other responses, such as an
+MPP skill's task or a JSON-RPC error, omit it. An extension status message
+carries `contextId`, `taskId`, `extensions: [<extension URI>]` and the
+`x402.payment.*` metadata.
 
 1. An x402 paid call without a proof returns `TASK_STATE_INPUT_REQUIRED`. The status
    message carries `x402.payment.status: payment-required` and the v2
@@ -218,10 +245,23 @@ The gateway holds unpaid tasks in process memory until the payment
 requirement expires, for no longer than one hour. If the requirement has no
 expiry, the task waits ten minutes. When 256 tasks are pending, the oldest is
 evicted. A restart or a payment routed to another instance loses the task;
-the client receives `TaskNotFoundError` and must start a new purchase. A
-malformed payment message, or one whose `contextId` differs from the task's,
-returns `-32602` without consuming the task. Clients published for this
-extension URI send x402 v1 payloads over A2A 0.x; the gateway refuses them.
+the client receives `TaskNotFoundError` and must start a new purchase.
+`GetTask` and `CancelTask` also answer `TaskNotFoundError` for a pending task,
+which stays payable.
+
+These follow-ups return `-32602` and keep the task pending: a malformed payment
+message, a `contextId` that differs from the task's, a role other than
+`ROLE_USER`, and a malformed `_authorization`. Clients published for this
+extension URI send x402 v1 payloads over A2A 0.x. The 0.x role gets `-32602`,
+and an x402 v1 payload fails the task with
+`x402.payment.error: invalid_x402_version`. A failed receipt always names a
+`network`, the requirement's when the error carries none.
+
+If the first message carried no AP2 mandate, the payment message may carry one
+in a data part as `{"data": {"input": {"_authorization": {...}}}}`. It is
+verified against the stored purchase, and the rest of that part is ignored. A
+mandate from the first message takes precedence.
+
 The extension applies only to x402. An MPP resource still returns a terminal
 task.
 
@@ -235,6 +275,11 @@ These outcomes return a terminal task with one artifact:
 | Payment required on terminal path | `TASK_STATE_FAILED`    | Shared payment-required envelope                         |
 | Commerce failure                  | `TASK_STATE_FAILED`    | Shared error envelope                                    |
 
+Every `TASK_STATE_FAILED` task has a `ROLE_AGENT` status message whose text is
+the envelope's `message`; after an extension payment, the text summarizes the
+payment outcome instead. Only extension status messages carry `metadata` and
+`extensions`.
+
 With the x402 extension, an unpaid task is `TASK_STATE_INPUT_REQUIRED`; its
 payment terms are in the status message metadata. If the client declines,
 the task ends with no artifact.
@@ -247,13 +292,13 @@ The adapter returns JSON-RPC errors for invalid requests and A2A features it
 cannot serve. Alongside `-32700`, `-32600`, `-32601`, `-32602` and `-32603`, it
 uses these A2A codes:
 
-| Code     | A2A error                           | Returned for                                                          |
-| -------- | ----------------------------------- | --------------------------------------------------------------------- |
-| `-32001` | `TaskNotFoundError`                 | an unknown, expired or completed `taskId`                             |
-| `-32003` | `PushNotificationNotSupportedError` | the four push notification configuration methods                      |
-| `-32004` | `UnsupportedOperationError`         | other unsupported methods and message features listed below           |
-| `-32005` | `ContentTypeNotSupportedError`      | a text, file, inline-byte or URL part, or a non-JSON `mediaType`      |
-| `-32009` | `VersionNotSupportedError`          | an unsupported version; a missing or empty header is treated as `0.3` |
+| Code     | A2A error                           | Returned for                                                                                    |
+| -------- | ----------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `-32001` | `TaskNotFoundError`                 | an unknown, expired or completed `taskId`; `GetTask` and `CancelTask` for any id                |
+| `-32003` | `PushNotificationNotSupportedError` | the four push notification configuration methods                                                |
+| `-32004` | `UnsupportedOperationError`         | other unsupported methods and message features listed below                                     |
+| `-32005` | `ContentTypeNotSupportedError`      | a text, file, inline-byte or URL part, or a non-JSON `mediaType`                                |
+| `-32009` | `VersionNotSupportedError`          | an unsupported version; a missing header and parameter, or an empty header, is treated as `0.3` |
 
 Multipart messages, a `contextId` and non-empty `referenceTaskIds` return
 `-32004`. Missing `messageId` or a non-user role returns `-32602`. A request
@@ -297,14 +342,29 @@ match. A version upgrade adds a new snapshot rather than editing this one.
 
 | Header            | Scope                | Rule                                                                                                                                       |
 | ----------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `Authorization`   | every checkout route | `Bearer <token>`, constant-time comparison                                                                                                 |
+| `Authorization`   | every checkout route | `Bearer <token>`, constant-time comparison; a refusal is 401 with `WWW-Authenticate: Bearer`                                               |
 | `API-Version`     | every checkout route | exactly `2026-04-17`; missing and unsupported are distinct errors                                                                          |
 | `Content-Type`    | every POST           | if present, `application/json` or any media type ending in `+json`; an empty body may omit it, but a supplied non-JSON type still gets 415 |
 | `Idempotency-Key` | every POST           | 1-255 printable ASCII characters                                                                                                           |
-| `Request-Id`      | optional             | bounded and filtered; echoed on guard failures too, except the catch-all 500; separate from the gateway request id                         |
+| `Request-Id`      | optional             | bounded and filtered; echoed on every checkout response, refusals included; separate from the gateway request id                           |
 
 An absent, older, newer or malformed API version is not mapped to the supported
 snapshot.
+
+### Headers sent to the merchant
+
+The gateway forwards `Accept-Language`, `User-Agent`, `Request-Id`,
+`API-Version`, `Signature` and `Timestamp` to the merchant when present,
+printable ASCII and at most 2048 characters long. It never forwards the
+agent's `Authorization`, the caller's `Idempotency-Key`, which the derived key
+replaces, or any other caller header. A `backend.headers` entry of the same name
+wins, so an operator who wants a fixed `User-Agent` at the merchant must
+configure one.
+
+`Signature` and `Timestamp` pass through unverified. The gateway re-serializes
+the JSON body, so a merchant that verifies the raw request bytes fails; only one
+that verifies a canonical form of the parsed JSON can succeed. No signing agent
+has been tested against this path.
 
 ### Checkout operations
 
@@ -327,6 +387,13 @@ execution; an invalid request returns `400 invalid_request_body`. Successful
 merchant responses are validated before return. An invalid merchant document or
 success status outside the ACP contract becomes a safe `processing_error`; the
 merchant body is not relayed or cached.
+
+Validation accepts unknown values in the `supported` and `required` lists of
+`capabilities.interventions`, in both directions, and passes them through,
+because the capability negotiation RFC (4.6.2) says to ignore unknown
+capability values. It also accepts an unknown value of an enum whose schema
+description calls it extensible. Unknown fields, and unknown values of every
+other enum, are still refused.
 
 Completion accepts the schema's two outcomes: a completed session with an
 order, or an ordinary non-completed session without one.
@@ -360,25 +427,28 @@ The body fingerprint uses parsed JSON. Object key order and numeric spelling
 such as `1` versus `1.0` normalize; array order, type, and null versus absence
 remain distinct.
 
-| Situation                                                                  | Response                                                                                                       |
-| -------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| first request                                                              | atomically claimed before merchant execution                                                                   |
-| same key and body, still running                                           | `409 idempotency_in_flight` with `Retry-After`                                                                 |
-| same key and body, completed                                               | stored response with `Idempotent-Replayed: true`; no merchant call                                             |
-| same key, different body                                                   | `422 idempotency_conflict`; no merchant call                                                                   |
-| ACP response below 500 after the claim, including pipeline `INPUT_INVALID` | cached                                                                                                         |
-| ACP response 500 or higher after the merchant may have run                 | `409 idempotency_unresolved` on retry by default; with `merchantIdempotent`, the claim is released for a retry |
-| ACP response 500 or higher when the merchant was not called                | claim released; a clean retry may run                                                                          |
+| Situation                                                                   | Response                                                                                                       |
+| --------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| first request                                                               | atomically claimed before merchant execution                                                                   |
+| same key and body, still running                                            | `409 idempotency_in_flight` with `Retry-After`                                                                 |
+| same key and body, completed                                                | stored response with `Idempotent-Replayed: true`; no merchant call                                             |
+| same key, different body                                                    | `422 idempotency_conflict`; no merchant call                                                                   |
+| ACP response below 500 after the claim, including pipeline `INPUT_INVALID`  | cached                                                                                                         |
+| ACP response 500 or higher after the merchant may have run                  | `409 idempotency_unresolved` on retry by default; with `merchantIdempotent`, the claim is released for a retry |
+| ACP response 500 or higher when the merchant was not called or answered 429 | claim released; a clean retry may run                                                                          |
 
-The ACP response status controls finalization, not the merchant's raw status. A
-merchant 401 or 403 maps to ACP 502 and becomes unresolved, while a
-post-claim pipeline `INPUT_INVALID` maps to ACP 400 and is cached. Request-guard
-failures occur before the claim and are never stored: 404 or 405 routing,
-authentication failure, missing or invalid idempotency and API-version headers,
-an unreadable or oversized body, invalid JSON or schema, or an unsupported
-content type. A guard failure still echoes the filtered `Request-Id`, and the
-`Idempotency-Key` once that header has passed its own check. A routing 405
-sends `Allow`.
+The ACP response status controls claim finalization. The gateway treats a
+merchant 429 as unprocessed, releases the claim and returns ACP 503. Merchants
+must send 429 before side effects. A merchant 503 also maps to ACP 503 but may
+follow partial work, so its claim stays unresolved unless
+`merchantIdempotent` is set. Merchant 401 and 403 map to ACP 502 and stay
+unresolved. A post-claim pipeline `INPUT_INVALID` maps to ACP 400 and is cached.
+
+Request guards run before the claim, so their failures are never stored. These
+include routing, authentication, header, body, JSON, schema and content-type
+errors. The response echoes a filtered `Request-Id`; a POST also echoes a
+well-formed `Idempotency-Key`, even when a guard fails before checking it. A
+malformed key is never echoed, and routing 405 includes `Allow`.
 
 ACP requires a fresh attempt after a 5xx. By default, the gateway keeps the
 claim when the merchant may have acted, to avoid a duplicate order. Set
@@ -417,27 +487,32 @@ the merchant does not deduplicate.
 
 ### ACP errors
 
-| Cause                                             | Response                                                       |
-| ------------------------------------------------- | -------------------------------------------------------------- |
-| pipeline `INPUT_INVALID`                          | `400 invalid_request_body`                                     |
-| merchant 404                                      | `404 checkout_session_not_found`                               |
-| merchant 405 on cancel                            | `405 checkout_session_not_cancelable`                          |
-| merchant 405 on another operation                 | `405 method_not_allowed`                                       |
-| merchant 400 or 422                               | `422 invalid_request_body`                                     |
-| valid merchant ACP error on a relayed status      | that status, with its `type`, safe `code` and optional `param` |
-| merchant 409                                      | `409 checkout_session_conflict`                                |
-| merchant 401, 403, 5xx or another unmapped status | `502 processing_error`                                         |
-| backend timeout                                   | `504 service_unavailable`                                      |
-| load shedding                                     | `503 service_unavailable`                                      |
-| mapping, storage or unexpected payment challenge  | `500 processing_error`                                         |
+| Cause                                                     | Response                                                       |
+| --------------------------------------------------------- | -------------------------------------------------------------- |
+| pipeline `INPUT_INVALID`                                  | `400 invalid_request_body`                                     |
+| merchant 404                                              | `404 checkout_session_not_found`                               |
+| merchant 405 on cancel                                    | `405 checkout_session_not_cancelable`                          |
+| merchant 405 on another operation                         | `405 method_not_allowed`                                       |
+| merchant 400 or 422                                       | the same status, `invalid_request_body`                        |
+| valid merchant ACP error on a relayed status              | that status, with its `type`, safe `code` and optional `param` |
+| merchant 409                                              | `409 checkout_session_conflict`                                |
+| merchant 429 or 503                                       | `503 service_unavailable` with `Retry-After`                   |
+| merchant 401, 403, another 5xx or another unmapped status | `502 processing_error`                                         |
+| backend timeout                                           | `504 service_unavailable`                                      |
+| load shedding                                             | `503 service_unavailable`                                      |
+| mapping, storage or unexpected payment challenge          | `500 processing_error`                                         |
 
 ACP errors contain `type`, `code`, `message`, a safe `param` when available,
 and `supported_versions` for API-version errors. For a valid merchant ACP error
 on a relayed status, the gateway uses its `type` and a snake_case `code` of at
-most 64 characters. It also includes a bounded, printable `param` when
-present. The gateway supplies its own `message`; no other merchant body fields
-are sent to the agent. Merchant 401/403 is not presented as a failure of the
-agent's ACP bearer token.
+most 64 characters. A code starting with `idempotency_` is not relayed,
+because only the gateway issues those codes. It also includes a bounded,
+printable `param` when present. The gateway supplies its own `message`; no
+other merchant body fields are sent to the agent. Merchant 401/403 is not
+presented as a failure of the agent's ACP bearer token.
+
+`Retry-After` on a 503 for a merchant 429 or 503 is the merchant's value when
+it is whole seconds, clamped to 1-300, and 5 otherwise.
 
 Session ids such as `gid://shop/Checkout/1` are accepted when encoded as one
 URL segment. Empty ids and ASCII control characters are refused. Merchant
@@ -472,8 +547,7 @@ role; `Signature` and `Timestamp` verification; discounts and the general
 extension framework; seller-backed payment handlers; and other ACP versions.
 A `Signature` header does not replace bearer authentication.
 
-No ACP SDK ships. Conformance tests use the vendored official schema and
-examples.
+No ACP SDK ships. Conformance tests use the vendored official schema and examples.
 
 ## x402
 
@@ -487,8 +561,23 @@ available, such as `invalid_network`. The provider derives a replay key from
 the authorization, which the pipeline reserves before settlement. A successful
 settlement records the transaction hash.
 
-`payments.x402.paymentFlow` chooses when the payment settles. A resource's
-`paymentFlow` overrides it when x402 is the selected rail:
+The signature covers neither the flow nor the resource, so the proof's
+`accepted` must match the offer: amount, asset, `payTo` ignoring letter case,
+and every `extra` key the gateway sent, where an absent `extra.paymentFlow`
+means `authorization`. A `resource.url` in the proof must equal the
+challenge's. A mismatch is `invalid_payment_requirements`, refused before the
+facilitator is called. `maxTimeoutSeconds` and `extra` keys added by the client
+are not compared. The facilitator receives the payload without `resource`,
+since its `resource://` URL is the gateway's own identifier.
+
+x402 v1 is not accepted. A payload declaring an `x402Version` other than 2 is
+refused as `invalid_x402_version` on every carrier. A request carrying only the
+v1 `X-PAYMENT` header gets the 402 challenge with
+`error: "invalid_x402_version"` in `PAYMENT-REQUIRED`.
+
+`payments.x402.paymentFlow` chooses when an x402 payment settles, and
+`payments.mpp.paymentFlow` does the same for MPP. A resource's `paymentFlow`
+overrides the setting of whichever rail serves it:
 
 | Flow                      | Order                                 | Backend fails                                          | Settlement refused after backend |
 | ------------------------- | ------------------------------------- | ------------------------------------------------------ | -------------------------------- |
@@ -505,11 +594,15 @@ work before settlement. A refusal leaves that work unpaid; an uncertain
 settlement leaves its payment status unknown. In both cases, the gateway
 withholds the backend response. Use `upfront` when backend side effects must
 follow payment. Backend time counts toward `maxTimeoutSeconds`: the payment
-authorization must remain valid at settlement. MPP always settles before the
-backend call.
+authorization must remain valid at settlement.
 
-Unsupported: SVM, Permit2, `upto`, `deferred`, multi-asset routing and
-dynamic pricing.
+A backend failure under `authorization` still consumes the authorization at
+this gateway, although its nonce stays unused on chain. Presenting the same
+proof again returns 402 with `invalid_exact_evm_nonce_already_used`; the client
+signs a fresh authorization.
+
+Unsupported: SVM, Permit2, the `upto`, `batch-settlement` and `auth-capture`
+schemes, multi-asset routing and dynamic pricing.
 
 Facilitator authentication supports `none`, `bearer` and `cdp`; config rejects
 other auth types. Remote mode works on Base Sepolia. Config accepts local mode
@@ -549,10 +642,27 @@ payment proof travels in the request body.
 MPP and x402 derive the same replay identity for the same EIP-3009
 authorization, so reuse across rails collides in one receipt store.
 
-Over HTTP, MPP verification, replay, settlement, and provider errors use
-`application/problem+json` and the core draft's problem types. The gateway
-keeps `code`, `message`, and `details` as extension members. A successful
-`Payment-Receipt` includes `challengeId` and `chainId`.
+`payments.mpp.paymentFlow` takes the [x402 flow values](#x402), with the same
+`authorization` default. Under `authorization`, backend time counts toward the
+challenge lifetime, `challengeTtlSeconds` (default 300), because `mppx` signs
+`validBefore` equal to the challenge's `expires`. If the backend outlasts the
+remaining window, settlement is refused and the response withheld, leaving the
+backend's work unpaid as with x402. Use `upfront` for a backend with side
+effects.
+
+Over HTTP, the unpaid 402 and MPP verification, replay, settlement, and
+provider errors use `application/problem+json` and the core draft's problem
+types; the unpaid one is `payment-required`. Envelope members such as `code`,
+`message`, and `details` stay as extension members, and `status` is the numeric
+HTTP status. `detail` is a sentence; the reason token stays in `message` and
+`details.reason`. A successful `Payment-Receipt` includes `challengeId` and
+`chainId`.
+
+A credential whose challenge already paid for a request is `invalid-challenge`
+with reason `challenge_already_used`. The gateway learns this from the
+facilitator's reason or the token's `authorizationState`. When neither shows
+it, including when that read fails, the facilitator's reason is reported
+instead, under `verification-failed`.
 
 Terminate TLS in front of deployed MPP endpoints. The core draft forbids
 issuing challenges over plain HTTP.
