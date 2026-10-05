@@ -441,8 +441,13 @@ describe('A2A request limits and lifecycle', () => {
     const padded = (bytes: number) =>
       sendMessagePayload({ resource: 'market_report', input: { symbol: 'x'.repeat(bytes) } });
 
-    const { body } = await post(adapter, padded(256 * 1024));
-    expect(body.error?.code).toBe(-32700);
+    // 413 and -32600, as the gateway mount answers in front of the adapter
+    const { status, body } = await post(adapter, padded(256 * 1024));
+    expect(status).toBe(413);
+    expect(body.error).toMatchObject({
+      code: -32600,
+      message: expect.stringContaining('byte limit'),
+    });
     expect(execute).not.toHaveBeenCalled();
 
     // The same call under the cap executes

@@ -234,6 +234,18 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
       }
 
       const read = await readCappedBody(req, MAX_REQUEST_BODY_BYTES);
+      if (read.kind === 'too-large') {
+        this.writeJson(
+          res,
+          413,
+          jsonRpcError(
+            null,
+            JSONRPC_INVALID_REQUEST,
+            `Request body exceeds the ${MAX_REQUEST_BODY_BYTES}-byte limit.`,
+          ),
+        );
+        return;
+      }
       if (read.kind !== 'ok') {
         this.writeJson(
           res,
