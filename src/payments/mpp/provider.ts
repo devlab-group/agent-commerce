@@ -6,11 +6,15 @@
  * checks first, then a read-only check by an x402 facilitator. Settlement hands
  * the same signed authorization to that facilitator through an internal x402
  * provider built from these options. The MPP layer adds no signing key.
+ *
+ * Settlement follows a successful backend call unless the payment flow is
+ * `upfront`. The drafts require a confirmed transaction before a
+ * `Payment-Receipt`, not before the backend runs.
  */
 import { Challenge, Credential, Errors, Method, PaymentRequest, Receipt } from 'mppx';
 import { Methods, type Types } from 'mppx/evm';
 import { charge } from 'mppx/evm/server';
-import { getAddress, isAddress } from 'viem';
+import { createPublicClient, getAddress, http, isAddress, parseAbi } from 'viem';
 import {
   type AdapterHealth,
   type Clock,
@@ -26,8 +30,10 @@ import {
   type PaymentVerificationContext,
   systemClock,
 } from '../../core';
+import { SETTLE_AFTER_BACKEND_METADATA_KEY } from '../../core/execution/settlement-order';
 import { parseCanonicalAmount } from '../x402/amount';
 import type { X402FacilitatorConfig } from '../x402/guardrails';
+import { X402_DEFAULT_PAYMENT_FLOW, type X402PaymentFlow } from '../x402/payment-flow';
 import { createX402PaymentProvider, DEFAULT_IDS } from '../x402/provider';
 import { computeReplayKey } from '../x402/replay-key';
 import {
@@ -42,6 +48,17 @@ import { MPP_DESCRIPTOR } from './descriptor';
 import { CONTENT_DIGEST_METADATA_KEY } from './transport';
 
 const DEFAULT_CHALLENGE_TTL_SECONDS = 300;
+
+// The x402 SDK's verify reason for an EIP-3009 nonce already spent on chain
+const NONCE_ALREADY_USED = 'invalid_exact_evm_nonce_already_used';
+
+const AUTHORIZATION_STATE_ABI = parseAbi([
+  'function authorizationState(address authorizer, bytes32 nonce) view returns (bool)',
+]);
+const NONCE_READ_TIMEOUT_MS = 5_000;
+
+/** Whether the token contract has recorded `nonce` as used by `payer` */
+export type NonceUsedReader = (payer: `0x${string}`, nonce: `0x${string}`) => Promise<boolean>;
 
 export interface MppProviderOptions {
   /** Merchant-controlled settlement destination. Never gateway-owned */
@@ -72,6 +89,10 @@ export interface MppProviderOptions {
   readonly challengeTtlSeconds?: number;
   /** CAIP-2 network; accepts `eip155:84532` or `eip155:8453` and defaults to the former */
   readonly network?: string;
+  /** Same flow values as x402; `authorization` settles after the backend */
+  readonly paymentFlow?: X402PaymentFlow;
+  /** Per-resource overrides of `paymentFlow`, keyed by resource id */
+  readonly resourcePaymentFlows?: Readonly<Record<string, X402PaymentFlow>>;
   readonly clock?: Clock;
   readonly ids?: IdGenerator;
 }
@@ -155,13 +176,28 @@ export function createMppPaymentProvider(options: MppProviderOptions): PaymentPr
     ...(logger !== undefined ? { logger } : {}),
     ...(options.clock !== undefined ? { clock: options.clock } : {}),
   });
-  return createMppProviderWithSettlement(rest, settlement);
+  // One attempt: the read only names the reason for a refusal already decided
+  const chain = createPublicClient({
+    transport: http(rpcUrl, { timeout: NONCE_READ_TIMEOUT_MS, retryCount: 0 }),
+  });
+  const nonceUsed: NonceUsedReader = (payer, nonce) =>
+    chain.readContract({
+      address: options.asset,
+      abi: AUTHORIZATION_STATE_ABI,
+      functionName: 'authorizationState',
+      args: [payer, nonce],
+    });
+  return createMppProviderWithSettlement(rest, settlement, nonceUsed);
 }
 
-/** Internal seam: tests inject a settlement provider. Not exported from the `./mpp` entry */
+/**
+ * Internal seam: tests inject a settlement provider and the nonce reader. Not
+ * exported from the `./mpp` entry.
+ */
 export function createMppProviderWithSettlement(
   options: MppChallengeOptions,
   settlement: PaymentProvider,
+  nonceUsed?: NonceUsedReader,
 ): PaymentProvider {
   validateOptions(options);
   if (settlement.name !== 'x402') {
@@ -221,6 +257,12 @@ export function createMppProviderWithSettlement(
       await settlementRequirement(context);
       settlementTermsChecked = true;
     }
+    const paymentFlow =
+      options.resourcePaymentFlows?.[context.resource.id] ??
+      options.paymentFlow ??
+      X402_DEFAULT_PAYMENT_FLOW;
+    // mppx signs `validBefore` at this expiry. Under `authorization`, the
+    // backend must finish before then for settlement to proceed.
     const expires = new Date(clock.now().getTime() + ttlSeconds * 1000);
     const digest = context.metadata?.[CONTENT_DIGEST_METADATA_KEY];
     const challenge = Challenge.fromMethod(Methods.charge, {
@@ -262,6 +304,7 @@ export function createMppProviderWithSettlement(
         // objects for MCP
         envelope: { wwwAuthenticate: Challenge.serialize(challenge), challenges: [challenge] },
       },
+      metadata: { [SETTLE_AFTER_BACKEND_METADATA_KEY]: paymentFlow === 'authorization' },
     };
   }
 
@@ -306,14 +349,10 @@ export function createMppProviderWithSettlement(
       return rejected(requirement, verificationReason(error));
     }
 
+    // validateCredential proved it equals the 32-byte challenge hash
+    const nonce = (credential.payload as Types.AuthorizationPayload).nonce as `0x${string}`;
     // Match x402's key so the same authorization collides across both rails
-    const replayKey = computeReplayKey({
-      chainId,
-      asset,
-      from: payer,
-      // validateCredential proved it equals the 32-byte challenge hash
-      nonce: (credential.payload as Types.AuthorizationPayload).nonce as `0x${string}`,
-    });
+    const replayKey = computeReplayKey({ chainId, asset, from: payer, nonce });
 
     // The facilitator check runs before the pipeline reserves the replay key,
     // so an outage throws the x402 provider's retryable error and uses up
@@ -322,7 +361,17 @@ export function createMppProviderWithSettlement(
       await toX402Context(context, credential.payload as Types.AuthorizationPayload),
     );
     if (x402Verification.status !== 'verified') {
-      return rejected(requirement, x402Verification.rejectionReason ?? 'settlement_rejected');
+      // A spent challenge-hash nonce means the challenge was used. Check
+      // the token when the facilitator reports only a simulation failure;
+      // keep its reason if the token read fails.
+      const reason = x402Verification.rejectionReason;
+      const spent =
+        reason === NONCE_ALREADY_USED ||
+        ((await nonceUsed?.(payer, nonce).catch(() => false)) ?? false);
+      return rejected(
+        requirement,
+        spent ? 'challenge_already_used' : (reason ?? 'settlement_rejected'),
+      );
     }
     // A different key would settle an authorization the pipeline did not reserve
     if (x402Verification.replayKey !== replayKey) {

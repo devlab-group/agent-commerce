@@ -109,6 +109,17 @@ function substitutePathParams(url: string): string {
   return filled;
 }
 
+// The rail's settlement order and how many resources override it
+function describePaymentFlow(rail: {
+  readonly paymentFlow?: string | undefined;
+  readonly resourcePaymentFlows?: Readonly<Record<string, string>> | undefined;
+}): string {
+  const overrides = Object.keys(rail.resourcePaymentFlows ?? {}).length;
+  const overrideCount =
+    overrides > 0 ? ` (${overrides} resource ${overrides === 1 ? 'override' : 'overrides'})` : '';
+  return `paymentFlow=${rail.paymentFlow ?? 'authorization'}${overrideCount}`;
+}
+
 // Shared settlement fields; `payTo` holds x402 `payTo` or MPP `recipient`
 interface LiveX402 {
   readonly asset: string;
@@ -562,10 +573,7 @@ export async function runDoctor(
     checks.push({ name: 'Payments', status: 'INFO', detail: 'x402 not configured' });
   } else {
     const { mode, where, via } = describeSettlement(x402.network, x402.facilitator);
-    const overrides = Object.keys(x402.resourcePaymentFlows ?? {}).length;
-    const overrideCount =
-      overrides > 0 ? ` (${overrides} resource ${overrides === 1 ? 'override' : 'overrides'})` : '';
-    const flow = `paymentFlow=${x402.paymentFlow ?? 'authorization'}${overrideCount}`;
+    const flow = describePaymentFlow(x402);
     const summary = `x402 v2 (scheme=exact) enabled - ${where}, destination=${maskMiddle(x402.payTo)}, facilitator=${via}, ${flow}`;
     const live = wellKnown?.ok ? extractWellKnownX402(wellKnown.body) : undefined;
     if (sameAddress(x402.asset, PLACEHOLDER_ASSET_ADDRESS)) {
@@ -614,6 +622,7 @@ export async function runDoctor(
       `MPP ${MPP_PROFILE.intent}/${MPP_PROFILE.method}/${MPP_PROFILE.credentialType} enabled - ` +
       `${where}, asset=${MPP_PROFILE.assetSymbol} ${maskMiddle(mpp.asset)}, ` +
       `recipient=${maskMiddle(mpp.recipient)}, facilitator=${via}, ` +
+      `${describePaymentFlow(mpp)}, ` +
       `spec ${MPP_SPEC_DRAFTS.core}@${MPP_SPEC_COMMIT.slice(0, 7)}, mppx ${MPPX_VERSION}`;
     const configured = { asset: mpp.asset, network: mpp.network, payTo: mpp.recipient };
     const live = wellKnown?.ok ? extractWellKnownX402(wellKnown.body, 'mpp') : undefined;

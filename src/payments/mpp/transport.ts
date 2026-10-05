@@ -5,7 +5,7 @@
 
 import { createHash } from 'node:crypto';
 import { isRecord } from '../../core/is-record';
-import { mppProblem } from './problems';
+import { mppProblem, mppProblemDetail } from './problems';
 
 /**
  * `CanonicalRequest.metadata` key for the digest of an HTTP request body. The
@@ -32,7 +32,8 @@ export const MPP_MCP_RECEIPT_META_KEY = 'org.paymentauth/receipt';
  * Build payment-required metadata from the provider's challenge objects.
  * Return undefined if the envelope has none. The draft uses JSON-RPC error
  * -32042; this gateway puts the data in a tool result's `_meta`, which
- * `mppx` also reads. A refusal adds its Problem Details type.
+ * `mppx` also reads. A refusal adds its Problem Details, with the provider's
+ * reason token in the `reason` member.
  */
 export function mcpPaymentRequired(
   envelope: unknown,
@@ -49,7 +50,8 @@ export function mcpPaymentRequired(
           problem: {
             ...mppProblem(refusal.code, 402, reason),
             status: 402,
-            detail: refusal.detail,
+            detail: mppProblemDetail(reason, refusal.detail),
+            ...(reason !== undefined ? { reason } : {}),
           },
         }
       : {}),

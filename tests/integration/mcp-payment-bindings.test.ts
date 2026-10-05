@@ -277,7 +277,7 @@ describe('MPP MCP transport', () => {
     expect(fresh.challenges[0]?.id).not.toBe(required.challenges[0]?.id);
     expect(fresh.problem).toMatchObject({
       type: 'https://paymentauth.org/problems/verification-failed',
-      detail: 'insufficient_funds',
+      detail: expect.stringContaining('insufficient_funds'),
     });
     expect(refused._meta?.['org.paymentauth/receipt']).toBeUndefined();
     expect(facilitator.settle).not.toHaveBeenCalled();

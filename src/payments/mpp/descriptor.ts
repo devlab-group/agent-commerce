@@ -23,6 +23,8 @@ export const MPP_DESCRIPTOR: AdapterDescriptor = {
     ...MPP_NETWORKS.map((network) => `network=${network}`),
     `asset=${MPP_PROFILE.assetSymbol}`,
     'verify-before-settle',
+    'authorization-flow',
+    'upfront-flow',
     'payment-receipt',
     // HTTP request bodies only; MCP and A2A carry the proof in the body
     'challenge-digest-binding',

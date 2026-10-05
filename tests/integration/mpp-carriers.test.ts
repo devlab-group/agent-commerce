@@ -7,6 +7,7 @@
  */
 import { createHash } from 'node:crypto';
 import { Challenge, Receipt } from 'mppx';
+import { Mppx } from 'mppx/client';
 import { charge as clientCharge } from 'mppx/evm/client';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -18,7 +19,7 @@ import {
   type ReceiptStore,
 } from '../../src/core';
 import { createGateway, type GatewayInstance } from '../../src/gateway';
-import { createMppPaymentProvider } from '../../src/payments/mpp/provider';
+import { createMppPaymentProvider, type MppProviderOptions } from '../../src/payments/mpp/provider';
 import { createA2aAdapter } from '../../src/protocols/a2a';
 import { createMcpAdapter } from '../../src/protocols/mcp';
 import { createSqliteReceiptStore } from '../../src/storage/receipts';
@@ -98,6 +99,7 @@ const backend: BackendExecutor = {
 async function startGateway(
   store: ReceiptStore = createFakeStore(),
   backendExecutor: BackendExecutor = backend,
+  mpp: Partial<MppProviderOptions> = {},
 ): Promise<GatewayInstance> {
   gateway = await createGateway({
     config: config(),
@@ -116,6 +118,7 @@ async function startGateway(
           url: 'https://facilitator.example.com',
           auth: { type: 'none' },
         },
+        ...mpp,
       }),
     ],
     protocolAdapters: [createMcpAdapter(), createA2aAdapter()],
@@ -196,7 +199,64 @@ function wwwAuthenticateOf(envelope: Record<string, unknown> | undefined): unkno
   return payment?.envelope?.wwwAuthenticate;
 }
 
+const failingBackend: BackendExecutor = {
+  async call() {
+    throw new Error('backend down');
+  },
+};
+
 describe('MPP over HTTP', () => {
+  it('answers an unpaid request with a payment-required problem document', async () => {
+    const gw = await startGateway();
+
+    const challenged = await invokeHttp(gw);
+
+    expect(challenged.statusCode).toBe(402);
+    expect(challenged.headers['content-type']).toMatch(/^application\/problem\+json/);
+    expect(challenged.headers['www-authenticate']).toMatch(/^Payment /);
+    expect(challenged.json()).toMatchObject({
+      type: 'https://paymentauth.org/problems/payment-required',
+      title: 'Payment Required',
+      status: 402,
+      detail: expect.stringContaining('Payment of 0.01 USDC is required'),
+      code: 'PAYMENT_REQUIRED',
+      resourceId: 'market_report',
+      payment: { provider: 'mpp' },
+    });
+  });
+
+  it('accepts the mppx fetch retry from a problem-document challenge', async () => {
+    const gw = await startGateway();
+    const client = Mppx.create({
+      methods: [clientCharge({ account: buyer, authorization: AUTHORIZATION })],
+      polyfill: false,
+      fetch: async (input, init) => {
+        const request = new Request(input, init);
+        const res = await gw.server.inject({
+          method: 'POST',
+          url: new URL(request.url).pathname,
+          headers: Object.fromEntries(request.headers),
+          payload: await request.text(),
+        });
+        return new Response(res.body, {
+          status: res.statusCode,
+          headers: res.headers as Record<string, string>,
+        });
+      },
+    });
+
+    const paid = await client.fetch('http://gateway.test/api/resources/market_report/invoke', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    });
+
+    expect(paid.status).toBe(200);
+    expect(await paid.json()).toEqual(REPORT);
+    expect(paid.headers.get('payment-receipt')).not.toBeNull();
+    expect(facilitator.settle).toHaveBeenCalledTimes(1);
+  });
+
   it('challenges with WWW-Authenticate, accepts Authorization: Payment and returns Payment-Receipt', async () => {
     const gw = await startGateway();
 
@@ -267,8 +327,9 @@ describe('MPP over HTTP', () => {
       type: 'https://paymentauth.org/problems/verification-failed',
       title: 'Verification Failed',
       status: 402,
-      detail: 'insufficient_funds',
+      detail: 'The payment was refused: insufficient_funds.',
       code: 'PAYMENT_INVALID',
+      details: { reason: 'insufficient_funds' },
     });
     expect(refused.headers['cache-control']).toBe('no-store');
     const fresh = refused.headers['www-authenticate'];
@@ -277,8 +338,40 @@ describe('MPP over HTTP', () => {
     expect(paid.statusCode).toBe(200);
   });
 
-  it('answers a refused settlement with 402, a fresh challenge and a failed PAYMENT-RESPONSE', async () => {
+  it('reports a spent nonce as an already-used challenge', async () => {
     const gw = await startGateway();
+    const first = (await invokeHttp(gw)).headers['www-authenticate'];
+    facilitator.verify.mockResolvedValueOnce({
+      isValid: false,
+      invalidReason: 'invalid_exact_evm_nonce_already_used',
+    });
+
+    const refused = await invokeHttp(gw, { authorization: await credentialFor(first) });
+
+    expect(refused.statusCode).toBe(402);
+    expect(refused.json()).toMatchObject({
+      type: 'https://paymentauth.org/problems/invalid-challenge',
+      title: 'Invalid Challenge',
+      status: 402,
+      detail: 'The challenge has already been used for a payment.',
+      code: 'PAYMENT_INVALID',
+      details: { reason: 'challenge_already_used' },
+    });
+    const fresh = refused.headers['www-authenticate'];
+    expect(fresh).toMatch(/^Payment /);
+    expect(fresh).not.toBe(first);
+    expect(facilitator.settle).not.toHaveBeenCalled();
+  });
+
+  it('withholds the response and rechallenges after settlement refusal', async () => {
+    let backendCalls = 0;
+    const counting: BackendExecutor = {
+      async call() {
+        backendCalls += 1;
+        return { status: 200, body: REPORT, headers: {}, durationMs: 1 };
+      },
+    };
+    const gw = await startGateway(createFakeStore(), counting);
     const first = (await invokeHttp(gw)).headers['www-authenticate'];
     facilitator.settle.mockResolvedValueOnce({
       success: false,
@@ -289,11 +382,13 @@ describe('MPP over HTTP', () => {
 
     const refused = await invokeHttp(gw, { authorization: await credentialFor(first) });
 
+    expect(backendCalls).toBe(1);
     expect(refused.statusCode).toBe(402);
     expect(refused.json()).toMatchObject({
       type: 'https://paymentauth.org/problems/verification-failed',
       code: 'PAYMENT_SETTLEMENT_FAILED',
     });
+    expect(refused.json()).not.toHaveProperty('report');
     const fresh = refused.headers['www-authenticate'];
     expect(fresh).toMatch(/^Payment /);
     expect(fresh).not.toBe(first);
@@ -304,17 +399,45 @@ describe('MPP over HTTP', () => {
     expect(refused.headers['payment-receipt']).toBeUndefined();
   });
 
-  it('sends no Payment-Receipt header when the backend fails after settlement', async () => {
-    const failing: BackendExecutor = {
-      async call() {
-        throw new Error('backend down');
-      },
-    };
-    const gw = await startGateway(createFakeStore(), failing);
+  it('does not settle or reuse a credential after backend failure', async () => {
+    const store = createSqliteReceiptStore({ path: ':memory:' });
+    await store.init();
+    const gw = await startGateway(store, failingBackend);
+    const credential = await credentialFor((await invokeHttp(gw)).headers['www-authenticate']);
+
+    const failed = await invokeHttp(gw, { authorization: credential });
+
+    expect(failed.statusCode).toBe(502);
+    expect(failed.json()).toMatchObject({ code: 'BACKEND_ERROR' });
+    expect(failed.json().details ?? {}).not.toHaveProperty('payment');
+    expect(failed.headers['payment-receipt']).toBeUndefined();
+    expect(failed.headers['payment-response']).toBeUndefined();
+    expect((await store.listPaymentAttempts())[0]).toMatchObject({
+      status: 'rejected',
+      rejectionReason: 'backend_failed',
+    });
+
+    // The unspent nonce still passes the facilitator check, so the gateway's
+    // reservation is what refuses the second presentation
+    const again = await invokeHttp(gw, { authorization: credential });
+
+    expect(again.statusCode).toBe(402);
+    expect(again.json()).toMatchObject({
+      type: 'https://paymentauth.org/problems/invalid-challenge',
+      code: 'PAYMENT_REPLAYED',
+    });
+    expect(again.headers['www-authenticate']).toMatch(/^Payment /);
+    expect(facilitator.settle).not.toHaveBeenCalled();
+    await store.close();
+  });
+
+  it('reports an upfront settlement after backend failure without Payment-Receipt', async () => {
+    const gw = await startGateway(createFakeStore(), failingBackend, { paymentFlow: 'upfront' });
     const credential = await credentialFor((await invokeHttp(gw)).headers['www-authenticate']);
 
     const res = await invokeHttp(gw, { authorization: credential });
 
+    expect(facilitator.settle).toHaveBeenCalledTimes(1);
     expect(res.json()).toMatchObject({ code: 'BACKEND_ERROR' });
     // MPP puts the receipt in the error body, not a Payment-Receipt header
     expect(res.headers['payment-receipt']).toBeUndefined();
@@ -346,7 +469,8 @@ describe('MPP over HTTP', () => {
     expect(swapped.statusCode).toBe(402);
     expect(swapped.json()).toMatchObject({
       type: 'https://paymentauth.org/problems/verification-failed',
-      detail: 'body_digest_mismatch',
+      detail: 'The request body differs from the one the challenge was issued for.',
+      message: 'body_digest_mismatch',
       code: 'PAYMENT_INVALID',
     });
     expect(facilitator.settle).not.toHaveBeenCalled();

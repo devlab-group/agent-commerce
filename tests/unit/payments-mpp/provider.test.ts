@@ -365,6 +365,28 @@ describe('MPP createRequirement', () => {
     );
   });
 
+  it.each([
+    ['authorization by default', {}, true],
+    ['upfront for the rail', { paymentFlow: 'upfront' }, false],
+    [
+      'a per-resource upfront override',
+      { resourcePaymentFlows: { market_report: 'upfront' } },
+      false,
+    ],
+    [
+      'a per-resource authorization override of an upfront rail',
+      { paymentFlow: 'upfront', resourcePaymentFlows: { market_report: 'authorization' } },
+      true,
+    ],
+    ["another resource's override", { resourcePaymentFlows: { other_report: 'upfront' } }, true],
+  ] as const)(
+    'asks the pipeline to settle after the backend under %s',
+    async (_label, flow, expected) => {
+      const requirement = await requirementFor(makeProvider(flow));
+      expect(requirement.metadata).toEqual({ settleAfterBackend: expected });
+    },
+  );
+
   it('refuses a resource priced in anything but USDC', async () => {
     await expect(requirementFor(makeProvider(), paidResource(), '0.01', 'EUR')).rejects.toSatisfy(
       (error: unknown) => isCommerceError(error) && error.code === 'CONFIG_INVALID',
@@ -476,6 +498,57 @@ describe('MPP verify', () => {
       rejectionReason: 'insufficient_funds',
     });
     expect(facilitator.settle).not.toHaveBeenCalled();
+  });
+
+  it('reports a nonce the facilitator found spent as an already-used challenge', async () => {
+    const provider = makeProvider();
+    const requirement = await requirementFor(provider);
+    facilitator.verify.mockResolvedValueOnce({
+      isValid: false,
+      invalidReason: 'invalid_exact_evm_nonce_already_used',
+    });
+
+    expect(
+      await verifyWith(provider, requirement, await clientCredential(requirement)),
+    ).toMatchObject({ status: 'rejected', rejectionReason: 'challenge_already_used' });
+  });
+
+  it.each([
+    [
+      'names the challenge as used when the token contract has the nonce',
+      async () => true,
+      'challenge_already_used',
+    ],
+    [
+      "keeps the facilitator's reason when the nonce is unused",
+      async () => false,
+      'insufficient_funds',
+    ],
+    [
+      "keeps the facilitator's reason when the nonce cannot be read",
+      async () => {
+        throw new Error('rpc down');
+      },
+      'insufficient_funds',
+    ],
+  ])('after a facilitator refusal, %s', async (_label, nonceUsed, reason) => {
+    const reader = vi.fn(nonceUsed);
+    const provider = createMppProviderWithSettlement(BASE_OPTIONS, x402Settlement(), reader);
+    const requirement = await requirementFor(provider);
+    facilitator.verify.mockResolvedValueOnce({
+      isValid: false,
+      invalidReason: 'insufficient_funds',
+    });
+    const credential = await clientCredential(requirement);
+
+    expect(await verifyWith(provider, requirement, credential)).toMatchObject({
+      status: 'rejected',
+      rejectionReason: reason,
+    });
+    expect(reader).toHaveBeenCalledWith(
+      buyer.address,
+      Types.challengeHash(issuedChallenge(requirement)),
+    );
   });
 
   it('rejects when the x402 check derives another replay key', async () => {
@@ -882,35 +955,131 @@ describe('MPP settle', () => {
 });
 
 describe('MPP through the execution pipeline', () => {
-  it('delivers once, then refuses the same credential as a replay', async () => {
-    const provider = makeProvider();
-    const store = createFakeStore();
-    const pipeline = createExecutionPipeline({
-      resources: createResourceRegistry([paidResource()]),
-      paymentProviders: [provider],
-      store,
-      backend: createFakeBackendExecutor(),
-      events: store,
-      logger: createCapturingLogger(),
-      clock: createFakeClock(),
-      ids: createFakeIdGenerator(),
-    });
-    const credential = await clientCredential(await requirementFor(provider));
-    facilitator.verify.mockResolvedValue({ isValid: true });
-    facilitator.settle.mockResolvedValue(SETTLED);
-    const request = {
-      requestId: 'req-1',
+  function paidRequest(credential: string, requestId = 'req-1') {
+    return {
+      requestId,
       resourceId: 'market_report',
       input: {},
       protocol: 'http' as const,
       receivedAt: new Date().toISOString(),
       payment: { method: 'mpp' as const, payload: credential },
     };
+  }
 
-    expect(await pipeline.execute(request)).toMatchObject({ kind: 'delivered' });
-    await expect(pipeline.execute({ ...request, requestId: 'req-2' })).rejects.toSatisfy(
-      (error: unknown) => isCommerceError(error) && error.code === 'PAYMENT_REPLAYED',
+  // Records the order of backend and settlement calls
+  function pipelineFor(provider: PaymentProvider, options: { backendFails?: boolean } = {}) {
+    const calls: string[] = [];
+    const store = createFakeStore();
+    facilitator.settle.mockImplementation(async () => {
+      calls.push('settle');
+      return SETTLED;
+    });
+    const pipeline = createExecutionPipeline({
+      resources: createResourceRegistry([paidResource()]),
+      paymentProviders: [provider],
+      store,
+      backend: createFakeBackendExecutor(async () => {
+        calls.push('backend');
+        if (options.backendFails) throw new Error('backend down');
+        return { status: 200, headers: {}, body: { ok: true }, durationMs: 5 };
+      }),
+      events: store,
+      logger: createCapturingLogger(),
+      clock: createFakeClock(),
+      ids: createFakeIdGenerator(),
+    });
+    return { pipeline, store, calls };
+  }
+
+  const hasCode = (code: string) => (error: unknown) =>
+    isCommerceError(error) && error.code === code;
+
+  it('delivers once, then refuses the same credential as a replay', async () => {
+    const provider = makeProvider();
+    const { pipeline } = pipelineFor(provider);
+    const credential = await clientCredential(await requirementFor(provider));
+
+    expect(await pipeline.execute(paidRequest(credential))).toMatchObject({ kind: 'delivered' });
+    await expect(pipeline.execute(paidRequest(credential, 'req-2'))).rejects.toSatisfy(
+      hasCode('PAYMENT_REPLAYED'),
     );
     expect(facilitator.settle).toHaveBeenCalledTimes(1);
+  });
+
+  it('settles after the backend by default and issues a receipt', async () => {
+    const provider = makeProvider();
+    const { pipeline, calls } = pipelineFor(provider);
+    const credential = await clientCredential(await requirementFor(provider));
+
+    const outcome = await pipeline.execute(paidRequest(credential));
+
+    expect(calls).toEqual(['backend', 'settle']);
+    expect(outcome).toMatchObject({
+      kind: 'delivered',
+      payment: { provider: 'mpp', status: 'settled', metadata: { receipt: expect.any(String) } },
+    });
+  });
+
+  it('settles before the backend under upfront', async () => {
+    const provider = makeProvider({ paymentFlow: 'upfront' });
+    const { pipeline, calls } = pipelineFor(provider);
+    const credential = await clientCredential(await requirementFor(provider));
+
+    await pipeline.execute(paidRequest(credential));
+
+    expect(calls).toEqual(['settle', 'backend']);
+  });
+
+  it('settles nothing when the backend fails, and refuses the credential afterwards', async () => {
+    const provider = makeProvider();
+    const { pipeline, store, calls } = pipelineFor(provider, { backendFails: true });
+    const credential = await clientCredential(await requirementFor(provider));
+
+    const failed = pipeline.execute(paidRequest(credential));
+
+    await expect(failed).rejects.toSatisfy(
+      (error: unknown) =>
+        isCommerceError(error) &&
+        error.code === 'BACKEND_ERROR' &&
+        error.details?.['payment'] === undefined,
+    );
+    expect(await store.listPaymentAttempts()).toMatchObject([
+      { status: 'rejected', rejectionReason: 'backend_failed' },
+    ]);
+    await expect(pipeline.execute(paidRequest(credential, 'req-2'))).rejects.toSatisfy(
+      (error: unknown) =>
+        isCommerceError(error) && error.code === 'PAYMENT_REPLAYED' && error.httpStatus === 402,
+    );
+    expect(calls).toEqual(['backend']);
+  });
+
+  it('keeps the payment settled when the backend fails under upfront', async () => {
+    const provider = makeProvider({ paymentFlow: 'upfront' });
+    const { pipeline, store, calls } = pipelineFor(provider, { backendFails: true });
+    const credential = await clientCredential(await requirementFor(provider));
+
+    await expect(pipeline.execute(paidRequest(credential))).rejects.toSatisfy(
+      hasCode('BACKEND_ERROR'),
+    );
+
+    expect(calls).toEqual(['settle', 'backend']);
+    expect(await store.listPaymentAttempts()).toMatchObject([{ status: 'settled' }]);
+  });
+
+  it('withholds the response when settlement is not confirmed after the backend ran', async () => {
+    const provider = makeProvider();
+    const { pipeline, store, calls } = pipelineFor(provider);
+    facilitator.settle.mockRejectedValueOnce(new Error('The operation timed out'));
+    const credential = await clientCredential(await requirementFor(provider));
+
+    await expect(pipeline.execute(paidRequest(credential))).rejects.toSatisfy(
+      (error: unknown) =>
+        isCommerceError(error) &&
+        error.code === 'PAYMENT_SETTLEMENT_FAILED' &&
+        error.details?.['settlementUncertain'] === true,
+    );
+
+    expect(calls).toEqual(['backend']);
+    expect(await store.listPaymentAttempts()).toMatchObject([{ status: 'settlement-uncertain' }]);
   });
 });

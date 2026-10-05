@@ -57,6 +57,10 @@ export function createConfiguredPaymentProviders(
         ...(mpp.allowUnauthenticatedFacilitator !== undefined
           ? { allowUnauthenticatedFacilitator: mpp.allowUnauthenticatedFacilitator }
           : {}),
+        ...(mpp.paymentFlow !== undefined ? { paymentFlow: mpp.paymentFlow } : {}),
+        ...(mpp.resourcePaymentFlows !== undefined
+          ? { resourcePaymentFlows: mpp.resourcePaymentFlows }
+          : {}),
         logger,
       }),
     );

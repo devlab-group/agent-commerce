@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mppProblem } from '../../../src/payments/mpp/problems';
+import { mppProblem, mppProblemDetail } from '../../../src/payments/mpp/problems';
 
 const type = (name: string) => `https://paymentauth.org/problems/${name}`;
 
@@ -9,6 +9,8 @@ describe('mppProblem', () => {
     ['PAYMENT_INVALID', 402, 'invalid_payload', 'malformed-credential'],
     ['PAYMENT_INVALID', 402, 'challenge_not_issued', 'invalid-challenge'],
     ['PAYMENT_INVALID', 402, 'wrong_resource', 'invalid-challenge'],
+    ['PAYMENT_INVALID', 402, 'challenge_already_used', 'invalid-challenge'],
+    ['PAYMENT_REQUIRED', 402, undefined, 'payment-required'],
     ['PAYMENT_INVALID', 402, 'challenge_expired', 'payment-expired'],
     ['PAYMENT_INVALID', 402, 'authorization_expired', 'payment-expired'],
     ['PAYMENT_INVALID', 402, 'wrong_nonce', 'verification-failed'],
@@ -28,5 +30,32 @@ describe('mppProblem', () => {
       type: type('verification-failed'),
       title: 'Verification Failed',
     });
+  });
+
+  it('titles the unpaid challenge Payment Required', () => {
+    expect(mppProblem('PAYMENT_REQUIRED', 402).title).toBe('Payment Required');
+  });
+});
+
+describe('mppProblemDetail', () => {
+  it('describes a known reason in a sentence', () => {
+    expect(mppProblemDetail('wrong_nonce', 'fallback')).toBe(
+      'The authorization nonce is not derived from the challenge.',
+    );
+  });
+
+  it('quotes a reason it has no sentence for, without reading Object.prototype', () => {
+    expect(mppProblemDetail('insufficient_funds', 'fallback')).toBe(
+      'The payment was refused: insufficient_funds.',
+    );
+    expect(mppProblemDetail('constructor', 'fallback')).toBe(
+      'The payment was refused: constructor.',
+    );
+  });
+
+  it('keeps the error message when there is no reason', () => {
+    expect(mppProblemDetail(undefined, 'Settlement could not be confirmed')).toBe(
+      'Settlement could not be confirmed',
+    );
   });
 });

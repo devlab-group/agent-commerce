@@ -376,6 +376,8 @@ const MppSchema = z
     realm: z.string().min(1),
     challengeSecret: z.string().min(1),
     challengeTtlSeconds: NumberOrString.optional(),
+    // Same values and default as `payments.x402.paymentFlow`
+    paymentFlow: z.enum(X402_PAYMENT_FLOWS).optional(),
     facilitator: FacilitatorSchema,
     // Real funds. Never defaulted; see src/payments/x402/guardrails.ts
     allowMainnet: BooleanOrString.optional(),
@@ -535,6 +537,10 @@ export interface GatewayConfig {
       readonly realm: string;
       readonly challengeSecret: string;
       readonly challengeTtlSeconds?: number;
+      /** Defaults to `authorization`: settle after a successful backend call */
+      readonly paymentFlow?: X402PaymentFlow;
+      /** Resources whose `paymentFlow` overrides the rail's, by resource id */
+      readonly resourcePaymentFlows?: Readonly<Record<string, X402PaymentFlow>>;
       readonly facilitator: X402FacilitatorConfig;
       readonly allowMainnet?: boolean;
       readonly allowUnauthenticatedFacilitator?: boolean;
@@ -758,16 +764,17 @@ function normalize(raw: RawConfig): GatewayConfig {
     normalizeResource(id, entry, protocols, x402, mpp, ap2),
   );
   // CommerceResource has no payment-flow field, so the overrides travel with
-  // the x402 rail that applies them
+  // each rail, and the one selected for a request applies them
   const resourcePaymentFlows = Object.fromEntries(
     Object.entries(raw.resources).flatMap(([id, entry]) =>
       entry.paymentFlow !== undefined ? [[id, entry.paymentFlow]] : [],
     ),
   );
+  const hasFlowOverrides = Object.keys(resourcePaymentFlows).length > 0;
   const x402WithFlows =
-    x402 !== undefined && Object.keys(resourcePaymentFlows).length > 0
-      ? { ...x402, resourcePaymentFlows }
-      : x402;
+    x402 !== undefined && hasFlowOverrides ? { ...x402, resourcePaymentFlows } : x402;
+  const mppWithFlows =
+    mpp !== undefined && hasFlowOverrides ? { ...mpp, resourcePaymentFlows } : mpp;
   if (protocols.acp.enabled) validateAcpCheckoutMapping(protocols.acp, resources);
   // Require an exposed resource so the enabled adapter publishes a skill
   if (protocols.a2a.enabled && !resources.some((r) => r.exposedVia.includes('a2a'))) {
@@ -797,7 +804,7 @@ function normalize(raw: RawConfig): GatewayConfig {
     resources,
     payments: {
       ...(x402WithFlows !== undefined ? { x402: x402WithFlows } : {}),
-      ...(mpp !== undefined ? { mpp } : {}),
+      ...(mppWithFlows !== undefined ? { mpp: mppWithFlows } : {}),
     },
     ...(ap2 !== undefined ? { authorization: { ap2 } } : {}),
   };
@@ -1372,6 +1379,7 @@ function normalizeMpp(raw: RawConfig['payments']['mpp']): NormalizedMpp | undefi
           ),
         }
       : {}),
+    paymentFlow: raw.paymentFlow ?? X402_DEFAULT_PAYMENT_FLOW,
     facilitator: normalizeFacilitator(raw.facilitator),
     ...(raw.allowMainnet !== undefined
       ? { allowMainnet: toBoolean(raw.allowMainnet, 'payments.mpp.allowMainnet') }
@@ -1556,11 +1564,12 @@ function normalizeResource(
 
   if (
     entry.paymentFlow !== undefined &&
-    (entry.pricing.type !== 'fixed' || !paymentMethods.includes('x402'))
+    (entry.pricing.type !== 'fixed' ||
+      !paymentMethods.some((method) => method === 'x402' || method === 'mpp'))
   ) {
     throw new CommerceError(
       'CONFIG_INVALID',
-      `Resource "${id}" sets paymentFlow, which requires fixed pricing and "x402" in payments`,
+      `Resource "${id}" sets paymentFlow, which requires fixed pricing and "x402" or "mpp" in payments`,
       { details: { path: `resources.${id}.paymentFlow`, resourceId: id } },
     );
   }

@@ -27,7 +27,7 @@ import {
   toPaymentRequiredEnvelope,
 } from '../core';
 import { isRecord } from '../core/is-record';
-import { mppProblem } from '../payments/mpp/problems';
+import { mppProblem, mppProblemDetail } from '../payments/mpp/problems';
 import { CONTENT_DIGEST_METADATA_KEY, contentDigest } from '../payments/mpp/transport';
 import {
   settlementFailure,
@@ -230,6 +230,20 @@ async function handleInvoke(
       // A challenge is per-request (fresh nonce window, fresh expiry). Caching
       // one would hand a later buyer an expired offer.
       reply.header('cache-control', 'no-store');
+      if (envelope.payment.provider === 'mpp') {
+        // Use Problem Details for unpaid MPP requests and refusals
+        const { status: _envelopeStatus, ...members } = envelope;
+        reply
+          .header('content-type', 'application/problem+json')
+          .status(402)
+          .send({
+            ...mppProblem(envelope.code, 402),
+            status: 402,
+            detail: envelope.message,
+            ...members,
+          });
+        return;
+      }
       reply.status(402).send(envelope);
       return;
     }
@@ -307,7 +321,8 @@ function sendInvokeError(
       .send({
         ...mppProblem(error.code, error.httpStatus, reason),
         status: error.httpStatus,
-        detail: error.message,
+        // The reason token stays in `message` and `details.reason`
+        detail: mppProblemDetail(reason, error.message),
         ...members,
       });
     return;
