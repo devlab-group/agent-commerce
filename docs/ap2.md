@@ -165,9 +165,9 @@ input into path, query and body values.
 
 ## Creating the checkout JWT
 
-The gateway verifies checkout JWTs. The merchant signs them in its own process
-with the private half of a key whose public half appears under
-`checkoutIssuers`.
+The merchant signs checkout JWTs outside the gateway and gives them to the
+buyer. The gateway verifies them with public keys under `checkoutIssuers`; it
+has no checkout-JWT issuance route.
 
 ```ts
 import { createCheckoutJwt } from '@devlab.group/agent-commerce/ap2';

@@ -62,11 +62,15 @@ use their native payment format:
 | x402 | v2 `PaymentRequired` in `structuredContent` and `content[0].text` | `_meta["x402/payment"]`, a `PaymentPayload` object         | `_meta["x402/payment-response"]`   |
 | MPP  | `_meta["org.paymentauth/payment-required"]` with the challenges   | `_meta["org.paymentauth/credential"]`, a credential object | `_meta["org.paymentauth/receipt"]` |
 
-The x402 carrier follows the x402 MCP transport; the MPP carrier follows
-`draft-payment-transport-mcp-00`. If a call supplies both `_payment` and
-`_meta`, `_payment` takes precedence. The MPP draft sends challenges as
-JSON-RPC error `-32042`. This gateway puts them in tool results instead,
-which the `mppx` client also accepts.
+The x402 carrier follows the x402 MCP transport. The MPP credential and
+receipt carriers follow `draft-payment-transport-mcp-00`. If a call supplies
+both `_payment` and `_meta`, `_payment` takes precedence.
+
+The MPP draft uses JSON-RPC errors `-32042` for challenges and `-32043` for
+refusals. This gateway puts both in tool-result `_meta`, which `mppx` accepts
+but the draft does not define. MCP `2026-07-28` reserves `-32042` for protocol
+use. The gateway reads payment `_meta` only inside `params` and does not
+advertise payment support in its capabilities.
 
 Without a proof, the tool returns `isError: true` and the gateway's
 payment-required envelope in `structuredContent`. For x402, the v2
@@ -118,8 +122,10 @@ exception messages and stack traces are omitted.
 ### MCP exclusions
 
 The adapter does not implement MCP resources, prompts, sampling, completions,
-elicitation, roots, logging, tasks or tool-list-change notifications. The
-gateway, rather than the MCP adapter, enforces Host and Origin checks.
+elicitation, roots, logging, tasks or tool-list-change notifications. It has
+no MCP authorization, sessions, subscriptions, pagination or HTTP+SSE
+transport. The gateway, rather than the MCP adapter, enforces Host and Origin
+checks.
 
 The MCP adapter maps payment carriers and results. It does not verify or
 settle payments or call merchant backends.
