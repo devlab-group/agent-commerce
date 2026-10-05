@@ -229,6 +229,14 @@ class McpProtocolAdapter implements HttpProtocolAdapter {
       const abortController = new AbortController();
       res.once('close', () => abortController.abort());
       const read = await readCappedBody(req, MAX_REQUEST_BODY_BYTES);
+      if (read.kind === 'too-large') {
+        this.writeJsonRpcError(
+          res,
+          413,
+          `Request body exceeds the ${MAX_REQUEST_BODY_BYTES}-byte limit.`,
+        );
+        return;
+      }
       if (read.kind !== 'ok') {
         this.writeJsonRpcError(res, 400, 'Could not read the request body.');
         return;

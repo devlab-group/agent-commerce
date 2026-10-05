@@ -834,6 +834,34 @@ describe('mcp adapter: transport and lifecycle', () => {
     expect(body.error.message.toLowerCase()).toContain('method not allowed');
   });
 
+  // The gateway mount enforces the same cap first; this is the adapter's own
+  it('answers a body over its own cap with 413 and runs nothing', async () => {
+    const h = await setup([FREE_ECHO_RESOURCE]);
+    const oversized = JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name: 'echo', arguments: { text: 'x'.repeat(300 * 1024) } },
+    });
+
+    const res = await fetch(`${h.server.url}${h.adapter.mountPath}`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+      },
+      body: oversized,
+    });
+
+    expect(res.status).toBe(413);
+    expect(await res.json()).toMatchObject({
+      jsonrpc: '2.0',
+      id: null,
+      error: { code: -32600, message: expect.stringContaining('byte limit') },
+    });
+    expect(h.pipeline.requests).toHaveLength(0);
+  });
+
   it('refuses tools/list with a cursor, since the server issues none', async () => {
     const h = await setup([FREE_ECHO_RESOURCE]);
 
