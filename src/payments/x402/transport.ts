@@ -9,6 +9,20 @@ import { isRecord } from '../../core/is-record';
 /** MCP `_meta` key of a tool call's `PaymentPayload` (x402 MCP transport) */
 export const X402_MCP_PAYMENT_META_KEY = 'x402/payment';
 
+/** Challenge key read by the `cloudflare/agents` x402 MCP client */
+export const X402_MCP_ERROR_META_KEY = 'x402/error';
+
+/**
+ * Accept an object or base64 string from `x402/payment` and return the string
+ * the provider decodes. An absent value returns undefined; other JSON
+ * values are encoded for provider validation.
+ */
+export function x402McpPaymentSubmission(value: unknown): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value === 'string') return value;
+  return Buffer.from(JSON.stringify(value), 'utf8').toString('base64');
+}
+
 /** MCP `_meta` key of a tool result's settlement response (x402 MCP transport) */
 export const X402_MCP_PAYMENT_RESPONSE_META_KEY = 'x402/payment-response';
 

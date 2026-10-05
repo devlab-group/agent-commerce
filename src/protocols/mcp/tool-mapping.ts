@@ -13,6 +13,8 @@ import {
   type PaymentMethodName,
 } from '../../core';
 import { isRecord } from '../../core/is-record';
+import { MPP_MCP_CREDENTIAL_META_KEY } from '../../payments/mpp/transport';
+import { X402_MCP_PAYMENT_META_KEY } from '../../payments/x402/transport';
 import { MCP_TOOL_NAME_PATTERN } from './constants';
 
 export function isValidToolName(id: string): boolean {
@@ -29,12 +31,23 @@ function primaryPaymentMethod(resource: CommerceResource): PaymentMethodName | u
   return resource.paymentMethods[0];
 }
 
+/** Describe the selected rail's `_meta` proof and `_payment` fallback */
+export function proofCarriers(method: PaymentMethodName | undefined): string {
+  const field = `the "${PAYMENT_INPUT_FIELD}" argument`;
+  if (method === 'x402') return `_meta["${X402_MCP_PAYMENT_META_KEY}"] or ${field}`;
+  if (method === 'mpp') return `_meta["${MPP_MCP_CREDENTIAL_META_KEY}"] or ${field}`;
+  return field;
+}
+
 // How to supply a proof, generic when the resource names no rail
 function paymentProofNote(resource: CommerceResource): string {
   const method = primaryPaymentMethod(resource);
-  const rail = method !== undefined ? `a ${method}` : 'a';
-  return `Requires ${rail} payment proof in the "${PAYMENT_INPUT_FIELD}" input field (obtained from a previous payment-required response).`;
+  const rail = method !== undefined ? `an ${method}` : 'a';
+  return `Requires ${rail} payment proof in ${proofCarriers(method)}, built from the payment-required response.`;
 }
+
+// Tell callers to omit `_payment` when a wrapper supplies `_meta`
+const OMIT_NOTE = 'Omit it when the client sends the proof in _meta.';
 
 /**
  * Description for the reserved `_payment` input property, in the proof
@@ -43,10 +56,10 @@ function paymentProofNote(resource: CommerceResource): string {
 function paymentInputFieldDescription(resource: CommerceResource): string {
   const method = primaryPaymentMethod(resource);
   if (method === 'x402') {
-    return 'x402 payment proof (base64 PAYMENT-SIGNATURE value) returned from a previous payment-required response.';
+    return `x402 payment proof (base64 PAYMENT-SIGNATURE value) for a previous payment-required response. ${OMIT_NOTE}`;
   }
   if (method === 'mpp') {
-    return 'MPP credential (the full "Authorization: Payment ..." value) for the challenge in a previous payment-required response.';
+    return `MPP credential (the full "Authorization: Payment ..." value) for the challenge in a previous payment-required response. ${OMIT_NOTE}`;
   }
   if (method !== undefined) {
     return `${method} payment proof (base64-encoded) returned from a previous payment-required response.`;

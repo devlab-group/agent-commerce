@@ -1,7 +1,8 @@
 /**
  * Exercise both rails' MCP bindings against the gateway: `@x402/mcp` for
- * x402 and `mppx/mcp/client` for MPP. Only the facilitator HTTP client is
- * mocked.
+ * x402 and `mppx/mcp/client` for MPP. The `cloudflare/agents` x402 client is
+ * not installed, so its steps are replayed by hand. Only the facilitator HTTP
+ * client is mocked.
  */
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -218,6 +219,116 @@ describe('x402 MCP transport', () => {
       code: 'PAYMENT_INVALID',
     });
     expect(facilitator.settle).not.toHaveBeenCalled();
+  });
+});
+
+// What `withX402Client` in `cloudflare/agents` does: it pays only when the
+// result has `isError` and a non-empty `_meta["x402/error"].accepts`, builds a
+// v2 payload from that object's `x402Version`, `resource`, `accepts` and
+// `extensions`, and retries with the payload as base64 JSON in `_meta`
+describe('Cloudflare x402 MCP dialect', () => {
+  async function challenge(client: Client): Promise<PaymentRequired> {
+    const challenged = (await client.callTool({
+      name: 'x402_report',
+      arguments: {},
+    })) as CallToolResult;
+    expect(challenged.isError).toBe(true);
+    const required = challenged._meta?.['x402/error'] as PaymentRequired;
+    expect(required).toMatchObject({ x402Version: 2, accepts: [{ scheme: 'exact' }] });
+    // The bare PaymentRequired, without the gateway envelope beside it
+    expect(required).not.toHaveProperty('code');
+    return required;
+  }
+
+  it('offers the challenge in _meta["x402/error"] and settles a base64 string proof', async () => {
+    const client = await connect();
+    const required = await challenge(client);
+    const payload = await x402Payments().createPaymentPayload({
+      x402Version: required.x402Version,
+      resource: required.resource,
+      accepts: structuredClone(required.accepts),
+      ...(required.extensions !== undefined ? { extensions: required.extensions } : {}),
+    });
+
+    const paid = (await client.callTool({
+      name: 'x402_report',
+      arguments: {},
+      _meta: { 'x402/payment': btoa(JSON.stringify(payload)) },
+    })) as CallToolResult;
+
+    expect(paid.isError).not.toBe(true);
+    expect(paid.structuredContent).toEqual({ report: 'paid' });
+    expect(paid._meta?.['x402/payment-response']).toMatchObject({ success: true, transaction: TX });
+    expect(facilitator.settle).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses malformed string proofs with a fresh challenge', async () => {
+    const refused = (await (
+      await connect()
+    ).callTool({
+      name: 'x402_report',
+      arguments: {},
+      _meta: { 'x402/payment': 'not a payment payload' },
+    })) as CallToolResult;
+
+    expect(refused.isError).toBe(true);
+    expect(refused.structuredContent).toMatchObject({ code: 'PAYMENT_INVALID' });
+    expect(refused._meta?.['x402/error']).toMatchObject({
+      x402Version: 2,
+      error: expect.any(String),
+      accepts: [{ scheme: 'exact' }],
+    });
+    expect(facilitator.verify).not.toHaveBeenCalled();
+    expect(facilitator.settle).not.toHaveBeenCalled();
+  });
+});
+
+describe('_meta carrier precedence', () => {
+  it('uses an x402 proof in _meta over a _payment placeholder', async () => {
+    const client = wrapMCPClientWithPayment(await connect(), x402Payments(), {
+      autoPayment: true,
+    });
+
+    const result = await client.callTool('x402_report', { _payment: '<payment proof>' });
+
+    expect(result.paymentMade).toBe(true);
+    expect(result.isError).not.toBe(true);
+    expect(facilitator.settle).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses an MPP credential in _meta over a _payment placeholder', async () => {
+    const client = await connect();
+    McpClient.wrap(client, {
+      methods: [clientCharge({ account: buyer, authorization: AUTHORIZATION })],
+    });
+
+    const result = (await client.callTool({
+      name: 'mpp_report',
+      arguments: { _payment: '<payment proof>' },
+    })) as CallToolResult;
+
+    expect(result.isError).not.toBe(true);
+    expect(facilitator.settle).toHaveBeenCalledTimes(1);
+  });
+
+  it('names both carriers in the tool description and the payment-required sentence', async () => {
+    const client = await connect();
+    const { tools } = await client.listTools();
+    const challenged = (await client.callTool({
+      name: 'x402_report',
+      arguments: {},
+    })) as CallToolResult;
+
+    const carriers = '_meta["x402/payment"] or the "_payment" argument';
+    expect(tools.find((t) => t.name === 'x402_report')?.description).toContain(
+      `an x402 payment proof in ${carriers}`,
+    );
+    expect(tools.find((t) => t.name === 'mpp_report')?.description).toContain(
+      '_meta["org.paymentauth/credential"] or the "_payment" argument',
+    );
+    expect(String((challenged.content[1] as { text: string }).text)).toContain(
+      `Retry with an x402 payment proof in ${carriers}.`,
+    );
   });
 });
 

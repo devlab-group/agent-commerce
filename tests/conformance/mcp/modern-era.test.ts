@@ -76,13 +76,33 @@ describe('mcp adapter: 2026-07-28 revision', () => {
     expect(discovered.supportedVersions).toContain(EXPECTED_MCP_MODERN_PROTOCOL_REVISION);
   });
 
-  it('lists tools with the cache fields the revision requires', async () => {
+  it('lists tools as publicly cacheable for a minute', async () => {
     const h = await setup([FREE_ECHO_RESOURCE]);
 
     const listed = await h.client.listTools();
 
     expect(listed.tools.map((t) => t.name)).toEqual(['echo']);
-    expect(listed).toMatchObject({ ttlMs: expect.any(Number), cacheScope: expect.any(String) });
+    expect(listed).toMatchObject({ ttlMs: 60_000, cacheScope: 'public' });
+  });
+
+  it('refuses tools/list with a cursor, since the server issues none', async () => {
+    const h = await setup([FREE_ECHO_RESOURCE]);
+
+    await expect(h.client.listTools({ cursor: 'page-2' })).rejects.toMatchObject({ code: -32602 });
+  });
+
+  it('reads an x402 proof sent as a base64 string in _meta', async () => {
+    const h = await setup([PAID_WEATHER_RESOURCE]);
+    h.pipeline.handler = delivered;
+    const token = btoa(JSON.stringify({ x402Version: 2, accepted: { scheme: 'exact' } }));
+
+    await h.client.callTool({
+      name: 'get-weather',
+      arguments: { city: 'Oslo', _payment: 'placeholder' },
+      _meta: { 'x402/payment': token },
+    });
+
+    expect(h.pipeline.requests[0]?.payment).toEqual({ method: 'x402', payload: token });
   });
 
   it('calls a tool through the pipeline', async () => {

@@ -11,7 +11,6 @@ import {
   DELIVERY_SUMMARY_META_KEY,
   type DeliveredOutcome,
   type ExecutionOutcome,
-  PAYMENT_INPUT_FIELD,
   type PaymentMethodName,
   type PaymentRequiredOutcome,
   toDeliverySummary,
@@ -29,9 +28,11 @@ import {
   settlementFailure,
   settlementResponse,
   settlementResponseFromDetails,
+  X402_MCP_ERROR_META_KEY,
   X402_MCP_PAYMENT_RESPONSE_META_KEY,
   x402ErrorCode,
 } from '../../payments/x402/transport';
+import { proofCarriers } from './tool-mapping';
 
 function toRecord(value: object): Record<string, unknown> {
   return value as Record<string, unknown>;
@@ -79,23 +80,26 @@ function structuredError(
 function withX402Challenge(
   envelope: Record<string, unknown>,
   challenge: Record<string, unknown>,
-  error?: string,
 ): Record<string, unknown> {
-  return { ...challenge, ...(error !== undefined ? { error } : {}), ...envelope };
+  return { ...challenge, ...envelope };
 }
 
 function paymentRequiredResult(outcome: PaymentRequiredOutcome): CallToolResult {
   const envelope = toPaymentRequiredEnvelope(outcome);
   const p = envelope.payment;
+  const x402Required = p.provider === 'x402' ? p.envelope : undefined;
   const structured =
-    p.provider === 'x402' && p.envelope !== undefined
-      ? withX402Challenge(toRecord(envelope), p.envelope)
+    x402Required !== undefined
+      ? withX402Challenge(toRecord(envelope), x402Required)
       : toRecord(envelope);
   const mppRequired = p.provider === 'mpp' ? mcpPaymentRequired(p.envelope) : undefined;
+  let meta: Record<string, unknown> | undefined;
+  if (x402Required !== undefined) meta = { [X402_MCP_ERROR_META_KEY]: x402Required };
+  else if (mppRequired !== undefined) meta = { [MPP_MCP_PAYMENT_REQUIRED_META_KEY]: mppRequired };
   return structuredError(
     structured,
-    `Payment required: ${p.amount} ${p.currency} to ${p.destination} for resource "${outcome.resourceId}". Retry the call with a ${p.provider} payment proof in the "${PAYMENT_INPUT_FIELD}" input field.`,
-    mppRequired !== undefined ? { [MPP_MCP_PAYMENT_REQUIRED_META_KEY]: mppRequired } : undefined,
+    `Payment required: ${p.amount} ${p.currency} to ${p.destination} for resource "${outcome.resourceId}". Retry with an ${p.provider} payment proof in ${proofCarriers(p.provider)}.`,
+    meta,
   );
 }
 
@@ -106,13 +110,13 @@ export function errorResult(error: CommerceError, rail?: PaymentMethodName): Cal
   const challenge = details?.['challenge'];
   // Include the rail's new challenge when a 402 refusal supplies one
   const refused = error.httpStatus === 402 && isRecord(challenge);
-  const structured =
+  const x402Required =
     rail === 'x402' && refused
-      ? withX402Challenge(
-          toRecord(envelope),
-          challenge,
-          x402ErrorCode(error.code, details?.['reason']),
-        )
+      ? { ...challenge, error: x402ErrorCode(error.code, details?.['reason']) }
+      : undefined;
+  const structured =
+    x402Required !== undefined
+      ? withX402Challenge(toRecord(envelope), x402Required)
       : toRecord(envelope);
   let meta: Record<string, unknown> | undefined;
   if (rail === 'x402') {
@@ -120,7 +124,12 @@ export function errorResult(error: CommerceError, rail?: PaymentMethodName): Cal
       error.code === 'PAYMENT_SETTLEMENT_FAILED'
         ? settlementFailure(details)
         : settlementResponseFromDetails(details);
-    if (settlement !== undefined) meta = { [X402_MCP_PAYMENT_RESPONSE_META_KEY]: settlement };
+    if (settlement !== undefined || x402Required !== undefined) {
+      meta = {
+        ...(x402Required !== undefined ? { [X402_MCP_ERROR_META_KEY]: x402Required } : {}),
+        ...(settlement !== undefined ? { [X402_MCP_PAYMENT_RESPONSE_META_KEY]: settlement } : {}),
+      };
+    }
   } else if (rail === 'mpp' && refused) {
     // MPP error results carry a challenge but no receipt
     const required = mcpPaymentRequired(challenge, {

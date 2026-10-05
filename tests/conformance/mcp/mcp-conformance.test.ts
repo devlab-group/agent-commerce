@@ -689,6 +689,33 @@ describe('mcp adapter: batch fan-out', () => {
     });
   }
 
+  it('accepts batches only under MCP 2025-03-26', async () => {
+    const h = await setup([FREE_ECHO_RESOURCE]);
+    h.pipeline.handler = deliveredOutcome;
+    const post = (version: string) =>
+      fetch(`${h.server.url}${h.adapter.mountPath}`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          accept: 'application/json, text/event-stream',
+          'mcp-protocol-version': version,
+        },
+        body: JSON.stringify(rawBatch('echo', 2)),
+      });
+
+    for (const version of ['2025-06-18', '2025-11-25']) {
+      const refused = await post(version);
+      expect(refused.status).toBe(400);
+      expect(await refused.json()).toMatchObject({ error: { code: -32600 }, id: null });
+    }
+    expect(h.pipeline.requests).toHaveLength(0);
+
+    const served = await post('2025-03-26');
+    expect(served.status).toBe(200);
+    await served.text();
+    expect(h.pipeline.requests).toHaveLength(2);
+  });
+
   it('never runs more than the concurrency cap at once, and never admits more than cap+queue total, for an oversized JSON-RPC batch', async () => {
     const h = await setup([FREE_ECHO_RESOURCE]);
     const BATCH_SIZE = SDK_MAX_BATCH_SIZE;
@@ -798,9 +825,20 @@ describe('mcp adapter: transport and lifecycle', () => {
     const res = await fetch(`${h.server.url}${h.adapter.mountPath}`, { method: 'GET' });
     expect(res.status).toBe(405);
     expect(res.headers.get('allow')).toBe('POST');
-    const body = (await res.json()) as { jsonrpc: string; error: { message: string } };
+    const body = (await res.json()) as {
+      jsonrpc: string;
+      error: { code: number; message: string };
+    };
     expect(body.jsonrpc).toBe('2.0');
+    expect(body.error.code).toBe(-32600);
     expect(body.error.message.toLowerCase()).toContain('method not allowed');
+  });
+
+  it('refuses tools/list with a cursor, since the server issues none', async () => {
+    const h = await setup([FREE_ECHO_RESOURCE]);
+
+    await expect(h.client.listTools({ cursor: 'page-2' })).rejects.toMatchObject({ code: -32602 });
+    expect((await h.client.listTools()).tools).toHaveLength(1);
   });
 
   it('answers 503 before start() and after stop(), and reports health to match', async () => {
@@ -824,7 +862,9 @@ describe('mcp adapter: transport and lifecycle', () => {
 
     try {
       expect((await adapter.health()).status).toBe('fail');
-      expect((await callEcho()).status).toBe(503);
+      const notRunning = await callEcho();
+      expect(notRunning.status).toBe(503);
+      expect(await notRunning.json()).toMatchObject({ error: { code: -32603 } });
 
       await adapter.start(context);
       const after = await adapter.health();

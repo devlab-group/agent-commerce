@@ -49,7 +49,7 @@ import {
 import { toLogInfo } from '../../core/errors';
 import { isRecord } from '../../core/is-record';
 import { MPP_MCP_CREDENTIAL_META_KEY } from '../../payments/mpp/transport';
-import { X402_MCP_PAYMENT_META_KEY } from '../../payments/x402/transport';
+import { X402_MCP_PAYMENT_META_KEY, x402McpPaymentSubmission } from '../../payments/x402/transport';
 import { PACKAGE_VERSION } from '../../version';
 import { readCappedBody } from '../http';
 import { MCP_MODERN_PROTOCOL_REVISION, MCP_TOOL_NAME_PATTERN } from './constants';
@@ -97,6 +97,12 @@ const MAX_REQUEST_BODY_BYTES = 256 * 1024;
  * fast with GATEWAY_BUSY and reach no backend.
  */
 const MAX_QUEUED_TOOL_CALLS = 64;
+
+// Batch revision used by the SDK when no protocol-version header is sent
+const MCP_BATCH_PROTOCOL_REVISION = '2025-03-26';
+
+// The tool list is public and stable until restart; cache it for a minute
+const TOOLS_LIST_CACHE_HINT = { ttlMs: 60_000, cacheScope: 'public' } as const;
 
 class McpProtocolAdapter implements HttpProtocolAdapter {
   readonly name = 'mcp' as const;
@@ -227,7 +233,17 @@ class McpProtocolAdapter implements HttpProtocolAdapter {
         this.writeJsonRpcError(res, 400, 'Could not read the request body.');
         return;
       }
-      const malformed = isModernRequest(req) ? undefined : malformedToolCall(read.text);
+      const body = parseJson(read.text);
+      const version = req.headers['mcp-protocol-version'];
+      if (Array.isArray(body) && version !== undefined && version !== MCP_BATCH_PROTOCOL_REVISION) {
+        this.writeJsonRpcError(
+          res,
+          400,
+          `Invalid Request: JSON-RPC batches are supported only in MCP ${MCP_BATCH_PROTOCOL_REVISION}.`,
+        );
+        return;
+      }
+      const malformed = isModernRequest(req) ? undefined : malformedToolCall(body);
       if (malformed !== undefined) {
         this.writeJsonRpcError(res, 200, malformed.message, -32602, malformed.id);
         return;
@@ -272,11 +288,12 @@ class McpProtocolAdapter implements HttpProtocolAdapter {
     this.context = undefined;
   }
 
+  // Use general JSON-RPC codes for transport errors
   private writeJsonRpcError(
     res: ServerResponse,
     status: number,
     message: string,
-    code = -32000,
+    code = status >= 500 ? -32603 : -32600,
     id: string | number | null = null,
   ): void {
     if (res.headersSent) return;
@@ -291,11 +308,15 @@ class McpProtocolAdapter implements HttpProtocolAdapter {
   private buildServer(signal: AbortSignal): Server {
     const server = new Server(
       { name: this.serverName, version: this.serverVersion },
-      { capabilities: { tools: {} } },
+      { capabilities: { tools: {} }, cacheHints: { 'tools/list': TOOLS_LIST_CACHE_HINT } },
     );
-    server.setRequestHandler('tools/list', async () => ({
-      tools: this.tools.map((t) => t.tool),
-    }));
+    server.setRequestHandler('tools/list', async (request) => {
+      // A cursor is invalid because this list is not paginated
+      if (request.params?.cursor !== undefined) {
+        throw new ProtocolError(ProtocolErrorCode.InvalidParams, 'Invalid cursor.');
+      }
+      return { tools: this.tools.map((t) => t.tool) };
+    });
     server.setRequestHandler('tools/call', async (request) =>
       this.handleToolCall(
         request.params.name,
@@ -327,7 +348,9 @@ class McpProtocolAdapter implements HttpProtocolAdapter {
       const requestId = context.ids.next('mcp');
       const fields = extractReservedInputFields(rawArgs, resource, requestId);
       const { input, authorization } = fields;
-      const payment = fields.payment ?? paymentFromMeta(meta, resource);
+      // Client wrappers attach proofs in `_meta`; that proof takes priority
+      // over a possible `_payment` placeholder in the arguments
+      const payment = paymentFromMeta(meta, resource) ?? fields.payment;
       const request: CanonicalRequest = {
         requestId,
         resourceId,
@@ -424,7 +447,7 @@ function toWebRequest(req: IncomingMessage, body: string, signal: AbortSignal): 
 
 /**
  * Let the SDK validate requests with `Mcp-Method` or a modern version header;
- * malformed headers and `_meta` may require an HTTP 400 response.
+ * malformed headers and `_meta` may require an HTTP 400 response
  */
 function isModernRequest(req: IncomingMessage): boolean {
   if (req.headers['mcp-method'] !== undefined) return true;
@@ -433,14 +456,17 @@ function isModernRequest(req: IncomingMessage): boolean {
   return typeof version === 'string' && version >= MCP_MODERN_PROTOCOL_REVISION;
 }
 
-/** Give malformed tool calls without modern headers a short -32602 response. */
-function malformedToolCall(body: string): { id: string | number; message: string } | undefined {
-  let message: unknown;
+// Undefined for a body that is not JSON; the SDK answers that with -32700
+function parseJson(body: string): unknown {
   try {
-    message = JSON.parse(body);
+    return JSON.parse(body);
   } catch {
     return undefined;
   }
+}
+
+// Give malformed tool calls without modern headers a short -32602 response
+function malformedToolCall(message: unknown): { id: string | number; message: string } | undefined {
   if (!isRecord(message) || message['method'] !== 'tools/call') return undefined;
   const id = message['id'];
   if (typeof id !== 'string' && typeof id !== 'number') return undefined;
@@ -470,16 +496,15 @@ async function writeWebResponse(response: Response, res: ServerResponse): Promis
   res.end();
 }
 
-// Read a proof from the selected rail's MCP carrier when `_payment` is absent
+// Read a proof from the selected rail's MCP `_meta` carrier
 function paymentFromMeta(
   meta: Record<string, unknown> | undefined,
   resource: CommerceResource,
 ): PaymentSubmission | undefined {
   const method = resource.paymentMethods[0];
-  const x402Payload = meta?.[X402_MCP_PAYMENT_META_KEY];
-  if (method === 'x402' && isRecord(x402Payload)) {
-    // Match the HTTP header's base64-encoded PaymentPayload JSON
-    return { method, payload: Buffer.from(JSON.stringify(x402Payload), 'utf8').toString('base64') };
+  if (method === 'x402') {
+    const payload = x402McpPaymentSubmission(meta?.[X402_MCP_PAYMENT_META_KEY]);
+    if (payload !== undefined) return { method, payload };
   }
   const credential = meta?.[MPP_MCP_CREDENTIAL_META_KEY];
   if (method === 'mpp' && isRecord(credential)) {
