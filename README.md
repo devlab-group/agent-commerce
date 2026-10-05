@@ -160,6 +160,21 @@ gateway and a dashboard.
 
 To stop and wipe state: `docker compose down -v`.
 
+### `agent-commerce demo`
+
+From a repository clone, one command starts the stack and runs the buyer agent:
+
+```bash
+npm run agent-commerce -- demo
+```
+
+It starts the stack with `docker compose up --build --detach --wait`, which
+returns once every service with a health check is healthy, then runs
+`npm run demo:agent`. A failing step stops the run with exit code 1, after
+printing the end of its error output and the command to rerun it by hand.
+`demo` does not run `doctor`. The Linux note above applies, and the stack
+keeps running in the background until `docker compose down -v`.
+
 ## How it works
 
 ```text
@@ -390,7 +405,7 @@ PASS  Protocols            http=on mcp=on (/mcp) a2a=off acp=off
 INFO  A2A                  disabled
 INFO  ACP                  disabled
 INFO  AP2                  disabled
-PASS  Payments             x402 v2 (scheme=exact) enabled - LOCAL dev chain (eip155:84532, chain id shared with Base Sepolia), destination=0x7099…79C8, facilitator=local (in-process)
+PASS  Payments             x402 v2 (scheme=exact) enabled - LOCAL dev chain (eip155:84532, chain id shared with Base Sepolia), destination=0x7099…79C8, facilitator=local (in-process), paymentFlow=authorization
 INFO  Payments (MPP)       MPP not configured
 PASS  Storage              sqlite schema v2 writable; receipts=2
 PASS  Protocol versions    reported by gateway /.well-known/agent-commerce
@@ -402,6 +417,17 @@ Score: 7/7 checks passed
 resolved local config and fails if they differ.
 
 Exits non-zero if anything fails. `--json` for machines.
+
+### `agent-commerce version`
+
+```bash
+npm run agent-commerce -- version
+```
+
+Prints the CLI version and, for each protocol SDK and runtime library, the
+version the package declares and the area that uses it. These are the pins in
+`package.json`, optional peers included, not the versions installed in
+`node_modules`. `agent-commerce --version` prints the CLI version alone.
 
 ## Exposure and access
 
