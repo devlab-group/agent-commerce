@@ -11,6 +11,7 @@ import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { GatewayConfig } from '../../src/config';
 import type { BackendExecutor } from '../../src/core';
+import { HttpBackendExecutor } from '../../src/core/execution';
 import { createGateway, type GatewayInstance } from '../../src/gateway';
 import { createA2aAdapter } from '../../src/protocols/a2a';
 import { createAcpAdapter } from '../../src/protocols/acp';
@@ -119,8 +120,11 @@ const backend: BackendExecutor = {
   },
 };
 
-async function startGateway(acpEnabled = true): Promise<GatewayInstance> {
-  const cfg = config(acpEnabled);
+async function startGateway(
+  acpEnabled = true,
+  options: { backend?: BackendExecutor; cfg?: GatewayConfig } = {},
+): Promise<GatewayInstance> {
+  const cfg = options.cfg ?? config(acpEnabled);
   const acp = cfg.protocols.acp;
   gateway = await createGateway({
     config: cfg,
@@ -139,10 +143,32 @@ async function startGateway(acpEnabled = true): Promise<GatewayInstance> {
           ]
         : []),
     ],
-    backend,
+    backend: options.backend ?? backend,
   });
   return gateway;
 }
+
+// The shipped executor over a recording `fetch`: what the merchant's socket
+// would receive, header for header
+function recordingMerchant(): { backend: BackendExecutor; sent: Record<string, string>[] } {
+  const sent: Record<string, string>[] = [];
+  const fetchImpl = (async (_input: unknown, init?: RequestInit) => {
+    sent.push(Object.fromEntries(new Headers(init?.headers).entries()));
+    return new Response(JSON.stringify(EXAMPLES['create_checkout_session_response']), {
+      status: 201,
+      headers: { 'content-type': 'application/json' },
+    });
+  }) as typeof fetch;
+  return { backend: new HttpBackendExecutor({ fetchImpl }), sent };
+}
+
+const AGENT_HEADERS = {
+  'accept-language': 'en-US',
+  'user-agent': 'integration-agent/1.0',
+  'request-id': 'req-integration-1',
+  signature: 'c2lnbmF0dXJl',
+  timestamp: '2026-10-05T10:00:00Z',
+};
 
 function acpHeaders(extra: Record<string, string> = {}): Record<string, string> {
   return {
@@ -230,6 +256,62 @@ describe('ACP over the gateway', () => {
 
     expect(res.statusCode).toBe(401);
     expect(backendCalls).toEqual([]);
+  });
+});
+
+describe('ACP request headers at the merchant', () => {
+  it('delivers the six seller-facing headers and never the bearer token', async () => {
+    const merchant = recordingMerchant();
+    const gw = await startGateway(true, { backend: merchant.backend });
+    const res = await gw.server.inject({
+      method: 'POST',
+      url: '/acp/checkout_sessions',
+      headers: acpHeaders({ ...AGENT_HEADERS, cookie: 'agent_session=1' }),
+      payload: JSON.stringify(CREATE_BODY),
+    });
+
+    expect(res.statusCode).toBe(201);
+    expect(merchant.sent).toHaveLength(1);
+    const received = merchant.sent[0] ?? {};
+    expect(received).toMatchObject({ ...AGENT_HEADERS, 'api-version': '2026-04-17' });
+    expect(received['authorization']).toBeUndefined();
+    expect(received['cookie']).toBeUndefined();
+    expect(JSON.stringify(received)).not.toContain(TOKEN);
+    // The derived operation key, not the caller's
+    expect(received['idempotency-key']).not.toBe('idem-integration-1');
+    expect(received['content-type']).toBe('application/json');
+  });
+
+  it('keeps an operator-configured header over the same header from the agent', async () => {
+    const merchant = recordingMerchant();
+    const cfg = config(true);
+    const resources = cfg.resources.map((resource) =>
+      resource.id === OPERATIONS.createCheckoutSession
+        ? {
+            ...resource,
+            handler: {
+              ...resource.handler,
+              headers: { 'User-Agent': 'merchant-gateway', Authorization: 'Bearer backend-key' },
+            },
+          }
+        : resource,
+    );
+    const gw = await startGateway(true, {
+      backend: merchant.backend,
+      cfg: { ...cfg, resources },
+    });
+    const res = await gw.server.inject({
+      method: 'POST',
+      url: '/acp/checkout_sessions',
+      headers: acpHeaders(AGENT_HEADERS),
+      payload: JSON.stringify(CREATE_BODY),
+    });
+
+    expect(res.statusCode).toBe(201);
+    const received = merchant.sent[0] ?? {};
+    expect(received['user-agent']).toBe('merchant-gateway');
+    expect(received['authorization']).toBe('Bearer backend-key');
+    expect(received['accept-language']).toBe('en-US');
   });
 });
 

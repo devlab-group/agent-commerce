@@ -37,17 +37,24 @@ import {
 } from './constants';
 import { buildDescriptor } from './descriptor';
 import { type AcpDiscoveryMetadata, buildAcpDiscoveryDocument } from './discovery';
-import { type AcpFailure, acpFailure, writeAcpFailure, writeAcpJson } from './errors';
+import {
+  type AcpFailure,
+  type AcpResponseHeaders,
+  acpFailure,
+  writeAcpFailure,
+  writeAcpJson,
+} from './errors';
 import { operationKey, requestFingerprint } from './idempotency/fingerprint';
 import {
   type AcpIdempotencyScope,
   type AcpIdempotencyStore,
   createAcpIdempotencyStore,
 } from './idempotency/store';
-import { type AcpGuardedRequest, guardAcpRequest } from './request-guards';
+import { type AcpGuardedRequest, acpEchoHeaders, guardAcpRequest } from './request-guards';
 import {
   type AcpResponse,
   asResponse,
+  isMerchantRateLimit,
   mapCommerceErrorToAcp,
   toAcpResponse,
 } from './response-mapping';
@@ -92,8 +99,10 @@ const PRE_BACKEND_ERROR_CODES: ReadonlySet<string> = new Set([
   'AUTHORIZATION_PROVIDER_UNAVAILABLE',
 ]);
 
-function reachedFor(code: string): MerchantReach {
-  return PRE_BACKEND_ERROR_CODES.has(code) ? 'no' : 'unknown';
+// Treat merchant 429 as unprocessed and release the key. A 503 may follow
+// partial work, so its outcome stays unknown.
+function reachedFor(error: CommerceError): MerchantReach {
+  return PRE_BACKEND_ERROR_CODES.has(error.code) || isMerchantRateLimit(error) ? 'no' : 'unknown';
 }
 
 function notReached(failure: AcpFailure): AcpCheckoutAttempt {
@@ -259,6 +268,7 @@ export class AcpProtocolAdapter implements HttpProtocolAdapter {
   async handleHttp(req: IncomingMessage, res: ServerResponse): Promise<void> {
     try {
       if (!this.started) {
+        // Reachable during shutdown, which stops adapters before the server
         writeAcpFailure(
           res,
           acpFailure(
@@ -267,6 +277,7 @@ export class AcpProtocolAdapter implements HttpProtocolAdapter {
             'service_unavailable',
             'The ACP adapter is not running.',
           ),
+          acpEchoHeaders(req),
         );
         return;
       }
@@ -284,7 +295,7 @@ export class AcpProtocolAdapter implements HttpProtocolAdapter {
       const response = await this.dispatch(request);
       writeAcpJson(res, response.status, response.body, this.responseHeaders(request, response));
     } catch (err) {
-      this.fail(res, err, 'acp adapter: request handling failed');
+      this.fail(res, err, 'acp adapter: request handling failed', acpEchoHeaders(req));
     }
   }
 
@@ -357,8 +368,8 @@ export class AcpProtocolAdapter implements HttpProtocolAdapter {
     if (outcome.response.status < 500) {
       store.complete(scope, outcome.response);
     } else if (outcome.reached === 'no' || this.idempotencyOptions.merchantIdempotent === true) {
-      // Release the claim when no merchant call ran or the merchant is
-      // configured to deduplicate retries by the derived key
+      // Release when no call ran, the merchant returned 429, or the merchant
+      // deduplicates retries by the derived key
       store.release(scope);
     } else {
       // A timeout, a merchant status ACP cannot relay or a non-ACP reply: the
@@ -432,19 +443,20 @@ export class AcpProtocolAdapter implements HttpProtocolAdapter {
         {
           resourceId: resource.id,
           requestId: canonical.requestId,
-          reached: reachedFor(error.code),
+          reached: reachedFor(error),
           err: toLogInfo(error),
         },
         'acp adapter: checkout execution failed',
       );
       return {
         response: asResponse(mapCommerceErrorToAcp(error, request.route.operation)),
-        reached: reachedFor(error.code),
+        reached: reachedFor(error),
       };
     }
   }
 
-  // Protocol-owned headers only; a merchant backend's headers are never proxied
+  // Protocol-owned headers only. No merchant header is proxied: `Retry-After`
+  // is written from seconds the mapping parsed and capped.
   private responseHeaders(
     request: AcpGuardedRequest,
     response?: AcpResponse,
@@ -462,12 +474,18 @@ export class AcpProtocolAdapter implements HttpProtocolAdapter {
     };
   }
 
-  private fail(res: ServerResponse, err: unknown, message: string): void {
+  private fail(
+    res: ServerResponse,
+    err: unknown,
+    message: string,
+    headers: AcpResponseHeaders = {},
+  ): void {
     // Nothing from `err` reaches the client
     this.context?.logger.error({ err: toLogInfo(err) }, message);
     writeAcpFailure(
       res,
       acpFailure(500, 'processing_error', 'internal_error', 'Internal server error.'),
+      headers,
     );
   }
 

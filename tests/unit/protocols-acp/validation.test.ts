@@ -160,6 +160,44 @@ describe('validateAcpDocument - rejections', () => {
     ).toBeUndefined();
   });
 
+  // Capability negotiation RFC 4.6.2: unknown capability values are ignored,
+  // though the snapshot schema lists the known ones as an enum
+  it('accepts an unknown intervention in a request and in a merchant response', () => {
+    const request = mutated('create_checkout_session_request', (draft) => {
+      draft['capabilities'] = { interventions: { supported: ['3ds', 'passkey'] } };
+    });
+    const response = mutated('create_checkout_session_response', (draft) => {
+      const capabilities = draft['capabilities'] as Record<string, unknown>;
+      capabilities['interventions'] = { supported: ['passkey'], required: ['passkey'] };
+    });
+
+    expect(validateAcpDocument('createRequest', request)).toBeUndefined();
+    expect(validateAcpDocument('checkoutSession', response)).toBeUndefined();
+  });
+
+  it('still rejects an unknown capability field and a non-string capability value', () => {
+    const unknownField = mutated('create_checkout_session_request', (draft) => {
+      draft['capabilities'] = { interventions: { supported: [], passkeys: true } };
+    });
+    const wrongType = mutated('create_checkout_session_request', (draft) => {
+      draft['capabilities'] = { interventions: { supported: [3] } };
+    });
+
+    expect(validateAcpDocument('createRequest', unknownField)).toEqual({
+      code: 'additionalProperties',
+      path: '$.capabilities.interventions.passkeys',
+    });
+    expect(validateAcpDocument('createRequest', wrongType)?.code).toBe('type');
+  });
+
+  it('keeps the scalar intervention enums closed', () => {
+    const request = mutated('create_checkout_session_request', (draft) => {
+      draft['capabilities'] = { interventions: { supported: [], display_context: 'hologram' } };
+    });
+
+    expect(validateAcpDocument('createRequest', request)?.code).toBe('enum');
+  });
+
   // Enums ACP calls closed per API version stay closed
   it('still rejects a value outside a closed enum', () => {
     const failure = validateAcpDocument('discoveryResponse', {

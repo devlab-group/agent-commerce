@@ -39,6 +39,9 @@ export function toCanonicalRequest(options: AcpCanonicalRequestOptions): Canonic
     protocol: 'acp',
     receivedAt,
     ...(idempotencyKey !== undefined ? { idempotencyKey } : {}),
+    ...(request.forwardedHeaders !== undefined && Object.keys(request.forwardedHeaders).length > 0
+      ? { backendHeaders: request.forwardedHeaders }
+      : {}),
   };
 }
 

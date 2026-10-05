@@ -67,6 +67,7 @@ function acpValidators(): ReadonlyMap<AcpDefinition, ValidateFunction> {
   addFormats(ajv);
 
   const document = relaxExtensibleEnums(structuredClone(schemaDocument)) as Record<string, unknown>;
+  openCapabilityValues(document);
   const schemaId = typeof document['$id'] === 'string' ? document['$id'] : '';
   ajv.addSchema(document as Parameters<typeof ajv.addSchema>[0]);
 
@@ -112,6 +113,20 @@ function relaxExtensibleEnums(node: unknown): unknown {
   }
   for (const value of Object.values(record)) relaxExtensibleEnums(value);
   return node;
+}
+
+/**
+ * Allow unknown intervention values in negotiated `supported` and `required`
+ * lists, as ACP requires. The snapshot schema closes these enums; other
+ * fields remain strict.
+ */
+function openCapabilityValues(document: Record<string, unknown>): void {
+  const defs = document['$defs'] as Record<string, { properties?: Record<string, unknown> }>;
+  const properties = defs['InterventionCapabilities']?.properties ?? {};
+  for (const list of ['supported', 'required']) {
+    const items = (properties[list] as { items?: Record<string, unknown> } | undefined)?.items;
+    if (items !== undefined) delete items['enum'];
+  }
 }
 
 /**

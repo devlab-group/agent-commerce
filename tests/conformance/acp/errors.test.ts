@@ -65,9 +65,11 @@ describe('merchant failures', () => {
   it.each([
     ['a 404', 404, 404, 'checkout_session_not_found'],
     ['a 409', 409, 409, 'checkout_session_conflict'],
+    ['a 400', 400, 400, 'invalid_request_body'],
     ['a 422', 422, 422, 'invalid_request_body'],
     ['a 500', 500, 502, 'processing_error'],
-    ['a 503', 503, 502, 'processing_error'],
+    ['a 429', 429, 503, 'service_unavailable'],
+    ['a 503', 503, 503, 'service_unavailable'],
     // Relaying this would tell the agent its own bearer token failed
     ['a 401', 401, 502, 'processing_error'],
   ])('maps %s to an ACP error that carries nothing of it', async (_label, from, to, code) => {
@@ -91,7 +93,8 @@ describe('merchant failures', () => {
       },
     });
 
-    expect(result.status).toBe(422);
+    // On the merchant's own status: the snapshot's 3DS refusal is a 400
+    expect(result.status).toBe(400);
     expect(result.body).toMatchObject({
       type: 'invalid_request',
       code: 'requires_3ds',
@@ -104,14 +107,38 @@ describe('merchant failures', () => {
   it.each([
     ['an invalid code', { code: 'Requires 3DS!' }],
     ['a non-ACP error body', { code: 'requires_3ds', extra: true }],
+    // Only the gateway speaks about the caller's Idempotency-Key
+    ['a code the gateway reserves', { code: 'idempotency_conflict' }],
   ])('uses gateway error mapping for %s', async (_label, patch) => {
     const result = await createWith({
-      status: 400,
+      status: 422,
       body: { type: 'invalid_request', message: 'm', ...patch },
     });
 
     expect(result.status).toBe(422);
     expect(result.body['code']).toBe('invalid_request_body');
+  });
+
+  it.each([
+    ['whole seconds', '30', '30'],
+    ['a delay beyond the cap', '86400', '300'],
+    ['an HTTP date', 'Wed, 21 Oct 2026 07:28:00 GMT', '5'],
+    ['no Retry-After at all', undefined, '5'],
+  ])('answers a merchant 429 with a bounded Retry-After for %s', async (_label, sent, expected) => {
+    stack = await startAcpStack();
+    stack.nextReply({
+      status: 429,
+      body: LEAKY_BODY,
+      ...(sent !== undefined ? { headers: { 'retry-after': sent } } : {}),
+    });
+    const result = await acpFetch(stack, '/acp/checkout_sessions', {
+      headers: acpHeaders(),
+      body: CREATE_REQUEST,
+    });
+
+    expect(result.status).toBe(503);
+    expect(result.body['type']).toBe('service_unavailable');
+    expect(result.headers.get('retry-after')).toBe(expected);
   });
 
   it('uses gateway error mapping for an unrelayed merchant status', async () => {

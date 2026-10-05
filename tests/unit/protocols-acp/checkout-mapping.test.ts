@@ -146,6 +146,14 @@ describe('ACP checkout mapping', () => {
     });
   });
 
+  it('asks for no forwarded header when the caller sent only the required ones', async () => {
+    const { context, execute } = setup(deliveredFor('createCheckoutSession'));
+    await send(context, { url: `${MOUNT}/checkout_sessions`, body: CREATE_BODY });
+
+    // API-Version is always present on an accepted request
+    expect(firstRequest(execute).backendHeaders).toEqual({ 'api-version': ACP_SPEC_VERSION });
+  });
+
   it('generates its own request id rather than trusting the caller', async () => {
     const { context, execute } = setup(deliveredFor('createCheckoutSession'));
     await send(context, { url: `${MOUNT}/checkout_sessions`, body: CREATE_BODY });

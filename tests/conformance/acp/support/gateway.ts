@@ -51,6 +51,8 @@ export interface MerchantCall {
 export interface MerchantReply {
   readonly status: number;
   readonly body: unknown;
+  /** Extra response headers, such as `Retry-After` */
+  readonly headers?: Record<string, string>;
   /** Held open this long before replying, to provoke a gateway timeout */
   readonly delayMs?: number;
   /** Held open until this settles, for a test that must act while the merchant is mid-call */
@@ -110,7 +112,7 @@ async function startMerchant(state: MerchantState): Promise<{ server: Server; or
       const reply = state.queued ?? defaultReply(req.method ?? '', url.pathname);
       state.queued = undefined;
       const send = (): void => {
-        res.writeHead(reply.status, { 'content-type': 'application/json' });
+        res.writeHead(reply.status, { 'content-type': 'application/json', ...reply.headers });
         res.end(JSON.stringify(reply.body));
       };
       if (reply.until !== undefined) void reply.until.then(send);

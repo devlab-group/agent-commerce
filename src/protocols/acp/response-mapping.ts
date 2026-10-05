@@ -3,12 +3,17 @@
  * be a document the pinned snapshot accepts, on the status ACP fixes for the
  * route, because a merchant backend is not automatically ACP-conformant. A
  * failure uses ACP's error shape. Only selected fields of a valid merchant
- * ACP error can cross this boundary; internal details stay in logs.
+ * ACP error and a capped `Retry-After` delay can cross this boundary; internal
+ * details stay in logs.
  */
 import type { CommerceError, DeliveredOutcome } from '../../core';
 import { BackendErrorResponse } from '../../core/execution/backend-http';
 import { isRecord } from '../../core/is-record';
-import type { AcpCheckoutOperation } from './constants';
+import {
+  ACP_MERCHANT_RETRY_AFTER_DEFAULT_SECONDS,
+  ACP_MERCHANT_RETRY_AFTER_MAX_SECONDS,
+  type AcpCheckoutOperation,
+} from './constants';
 import { type AcpErrorType, type AcpFailure, acpFailure } from './errors';
 import { type AcpDefinition, validateAcpDocument } from './validation';
 
@@ -191,19 +196,34 @@ export function mapCommerceErrorToAcp(
 }
 
 /**
- * A merchant status worth relaying, or a 502. Only statuses that mean the same
- * to an ACP client pass through. A merchant 401 or 403 does not: it would tell
- * the agent its own bearer token failed, when the gateway's backend credential
- * did.
+ * Relay compatible merchant statuses and map merchant 429/503 to ACP 503.
+ * Merchant 401/403 maps to 502 so it does not suggest the agent's bearer
+ * token failed.
  */
 function fromBackendStatus(error: CommerceError, operation: AcpCheckoutOperation): AcpFailure {
   const failure = statusFailure(error, operation);
   return failure.status < 500 ? withMerchantError(failure, error) : failure;
 }
 
+/** True for merchant 429, which the adapter treats as unprocessed */
+export function isMerchantRateLimit(error: CommerceError): boolean {
+  return error.code === 'BACKEND_ERROR' && error.details?.['status'] === 429;
+}
+
+// Parse whole seconds, cap the delay, and use the default for other forms
+function merchantRetryAfterSeconds(error: CommerceError): number {
+  const value =
+    error.cause instanceof BackendErrorResponse ? error.cause.headers['retry-after'] : undefined;
+  if (value === undefined || !/^\d{1,9}$/.test(value.trim())) {
+    return ACP_MERCHANT_RETRY_AFTER_DEFAULT_SECONDS;
+  }
+  return Math.min(Math.max(Number(value), 1), ACP_MERCHANT_RETRY_AFTER_MAX_SECONDS);
+}
+
 // Limit merchant codes to snake_case and params to short printable text
-// beginning with `$`
-const MERCHANT_CODE = /^[a-z][a-z0-9_]{0,63}$/;
+// beginning with `$`. The `idempotency_` codes describe the caller's own key
+// and only the gateway issues them.
+const MERCHANT_CODE = /^(?!idempotency_)[a-z][a-z0-9_]{0,63}$/;
 const MERCHANT_PARAM = /^\$[\x20-\x7e]{0,255}$/;
 
 /**
@@ -226,8 +246,9 @@ function withMerchantError(failure: AcpFailure, error: CommerceError): AcpFailur
 }
 
 function statusFailure(error: CommerceError, operation: AcpCheckoutOperation): AcpFailure {
-  const status = error.details?.['status'];
-  switch (typeof status === 'number' ? status : 0) {
+  const merchantStatus = error.details?.['status'];
+  const status = typeof merchantStatus === 'number' ? merchantStatus : 0;
+  switch (status) {
     case 404:
       return acpFailure(
         404,
@@ -251,8 +272,10 @@ function statusFailure(error: CommerceError, operation: AcpCheckoutOperation): A
           );
     case 400:
     case 422:
+      // Relayed on the merchant's own status: the snapshot's 3DS refusal is a
+      // 400, and its only 422 is the idempotency conflict
       return acpFailure(
-        422,
+        status,
         'invalid_request',
         'invalid_request_body',
         'The merchant rejected this checkout request.',
@@ -264,6 +287,17 @@ function statusFailure(error: CommerceError, operation: AcpCheckoutOperation): A
         'checkout_session_conflict',
         'This checkout session is in a state that does not allow this operation.',
       );
+    case 429:
+    case 503:
+      return {
+        ...acpFailure(
+          503,
+          'service_unavailable',
+          'service_unavailable',
+          'The merchant is temporarily unavailable.',
+        ),
+        retryAfterSeconds: merchantRetryAfterSeconds(error),
+      };
     default:
       return acpFailure(
         502,
@@ -275,5 +309,11 @@ function statusFailure(error: CommerceError, operation: AcpCheckoutOperation): A
 }
 
 export function asResponse(failure: AcpFailure): AcpResponse {
-  return { status: failure.status, body: failure.error };
+  return {
+    status: failure.status,
+    body: failure.error,
+    ...(failure.retryAfterSeconds !== undefined
+      ? { retryAfterSeconds: failure.retryAfterSeconds }
+      : {}),
+  };
 }
