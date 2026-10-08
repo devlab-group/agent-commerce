@@ -117,9 +117,11 @@ describe('health() - mocked RPC client', () => {
   it('passes for a remote facilitator that advertises our scheme and network, without probing anvil_nodeInfo', async () => {
     getChainIdMock.mockResolvedValueOnce(84532);
     getCodeMock.mockResolvedValueOnce('0x6080604052');
-    supportedMock.mockResolvedValueOnce([
-      { x402Version: 2, scheme: 'exact', network: 'eip155:84532' },
-    ]);
+    supportedMock.mockResolvedValueOnce({
+      kinds: [{ x402Version: 2, scheme: 'exact', network: 'eip155:84532' }],
+      extensions: [],
+      signers: {},
+    });
     const provider = await makeProvider('remote');
     const health = await provider.health();
     expect(health.status).toBe('pass');
@@ -134,9 +136,11 @@ describe('health() - mocked RPC client', () => {
     // after the buyer has signed
     getChainIdMock.mockResolvedValueOnce(84532);
     getCodeMock.mockResolvedValueOnce('0x6080604052');
-    supportedMock.mockResolvedValueOnce([
-      { x402Version: 2, scheme: 'exact', network: 'eip155:8453' },
-    ]);
+    supportedMock.mockResolvedValueOnce({
+      kinds: [{ x402Version: 2, scheme: 'exact', network: 'eip155:8453' }],
+      extensions: [],
+      signers: {},
+    });
     const provider = await makeProvider('remote');
     const health = await provider.health();
     expect(health.status).toBe('fail');

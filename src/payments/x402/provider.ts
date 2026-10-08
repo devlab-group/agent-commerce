@@ -51,12 +51,9 @@ import {
   type LocalFacilitatorClient,
 } from './chain';
 import { assertDevKeyIsLocalOnly, assertPayToIsNotDevAddress, describeRpc } from './dev-key-guard';
-import {
-  createLocalFacilitatorBinding,
-  createRemoteFacilitatorBinding,
-  type FacilitatorBinding,
-} from './facilitator';
+import { createRemoteFacilitatorBinding, type FacilitatorBinding } from './facilitator';
 import { resolveX402Deployment, type X402FacilitatorConfig } from './guardrails';
+import { createLocalFacilitatorBinding } from './local-facilitator';
 import { describeDeploymentMode } from './networks';
 import {
   declaredX402Version,
@@ -643,7 +640,7 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
       if (binding.kind === 'remote') {
         // Reachable is not enough: a facilitator that does not carry our
         // scheme on our network fails every payment after the buyer has signed
-        const kinds = await binding.supported();
+        const { kinds } = await binding.supported();
         const supportsUs = kinds.some(
           (kind) =>
             kind.x402Version === X402_VERSION &&

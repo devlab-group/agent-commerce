@@ -157,6 +157,20 @@ describe('published package metadata', () => {
     expect(manifest.pnpm).toBeUndefined();
   });
 
+  it('pins every @x402 package to one version older than 2.26.0', () => {
+    // Keep the @x402 pins aligned. The EVM facilitator in 2.26.0-2.28.0 can
+    // leave a failed `eth_getCode` promise unhandled, exiting Node. Raise the
+    // bound only for a release that fixes this
+    const versions = new Set(
+      Object.entries({ ...manifest.peerDependencies, ...manifest.devDependencies })
+        .filter(([name]) => name.startsWith('@x402/'))
+        .map(([, version]) => version),
+    );
+    expect(versions.size).toBe(1);
+    const [major, minor] = ([...versions][0] as string).split('.').map(Number);
+    expect(major === 2 && (minor as number) < 26).toBe(true);
+  });
+
   it('keeps the AP2 crypto libraries optional and exactly pinned', () => {
     // A mandate decides whether a purchase was authorized, so nothing in that
     // path floats. `jose` and `@sd-jwt/core` are optional peers because a
@@ -193,8 +207,12 @@ describe('published package metadata', () => {
       '@coinbase/x402',
       '@modelcontextprotocol/server',
       '@sd-jwt/core',
+      '@solana/kit',
+      '@ton/core',
       '@x402/core',
       '@x402/evm',
+      '@x402/svm',
+      '@x402/tvm',
       'canonicalize',
       'jose',
       'mppx',
