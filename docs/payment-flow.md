@@ -162,6 +162,8 @@ The demo and CI settle for real, on a chain they own:
   labeled `LOCAL DEVELOPMENT ONLY - DO NOT FUND`.
 - The E2E asserts the buyer's balance falls and the merchant's rises by exactly
   the price, and that the receipt carries a real transaction hash.
+- A second E2E settles on Anvil chains 31338 and 31339 through a loopback
+  SDK `x402Facilitator`, exercising the remote path used for public networks.
 
 No public RPC, no public chain, no hosted facilitator, no real money.
 

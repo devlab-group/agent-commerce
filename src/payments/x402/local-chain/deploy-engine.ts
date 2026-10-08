@@ -30,6 +30,11 @@ export interface DeployLocalChainOptions {
   readonly rpcUrl: string;
   /** Canonical decimal display amount, e.g. "100.00" */
   readonly buyerInitialBalance: string;
+  /**
+   * Expected RPC chain ID; defaults to the local chain. Tests on another
+   * Anvil chain override it.
+   */
+  readonly chainId?: number;
   readonly log?: (message: string) => void;
 }
 
@@ -55,18 +60,20 @@ export async function deployLocalChain(
   const log = options.log ?? (() => {});
   const publicClient = createLocalPublicClient(options.rpcUrl);
 
+  const expected = options.chainId ?? LOCAL_CHAIN_ID;
   const chainId = await publicClient.getChainId();
-  if (chainId !== LOCAL_CHAIN_ID) {
+  if (chainId !== expected) {
     throw new CommerceError(
       'CONFIG_INVALID',
-      `Local chain at ${options.rpcUrl} reports chain id ${chainId}, expected ${LOCAL_CHAIN_ID}. ` +
-        `Start it with "npm run chain:start" (anvil --chain-id ${LOCAL_CHAIN_ID} ...).`,
+      `Local chain at ${options.rpcUrl} reports chain id ${chainId}, expected ${expected}. ` +
+        `Start it with "npm run chain:start" (anvil --chain-id ${expected} ...).`,
     );
   }
 
   const facilitatorClient = createLocalFacilitatorClient(
     options.rpcUrl,
     LOCAL_FACILITATOR_ACCOUNT.privateKey,
+    expected,
   );
 
   let asset = existingAsset;
