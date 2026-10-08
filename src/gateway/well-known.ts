@@ -22,7 +22,7 @@ import type {
 import { MPP_PROFILE } from '../payments/mpp/constants';
 import {
   type DeploymentMode,
-  requireNetworkProfile,
+  requireX402Network,
   resolveDeploymentMode,
 } from '../payments/x402/networks';
 import { PACKAGE_VERSION } from '../version';
@@ -157,7 +157,7 @@ export function buildWellKnownDocument(options: BuildWellKnownOptions): WellKnow
               // Chain id 84532 is both the local dev chain and public Base
               // Sepolia, so the network id alone cannot say which one this is
               mode: resolveDeploymentMode(
-                requireNetworkProfile(x402.network, 'payments.x402.network'),
+                requireX402Network(x402.network, 'payments.x402.network', x402.networks),
                 x402.facilitator.mode,
               ),
             },
@@ -175,7 +175,7 @@ export function buildWellKnownDocument(options: BuildWellKnownOptions): WellKnow
               recipient: mpp.recipient,
               facilitator: { mode: mpp.facilitator.mode },
               mode: resolveDeploymentMode(
-                requireNetworkProfile(mpp.network, 'payments.mpp.network'),
+                requireX402Network(mpp.network, 'payments.mpp.network'),
                 mpp.facilitator.mode,
               ),
             },

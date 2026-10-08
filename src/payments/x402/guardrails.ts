@@ -11,12 +11,15 @@
  * Imports no peer (no viem, no `@x402/*`), so the CLI can load it.
  */
 import { CommerceError } from '../../core';
+import { isBurnAddress, sameAddress } from './addresses';
 import { isLikelyLocalOrPrivateHost, isWellKnownDevAddress } from './dev-key-guard';
 import {
+  type CustomNetworks,
   type DeploymentMode,
-  type NetworkProfile,
-  requireNetworkProfile,
+  LOCAL_CHAIN_ID,
+  requireX402Network,
   resolveDeploymentMode,
+  type X402Network,
 } from './networks';
 
 /**
@@ -59,10 +62,12 @@ export interface X402DeploymentInput {
   readonly configPath?: string;
   /** Settlement-recipient field named in errors, `payTo` by default */
   readonly payToField?: string;
+  /** EVM networks declared under `payments.x402.networks` */
+  readonly customNetworks?: CustomNetworks;
 }
 
 export interface X402Deployment {
-  readonly profile: NetworkProfile;
+  readonly profile: X402Network;
   readonly mode: DeploymentMode;
 }
 
@@ -78,7 +83,7 @@ function invalid(message: string, path: string): CommerceError {
 export function resolveX402Deployment(input: X402DeploymentInput): X402Deployment {
   const at = input.configPath ?? 'payments.x402';
   const payTo = input.payToField ?? 'payTo';
-  const profile = requireNetworkProfile(input.network, `${at}.network`);
+  const profile = requireX402Network(input.network, `${at}.network`, input.customNetworks);
   const mode = resolveDeploymentMode(profile, input.facilitator.mode);
 
   // Local mode keeps a gas-paying key in the gateway process. A compromise
@@ -86,6 +91,13 @@ export function resolveX402Deployment(input: X402DeploymentInput): X402Deploymen
   if (profile.kind === 'mainnet' && input.facilitator.mode === 'local') {
     throw invalid(
       `${at}: network "${profile.id}" (${profile.displayName}) is a mainnet and cannot be served by facilitator.mode "local". A mainnet deployment must settle through a remote facilitator.`,
+      `${at}.facilitator.mode`,
+    );
+  }
+  // The local signer uses Anvil's chain ID; reject other networks before settlement
+  if (input.facilitator.mode === 'local' && profile.id !== `eip155:${LOCAL_CHAIN_ID}`) {
+    throw invalid(
+      `${at}: facilitator.mode "local" serves the local Anvil chain (eip155:${LOCAL_CHAIN_ID}) only, not "${profile.id}" (${profile.displayName}). Use a remote facilitator.`,
       `${at}.facilitator.mode`,
     );
   }
@@ -127,7 +139,7 @@ export function resolveX402Deployment(input: X402DeploymentInput): X402Deploymen
 
   // The config loader's address check refuses this too; repeated here for a
   // library consumer who calls `createX402PaymentProvider` without it
-  if (/^0x0{40}$/i.test(input.payTo)) {
+  if (isBurnAddress(profile, input.payTo)) {
     throw invalid(
       `${at}: "${payTo}" is the zero address. Every payment settled there is destroyed.`,
       `${at}.${payTo}`,
@@ -147,7 +159,7 @@ export function resolveX402Deployment(input: X402DeploymentInput): X402Deploymen
   // Mainnet only: a testnet is where pointing at a mock token is normal
   const canonical = profile.canonicalAsset;
   if (mode === 'mainnet' && canonical) {
-    if (!sameAddress(input.asset, canonical.address)) {
+    if (!sameAddress(profile, input.asset, canonical.address)) {
       throw invalid(
         `${at}: asset ${input.asset} is not ${canonical.symbol} on ${profile.displayName} (expected ${canonical.address}). Settling a mainnet payment in an unintended token is refused.`,
         `${at}.asset`,
@@ -156,15 +168,16 @@ export function resolveX402Deployment(input: X402DeploymentInput): X402Deploymen
     // The buyer signs the EIP-712 domain and the scheme checks it. A wrong one
     // refuses every payment with `invalid_exact_evm_token_name_mismatch` after
     // the buyer signed, so it is caught here, before the gateway starts.
-    if (input.assetName !== undefined && input.assetName !== canonical.name) {
+    const domain = 'name' in canonical ? canonical : undefined;
+    if (domain && input.assetName !== undefined && input.assetName !== domain.name) {
       throw invalid(
-        `${at}: assetName "${input.assetName}" is not the EIP-712 domain name ${canonical.symbol} reports on ${profile.displayName} (expected "${canonical.name}"). Every payment would be refused after the buyer signed.`,
+        `${at}: assetName "${input.assetName}" is not the EIP-712 domain name ${canonical.symbol} reports on ${profile.displayName} (expected "${domain.name}"). Every payment would be refused after the buyer signed.`,
         `${at}.assetName`,
       );
     }
-    if (input.assetVersion !== undefined && input.assetVersion !== canonical.version) {
+    if (domain && input.assetVersion !== undefined && input.assetVersion !== domain.version) {
       throw invalid(
-        `${at}: assetVersion "${input.assetVersion}" is not the EIP-712 domain version ${canonical.symbol} reports on ${profile.displayName} (expected "${canonical.version}").`,
+        `${at}: assetVersion "${input.assetVersion}" is not the EIP-712 domain version ${canonical.symbol} reports on ${profile.displayName} (expected "${domain.version}").`,
         `${at}.assetVersion`,
       );
     }
@@ -229,8 +242,4 @@ function credentialFields(auth: FacilitatorAuth): readonly (readonly [string, st
     default:
       return [];
   }
-}
-
-function sameAddress(a: string, b: string): boolean {
-  return a.toLowerCase() === b.toLowerCase();
 }

@@ -19,9 +19,10 @@ import {
 } from '../../payments/mpp/constants';
 import type { X402FacilitatorConfig } from '../../payments/x402/guardrails';
 import {
+  type CustomNetworks,
   type DeploymentMode,
   describeDeploymentMode,
-  findNetworkProfile,
+  findX402Network,
   resolveDeploymentMode,
 } from '../../payments/x402/networks';
 // Narrow modules, not the protocol barrels: the CLI must pull in no protocol SDK
@@ -199,8 +200,9 @@ function findX402Mismatch(
 function describeSettlement(
   network: string,
   facilitator: X402FacilitatorConfig,
+  customNetworks?: CustomNetworks,
 ): { readonly mode: DeploymentMode | undefined; readonly where: string; readonly via: string } {
-  const profile = findNetworkProfile(network);
+  const profile = findX402Network(network, customNetworks);
   const mode = profile ? resolveDeploymentMode(profile, facilitator.mode) : undefined;
   const where =
     profile === undefined || mode === undefined
@@ -572,7 +574,7 @@ export async function runDoctor(
   if (x402 === undefined || !x402.enabled) {
     checks.push({ name: 'Payments', status: 'INFO', detail: 'x402 not configured' });
   } else {
-    const { mode, where, via } = describeSettlement(x402.network, x402.facilitator);
+    const { mode, where, via } = describeSettlement(x402.network, x402.facilitator, x402.networks);
     const flow = describePaymentFlow(x402);
     const summary = `x402 v2 (scheme=exact) enabled - ${where}, destination=${maskMiddle(x402.payTo)}, facilitator=${via}, ${flow}`;
     const live = wellKnown?.ok ? extractWellKnownX402(wellKnown.body) : undefined;

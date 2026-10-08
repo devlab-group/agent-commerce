@@ -282,6 +282,10 @@ export interface X402ProviderOptions {
   readonly allowMainnet?: boolean;
   /** Must be true for an unauthenticated mainnet facilitator. */
   readonly allowUnauthenticatedFacilitator?: boolean;
+  /** EVM networks outside the built-in registry; `network` may name one */
+  readonly customNetworks?: Readonly<
+    Record<string, { readonly kind: 'testnet' | 'mainnet'; readonly displayName: string }>
+  >;
   readonly logger?: Logger;
   readonly clock?: Clock;
   readonly ids?: IdGenerator;
@@ -308,12 +312,13 @@ export interface NetworkProfile {
   readonly chainId: number;
   readonly displayName: string;
   readonly kind: 'testnet' | 'mainnet';
-  /** Canonical USDC and its EIP-712 domain, enforced on mainnet only */
+  /** The network's USDC and its EIP-712 domain: the default asset, required on mainnet */
   readonly canonicalAsset?: {
     readonly symbol: string;
     readonly address: string;
     readonly name: string;
     readonly version: string;
+    readonly decimals: number;
   };
 }
 ```

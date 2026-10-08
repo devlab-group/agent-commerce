@@ -178,14 +178,12 @@ Public-network configuration follows these rules:
 - **Mainnet is refused unless every guardrail is satisfied** - an explicit
   `allowMainnet`, a remote facilitator over HTTPS, a second explicit
   acknowledgment if no facilitator credential is configured, a non-development
-  settlement destination, and canonical USDC with the EIP-712 domain the token
-  reports. Config validation checks these before startup, so
-  `agent-commerce validate` catches them and the gateway will not start
-  without them. See [configuration.md](configuration.md).
+  settlement destination, and canonical USDC with its EIP-712 domain on
+  built-in mainnets. Config validation checks these before startup;
+  `agent-commerce validate` reports missing guards. See [configuration.md](configuration.md).
 - **`assetName` is part of that.** Base mainnet's USDC reports `"USD Coin"`,
   Base Sepolia's reports `"USDC"`, and the buyer signs that string into their
-  EIP-712 domain. Config validation rejects a mainnet mismatch before the buyer
-  signs.
+  EIP-712 domain. Config validation rejects a mismatch before the buyer signs.
 - **`health()` asks the right question per mode.** In local mode it probes
   `anvil_nodeInfo`, so a local facilitator pointed at a real node reports
   unhealthy and `/ready` refuses to serve. In remote mode it asks the

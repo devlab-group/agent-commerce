@@ -34,6 +34,7 @@ export function createConfiguredPaymentProviders(
         ...(x402.allowUnauthenticatedFacilitator !== undefined
           ? { allowUnauthenticatedFacilitator: x402.allowUnauthenticatedFacilitator }
           : {}),
+        ...(x402.networks !== undefined ? { customNetworks: x402.networks } : {}),
         logger,
       }),
     );

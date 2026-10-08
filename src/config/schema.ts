@@ -54,6 +54,12 @@ import {
   type MppNetwork,
 } from '../payments/mpp/constants';
 import { resolveX402Deployment, type X402FacilitatorConfig } from '../payments/x402/guardrails';
+import { type CustomNetworks, validateCustomNetworks } from '../payments/x402/networks';
+import {
+  type ResolvedX402Option,
+  resolveX402Option,
+  type X402OptionInput,
+} from '../payments/x402/options';
 import {
   X402_DEFAULT_PAYMENT_FLOW,
   X402_PAYMENT_FLOWS,
@@ -343,16 +349,38 @@ const FacilitatorSchema = z.discriminatedUnion('mode', [
     .strict(),
 ]);
 
+// Settlement network, payee and token, resolved by x402/options.ts. Network
+// and payee fields follow the SDK's `PaymentOption`; asset fields override defaults
+const X402OptionSchema = z
+  .object({
+    scheme: z.string().min(1).optional(),
+    network: z.string().min(1),
+    payTo: z.string().min(1),
+    asset: z.string().min(1).optional(),
+    assetName: z.string().min(1).optional(),
+    assetVersion: z.string().min(1).optional(),
+    assetDecimals: NumberOrString.optional(),
+  })
+  .strict();
+
+const X402NetworkDeclarationSchema = z
+  .object({ kind: z.enum(['testnet', 'mainnet']), displayName: z.string().min(1) })
+  .strict();
+
 const X402Schema = z
   .object({
     enabled: BooleanOrString,
-    network: z.string().min(1),
+    // Accept direct fields or an `options` array, never both
+    network: z.string().min(1).optional(),
+    payTo: z.string().min(1).optional(),
+    asset: z.string().min(1).optional(),
+    assetName: z.string().min(1).optional(),
+    assetVersion: z.string().min(1).optional(),
+    assetDecimals: NumberOrString.optional(),
+    options: z.array(X402OptionSchema).optional(),
+    // EVM networks outside the built-in registry, each with its environment
+    networks: z.record(z.string().min(1), X402NetworkDeclarationSchema).optional(),
     rpcUrl: z.string().min(1),
-    asset: z.string().min(1),
-    assetName: z.string().min(1),
-    assetVersion: z.string().min(1),
-    assetDecimals: NumberOrString,
-    payTo: z.string().min(1),
     maxTimeoutSeconds: NumberOrString,
     // `authorization` (the x402 default) settles after the backend call
     paymentFlow: z.enum(X402_PAYMENT_FLOWS).optional(),
@@ -525,6 +553,8 @@ export interface GatewayConfig {
       readonly facilitator: X402FacilitatorConfig;
       readonly allowMainnet?: boolean;
       readonly allowUnauthenticatedFacilitator?: boolean;
+      /** EVM networks declared beside the built-in ones, by CAIP-2 id */
+      readonly networks?: CustomNetworks;
     };
     readonly mpp?: {
       readonly enabled: boolean;
@@ -696,62 +726,9 @@ function normalize(raw: RawConfig): GatewayConfig {
   };
   validateMountPaths(protocols);
 
-  const x402Raw = raw.payments.x402;
-  const x402 =
-    x402Raw !== undefined
-      ? {
-          enabled: toBoolean(x402Raw.enabled, 'payments.x402.enabled'),
-          network: x402Raw.network,
-          rpcUrl: x402Raw.rpcUrl,
-          asset: x402Raw.asset,
-          assetName: x402Raw.assetName,
-          assetVersion: x402Raw.assetVersion,
-          assetDecimals: toNumber(x402Raw.assetDecimals, 'payments.x402.assetDecimals', {
-            min: 0,
-            max: 36,
-          }),
-          payTo: x402Raw.payTo,
-          maxTimeoutSeconds: toNumber(
-            x402Raw.maxTimeoutSeconds,
-            'payments.x402.maxTimeoutSeconds',
-            {
-              min: 1,
-            },
-          ),
-          paymentFlow: x402Raw.paymentFlow ?? X402_DEFAULT_PAYMENT_FLOW,
-          facilitator: normalizeFacilitator(x402Raw.facilitator),
-          ...(x402Raw.allowMainnet !== undefined
-            ? { allowMainnet: toBoolean(x402Raw.allowMainnet, 'payments.x402.allowMainnet') }
-            : {}),
-          ...(x402Raw.allowUnauthenticatedFacilitator !== undefined
-            ? {
-                allowUnauthenticatedFacilitator: toBoolean(
-                  x402Raw.allowUnauthenticatedFacilitator,
-                  'payments.x402.allowUnauthenticatedFacilitator',
-                ),
-              }
-            : {}),
-        }
-      : undefined;
-
-  if (x402) {
-    validateAddress('payments.x402.payTo', x402.payTo);
-    validateAddress('payments.x402.asset', x402.asset);
-    // The provider makes the same call at construction; running it here lets
-    // `agent-commerce validate` report an unsafe deployment before boot
-    resolveX402Deployment({
-      network: x402.network,
-      payTo: x402.payTo,
-      asset: x402.asset,
-      assetName: x402.assetName,
-      assetVersion: x402.assetVersion,
-      facilitator: x402.facilitator,
-      ...(x402.allowMainnet !== undefined ? { allowMainnet: x402.allowMainnet } : {}),
-      ...(x402.allowUnauthenticatedFacilitator !== undefined
-        ? { allowUnauthenticatedFacilitator: x402.allowUnauthenticatedFacilitator }
-        : {}),
-    });
-  }
+  const x402Settings =
+    raw.payments.x402 !== undefined ? normalizeX402(raw.payments.x402) : undefined;
+  const x402 = x402Settings?.config;
 
   const mpp = normalizeMpp(raw.payments.mpp);
 
@@ -761,7 +738,7 @@ function normalize(raw: RawConfig): GatewayConfig {
   }
 
   const resources = Object.entries(raw.resources).map(([id, entry]) =>
-    normalizeResource(id, entry, protocols, x402, mpp, ap2),
+    normalizeResource(id, entry, protocols, x402Settings, mpp, ap2),
   );
   // CommerceResource has no payment-flow field, so the overrides travel with
   // each rail, and the one selected for a request applies them
@@ -1337,9 +1314,165 @@ function closedObjectProperties(schema: unknown): Record<string, unknown> | unde
   return isRecord(schema['properties']) ? schema['properties'] : {};
 }
 
+type X402Config = NonNullable<GatewayConfig['payments']['x402']>;
+
 interface NormalizedX402 {
-  readonly enabled: boolean;
-  readonly assetDecimals: number;
+  readonly config: X402Config;
+  /**
+   * Symbol of the network's default asset when no asset is configured. A
+   * resource's price must then be in that token or in USD.
+   */
+  readonly defaultAssetSymbol?: string;
+}
+
+function x402Invalid(message: string, path: string): CommerceError {
+  return new CommerceError('CONFIG_INVALID', message, { details: { path } });
+}
+
+// The fields of one option, as they appear directly under `payments.x402`
+const DIRECT_OPTION_FIELDS = [
+  'network',
+  'payTo',
+  'asset',
+  'assetName',
+  'assetVersion',
+  'assetDecimals',
+] as const;
+
+type RawX402 = NonNullable<RawConfig['payments']['x402']>;
+// An entry of `options`, or `payments.x402` itself in the direct form
+interface RawX402Option {
+  readonly scheme?: string | undefined;
+  readonly network?: string | undefined;
+  readonly payTo?: string | undefined;
+  readonly asset?: string | undefined;
+  readonly assetName?: string | undefined;
+  readonly assetVersion?: string | undefined;
+  readonly assetDecimals?: number | string | undefined;
+}
+
+function x402OptionInput(raw: RawX402Option, path: string): X402OptionInput {
+  return {
+    ...(raw.scheme !== undefined ? { scheme: raw.scheme } : {}),
+    network: raw.network as string,
+    payTo: raw.payTo as string,
+    ...(raw.asset !== undefined ? { asset: raw.asset } : {}),
+    ...(raw.assetName !== undefined ? { assetName: raw.assetName } : {}),
+    ...(raw.assetVersion !== undefined ? { assetVersion: raw.assetVersion } : {}),
+    ...(raw.assetDecimals !== undefined
+      ? {
+          assetDecimals: toNumber(raw.assetDecimals, `${path}.assetDecimals`, { min: 0, max: 36 }),
+        }
+      : {}),
+  };
+}
+
+/**
+ * Resolves direct `payments.x402` fields and a one-entry `options` array
+ * identically, preserving the original config form.
+ */
+function normalizeX402(raw: RawX402): NormalizedX402 {
+  const at = 'payments.x402';
+  const direct = DIRECT_OPTION_FIELDS.filter((field) => raw[field] !== undefined);
+  if (raw.options !== undefined && direct.length > 0) {
+    throw x402Invalid(
+      `${at}: give the option either under ${at}.options or directly (${direct.join(', ')}), not both`,
+      `${at}.options`,
+    );
+  }
+  if (raw.options?.length === 0) {
+    throw x402Invalid(`${at}.options is empty; list at least one option`, `${at}.options`);
+  }
+  if (raw.options === undefined) {
+    for (const field of ['network', 'payTo'] as const) {
+      if (raw[field] === undefined) {
+        throw x402Invalid(
+          `${at}.${field} is required, unless the options are listed under ${at}.options`,
+          `${at}.${field}`,
+        );
+      }
+    }
+  }
+
+  const networks = raw.networks;
+  if (networks !== undefined) validateCustomNetworks(networks, `${at}.networks`);
+
+  const entries: (readonly [string, RawX402Option])[] =
+    raw.options !== undefined
+      ? raw.options.map((option, i) => [`${at}.options[${i}]`, option] as const)
+      : [[at, raw]];
+  const options = entries.map(([path, entry]) =>
+    resolveX402Option(x402OptionInput(entry, path), path, networks),
+  );
+
+  // Reject resolved options the provider cannot serve so `validate` reports
+  // them before startup
+  options.forEach((option, i) => {
+    if (option.network.family !== 'evm') {
+      const path = `${entries[i]?.[0]}.network`;
+      throw x402Invalid(
+        `${path}: x402 settlement on ${option.network.displayName} (${option.network.id}) is not available yet; only EVM networks are`,
+        path,
+      );
+    }
+  });
+  if (options.length > 1) {
+    throw x402Invalid(
+      `${at}.options: more than one x402 option is not available yet; list exactly one`,
+      `${at}.options`,
+    );
+  }
+  const option = options[0] as ResolvedX402Option;
+
+  const config: X402Config = {
+    enabled: toBoolean(raw.enabled, `${at}.enabled`),
+    network: option.network.id,
+    rpcUrl: raw.rpcUrl,
+    asset: option.asset,
+    // An EVM option always carries its EIP-712 domain
+    assetName: option.assetName as string,
+    assetVersion: option.assetVersion as string,
+    assetDecimals: option.assetDecimals,
+    payTo: option.payTo,
+    maxTimeoutSeconds: toNumber(raw.maxTimeoutSeconds, `${at}.maxTimeoutSeconds`, { min: 1 }),
+    paymentFlow: raw.paymentFlow ?? X402_DEFAULT_PAYMENT_FLOW,
+    facilitator: normalizeFacilitator(raw.facilitator),
+    ...(raw.allowMainnet !== undefined
+      ? { allowMainnet: toBoolean(raw.allowMainnet, `${at}.allowMainnet`) }
+      : {}),
+    ...(raw.allowUnauthenticatedFacilitator !== undefined
+      ? {
+          allowUnauthenticatedFacilitator: toBoolean(
+            raw.allowUnauthenticatedFacilitator,
+            `${at}.allowUnauthenticatedFacilitator`,
+          ),
+        }
+      : {}),
+    ...(networks !== undefined ? { networks } : {}),
+  };
+
+  // The provider makes the same call at construction; running it here lets
+  // `agent-commerce validate` report an unsafe deployment before boot
+  resolveX402Deployment({
+    network: config.network,
+    payTo: config.payTo,
+    asset: config.asset,
+    assetName: config.assetName,
+    assetVersion: config.assetVersion,
+    facilitator: config.facilitator,
+    ...(config.allowMainnet !== undefined ? { allowMainnet: config.allowMainnet } : {}),
+    ...(config.allowUnauthenticatedFacilitator !== undefined
+      ? { allowUnauthenticatedFacilitator: config.allowUnauthenticatedFacilitator }
+      : {}),
+    ...(networks !== undefined ? { customNetworks: networks } : {}),
+  });
+
+  return {
+    config,
+    ...(option.defaultAssetSymbol !== undefined
+      ? { defaultAssetSymbol: option.defaultAssetSymbol }
+      : {}),
+  };
 }
 
 function normalizeFacilitator(raw: z.infer<typeof FacilitatorSchema>): X402FacilitatorConfig {
@@ -1517,7 +1650,7 @@ function normalizeResource(
   }
 
   if (entry.pricing.type === 'fixed') {
-    validatePricingAmount(id, entry.pricing.amount, x402?.assetDecimals);
+    validatePricingAmount(id, entry.pricing.amount, x402?.config.assetDecimals);
   }
 
   const paymentMethods = entry.payments ?? [];
@@ -1541,12 +1674,31 @@ function normalizeResource(
     }
     // At least one named rail must be enabled, not every one. `main.ts` checks
     // again at composition as defense in depth.
-    const enabledRails = [...(x402?.enabled ? ['x402'] : []), ...(mpp?.enabled ? ['mpp'] : [])];
+    const enabledRails = [
+      ...(x402?.config.enabled ? ['x402'] : []),
+      ...(mpp?.enabled ? ['mpp'] : []),
+    ];
     if (!paymentMethods.some((method) => enabledRails.includes(method))) {
       throw new CommerceError(
         'CONFIG_INVALID',
         `Resource "${id}" names payment method(s) "${paymentMethods.join(', ')}", none of which is configured and enabled under "payments"`,
         { details: { path: `resources.${id}.payments`, resourceId: id, paymentMethods } },
+      );
+    }
+    // With no asset configured, the x402 offer settles in the network's default
+    // stablecoin, so the price must name that token or USD
+    const defaultSymbol = x402?.defaultAssetSymbol;
+    if (
+      x402?.config.enabled &&
+      defaultSymbol !== undefined &&
+      paymentMethods.includes('x402') &&
+      entry.pricing.currency !== 'USD' &&
+      entry.pricing.currency !== defaultSymbol
+    ) {
+      throw new CommerceError(
+        'CONFIG_INVALID',
+        `Resource "${id}" is priced in ${entry.pricing.currency}, but x402 settles in ${defaultSymbol}, the default asset of ${x402.config.network}. Price it in ${defaultSymbol} or USD, or set payments.x402.asset.`,
+        { details: { path: `resources.${id}.pricing.currency`, resourceId: id } },
       );
     }
     // MPP fixes the currency label and decimal precision for every resource it serves

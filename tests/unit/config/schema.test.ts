@@ -391,17 +391,21 @@ describe('parseConfig', () => {
     });
 
     it('rejects an unknown CAIP-2 network', () => {
-      expect(messageFor(withX402({ network: 'eip155:1' }))).toContain('not a supported network');
-      expect(messageFor(withX402({ network: 'solana:mainnet' }))).toContain(
-        'not a supported network',
-      );
+      expect(messageFor(withX402({ network: 'eip155:10' }))).toContain('not a known network');
+      expect(messageFor(withX402({ network: 'solana:mainnet' }))).toContain('not a known network');
     });
 
     it('rejects a mainnet served by the in-process facilitator', () => {
       // The local facilitator signs with a key this process holds: a hot
       // wallet inside the resource server
       const message = messageFor(
-        withX402({ network: 'eip155:8453', asset: BASE_USDC, payTo: MERCHANT, allowMainnet: true }),
+        withX402({
+          network: 'eip155:8453',
+          asset: BASE_USDC,
+          assetName: 'USD Coin',
+          payTo: MERCHANT,
+          allowMainnet: true,
+        }),
       );
       expect(message).toContain('mainnet');
       expect(message).toContain('remote facilitator');

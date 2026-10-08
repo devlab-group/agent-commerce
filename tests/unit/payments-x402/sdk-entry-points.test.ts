@@ -6,17 +6,23 @@ import { HTTPFacilitatorClient } from '@x402/core/http';
 import { x402ResourceServer } from '@x402/core/server';
 import type { SchemeNetworkServer } from '@x402/core/types';
 import {
+  getDefaultAsset as evmDefaultAsset,
   isEIP3009Payload,
   isPermit2Payload,
   PERMIT2_ADDRESS,
   x402ExactPermit2ProxyAddress,
 } from '@x402/evm';
 import { ExactEvmScheme } from '@x402/evm/exact/server';
-import { decodeTransactionFromPayload, transactionMessageHash } from '@x402/svm';
+import {
+  decodeTransactionFromPayload,
+  getDefaultAsset as svmDefaultAsset,
+  transactionMessageHash,
+} from '@x402/svm';
 import { ExactSvmScheme } from '@x402/svm/exact/server';
-import { normalizeTonAddress } from '@x402/tvm';
+import { normalizeTonAddress, getDefaultAsset as tvmDefaultAsset } from '@x402/tvm';
 import { ExactTvmScheme } from '@x402/tvm/exact/server';
 import { describe, expect, it } from 'vitest';
+import { BUILT_IN_NETWORKS } from '../../../src/payments/x402/networks';
 
 const BASE = 'eip155:8453';
 const SOLANA_DEVNET = 'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1';
@@ -67,6 +73,25 @@ describe('pinned x402 SDK entry points', () => {
       asset: '0:f418a04cf196ebc959366844a6cdf53a6fd6fff1eadafc892f05210bba31593e',
     });
   });
+
+  // Config load cannot import the SDK, so the profiles repeat its default assets
+  it.each(BUILT_IN_NETWORKS.map((n) => [n.id, n] as const))(
+    '%s defaults to the asset the SDK names',
+    (_id, network) => {
+      const id = network.id as `${string}:${string}`;
+      if (network.family === 'evm') {
+        const { asset, name, version, decimals, symbol } = evmDefaultAsset(id);
+        expect(network.canonicalAsset).toEqual({ symbol, address: asset, name, version, decimals });
+        return;
+      }
+      const sdk = network.family === 'svm' ? svmDefaultAsset(id) : tvmDefaultAsset(id);
+      expect(network.canonicalAsset).toEqual({
+        symbol: sdk.symbol,
+        address: sdk.asset,
+        decimals: sdk.decimals,
+      });
+    },
+  );
 
   it('truncates excess precision to zero, so config load must refuse it first', async () => {
     const parsed = await new ExactEvmScheme().parsePrice('$0.0000001', BASE);

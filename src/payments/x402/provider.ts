@@ -54,7 +54,7 @@ import { assertDevKeyIsLocalOnly, assertPayToIsNotDevAddress, describeRpc } from
 import { createRemoteFacilitatorBinding, type FacilitatorBinding } from './facilitator';
 import { resolveX402Deployment, type X402FacilitatorConfig } from './guardrails';
 import { createLocalFacilitatorBinding } from './local-facilitator';
-import { describeDeploymentMode } from './networks';
+import { type CustomNetworks, describeDeploymentMode } from './networks';
 import {
   declaredX402Version,
   decodePaymentSubmission,
@@ -131,6 +131,11 @@ export interface X402ProviderOptions {
   readonly allowMainnet?: boolean;
   /** Required on mainnet when facilitator auth is `none` */
   readonly allowUnauthenticatedFacilitator?: boolean;
+  /**
+   * Custom EVM networks keyed by CAIP-2 ID; `network` may select one, and
+   * its `kind` determines mainnet guardrails
+   */
+  readonly customNetworks?: CustomNetworks;
   readonly logger?: Logger;
   readonly clock?: Clock;
   readonly ids?: IdGenerator;
@@ -165,8 +170,9 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
   }
   // The chain id is signed into the buyer's EIP-712 domain, so a network it
   // cannot be resolved from fails here, never at request time
-  const { profile, mode } = resolveX402Deployment({
+  const { profile: resolved, mode } = resolveX402Deployment({
     network: options.network,
+    ...(options.customNetworks !== undefined ? { customNetworks: options.customNetworks } : {}),
     payTo: options.payTo,
     asset: options.asset,
     assetName: options.assetName,
@@ -177,6 +183,14 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
       ? { allowUnauthenticatedFacilitator: options.allowUnauthenticatedFacilitator }
       : {}),
   });
+  if (resolved.family !== 'evm') {
+    throw new CommerceError(
+      'CONFIG_INVALID',
+      `x402 provider: "${options.network}" (${resolved.displayName}) is not an EVM network; this provider settles \`exact\` on EVM only`,
+    );
+  }
+  // Narrowed once: the request handlers below are hoisted declarations
+  const profile = resolved;
   const network = options.network as Network;
   // Built once, here, rather than in settle(): an unusable key fails the
   // provider at startup, not on the first paid request after that buyer's

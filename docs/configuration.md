@@ -312,11 +312,13 @@ payments:
     enabled: true
     network: ${X402_NETWORK} # CAIP-2; eip155:84532 locally
     rpcUrl: ${X402_RPC_URL}
+    payTo: ${MERCHANT_WALLET} # merchant-controlled. NEVER the gateway's.
+    # Optional on a built-in network, which settles in its USDC. Set all four
+    # for another token, such as the local MockUSDC.
     asset: ${X402_ASSET} # ERC-20 with EIP-3009
     assetName: ${X402_ASSET_NAME} # EIP-712 domain name
     assetVersion: ${X402_ASSET_VERSION}
     assetDecimals: ${X402_ASSET_DECIMALS}
-    payTo: ${MERCHANT_WALLET} # merchant-controlled. NEVER the gateway's.
     maxTimeoutSeconds: 120
     paymentFlow: authorization # default; or upfront
     facilitator:
@@ -336,6 +338,31 @@ the flow details.
 Startup rejects a `payTo` that is not a plausible address or is the zero
 address, and the effective destination is printed in a safe, visible form so a
 presenter can confirm where money goes.
+
+### The settlement asset
+
+Omit the four asset fields to use the [built-in network's](#network-and-facilitator)
+USDC address, EIP-712 domain and decimals. Resources using this default must
+be priced in `USDC` or `USD`. `USD` treats USDC at face value, without an
+exchange-rate lookup.
+
+For another token on a testnet or declared EVM network, set `asset`,
+`assetName`, `assetVersion` and `assetDecimals` together. No fields are
+inherited from USDC. Overrides for the default token must match its metadata.
+An explicitly configured `asset` preserves the resource's currency label;
+built-in mainnets require their canonical USDC.
+
+Alternatively, put these fields in a one-entry `options` array. Both forms
+resolve identically; config load rejects mixed forms, empty arrays and
+multiple entries.
+
+```yaml
+payments:
+  x402:
+    options:
+      - network: eip155:8453
+        payTo: ${MERCHANT_WALLET}
+```
 
 ### `payments.mpp`
 
@@ -380,23 +407,45 @@ development address, and either a facilitator credential or
 
 ## Network and facilitator
 
-`network` is a CAIP-2 identifier and must be one this build knows:
+`network` is a CAIP-2 identifier, either built in or declared:
 
-| `network`      |              | Notes                                      |
-| -------------- | ------------ | ------------------------------------------ |
-| `eip155:84532` | Base Sepolia | the chain id the local dev chain also uses |
-| `eip155:8453`  | Base         | mainnet; real funds                        |
+| `network`       | Network           | Kind    | Notes                                      |
+| --------------- | ----------------- | ------- | ------------------------------------------ |
+| `eip155:84532`  | Base Sepolia      | testnet | the chain id the local dev chain also uses |
+| `eip155:8453`   | Base              | mainnet |                                            |
+| `eip155:1`      | Ethereum          | mainnet |                                            |
+| `eip155:137`    | Polygon           | mainnet |                                            |
+| `eip155:42161`  | Arbitrum One      | mainnet |                                            |
+| `eip155:421614` | Arbitrum Sepolia  | testnet |                                            |
+| `eip155:43114`  | Avalanche C-Chain | mainnet |                                            |
 
-Anything else is `CONFIG_INVALID` at load. The chain id is signed into the
-buyer's EIP-712 domain, so an unrecognized network is never guessed at.
+Settlement has been demonstrated on Base Sepolia and Base. The other listed
+networks use the same provider through a remote facilitator advertising them;
+settlement on those chains has not been demonstrated.
+
+Declare another EVM network with its `kind` to select the mainnet guardrails.
+Custom networks have no default asset: set all four asset fields. Built-in
+networks cannot be redeclared.
+
+```yaml
+payments:
+  x402:
+    networks:
+      eip155:10: { kind: mainnet, displayName: OP Mainnet }
+```
+
+Unknown IDs raise `CONFIG_INVALID` at config load. The chain ID is part of
+the buyer's signed EIP-712 domain and must resolve explicitly.
 
 `facilitator` decides who verifies and broadcasts:
 
 ```yaml
 facilitator:
-  mode: local # in-process signer; refused on mainnet
+  mode: local # in-process signer; eip155:84532 only
   signerPrivateKey: ${X402_FACILITATOR_PRIVATE_KEY}
 ```
+
+Local mode requires Anvil on `eip155:84532`. Other networks require remote mode.
 
 ```yaml
 facilitator:
@@ -418,7 +467,7 @@ resolved mode.
 
 ## Mainnet guardrails
 
-`eip155:8453` moves real money, so a config naming it must also say so. All of
+A mainnet moves real money, so a config naming one must also say so. All of
 these are refused at config load, before the gateway starts:
 
 | Refused                                                   | Because                                                    |
@@ -428,7 +477,7 @@ these are refused at config load, before the gateway starts:
 | `facilitator.auth.type: none` without explicit acceptance | an unauthenticated counterparty must be acknowledged       |
 | a non-HTTPS `facilitator.url`                             | authorizations and settlement results would be unencrypted |
 | a well-known Anvil `payTo` or MPP `recipient`             | its private key is public                                  |
-| an `asset` other than canonical USDC on Base              | it could settle an unintended token                        |
+| an `asset` other than USDC on a built-in mainnet          | it could settle an unintended token                        |
 | the wrong USDC `assetName` or `assetVersion`              | the buyer signs that EIP-712 domain                        |
 
 The same rules apply to any non-local deployment where they make sense: plain
@@ -443,8 +492,9 @@ reports the parsed configuration and, when reachable, the live provider health.
 
 Base Sepolia USDC reports `"USDC"`; Base mainnet reports `"USD Coin"`. The buyer
 signs this name in the EIP-712 domain, so a mismatch would reject every payment
-after signing. The network registry (`src/payments/x402/networks.ts`) pins both
-values, and config validation rejects a mainnet mismatch before startup.
+after signing. The network registry (`src/payments/x402/networks.ts`) pins the
+domain of each built-in network's USDC, and config validation rejects a
+mismatch before startup.
 
 ### Running against a public network
 

@@ -245,12 +245,12 @@ configured and direct MPP construction both run these checks.
 
 ## Mainnet
 
-Base mainnet (`eip155:8453`) requires `allowMainnet: true`, a remote HTTPS
-facilitator, a non-development recipient, and canonical USDC address and EIP-712
-domain values. A facilitator with `auth.type: none` also requires
-`allowUnauthenticatedFacilitator: true`. Shared deployment checks run during
-config validation and provider construction; the provider additionally checks
-RPC and local-key safety.
+Mainnet requires `allowMainnet: true`, a remote HTTPS facilitator and a
+non-development recipient. Built-in mainnets require their canonical USDC
+address and EIP-712 domain; declared mainnets have no default asset to check.
+With `auth.type: none`, also set `allowUnauthenticatedFacilitator: true`.
+Config validation and provider construction share these checks. The provider
+also checks RPC and local-key safety.
 
 A facilitator cannot change an EIP-3009 transfer's signed recipient, amount, or
 chain. It can observe authorizations and refuse to broadcast them. A request
@@ -258,11 +258,11 @@ without facilitator credentials falls under the facilitator's anonymous-access
 terms and limits, so mainnet requires a separate acknowledgment for that
 configuration.
 
-The in-process facilitator is forbidden on mainnet because it puts a funded gas
-key in the gateway process. On Base Sepolia, config accepts any non-empty local
-facilitator key. Provider construction requires a 32-byte hex private key and
-rejects a well-known Anvil key against a public RPC. The local health check also
-requires Anvil, so public Base Sepolia needs remote mode to become ready.
+The in-process facilitator serves only `eip155:84532`; mainnet forbids it
+because its gas-paying key lives in the gateway process. Config accepts any
+non-empty local key, but provider construction requires 32-byte hex and rejects
+well-known Anvil keys against public RPCs. Local health checks require Anvil,
+so public Base Sepolia needs remote mode for readiness.
 
 ## Adversarial scenarios, and where each is tested
 
@@ -299,6 +299,9 @@ real funds.
 | not-yet-valid authorization (`validAfter` in the future)                                                                                | refused before settlement                                                                                                                                                   | `tests/e2e/payment`                                                                                                                        |
 | a `{param}` in the host position of `backend.url`                                                                                       | refused at config load                                                                                                                                                      | `tests/unit/config/schema.test.ts`                                                                                                         |
 | an unknown key nested under an `additionalProperties` schema                                                                            | rejected by the closed schema                                                                                                                                               | same                                                                                                                                       |
+| **a built-in mainnet redeclared as a testnet under `payments.x402.networks`**                                                           | `CONFIG_INVALID` at load; a built-in network cannot be redeclared                                                                                                           | `tests/unit/config/x402-options.test.ts`                                                                                                   |
+| **the in-process facilitator configured for a chain other than `eip155:84532`**                                                         | `CONFIG_INVALID` at load                                                                                                                                                    | same                                                                                                                                       |
+| **an asset field that contradicts the network's USDC, or another token on a built-in mainnet**                                          | `CONFIG_INVALID` at load                                                                                                                                                    | same                                                                                                                                       |
 | remote facilitator timeout during settlement                                                                                            | provider throws `PAYMENT_PROVIDER_UNAVAILABLE`; pipeline marks the attempt uncertain and returns `PAYMENT_SETTLEMENT_FAILED`                                                | `tests/unit/payments-x402/provider-remote-facilitator.test.ts`, `tests/unit/core/execution/pipeline.test.ts`                               |
 | an unclassified local `settle()` throw                                                                                                  | provider throws `PAYMENT_PROVIDER_UNAVAILABLE`; pipeline marks the attempt uncertain and returns `PAYMENT_SETTLEMENT_FAILED`                                                | `tests/unit/payments-x402/provider-sdk-mocked.test.ts`, `tests/unit/core/execution/pipeline.test.ts`                                       |
 | a local `settle()` throw wrapping an RPC error, not a revert                                                                            | same as an unclassified throw; not `transaction_reverted`                                                                                                                   | `tests/unit/payments-x402/provider-sdk-mocked.test.ts`                                                                                     |
