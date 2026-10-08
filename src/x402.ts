@@ -25,6 +25,7 @@ export {
   type FacilitatorAuth,
   type NetworkProfile,
   SUPPORTED_NETWORK_IDS,
+  type X402AssetTransferMethod,
   type X402FacilitatorConfig,
   type X402MultiOfferProviderOptions,
   type X402OfferOptions,

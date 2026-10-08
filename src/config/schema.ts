@@ -361,6 +361,7 @@ const X402OptionSchema = z
     assetName: z.string().min(1).optional(),
     assetVersion: z.string().min(1).optional(),
     assetDecimals: NumberOrString.optional(),
+    assetTransferMethod: z.string().min(1).optional(),
   })
   .strict();
 
@@ -384,6 +385,7 @@ const X402Schema = z
     assetName: z.string().min(1).optional(),
     assetVersion: z.string().min(1).optional(),
     assetDecimals: NumberOrString.optional(),
+    assetTransferMethod: z.string().min(1).optional(),
     options: z.array(X402OptionSchema).optional(),
     networks: z.record(z.string().min(1), X402NetworkSettingsSchema).optional(),
     // The RPC for every network without its own `networks.<id>.rpcUrl`
@@ -530,10 +532,13 @@ export interface X402OptionConfig {
   /** This network's RPC: `payments.x402.networks.<id>.rpcUrl`, else `payments.x402.rpcUrl` */
   readonly rpcUrl: string;
   readonly asset: string;
-  readonly assetName: string;
-  readonly assetVersion: string;
+  /** EIP-712 domain of the token; always present for EIP-3009 */
+  readonly assetName?: string;
+  readonly assetVersion?: string;
   readonly assetDecimals: number;
   readonly payTo: string;
+  /** Absent for EIP-3009, the default */
+  readonly assetTransferMethod?: 'permit2';
 }
 
 export interface GatewayConfig {
@@ -560,10 +565,13 @@ export interface GatewayConfig {
       readonly network: string;
       readonly rpcUrl: string;
       readonly asset: string;
-      readonly assetName: string;
-      readonly assetVersion: string;
+      /** Always present for EIP-3009; a Permit2 option may have none */
+      readonly assetName?: string;
+      readonly assetVersion?: string;
       readonly assetDecimals: number;
       readonly payTo: string;
+      /** Absent for EIP-3009, the default */
+      readonly assetTransferMethod?: 'permit2';
       readonly maxTimeoutSeconds: number;
       /** Defaults to `authorization`, the x402 default */
       readonly paymentFlow?: X402PaymentFlow;
@@ -1363,6 +1371,7 @@ const DIRECT_OPTION_FIELDS = [
   'assetName',
   'assetVersion',
   'assetDecimals',
+  'assetTransferMethod',
 ] as const;
 
 type RawX402 = NonNullable<RawConfig['payments']['x402']>;
@@ -1375,6 +1384,7 @@ interface RawX402Option {
   readonly assetName?: string | undefined;
   readonly assetVersion?: string | undefined;
   readonly assetDecimals?: number | string | undefined;
+  readonly assetTransferMethod?: string | undefined;
 }
 
 function x402OptionInput(raw: RawX402Option, path: string): X402OptionInput {
@@ -1385,6 +1395,9 @@ function x402OptionInput(raw: RawX402Option, path: string): X402OptionInput {
     ...(raw.asset !== undefined ? { asset: raw.asset } : {}),
     ...(raw.assetName !== undefined ? { assetName: raw.assetName } : {}),
     ...(raw.assetVersion !== undefined ? { assetVersion: raw.assetVersion } : {}),
+    ...(raw.assetTransferMethod !== undefined
+      ? { assetTransferMethod: raw.assetTransferMethod }
+      : {}),
     ...(raw.assetDecimals !== undefined
       ? {
           assetDecimals: toNumber(raw.assetDecimals, `${path}.assetDecimals`, { min: 0, max: 36 }),
@@ -1530,11 +1543,13 @@ function normalizeX402(raw: RawX402): NormalizedX402 {
       network,
       rpcUrl,
       asset: option.asset,
-      // An EVM option always carries its EIP-712 domain
-      assetName: option.assetName as string,
-      assetVersion: option.assetVersion as string,
+      ...(option.assetName !== undefined ? { assetName: option.assetName } : {}),
+      ...(option.assetVersion !== undefined ? { assetVersion: option.assetVersion } : {}),
       assetDecimals: option.assetDecimals,
       payTo: option.payTo,
+      ...(option.assetTransferMethod === 'permit2'
+        ? { assetTransferMethod: 'permit2' as const }
+        : {}),
     };
   });
   const first = options[0] as X402OptionConfig;

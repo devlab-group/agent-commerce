@@ -279,9 +279,9 @@ prints the `unsupported` lists for A2A, ACP and AP2 when they are enabled.
   private keys. Local facilitator mode does hold a separate gas-paying signer.
 - **Fail closed.** Missing, malformed, expired, replayed, wrong-amount,
   wrong-recipient, wrong-network and wrong-asset payments are rejected.
-- **Replay-safe twice over.** EIP-3009 stops a double spend on-chain; the
-  gateway additionally reserves a `replayKey` derived from the authorization
-  before it settles anything.
+- **Replay-safe twice over.** The EIP-3009 or Permit2 nonce stops a double
+  spend on-chain; the gateway additionally reserves a `replayKey` derived from
+  the authorization before it settles anything.
 - **On-chain settlement in CI.** The end-to-end test asserts the buyer's balance
   falls and the merchant's rises by exactly the price, with a real transaction
   hash in the receipt. A log line saying "payment successful" would not count.

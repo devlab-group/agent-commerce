@@ -95,6 +95,11 @@ merchant destination. The signature covers `from`, `to`, `value`,
 id through the EIP-712 domain. A broadcaster can execute that transfer or
 nothing; it cannot change the destination or amount.
 
+With [Permit2](configuration.md#permit2), the buyer signs
+`PermitWitnessTransferFrom`, binding the token, amount, nonce, deadline,
+x402 exact proxy as spender, and merchant destination as witness. The proxy
+transfers only the signed amount to that destination.
+
 So the gateway can confirm a payment without holding the funds or being able
 to redirect them.
 
@@ -125,15 +130,16 @@ rollback. The gateway records a `settled` payment attempt and a
 ## Replay: two independent defenses
 
 1. **On-chain.** EIP-3009 marks `authorizationState[from][nonce]` used; a second
-   `transferWithAuthorization` with the same nonce reverts. This prevents a
+   `transferWithAuthorization` with the same nonce reverts. Permit2 marks the
+   owner's nonce used in its own bitmap, across every token. This prevents a
    double *spend*.
-2. **In the gateway.** A replayed authorization could still be presented twice
-   in quick succession and unlock a second delivery before the first settles.
-   So the pipeline reserves `replayKey`, derived only from
-   `(chainId, asset, payer, nonce)`, under a `UNIQUE` constraint **before**
-   calling `settle`. A duplicate is `PAYMENT_REPLAYED`: it returns 409 while
-   the first attempt is unfinished or its status is unavailable, and 402 with
-   a fresh challenge when its stored status is treated as finished.
+2. **In the gateway.** Concurrent submissions could unlock a second delivery
+   before the first settles. The pipeline reserves `replayKey`, derived from
+   `(chainId, asset, payer, nonce)` or, for Permit2,
+   `(chainId, Permit2, owner, nonce)`, under a `UNIQUE` constraint **before**
+   calling `settle`. A duplicate returns `PAYMENT_REPLAYED`: 409 while the first
+   attempt is unfinished or its status is unavailable; 402 with a fresh
+   challenge when its stored status is treated as finished.
 
 Because the key comes from the authorization rather than the request, replaying
 it against another request still collides.

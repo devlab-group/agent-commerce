@@ -315,7 +315,7 @@ payments:
     payTo: ${MERCHANT_WALLET} # merchant-controlled. NEVER the gateway's.
     # Optional on a built-in network, which settles in its USDC. Set all four
     # for another token, such as the local MockUSDC.
-    asset: ${X402_ASSET} # ERC-20 with EIP-3009
+    asset: ${X402_ASSET} # ERC-20 with EIP-3009, unless the option uses Permit2
     assetName: ${X402_ASSET_NAME} # EIP-712 domain name
     assetVersion: ${X402_ASSET_VERSION}
     assetDecimals: ${X402_ASSET_DECIMALS}
@@ -349,8 +349,38 @@ exchange-rate lookup.
 Public built-in networks, testnet or mainnet, settle only in their USDC. On the
 local chain or a declared EVM network, set `asset`, `assetName`,
 `assetVersion` and `assetDecimals` together; no fields are inherited from
-USDC. Overrides for the default token must match its metadata. An explicitly
+USDC. A [Permit2](#permit2) token needs only `asset` and `assetDecimals`.
+Overrides for the default token must match its metadata. An explicitly
 configured `asset` preserves the resource's currency label.
+
+### Permit2
+
+For an ERC-20 without `transferWithAuthorization`, set
+`assetTransferMethod: permit2` to use
+[Permit2](https://github.com/Uniswap/permit2) and the x402 exact Permit2 proxy.
+This EVM-only option defaults to `eip3009`. Permit2 uses its own EIP-712
+domain, so `assetName` and `assetVersion` are unnecessary.
+
+```yaml
+payments:
+  x402:
+    network: eip155:31337
+    payTo: ${MERCHANT_WALLET}
+    asset: ${TOKEN_ADDRESS}
+    assetDecimals: 18
+    assetTransferMethod: permit2
+```
+
+Before paying, the buyer approves the Permit2 contract,
+`0x000000000022D473030F116dDEE9F6B43aC78BA3`, to spend the token. The gateway
+sends no approval and accepts no gas-sponsoring extension. Without that
+allowance it answers [412 Precondition Failed](protocols.md#http-surface).
+
+Other tokens require the local chain or a declared network, as above.
+Health checks require code at Permit2 and the proxy,
+`0x402085c248EeA27D92E8b30b2C58ed07f9E20001`. For a remote facilitator they
+check only that it advertises `exact` on the network, not that it settles
+Permit2.
 
 ### Several options
 

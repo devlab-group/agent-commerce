@@ -160,6 +160,24 @@ persistence must not fail the commerce flow.
   `resource://agent-commerce/resources/<id>`. `GatewayConfig.payments.x402.options`
   holds resolved options; single-option fields mirror the first. `/.well-known`
   includes `payments.x402.options` only for multiple offers and omits RPC URLs.
+- An x402 offer takes `assetTransferMethod` (`X402AssetTransferMethod`,
+  `eip3009` by default, or `permit2`). `X402ProviderOptions` now extends
+  `X402OfferOptions`.
+  - `assetName` and `assetVersion` became optional in both option types, in
+    `GatewayConfig.payments.x402` and its `options`, and in `/.well-known`.
+    EIP-3009 still requires both: config load supplies the default asset's
+    metadata or requires explicit values; provider construction rejects missing
+    values. Permit2 may omit them. With `strictNullChecks`, readers must
+    handle `undefined`.
+  - `/.well-known` publishes `assetTransferMethod: permit2` beside a Permit2
+    offer.
+  - The provider no longer forwards a payload's `extensions` to the
+    facilitator.
+  - `createPaymentProof` refuses an offer naming a method other than
+    `eip3009` with `INPUT_INVALID`.
+  - The invoke route returns 412 for a missing Permit2 allowance
+    (`permit2_allowance_required`), preserving `PAYMENT-REQUIRED` as specified
+    by the `exact` EVM scheme.
 
 - `ProtocolName` gained `a2a` and `acp`; `PROTOCOL_NAMES` is the runtime list
   used by validation. It is derived from a record keyed by the union, so a
@@ -280,15 +298,25 @@ includes the legacy `failed`, which may hide a settlement with no verdict.
 Published as `@devlab.group/agent-commerce/x402`.
 
 ```ts
-export interface X402ProviderOptions {
+/** One settlement option: network, token and merchant payee */
+export interface X402OfferOptions {
   readonly network: string; // CAIP-2, for example 'eip155:84532'
   readonly rpcUrl: string;
   readonly asset: `0x${string}`;
-  readonly assetName: string;
-  readonly assetVersion: string;
+  /** The token's EIP-712 domain; an EIP-3009 offer needs both */
+  readonly assetName?: string;
+  readonly assetVersion?: string;
   readonly assetDecimals: number;
   /** Merchant-controlled settlement destination. */
   readonly payTo: `0x${string}`;
+  /** Default 'eip3009'. A Permit2 buyer approves Permit2 for the token first */
+  readonly assetTransferMethod?: X402AssetTransferMethod;
+}
+
+export type X402AssetTransferMethod = 'eip3009' | 'permit2';
+
+/** A single offer and the settings every offer shares */
+export interface X402ProviderOptions extends X402OfferOptions {
   readonly maxTimeoutSeconds?: number;
   /** 'authorization' (default) settles after a successful backend call; 'upfront' first */
   readonly paymentFlow?: X402PaymentFlow;
@@ -316,12 +344,6 @@ export type FacilitatorAuth =
 export type X402FacilitatorConfig =
   | { readonly mode: 'local'; readonly signerPrivateKey: string }
   | { readonly mode: 'remote'; readonly url: string; readonly auth: FacilitatorAuth };
-
-/** One settlement option: the network, token and payee fields above */
-export type X402OfferOptions = Pick<
-  X402ProviderOptions,
-  'network' | 'rpcUrl' | 'asset' | 'assetName' | 'assetVersion' | 'assetDecimals' | 'payTo'
->;
 
 /** Several offers per paid resource, settled through one facilitator */
 export interface X402MultiOfferProviderOptions
@@ -625,10 +647,11 @@ export interface GatewayConfig {
       readonly network: string;
       readonly rpcUrl: string;
       readonly asset: string;
-      readonly assetName: string;
-      readonly assetVersion: string;
+      readonly assetName?: string; // always present for EIP-3009
+      readonly assetVersion?: string;
       readonly assetDecimals: number;
       readonly payTo: string;
+      readonly assetTransferMethod?: 'permit2'; // absent for EIP-3009
       readonly maxTimeoutSeconds: number;
       readonly paymentFlow?: X402PaymentFlow; // default 'authorization'
       readonly resourcePaymentFlows?: Readonly<Record<string, X402PaymentFlow>>;
@@ -729,7 +752,8 @@ the demo buyer; it is not a published package entry.
 `createPaymentProof` is the x402 client helper exported from the `./x402` entry.
 The demo buyer and the tests use it. Signing is offline: the chain id comes from
 the requirement's CAIP-2 network. The gateway does not call it or hold the buyer
-key.
+key. It signs only EIP-3009; another `extra.assetTransferMethod` yields
+`INPUT_INVALID`. Use the SDK's `x402Client` for Permit2.
 
 ```ts
 export interface CreatePaymentProofOptions {

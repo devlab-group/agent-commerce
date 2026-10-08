@@ -119,10 +119,11 @@ Covered in detail in [payment-flow.md](payment-flow.md). The invariants:
 1. Paid resources fail closed: payment or authorization failures do not deliver
    the resource.
 2. `verify` has no fund-moving side effects; only `settle` does.
-3. Replay is defended twice: on-chain via EIP-3009 `authorizationState`, and in
-   the gateway via a `replayKey` reserved under a `UNIQUE` constraint **before**
-   settlement. The key is derived from the authorization, not the request, so a
-   replay against a different request still collides.
+3. Replay is defended twice: on-chain via EIP-3009 `authorizationState` or the
+   Permit2 nonce bitmap, and in the gateway via a `replayKey` reserved under a
+   `UNIQUE` constraint **before** settlement. The key is derived from the
+   authorization, not the request, so a replay against a different request
+   still collides.
 4. The payment flow does not need buyer or merchant keys. In local mode the
    configured facilitator key pays gas and broadcasts a transfer whose
    recipient the buyer fixed in the signed authorization.
@@ -253,9 +254,11 @@ Config validation and provider construction share these checks. The provider
 also checks RPC and local-key safety.
 
 A facilitator cannot change an EIP-3009 transfer's signed recipient, amount, or
-chain. It can observe authorizations and refuse to broadcast them. A request
-without facilitator credentials falls under the facilitator's anonymous-access
-terms and limits, so mainnet requires a separate acknowledgment for that
+chain. A Permit2 signature binds the same terms and the x402 exact proxy as
+the only spender, which pays only the signed witness recipient. A facilitator
+can observe authorizations and refuse to broadcast them. A request without
+facilitator credentials falls under the facilitator's anonymous-access terms
+and limits, so mainnet requires a separate acknowledgment for that
 configuration.
 
 The in-process facilitator serves only the local chain, `eip155:31337`, which
@@ -284,8 +287,15 @@ real funds.
 | **an x402 proof whose `accepted` differs from the offer, or whose `resource.url` differs from the challenge's**                         | `invalid_payment_requirements` before the facilitator is called                                                                                                             | `tests/unit/payments-x402/provider-remote-facilitator.test.ts`                                                                             |
 | **multi-offer x402 proof whose `accepted` matches zero or multiple offers**                                                             | `invalid_payment_requirements`; no offer is selected and the facilitator is not called                                                                                      | `tests/unit/payments-x402/provider-remote-facilitator.test.ts`                                                                             |
 | **an AP2 mandate approved for one x402 offer, presented with a proof for another**                                                      | selected destination, network or asset fails mandate binding; no settlement                                                                                                 | `tests/unit/core/execution/pipeline-authorization.test.ts`                                                                                 |
-| **an EIP-3009 authorization signed for one EVM chain, presented as another chain's offer**                                              | `invalid_exact_evm_signature`: signature fails against the other chain's EIP-712 domain; neither chain's balances change                                                            | `tests/e2e/payment/x402-multichain.e2e.test.ts`                                                                                            |
+| **an EIP-3009 authorization signed for one EVM chain, presented as another chain's offer**                                              | `invalid_exact_evm_signature`: signature fails against the other chain's EIP-712 domain; neither chain's balances change                                                    | `tests/e2e/payment/x402-multichain.e2e.test.ts`                                                                                            |
 | **the same payer, token address and nonce on two EVM chains**                                                                           | both settle: the replay key includes the chain id                                                                                                                           | same                                                                                                                                       |
+| **a Permit2 proof naming another spender, token, amount or witness recipient than the offer**                                           | `invalid_permit2_spender`, `permit2_token_mismatch`, `permit2_amount_mismatch` or `invalid_permit2_recipient_mismatch` before the facilitator is called; balances unchanged | `tests/unit/payments-x402/provider-remote-facilitator.test.ts`, `tests/e2e/payment/x402-permit2.e2e.test.ts`                               |
+| **a Permit2 proof altered after signing**                                                                                               | `invalid_permit2_signature` from the facilitator; balances unchanged                                                                                                        | `tests/e2e/payment/x402-permit2.e2e.test.ts`                                                                                               |
+| **a Permit2 payment from a buyer without a Permit2 allowance**                                                                          | 412 with `error: permit2_allowance_required` in a fresh `PAYMENT-REQUIRED`; `permit2_simulation_failed` and 402 on a chain without Multicall3; balances unchanged           | `tests/e2e/payment/x402-permit2.e2e.test.ts`                                                                                               |
+| **a proof of the other transfer method, or one carrying both an EIP-3009 and a Permit2 authorization**                                  | `unsupported_scheme` before the facilitator is called, which would settle the Permit2 one                                                                                   | `tests/unit/payments-x402/provider-remote-facilitator.test.ts`, `tests/unit/payments-x402/provider.test.ts`                                |
+| **a gas-sponsoring extension in a Permit2 payload**                                                                                     | not forwarded: the facilitator receives no `extensions`                                                                                                                     | `tests/unit/payments-x402/provider-remote-facilitator.test.ts`                                                                             |
+| **one Permit2 authorization on two requests at once**                                                                                   | settles once; the other gets 409 `PAYMENT_REPLAYED`. The key is chain, Permit2, owner and nonce                                                                             | `tests/e2e/payment/x402-permit2.e2e.test.ts`                                                                                               |
+| **a Permit2 offer on a network without Permit2 or its x402 proxy**                                                                      | health fails, naming the missing contract                                                                                                                                   | `tests/e2e/payment/x402-permit2.e2e.test.ts`                                                                                               |
 | **x402 options on two networks sharing one RPC endpoint, or mixing testnet and mainnet**                                                | `CONFIG_INVALID` at load                                                                                                                                                    | `tests/unit/config/x402-options.test.ts`                                                                                                   |
 | replay, sequentially                                                                                                                    | refused, no second transfer                                                                                                                                                 | `tests/e2e/payment/x402-settlement.e2e.test.ts`, `tests/mainnet/base.smoke.test.ts`                                                        |
 | **duplicate concurrent request**                                                                                                        | settles once, other gets `PAYMENT_REPLAYED`                                                                                                                                 | `tests/integration/adversarial-payment.test.ts`                                                                                            |
@@ -311,6 +321,7 @@ real funds.
 | an unclassified local `settle()` throw                                                                                                  | provider throws `PAYMENT_PROVIDER_UNAVAILABLE`; pipeline marks the attempt uncertain and returns `PAYMENT_SETTLEMENT_FAILED`                                                | `tests/unit/payments-x402/provider-sdk-mocked.test.ts`, `tests/unit/core/execution/pipeline.test.ts`                                       |
 | a local `settle()` throw wrapping an RPC error, not a revert                                                                            | same as an unclassified throw; not `transaction_reverted`                                                                                                                   | `tests/unit/payments-x402/provider-sdk-mocked.test.ts`                                                                                     |
 | **a broadcast that lands but whose RPC response is an error**                                                                           | the SDK's catch-all with no transaction hash; provider throws `PAYMENT_PROVIDER_UNAVAILABLE`; pipeline records `settlement-uncertain`, no delivery                          | `tests/e2e/payment/x402-settlement.e2e.test.ts`, `tests/e2e/payment/mpp-settlement.e2e.test.ts`                                            |
+| **a Permit2 broadcast that lands but whose RPC response is an error**                                                                   | the SDK's catch-all with its message appended and no hash; handled as the row above                                                                                         | `tests/e2e/payment/x402-permit2.e2e.test.ts`                                                                                               |
 | **remote facilitator 401 / 5xx during verification**                                                                                    | transport failure, not a buyer rejection                                                                                                                                    | `tests/integration/adversarial-payment.test.ts`                                                                                            |
 | **malformed remote-facilitator response**                                                                                               | transport failure; never read as a verdict                                                                                                                                  | same                                                                                                                                       |
 | **remote facilitator refuses verification with a 400 and an `invalidReason`**                                                           | a buyer rejection carrying the sanitized reason; any other status with that body stays a transport failure                                                                  | `tests/integration/adversarial-payment.test.ts`, `tests/unit/payments-x402/provider-remote-facilitator.test.ts`                            |
@@ -422,17 +433,18 @@ settlement throw becomes `PAYMENT_PROVIDER_UNAVAILABLE`; the pipeline records
 the attempt `settlement-uncertain` and returns `PAYMENT_SETTLEMENT_FAILED`.
 
 For a failure it catches, the SDK returns `invalid_exact_evm_transaction_failed`
-unless the error message matches a known EIP-3009 failure such as a used nonce,
-with a valid transaction hash only when a mined transaction reverted. Without a
-hash the provider cannot tell a refused call from a lost response, because of
-that viem behavior, so it throws `PAYMENT_PROVIDER_UNAVAILABLE`. A revert during
-gas estimation that the SDK does not recognize is therefore also recorded
-`settlement-uncertain`, although nothing was sent.
+unless the error message matches a known EIP-3009 or Permit2 failure such as a
+used nonce, with a valid transaction hash only when a mined transaction
+reverted. On the Permit2 path the reason also carries the error message after a
+colon. Without a hash the provider cannot tell a refused call from a lost response,
+because of that viem behavior, so it throws `PAYMENT_PROVIDER_UNAVAILABLE`. A
+revert during gas estimation that the SDK does not recognize is therefore also
+recorded `settlement-uncertain`, although nothing was sent.
 
 Facilitator rejection reasons reach clients and storage only after trimming and
 a 64-character, `[A-Za-z0-9_.-]` check. Other values become the fixed token
 `invalid_payment` during verification or `settlement_failed` during settlement;
-the raw value is available only in debug logs.
+the raw value, with any URL cut to its origin, is available only in debug logs.
 
 ## OpenAPI import
 

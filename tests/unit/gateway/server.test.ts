@@ -332,6 +332,35 @@ describe('createGateway HTTP surface', () => {
     expect(res.json().payments.x402.payTo).toBeDefined();
   });
 
+  it("publishes each option's offer terms on /.well-known, never its RPC URL", async () => {
+    const base = makeGatewayConfig();
+    const x402 = base.payments.x402 as NonNullable<typeof base.payments.x402>;
+    const rpcUrl = 'https://rpc.example/v2/OPTION-RPC-KEY';
+    const terms = { network: x402.network, payTo: x402.payTo };
+    const eip3009 = {
+      ...terms,
+      asset: x402.asset,
+      assetName: 'MockUSDC',
+      assetVersion: '2',
+      assetDecimals: 6,
+    };
+    const permit2 = {
+      ...terms,
+      asset: '0x2222222222222222222222222222222222222222',
+      assetDecimals: 18,
+      assetTransferMethod: 'permit2' as const,
+    };
+    const config = makeGatewayConfig({
+      payments: {
+        x402: { ...x402, options: [eip3009, permit2].map((option) => ({ ...option, rpcUrl })) },
+      },
+    });
+    const gateway = await buildGateway({ config });
+    const res = await gateway.server.inject({ method: 'GET', url: '/.well-known/agent-commerce' });
+    expect(res.json().payments.x402.options).toEqual([eip3009, permit2]);
+    expect(res.payload).not.toContain('OPTION-RPC-KEY');
+  });
+
   it('GET /api/resources lists resources without leaking backend header secrets', async () => {
     const config = makeGatewayConfig();
     const withSecretHeader = {

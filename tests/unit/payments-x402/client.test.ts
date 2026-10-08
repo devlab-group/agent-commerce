@@ -147,6 +147,15 @@ describe('createPaymentProof', () => {
     );
   });
 
+  it('refuses an offer that asks for another transfer method', async () => {
+    await expect(
+      createPaymentProof({
+        buyerPrivateKey: BUYER_PRIVATE_KEY,
+        accepts: { ...ACCEPTS, extra: { ...ACCEPTS.extra, assetTransferMethod: 'permit2' } },
+      }),
+    ).rejects.toThrow(/signs EIP-3009 only, and this offer uses "permit2"/);
+  });
+
   it('throws a clear error when extra.name/extra.version are missing', async () => {
     const { extra, ...withoutExtra } = ACCEPTS;
     await expect(

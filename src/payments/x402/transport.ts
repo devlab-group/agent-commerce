@@ -35,6 +35,14 @@ export function x402ErrorCode(code: string, reason: unknown): string {
   return typeof reason === 'string' ? reason : 'unexpected_verify_error';
 }
 
+/**
+ * Returns 412 Precondition Failed for a missing Permit2 allowance: the buyer
+ * must approve Permit2 before retrying. Other refusals keep their status.
+ */
+export function x402RefusalStatus(code: string, httpStatus: number, reason: unknown): number {
+  return code === 'PAYMENT_INVALID' && reason === 'permit2_allowance_required' ? 412 : httpStatus;
+}
+
 interface SettledPayment {
   readonly status: string;
   readonly provider: string;

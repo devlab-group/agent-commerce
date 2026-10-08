@@ -46,4 +46,35 @@ describe('resolveX402Option', () => {
       ),
     ).toThrow(/needs assetDecimals/);
   });
+
+  describe('assetTransferMethod', () => {
+    const LOCAL = {
+      network: 'eip155:31337',
+      payTo: '0x1111111111111111111111111111111111111111',
+      asset: '0x5FbDB2315678afecb367f032d93F642f64180aa3',
+      assetDecimals: 18,
+    };
+
+    it('needs no EIP-712 domain for a Permit2 token', () => {
+      const option = resolveX402Option({ ...LOCAL, assetTransferMethod: 'permit2' }, 'opt');
+      expect(option.assetTransferMethod).toBe('permit2');
+      expect(option.assetName).toBeUndefined();
+    });
+
+    it('still needs the domain for an EIP-3009 token, the default method', () => {
+      expect(() => resolveX402Option(LOCAL, 'opt')).toThrow(/assetName/);
+    });
+
+    it('refuses an unknown method and any method off EVM', () => {
+      expect(() => resolveX402Option({ ...LOCAL, assetTransferMethod: 'permit' }, 'opt')).toThrow(
+        /opt\.assetTransferMethod: "permit" is not supported/,
+      );
+      expect(() =>
+        resolveX402Option(
+          { network: SOLANA_DEVNET, payTo: SOLANA_PAYEE, assetTransferMethod: 'permit2' },
+          'opt',
+        ),
+      ).toThrow(/EVM networks only/);
+    });
+  });
 });

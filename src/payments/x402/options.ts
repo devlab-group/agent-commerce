@@ -18,6 +18,8 @@ export interface X402OptionInput {
   readonly assetName?: string;
   readonly assetVersion?: string;
   readonly assetDecimals?: number;
+  /** `eip3009` (the default) or `permit2`; EVM only */
+  readonly assetTransferMethod?: string;
 }
 
 export interface ResolvedX402Option {
@@ -35,7 +37,12 @@ export interface ResolvedX402Option {
    * this symbol or USD
    */
   readonly defaultAssetSymbol?: string;
+  /** How the buyer authorizes the transfer; always `eip3009` off EVM */
+  readonly assetTransferMethod: X402AssetTransferMethod;
 }
+
+/** EIP-3009 `transferWithAuthorization`, or Permit2 with a prior token allowance */
+export type X402AssetTransferMethod = 'eip3009' | 'permit2';
 
 // Incorrect EIP-712 domain values invalidate the buyer's signature
 const FIELD_MEANINGS = {
@@ -86,6 +93,20 @@ export function resolveX402Option(
     );
   }
 
+  const method = input.assetTransferMethod ?? 'eip3009';
+  if (method !== 'eip3009' && method !== 'permit2') {
+    throw invalid(
+      `${path}.assetTransferMethod: "${method}" is not supported; use "eip3009" or "permit2"`,
+      `${path}.assetTransferMethod`,
+    );
+  }
+  if (network.family !== 'evm' && input.assetTransferMethod !== undefined) {
+    throw invalid(
+      `${path}.assetTransferMethod applies to EVM networks only, not to ${network.displayName}`,
+      `${path}.assetTransferMethod`,
+    );
+  }
+
   if (network.family !== 'evm') {
     for (const field of ['assetName', 'assetVersion'] as const) {
       if (input[field] !== undefined) {
@@ -129,12 +150,15 @@ export function resolveX402Option(
       ...(domain ? { assetName: domain.name, assetVersion: domain.version } : {}),
       assetDecimals: canonical.decimals,
       ...(asset === undefined ? { defaultAssetSymbol: canonical.symbol } : {}),
+      assetTransferMethod: method,
     };
   }
 
-  // Another token: nothing about it can be borrowed from the default
+  // Another token: nothing about it can be borrowed from the default. The
+  // token's EIP-712 domain matters to EIP-3009 only: a Permit2 buyer signs
+  // Permit2's own domain.
   const required =
-    network.family === 'evm'
+    network.family === 'evm' && method === 'eip3009'
       ? (['asset', 'assetName', 'assetVersion', 'assetDecimals'] as const)
       : (['asset', 'assetDecimals'] as const);
   const missing = required.filter((field) => input[field] === undefined);
@@ -151,9 +175,9 @@ export function resolveX402Option(
     network,
     payTo,
     asset,
-    ...(network.family === 'evm'
-      ? { assetName: input.assetName as string, assetVersion: input.assetVersion as string }
-      : {}),
+    ...(input.assetName !== undefined ? { assetName: input.assetName } : {}),
+    ...(input.assetVersion !== undefined ? { assetVersion: input.assetVersion } : {}),
     assetDecimals: input.assetDecimals as number,
+    assetTransferMethod: method,
   };
 }

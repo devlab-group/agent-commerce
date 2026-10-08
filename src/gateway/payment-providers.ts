@@ -22,10 +22,13 @@ export function createConfiguredPaymentProviders(
           network: option.network,
           rpcUrl: option.rpcUrl,
           asset: option.asset as `0x${string}`,
-          assetName: option.assetName,
-          assetVersion: option.assetVersion,
           assetDecimals: option.assetDecimals,
           payTo: option.payTo as `0x${string}`,
+          ...(option.assetName !== undefined ? { assetName: option.assetName } : {}),
+          ...(option.assetVersion !== undefined ? { assetVersion: option.assetVersion } : {}),
+          ...(option.assetTransferMethod !== undefined
+            ? { assetTransferMethod: option.assetTransferMethod }
+            : {}),
         })),
         maxTimeoutSeconds: x402.maxTimeoutSeconds,
         ...(x402.paymentFlow !== undefined ? { paymentFlow: x402.paymentFlow } : {}),

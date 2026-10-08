@@ -10,6 +10,7 @@ export {
   type NetworkProfile,
   SUPPORTED_NETWORK_IDS,
 } from './networks';
+export type { X402AssetTransferMethod } from './options';
 export type { X402PaymentFlow } from './payment-flow';
 export {
   createX402PaymentProvider,

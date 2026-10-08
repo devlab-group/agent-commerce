@@ -1,6 +1,6 @@
 /**
  * x402 payment provider: protocol v2, `exact` scheme, EVM, EIP-3009
- * `transferWithAuthorization`.
+ * `transferWithAuthorization` or Permit2 through the x402 exact proxy.
  *
  * `verify()` never moves funds. `settle()` does, and throws unless it is handed
  * a successful verification. Both run through a facilitator (see
@@ -10,12 +10,14 @@
 
 import type {
   Network,
+  PaymentPayload,
   PaymentRequired,
   PaymentRequirements,
   SettleResponse,
   SupportedKind,
   VerifyResponse,
 } from '@x402/core/types';
+import { PERMIT2_ADDRESS, x402ExactPermit2ProxyAddress } from '@x402/evm';
 import {
   BaseError,
   ContractFunctionRevertedError,
@@ -61,14 +63,16 @@ import {
   describeDeploymentMode,
   type NetworkProfile,
 } from './networks';
+import type { X402AssetTransferMethod } from './options';
 import {
   declaredX402Version,
   decodePaymentSubmission,
+  forFacilitator,
   isExactEvmPayload,
-  withoutResource,
+  isExactPermit2Payload,
 } from './payload';
 import { X402_DEFAULT_PAYMENT_FLOW, type X402PaymentFlow } from './payment-flow';
-import { computeReplayKey } from './replay-key';
+import { computePermit2ReplayKey, computeReplayKey } from './replay-key';
 
 const X402_VERSION = 2;
 const X402_PROTOCOL_VERSION = String(X402_VERSION);
@@ -80,9 +84,13 @@ const SETTLEMENT_PENDING_REASON = 'settlement_pending';
 /**
  * The SDK's catch-all for a throw from the broadcast call, and its reason for
  * a mined transaction that reverted. Only the second carries a hash. A revert
- * the SDK recognizes during gas estimation gets its own reason instead.
+ * the SDK recognizes during gas estimation gets its own reason instead. The
+ * Permit2 path appends the thrown message as `: <message>`.
  */
 const TRANSACTION_FAILED_REASON = 'invalid_exact_evm_transaction_failed';
+const isTransactionFailedReason = (reason: string | undefined): boolean =>
+  reason === TRANSACTION_FAILED_REASON ||
+  reason?.startsWith(`${TRANSACTION_FAILED_REASON}:`) === true;
 /**
  * `invalidReason`/`errorReason` are `z.string()` in the SDK schema, with no
  * length or charset bound. They reach the buyer's error, the persisted events
@@ -99,24 +107,8 @@ function sanitizeReason(reason: string | undefined, fallback: string): string {
   return REASON_SHAPE.test(trimmed) ? trimmed : fallback;
 }
 
-export interface X402ProviderOptions {
-  /**
-   * CAIP-2 network identifier, e.g. `eip155:84532`. The chain id it carries is
-   * part of the EIP-712 domain the buyer signs, so it is read from this value
-   * rather than defaulted.
-   */
-  readonly network: string;
-  /** RPC endpoint. Local chain: http://127.0.0.1:8545 */
-  readonly rpcUrl: string;
-  /** ERC-20 (EIP-3009) asset address used for settlement */
-  readonly asset: `0x${string}`;
-  /** EIP-712 domain name of the asset, e.g. 'MockUSDC' */
-  readonly assetName: string;
-  /** EIP-712 domain version of the asset, e.g. '2' */
-  readonly assetVersion: string;
-  readonly assetDecimals: number;
-  /** Merchant-controlled settlement destination. Never a gateway-owned wallet */
-  readonly payTo: `0x${string}`;
+/** A single offer and the settings every offer shares */
+export interface X402ProviderOptions extends X402OfferOptions {
   readonly maxTimeoutSeconds?: number;
   /**
    * When the payment settles relative to the backend call. Defaults to
@@ -149,19 +141,28 @@ export interface X402ProviderOptions {
 
 /** Settlement network, token and merchant payee for one offer */
 export interface X402OfferOptions {
-  /** CAIP-2 network identifier, e.g. `eip155:8453` */
+  /**
+   * CAIP-2 network identifier, e.g. `eip155:8453`. The chain id it carries is
+   * part of the EIP-712 domain the buyer signs, so it is read from this value
+   * rather than defaulted.
+   */
   readonly network: string;
   /** RPC endpoint of that network, for health checks and a local facilitator */
   readonly rpcUrl: string;
-  /** ERC-20 (EIP-3009) asset address used for settlement */
+  /** ERC-20 asset address used for settlement */
   readonly asset: `0x${string}`;
-  /** EIP-712 domain name of the asset */
-  readonly assetName: string;
-  /** EIP-712 domain version of the asset */
-  readonly assetVersion: string;
+  /** EIP-712 domain name of the asset, e.g. 'USDC'; required for EIP-3009 */
+  readonly assetName?: string;
+  /** EIP-712 domain version of the asset, e.g. '2'; required for EIP-3009 */
+  readonly assetVersion?: string;
   readonly assetDecimals: number;
   /** Merchant-controlled settlement destination. Never a gateway-owned wallet */
   readonly payTo: `0x${string}`;
+  /**
+   * `eip3009` (the default) or `permit2`. A Permit2 buyer approves the Permit2
+   * contract for the token beforehand; the gateway never sends approvals.
+   */
+  readonly assetTransferMethod?: X402AssetTransferMethod;
 }
 
 /**
@@ -185,9 +186,10 @@ const SELECTED_OFFER_KEY = 'x402.offer';
 interface Offer {
   readonly network: Network;
   readonly profile: NetworkProfile;
+  readonly method: X402AssetTransferMethod;
   readonly asset: `0x${string}`;
-  readonly assetName: string;
-  readonly assetVersion: string;
+  readonly assetName: string | undefined;
+  readonly assetVersion: string | undefined;
   readonly assetDecimals: number;
   readonly payTo: `0x${string}`;
   readonly rpcOrigin: string;
@@ -231,6 +233,15 @@ export function createX402PaymentProvider(
         `x402 provider: ${field('assetDecimals')} must be a non-negative integer`,
       );
     }
+    const method = input.assetTransferMethod ?? 'eip3009';
+    // The buyer signs the token's EIP-712 domain under EIP-3009, so the
+    // requirement must name it. Permit2 has a domain of its own.
+    if (method === 'eip3009' && (!input.assetName || !input.assetVersion)) {
+      throw new CommerceError(
+        'CONFIG_INVALID',
+        `x402 provider: an EIP-3009 offer needs ${field('assetName')} and ${field('assetVersion')}, the token's EIP-712 domain`,
+      );
+    }
     // The chain id is signed into the buyer's EIP-712 domain, so a network it
     // cannot be resolved from fails here, never at request time
     const deployment = resolveX402Deployment({
@@ -238,8 +249,8 @@ export function createX402PaymentProvider(
       ...(options.customNetworks !== undefined ? { customNetworks: options.customNetworks } : {}),
       payTo: input.payTo,
       asset: input.asset,
-      assetName: input.assetName,
-      assetVersion: input.assetVersion,
+      ...(input.assetName !== undefined ? { assetName: input.assetName } : {}),
+      ...(input.assetVersion !== undefined ? { assetVersion: input.assetVersion } : {}),
       facilitator: options.facilitator,
       ...(options.allowMainnet !== undefined ? { allowMainnet: options.allowMainnet } : {}),
       ...(options.allowUnauthenticatedFacilitator !== undefined
@@ -302,6 +313,7 @@ export function createX402PaymentProvider(
     return {
       network: input.network as Network,
       profile,
+      method,
       asset: input.asset,
       assetName: input.assetName,
       assetVersion: input.assetVersion,
@@ -331,6 +343,7 @@ export function createX402PaymentProvider(
       'exact-evm',
       `${options.facilitator.mode}-facilitator`,
       'eip-3009',
+      ...(offers.some((offer) => offer.method === 'permit2') ? ['permit2'] : []),
       'caip-2',
       `mode=${deploymentMode}`,
       'authorization-flow',
@@ -340,7 +353,7 @@ export function createX402PaymentProvider(
     status: 'stable',
     unsupported: [
       'svm',
-      'permit2',
+      'permit2 gas sponsoring extensions',
       'upto scheme',
       'batch-settlement scheme',
       'auth-capture scheme',
@@ -369,15 +382,15 @@ export function createX402PaymentProvider(
       payTo: offer.payTo,
       maxTimeoutSeconds,
       // `name`/`version` let the buyer and the facilitator build the same
-      // EIP-712 domain without calling `version()` on the token.
-      // `assetTransferMethod` names the one method this provider settles, so a
-      // conforming client never picks the `exact` scheme's Permit2 path.
+      // EIP-712 domain without calling `version()` on the token. They are
+      // required for EIP-3009; a Permit2 offer signs Permit2's own domain.
+      // `assetTransferMethod` names the method the client must sign with.
       // x402 requires an explicit non-default flow. Omit the default
       // `authorization` flow here.
       extra: {
-        name: offer.assetName,
-        version: offer.assetVersion,
-        assetTransferMethod: 'eip3009',
+        ...(offer.assetName !== undefined ? { name: offer.assetName } : {}),
+        ...(offer.assetVersion !== undefined ? { version: offer.assetVersion } : {}),
+        assetTransferMethod: offer.method,
         ...(paymentFlow === 'upfront' ? { paymentFlow } : {}),
       },
     }));
@@ -524,14 +537,9 @@ export function createX402PaymentProvider(
     if (payload.x402Version !== X402_VERSION) {
       return rejected('invalid_x402_version');
     }
-    if (!isExactEvmPayload(payload)) {
-      return rejected('unsupported_scheme');
-    }
-
-    const { authorization } = payload.payload;
-
-    if (!isAddress(authorization.from) || !isAddress(authorization.to)) {
-      return rejected('invalid_payload');
+    const transfer = readTransfer(payload, offer);
+    if (typeof transfer === 'string') {
+      return rejected(transfer);
     }
     // `accepted.network` names the chain the buyer signed for, so a mismatch
     // means a signature bound to a chain we do not settle on
@@ -548,25 +556,25 @@ export function createX402PaymentProvider(
     ) {
       return rejected('invalid_payment_requirements');
     }
-    if (getAddress(authorization.to) !== getAddress(offer.payTo)) {
-      return rejected('invalid_exact_evm_payload_recipient_mismatch');
+    if (transfer.to !== getAddress(offer.payTo)) {
+      return rejected(transfer.recipientMismatch);
     }
     let authorizedValue: bigint;
     let required: bigint;
     try {
-      authorizedValue = BigInt(authorization.value);
+      authorizedValue = BigInt(transfer.value);
       required = BigInt(requirements.amount);
     } catch {
       return rejected('invalid_payload');
     }
     if (authorizedValue !== required) {
-      return rejected('invalid_exact_evm_payload_authorization_value_mismatch');
+      return rejected(transfer.amountMismatch);
     }
 
     const scope = offer.binding.open();
     let sdkResult: VerifyResponse;
     try {
-      sdkResult = await scope.verify(withoutResource(payload), requirements);
+      sdkResult = await scope.verify(forFacilitator(payload), requirements);
     } catch (err) {
       // A throw means no verdict was obtained, so it is never held against the
       // buyer. Only an unclassified one is logged, as it may be an SDK fault.
@@ -585,7 +593,7 @@ export function createX402PaymentProvider(
       if (scope.transportFailed()) {
         if (sdkResult.invalidReason !== undefined) {
           logger.debug(
-            { reportedReason: sdkResult.invalidReason },
+            { reportedReason: redactedErrorText(sdkResult.invalidReason) },
             'x402 verify(): local facilitator transport failure reason',
           );
         }
@@ -598,32 +606,23 @@ export function createX402PaymentProvider(
       // the ledger records is constrained.
       if (sdkResult.invalidReason !== undefined) {
         logger.debug(
-          { reportedReason: sdkResult.invalidReason },
+          { reportedReason: redactedErrorText(sdkResult.invalidReason) },
           'x402 verify(): facilitator rejection reason',
         );
       }
       return rejected(sanitizeReason(sdkResult.invalidReason, 'invalid_payment'));
     }
 
-    // `accepted.network` equals the offer's network (checked above), so its
-    // chain id is the one the authorization is bound to
-    const replayKey = computeReplayKey({
-      chainId: offer.profile.chainId,
-      asset: getAddress(requirements.asset),
-      from: getAddress(authorization.from),
-      nonce: authorization.nonce,
-    });
-
     return {
       status: 'verified',
       provider: 'x402',
-      payer: getAddress(authorization.from),
-      payee: getAddress(authorization.to),
+      payer: transfer.from,
+      payee: transfer.to,
       amount: formatUnits(authorizedValue, offer.assetDecimals),
       currency: requirement.currency,
       network: payload.accepted.network,
       asset: getAddress(requirements.asset),
-      replayKey,
+      replayKey: transfer.replayKey,
     };
   }
 
@@ -651,7 +650,8 @@ export function createX402PaymentProvider(
     }
 
     const payload = decodePaymentSubmission(submission.payload);
-    if (!payload || !isExactEvmPayload(payload)) {
+    const transfer = payload ? readTransfer(payload, offer) : undefined;
+    if (!payload || transfer === undefined || typeof transfer === 'string') {
       throw new CommerceError(
         'PAYMENT_INVALID',
         'x402 provider: settle() received an undecodable payment payload',
@@ -672,7 +672,7 @@ export function createX402PaymentProvider(
     const scope = offer.binding.open();
     let sdkResult: SettleResponse;
     try {
-      sdkResult = await scope.settle(withoutResource(payload), requirements);
+      sdkResult = await scope.settle(forFacilitator(payload), requirements);
     } catch (err) {
       if (isProviderUnavailableError(err) || scope.transportFailed()) {
         throw new CommerceError(
@@ -713,11 +713,12 @@ export function createX402PaymentProvider(
       // because its throw may have followed a broadcast and viem reports an
       // RPC error on the send as a revert. Everything else is a real rejection.
       if (
-        sdkResult.errorReason === TRANSACTION_FAILED_REASON &&
+        isTransactionFailedReason(sdkResult.errorReason) &&
         !/^0x[0-9a-f]{64}$/i.test(sdkResult.transaction)
       ) {
+        // The appended message can carry an RPC URL
         logger.warn(
-          { reportedReason: sdkResult.errorReason },
+          { reportedReason: redactedErrorText(sdkResult.errorReason) },
           'x402 settle(): the broadcast failed without a transaction hash; outcome unknown',
         );
         throw new CommerceError(
@@ -738,7 +739,7 @@ export function createX402PaymentProvider(
       }
       if (sdkResult.errorReason !== undefined) {
         logger.debug(
-          { reportedReason: sdkResult.errorReason },
+          { reportedReason: redactedErrorText(sdkResult.errorReason) },
           'x402 settle(): facilitator failure reason',
         );
       }
@@ -762,7 +763,7 @@ export function createX402PaymentProvider(
       ...(verification.replayKey !== undefined ? { replayKey: verification.replayKey } : {}),
       settledAt: clock.nowIso(),
       // `amount` is the display value; x402's settlement response reports base units
-      metadata: { amountBaseUnits: payload.payload.authorization.value },
+      metadata: { amountBaseUnits: transfer.value },
     };
   }
 
@@ -788,6 +789,19 @@ export function createX402PaymentProvider(
         detail: `No contract code found at configured asset address ${offer.asset}`,
       };
     }
+    // Permit2 offers settle through two contracts the merchant does not deploy
+    if (offer.method === 'permit2') {
+      for (const [name, address] of PERMIT2_CONTRACTS) {
+        const deployed = await healthClient.getCode({ address });
+        if (!deployed || deployed === '0x') {
+          return {
+            status: 'fail',
+            detail: `No ${name} contract code found at ${address} on ${profile.displayName}`,
+          };
+        }
+      }
+    }
+    const contracts = `asset ${offer.asset}${offer.method === 'permit2' ? ', Permit2 and its x402 proxy' : ''}`;
 
     if (binding.kind === 'remote') {
       // Reachable is not enough: a facilitator that does not carry our
@@ -810,7 +824,7 @@ export function createX402PaymentProvider(
         status: 'pass',
         detail:
           `${describeDeploymentMode(deploymentMode)}: RPC ${rpcOrigin} reachable, chain id ` +
-          `${profile.chainId} (${profile.displayName}), asset ${offer.asset} has code, ` +
+          `${profile.chainId} (${profile.displayName}), ${contracts} have code, ` +
           `facilitator ${binding.describe} supports exact/${offer.network}`,
       };
     }
@@ -833,7 +847,7 @@ export function createX402PaymentProvider(
       status: 'pass',
       detail:
         `${describeDeploymentMode(deploymentMode)}: RPC ${rpcOrigin} reachable, chain id ` +
-        `${profile.chainId}, asset ${offer.asset} has code, confirmed Anvil dev node`,
+        `${profile.chainId}, ${contracts} have code, confirmed Anvil dev node`,
     };
   }
 
@@ -918,6 +932,66 @@ export function createX402PaymentProvider(
     verify,
     settle,
     health,
+  };
+}
+
+const PERMIT2_CONTRACTS = [
+  ['Permit2', PERMIT2_ADDRESS],
+  ['x402 exact Permit2 proxy', x402ExactPermit2ProxyAddress],
+] as const;
+
+// What a payload authorizes, read the way the offer's method settles it
+interface Transfer {
+  readonly from: `0x${string}`;
+  readonly to: `0x${string}`;
+  readonly value: string;
+  readonly replayKey: string;
+  readonly recipientMismatch: string;
+  readonly amountMismatch: string;
+}
+
+/**
+ * Reads the payer, payee, amount and replay key, or returns a refusal reason.
+ * Enforces the offer's method because the SDK facilitator chooses the method
+ * from the payload.
+ */
+function readTransfer(payload: PaymentPayload, offer: Offer): Transfer | string {
+  // verify() refuses an `accepted.network` other than the offer's, so this
+  // chain id is the one the authorization is bound to
+  const { chainId } = offer.profile;
+  if (offer.method === 'eip3009') {
+    if (!isExactEvmPayload(payload)) return 'unsupported_scheme';
+    const { from, to, value, nonce } = payload.payload.authorization;
+    if (!isAddress(from) || !isAddress(to)) return 'invalid_payload';
+    return {
+      from: getAddress(from),
+      to: getAddress(to),
+      value,
+      replayKey: computeReplayKey({
+        chainId,
+        asset: getAddress(offer.asset),
+        from: getAddress(from),
+        nonce,
+      }),
+      recipientMismatch: 'invalid_exact_evm_payload_recipient_mismatch',
+      amountMismatch: 'invalid_exact_evm_payload_authorization_value_mismatch',
+    };
+  }
+  if (!isExactPermit2Payload(payload)) return 'unsupported_scheme';
+  const { from, spender, permitted, witness, nonce } = payload.payload.permit2Authorization;
+  // Permit2 lets the spender move the permitted tokens anywhere; only the x402
+  // proxy binds the transfer to the signed witness recipient
+  if (getAddress(spender) !== getAddress(x402ExactPermit2ProxyAddress)) {
+    return 'invalid_permit2_spender';
+  }
+  if (getAddress(permitted.token) !== getAddress(offer.asset)) return 'permit2_token_mismatch';
+  return {
+    from: getAddress(from),
+    to: getAddress(witness.to),
+    value: permitted.amount,
+    replayKey: computePermit2ReplayKey({ chainId, owner: getAddress(from), nonce }),
+    recipientMismatch: 'invalid_permit2_recipient_mismatch',
+    amountMismatch: 'permit2_amount_mismatch',
   };
 }
 

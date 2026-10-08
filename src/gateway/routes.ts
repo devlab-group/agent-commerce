@@ -34,6 +34,7 @@ import {
   settlementResponse,
   settlementResponseFromDetails,
   x402ErrorCode,
+  x402RefusalStatus,
 } from '../payments/x402/transport';
 import { buildOperatorTokenHook } from './access-control';
 import type { AdapterRuntime } from './adapters';
@@ -327,7 +328,12 @@ function sendInvokeError(
       });
     return;
   }
-  reply.status(error.httpStatus).send(envelope);
+  // Preserve the challenge when a missing Permit2 allowance changes 402 to 412
+  const status =
+    paymentMethod === 'x402'
+      ? x402RefusalStatus(error.code, error.httpStatus, details?.['reason'])
+      : error.httpStatus;
+  reply.status(status).send(envelope);
 }
 
 // Each rail has its own proof header. MPP uses HTTP authentication, and an

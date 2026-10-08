@@ -12,12 +12,13 @@ import { registerExactEvmScheme } from '@x402/evm/exact/client';
 import { privateKeyToAccount } from 'viem/accounts';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CommerceResource, PaymentContext } from '../../../src/core';
-import { isCommerceError } from '../../../src/core';
+import { isCommerceError, NOOP_LOGGER } from '../../../src/core';
 import { createPaymentProof } from '../../../src/payments/x402/client';
 import {
   createX402PaymentProvider,
   type X402ProviderOptions,
 } from '../../../src/payments/x402/provider';
+import { computePermit2ReplayKey } from '../../../src/payments/x402/replay-key';
 
 const verifyMock = vi.fn();
 const settleMock = vi.fn();
@@ -652,5 +653,230 @@ describe('provider - several offers', () => {
     );
     expect(first?.destination).toBe(OFFERS[0].payTo);
     expect(last?.destination).toBe(OFFERS[2].payTo);
+  });
+});
+
+describe('provider - Permit2 offers', () => {
+  type Permit2Proof = {
+    payload: {
+      permit2Authorization: {
+        from: string;
+        spender: string;
+        nonce: string;
+        permitted: { token: string; amount: string };
+        witness: { to: string };
+      };
+    };
+    extensions?: Record<string, unknown>;
+    resource?: unknown;
+  };
+
+  const buyer = privateKeyToAccount(BUYER_PRIVATE_KEY);
+
+  // No token domain: Permit2 signs its own
+  const warn = vi.fn();
+  const makePermit2Provider = () =>
+    createX402PaymentProvider({
+      network: 'eip155:31337',
+      rpcUrl: RPC_URL,
+      asset: ASSET,
+      assetDecimals: 6,
+      payTo: PAY_TO,
+      assetTransferMethod: 'permit2',
+      facilitator: { mode: 'remote', url: FACILITATOR_URL, auth: { type: 'none' } },
+      logger: { ...NOOP_LOGGER, warn },
+    });
+
+  async function signedProof(provider: ReturnType<typeof makePermit2Provider>) {
+    const requirement = await provider.createRequirement(paymentContext());
+    const client = new x402Client();
+    registerExactEvmScheme(client, { signer: buyer, networks: ['eip155:31337'] });
+    client.setSpendControls(false);
+    const envelope = requirement.challenge.envelope as unknown as PaymentRequired;
+    const proof = (await client.createPaymentPayload(envelope)) as unknown as Permit2Proof;
+    return { requirement, proof };
+  }
+
+  const submission = (proof: unknown) => ({
+    method: 'x402' as const,
+    payload: Buffer.from(JSON.stringify(proof)).toString('base64'),
+  });
+
+  beforeEach(() => {
+    verifyMock.mockReset();
+    settleMock.mockReset();
+  });
+
+  it('names the method in the offer and the descriptor, without a token domain', async () => {
+    const provider = makePermit2Provider();
+    const requirement = await provider.createRequirement(paymentContext());
+    expect(requirement.challenge.accepts[0]?.['extra']).toEqual({ assetTransferMethod: 'permit2' });
+    expect(provider.descriptor.capabilities).toContain('permit2');
+  });
+
+  it('refuses an EIP-3009 offer without the token domain', () => {
+    expect(() =>
+      createX402PaymentProvider({
+        network: 'eip155:31337',
+        rpcUrl: RPC_URL,
+        asset: ASSET,
+        assetDecimals: 6,
+        payTo: PAY_TO,
+        facilitator: { mode: 'remote', url: FACILITATOR_URL, auth: { type: 'none' } },
+      }),
+    ).toThrow(/EIP-3009 offer needs "assetName" and "assetVersion"/);
+  });
+
+  it('verifies and settles an SDK-signed payload, forwarding no extensions', async () => {
+    const provider = makePermit2Provider();
+    const { requirement, proof } = await signedProof(provider);
+    const auth = proof.payload.permit2Authorization;
+    // An unadvertised gas-sponsoring extension never reaches the facilitator
+    proof.extensions = { eip2612GasSponsoring: { info: { from: buyer.address } } };
+    verifyMock.mockResolvedValueOnce({ isValid: true });
+    settleMock.mockResolvedValueOnce({
+      success: true,
+      transaction: `0x${'ab'.repeat(32)}`,
+      network: 'eip155:31337',
+      payer: buyer.address,
+    });
+
+    const context = {
+      requestId: 'req-1',
+      resource: RESOURCE,
+      requirement,
+      submission: submission(proof),
+    };
+    const verification = await provider.verify(context);
+    expect(verification).toMatchObject({
+      status: 'verified',
+      payer: buyer.address,
+      payee: PAY_TO,
+      amount: '0.01',
+      replayKey: computePermit2ReplayKey({
+        chainId: 31337,
+        owner: buyer.address,
+        nonce: auth.nonce,
+      }),
+    });
+    const forwarded = verifyMock.mock.calls[0]?.[0] as Permit2Proof;
+    expect(forwarded.payload.permit2Authorization).toEqual(auth);
+    expect(forwarded).not.toHaveProperty('extensions');
+    expect(forwarded).not.toHaveProperty('resource');
+
+    const settlement = await provider.settle({ ...context, verification });
+    expect(settlement.status).toBe('settled');
+    expect(settlement.metadata).toEqual({ amountBaseUnits: '10000' });
+    expect(settleMock.mock.calls[0]?.[0]).not.toHaveProperty('extensions');
+  });
+
+  const OTHER = '0x2222222222222222222222222222222222222222';
+  it.each<[string, (auth: Permit2Proof['payload']['permit2Authorization']) => void]>([
+    [
+      'invalid_permit2_spender',
+      (auth) => {
+        auth.spender = OTHER;
+      },
+    ],
+    [
+      'permit2_token_mismatch',
+      (auth) => {
+        auth.permitted.token = OTHER;
+      },
+    ],
+    [
+      'invalid_permit2_recipient_mismatch',
+      (auth) => {
+        auth.witness.to = OTHER;
+      },
+    ],
+    [
+      'permit2_amount_mismatch',
+      (auth) => {
+        auth.permitted.amount = '10001';
+      },
+    ],
+  ])('refuses %s before the facilitator sees it', async (reason, tamper) => {
+    const provider = makePermit2Provider();
+    const { requirement, proof } = await signedProof(provider);
+    tamper(proof.payload.permit2Authorization);
+    const result = await provider.verify({
+      requestId: 'req-1',
+      resource: RESOURCE,
+      requirement,
+      submission: submission(proof),
+    });
+    expect(result.rejectionReason).toBe(reason);
+    expect(verifyMock).not.toHaveBeenCalled();
+  });
+
+  // The SDK's Permit2 path returns every throw from the broadcast call with no
+  // hash, the catch-all with the message appended
+  it.each([
+    [
+      'the catch-all with a message, as an unknown outcome',
+      'invalid_exact_evm_transaction_failed: request timed out. URL: https://rpc.example/v2/RPC-KEY',
+      'throws',
+    ],
+    ['a recognized Permit2 revert, as a refusal', 'permit2_invalid_nonce', 'rejected'],
+  ])('settle() treats a failure without a hash, %s', async (_label, errorReason, outcome) => {
+    const provider = makePermit2Provider();
+    const { requirement, proof } = await signedProof(provider);
+    verifyMock.mockResolvedValueOnce({ isValid: true });
+    settleMock.mockResolvedValueOnce({
+      success: false,
+      errorReason,
+      transaction: '',
+      network: 'eip155:31337',
+    });
+    const context = {
+      requestId: 'req-1',
+      resource: RESOURCE,
+      requirement,
+      submission: submission(proof),
+    };
+    const settled = provider.settle({ ...context, verification: await provider.verify(context) });
+    if (outcome === 'throws') {
+      await expect(settled).rejects.toSatisfy(
+        (err: unknown) => isCommerceError(err) && err.code === 'PAYMENT_PROVIDER_UNAVAILABLE',
+      );
+      expect(warn).toHaveBeenCalled();
+      expect(JSON.stringify(warn.mock.calls)).not.toContain('RPC-KEY');
+    } else {
+      await expect(settled).resolves.toMatchObject({
+        status: 'rejected',
+        rejectionReason: errorReason,
+      });
+    }
+  });
+
+  it('refuses an EIP-3009 payload for a Permit2 offer', async () => {
+    const provider = makePermit2Provider();
+    const requirement = await provider.createRequirement(paymentContext());
+    const eip3009 = await proofFor(makeProvider({ type: 'none' }));
+    const result = await provider.verify({
+      requestId: 'req-1',
+      resource: RESOURCE,
+      requirement,
+      submission: { method: 'x402', payload: eip3009.payload },
+    });
+    expect(result.rejectionReason).toBe('unsupported_scheme');
+    expect(verifyMock).not.toHaveBeenCalled();
+  });
+
+  it('refuses a payload carrying both authorizations, which the SDK would settle through Permit2', async () => {
+    const eip3009Provider = makeProvider({ type: 'none' });
+    const { requirement, payload } = await proofFor(eip3009Provider);
+    const { proof } = await signedProof(makePermit2Provider());
+    const decoded = JSON.parse(Buffer.from(payload, 'base64').toString('utf8'));
+    decoded.payload.permit2Authorization = proof.payload.permit2Authorization;
+    const result = await eip3009Provider.verify({
+      requestId: 'req-1',
+      resource: RESOURCE,
+      requirement,
+      submission: submission(decoded),
+    });
+    expect(result.rejectionReason).toBe('unsupported_scheme');
+    expect(verifyMock).not.toHaveBeenCalled();
   });
 });

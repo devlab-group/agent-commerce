@@ -81,8 +81,11 @@ describe('pinned x402 SDK entry points', () => {
     (_id, network) => {
       const id = network.id as `${string}:${string}`;
       if (network.family === 'evm') {
-        const { asset, name, version, decimals, symbol } = evmDefaultAsset(id);
+        const sdk = evmDefaultAsset(id);
+        const { asset, name, version, decimals, symbol } = sdk;
         expect(network.canonicalAsset).toEqual({ symbol, address: asset, name, version, decimals });
+        // A default asset settles through EIP-3009, the method an option without one gets
+        expect(sdk.assetTransferMethod ?? 'eip3009').toBe('eip3009');
         return;
       }
       const sdk = network.family === 'svm' ? svmDefaultAsset(id) : tvmDefaultAsset(id);

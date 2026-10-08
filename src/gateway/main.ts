@@ -141,7 +141,9 @@ async function main(): Promise<void> {
     // pino's REDACT_PATHS does not protect console.log
     for (const option of x402.options ?? [x402]) {
       console.log(`    network      ${option.network}  via ${rpcOrigin(option.rpcUrl)}`);
-      console.log(`    asset        ${option.asset} (${option.assetName} v${option.assetVersion})`);
+      const domain = option.assetName ? ` (${option.assetName} v${option.assetVersion})` : '';
+      const method = option.assetTransferMethod === 'permit2' ? ' via Permit2' : '';
+      console.log(`    asset        ${option.asset}${domain}${method}`);
       console.log(`    pays to      ${option.payTo}   <- merchant-controlled, not the gateway`);
     }
     console.log(`    facilitator  ${x402.facilitator.mode}`);

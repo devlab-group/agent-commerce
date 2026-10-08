@@ -4,16 +4,16 @@ This page records the implemented subset and pinned revision for each protocol.
 
 ## Support matrix
 
-| Protocol | Status       | Revision                                                                       | Implemented subset                                                          |
-| -------- | ------------ | ------------------------------------------------------------------------------ | --------------------------------------------------------------------------- |
-| **HTTP** | Supported    | native                                                                         | resource routes and rail-specific payment headers                           |
-| **MCP**  | Supported    | MCP `2026-07-28` and `2025-11-25` through `@modelcontextprotocol/server@2.3.0` | tool discovery, invocation, payment-required and error mapping              |
-| **x402** | Supported    | x402 v2, `@x402/core@2.25.0`, `@x402/evm@2.25.0`                               | `exact` EVM/EIP-3009 challenge, verification, settlement and replay binding |
-| **A2A**  | Experimental | v1.0.1; negotiation `1.0`; `JSONRPC` binding                                   | Agent Card, `SendMessage`, paid flow and the x402 extension                 |
-| **ACP**  | Experimental | stable snapshot `2026-04-17`; REST binding                                     | discovery and the five checkout operations                                  |
-| **AP2**  | Experimental | v0.2.0, tag 2026-04-28, commit `b4587ac`; Direct mode                          | closed Checkout Mandate verification before settlement                      |
-| **MPP**  | Experimental | drafts at `tempoxyz/mpp-specs@806fdb8`; `mppx@0.13.1`                          | `charge`/`evm`/EIP-3009 over HTTP, MCP and A2A                              |
-| UCP      | Planned      | -                                                                              | no implementation                                                           |
+| Protocol | Status       | Revision                                                                       | Implemented subset                                                                                         |
+| -------- | ------------ | ------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------- |
+| **HTTP** | Supported    | native                                                                         | resource routes and rail-specific payment headers                                                          |
+| **MCP**  | Supported    | MCP `2026-07-28` and `2025-11-25` through `@modelcontextprotocol/server@2.3.0` | tool discovery, invocation, payment-required and error mapping                                             |
+| **x402** | Supported    | x402 v2, `@x402/core@2.25.0`, `@x402/evm@2.25.0`                               | `exact` EVM through EIP-3009, or Permit2 (partial): challenge, verification, settlement and replay binding |
+| **A2A**  | Experimental | v1.0.1; negotiation `1.0`; `JSONRPC` binding                                   | Agent Card, `SendMessage`, paid flow and the x402 extension                                                |
+| **ACP**  | Experimental | stable snapshot `2026-04-17`; REST binding                                     | discovery and the five checkout operations                                                                 |
+| **AP2**  | Experimental | v0.2.0, tag 2026-04-28, commit `b4587ac`; Direct mode                          | closed Checkout Mandate verification before settlement                                                     |
+| **MPP**  | Experimental | drafts at `tempoxyz/mpp-specs@806fdb8`; `mppx@0.13.1`                          | `charge`/`evm`/EIP-3009 over HTTP, MCP and A2A                                                             |
+| UCP      | Planned      | -                                                                              | no implementation                                                                                          |
 
 Experimental components are disabled unless configured and support only the
 subsets below. Planned means there is no adapter or endpoint.
@@ -552,14 +552,26 @@ No ACP SDK ships. Conformance tests use the vendored official schema and example
 ## x402
 
 The x402 provider supports v2 `exact` on EVM through EIP-3009
-`transferWithAuthorization`. Requirements explicitly include the token name
-and version used by the EIP-712 domain.
+`transferWithAuthorization` or, per option, Permit2. Permit2 support is
+partial: it has settled on Anvil against the deployed Permit2 and proxy code,
+not on a public network. Each requirement names its method in
+`extra.assetTransferMethod`. EIP-3009 requirements also include the token
+name and version used by the EIP-712 domain.
 
 Verification checks the scheme, signature, recipient, amount, validity window,
 payer balance, network and asset. Local refusals use x402 error codes where
 available, such as `invalid_network`. The provider derives a replay key from
 the authorization, which the pipeline reserves before settlement. A successful
 settlement records the transaction hash.
+
+A Permit2 proof must name the x402 exact Permit2 proxy as spender and match
+the offer's token, amount and `payTo` witness recipient. The gateway checks
+these before the facilitator checks the signature, deadline, balance and
+Permit2 allowance. Other spenders could redirect funds and are refused as
+`invalid_permit2_spender`. A proof using the wrong method or both
+authorizations is `unsupported_scheme`: the SDK facilitator chooses Permit2
+whenever that authorization is present. Since an owner's Permit2 nonce spans
+all tokens, the replay key uses the chain id, Permit2 address, owner and nonce.
 
 The signature covers neither the flow nor the resource, so the proof's
 `accepted` must match the offer: amount, asset, `payTo` ignoring letter case,
@@ -568,7 +580,9 @@ means `authorization`. A `resource.url` in the proof must equal the
 challenge's. A mismatch is `invalid_payment_requirements`, refused before the
 facilitator is called. `maxTimeoutSeconds` and `extra` keys added by the client
 are not compared. The facilitator receives the payload without `resource`,
-since its `resource://` URL is the gateway's own identifier.
+since its `resource://` URL is the gateway's own identifier, and without
+`extensions`: the gateway advertises none, and the SDK facilitator would act
+on a Permit2 gas-sponsoring extension.
 
 With [several options](configuration.md#several-options), the challenge uses
 `resource://agent-commerce/resources/<id>`. The comparison above selects the
@@ -605,8 +619,10 @@ this gateway, although its nonce stays unused on chain. Presenting the same
 proof again returns 402 with `invalid_exact_evm_nonce_already_used`; the client
 signs a fresh authorization.
 
-Unsupported: SVM, Permit2, the `upto`, `batch-settlement` and `auth-capture`
-schemes, multi-asset routing and dynamic pricing.
+Unsupported: SVM, the Permit2 gas-sponsoring extensions
+(`eip2612GasSponsoring`, `erc20ApprovalGasSponsoring`), the `upto`,
+`batch-settlement` and `auth-capture` schemes, multi-asset routing and
+dynamic pricing.
 
 Facilitator authentication supports `none`, `bearer` and `cdp`; config rejects
 other auth types. Remote mode works on Base Sepolia. Config accepts local mode
@@ -705,6 +721,12 @@ retry challenge. Other outcomes:
 - A replay returns 409 without a challenge if the first attempt is unfinished,
   has the legacy `failed` status, or its status is unavailable. Issuing another
   challenge could lead to a second payment for the same request.
+- A missing Permit2 token allowance (`permit2_allowance_required`) returns
+  412 Precondition Failed with a fresh `PAYMENT-REQUIRED`, per the `exact`
+  EVM scheme. The buyer approves Permit2 and retries.
+  `x402HTTPClient.parsePaymentResult` decodes that header only on 402;
+  for 412, call `getPaymentRequiredResponse` or read `details.challenge`
+  in the response body.
 - A settlement without a verdict returns 502 with `PAYMENT-RESPONSE`. Its
   reason is `settlement_pending` when a transaction hash is available, or
   `unexpected_settle_error` otherwise.

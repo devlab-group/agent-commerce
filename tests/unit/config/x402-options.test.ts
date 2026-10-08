@@ -168,6 +168,17 @@ describe('asset overrides', () => {
     expect(() => parseConfig(withX402({ ...local, ...token }), {})).not.toThrow();
   });
 
+  it('takes a Permit2 token with only its address and decimals', () => {
+    const local = { ...operational(), network: 'eip155:31337', payTo: MERCHANT };
+    const token = { asset: OTHER_TOKEN, assetDecimals: 18 };
+    const x402 = parseConfig(withX402({ ...local, ...token, assetTransferMethod: 'permit2' }), {})
+      .payments.x402;
+    expect(x402).toMatchObject({ ...token, assetTransferMethod: 'permit2' });
+    expect(x402?.assetName).toBeUndefined();
+    const unknown = refusal(withX402({ ...local, ...token, assetTransferMethod: 'permit' }));
+    expect(pathOf(unknown)).toBe('payments.x402.assetTransferMethod');
+  });
+
   it('refuses another token on a public network, testnet or mainnet', () => {
     const token = { asset: OTHER_TOKEN, assetName: 'Other', assetVersion: '1', assetDecimals: 6 };
     expect(refusal(withX402({ ...base, ...MINIMAL, ...token })).message).toContain(

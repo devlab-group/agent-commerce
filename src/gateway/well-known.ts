@@ -66,10 +66,13 @@ export interface WellKnownDocument {
       readonly enabled: boolean;
       readonly network: string;
       readonly asset: string;
-      readonly assetName: string;
-      readonly assetVersion: string;
+      /** Absent for a Permit2 token that has no EIP-712 domain */
+      readonly assetName?: string;
+      readonly assetVersion?: string;
       readonly assetDecimals: number;
       readonly payTo: string;
+      /** Absent for EIP-3009, the default */
+      readonly assetTransferMethod?: 'permit2';
       readonly maxTimeoutSeconds: number;
       readonly facilitator: { readonly mode: 'local' | 'remote' };
       /** `local`, `testnet` or `mainnet`, from the network */
@@ -78,10 +81,11 @@ export interface WellKnownDocument {
       readonly options?: readonly {
         readonly network: string;
         readonly asset: string;
-        readonly assetName: string;
-        readonly assetVersion: string;
+        readonly assetName?: string;
+        readonly assetVersion?: string;
         readonly assetDecimals: number;
         readonly payTo: string;
+        readonly assetTransferMethod?: 'permit2';
       }[];
     };
     /** Public settlement fields; excludes the challenge secret and facilitator credentials */
@@ -155,10 +159,13 @@ export function buildWellKnownDocument(options: BuildWellKnownOptions): WellKnow
               enabled: x402.enabled,
               network: x402.network,
               asset: x402.asset,
-              assetName: x402.assetName,
-              assetVersion: x402.assetVersion,
+              ...(x402.assetName !== undefined ? { assetName: x402.assetName } : {}),
+              ...(x402.assetVersion !== undefined ? { assetVersion: x402.assetVersion } : {}),
               assetDecimals: x402.assetDecimals,
               payTo: x402.payTo,
+              ...(x402.assetTransferMethod !== undefined
+                ? { assetTransferMethod: x402.assetTransferMethod }
+                : {}),
               maxTimeoutSeconds: x402.maxTimeoutSeconds,
               // Only local or remote is public: the facilitator URL can carry
               // a tenant path or an API key, and the signer key is secret
@@ -170,13 +177,22 @@ export function buildWellKnownDocument(options: BuildWellKnownOptions): WellKnow
               ...(x402.options !== undefined && x402.options.length > 1
                 ? {
                     options: x402.options.map(
-                      ({ network, asset, assetName, assetVersion, assetDecimals, payTo }) => ({
+                      ({
                         network,
                         asset,
                         assetName,
                         assetVersion,
                         assetDecimals,
                         payTo,
+                        assetTransferMethod,
+                      }) => ({
+                        network,
+                        asset,
+                        ...(assetName !== undefined ? { assetName } : {}),
+                        ...(assetVersion !== undefined ? { assetVersion } : {}),
+                        assetDecimals,
+                        payTo,
+                        ...(assetTransferMethod !== undefined ? { assetTransferMethod } : {}),
                       }),
                     ),
                   }
