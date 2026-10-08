@@ -7,8 +7,9 @@
  *    (INPUT_INVALID, or BACKEND_ERROR for an illegal configured header)
  * 3. resolve price
  * 4. free: straight to the backend
- * 5. paid: pick provider and createRequirement, then return a challenge or
- *    verify the proof and reserve authorization and replay identities
+ * 5. paid: pick provider and createRequirement, then return a challenge, or
+ *    select the offer the proof pays, verify it, and reserve authorization and
+ *    replay identities
  * 6. settle before calling the backend, or call the backend first and settle
  *    only if it succeeds. Finalize authorization according to the outcome
  *    (BACKEND_TIMEOUT / BACKEND_ERROR)
@@ -532,6 +533,16 @@ export function createExecutionPipeline(
 
       let verification: PaymentResult;
       try {
+        // Later steps, including authorization and settlement order, use the
+        // selected requirement with its full retry challenge
+        if (provider.selectRequirement) {
+          requirement = await provider.selectRequirement({
+            requestId: request.requestId,
+            resource,
+            requirement,
+            submission: payment,
+          });
+        }
         verification = await provider.verify({
           requestId: request.requestId,
           resource,

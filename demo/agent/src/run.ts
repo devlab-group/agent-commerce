@@ -208,14 +208,21 @@ export async function runDemoAgent(deps: DemoAgentDeps = {}): Promise<number> {
     }
     const envelope = structured;
     log.gateway(
-      `402 payment required: ${envelope.payment.amount} ${envelope.payment.currency} to ${envelope.payment.destination}`,
+      `402 payment required: ${envelope.payment.amount} ${envelope.payment.currency}, ${envelope.payment.accepts.length} offer(s)`,
     );
 
-    const accepts = envelope.payment.accepts[0];
+    // Pay the offer for the demo token on the demo network, not whichever
+    // happens to come first
+    const network = process.env['X402_NETWORK'] ?? LOCAL_NETWORK;
+    const accepts = envelope.payment.accepts.find(
+      (offer) =>
+        offer['network'] === network &&
+        String(offer['asset']).toLowerCase() === manifest.asset.toLowerCase(),
+    );
     if (accepts === undefined) {
       throw new DemoAgentStepError(
         'read payment requirement',
-        'PaymentRequiredEnvelope.payment.accepts was empty',
+        `no offer pays ${manifest.asset} on ${network}`,
       );
     }
 
@@ -224,7 +231,7 @@ export async function runDemoAgent(deps: DemoAgentDeps = {}): Promise<number> {
       merchant: manifest.merchant.address,
       asset: manifest.asset,
       maxValue: MAX_DEMO_PAYMENT_UNITS,
-      network: process.env['X402_NETWORK'] ?? LOCAL_NETWORK,
+      network,
     });
     log.buyer(
       `challenge checked before signing: pays ${accepts.amount} units of ${accepts.asset} to ${accepts.payTo}`,

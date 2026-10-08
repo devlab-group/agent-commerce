@@ -352,17 +352,38 @@ local chain or a declared EVM network, set `asset`, `assetName`,
 USDC. Overrides for the default token must match its metadata. An explicitly
 configured `asset` preserves the resource's currency label.
 
-Alternatively, put these fields in a one-entry `options` array. Both forms
-resolve identically; config load rejects mixed forms, empty arrays and
-multiple entries.
+### Several options
+
+Use `options` to offer x402 resources on several networks or in several
+tokens; the buyer pays one offer. Entries use the fields above, and a one-entry
+list resolves like the direct form. Config load rejects mixed forms, empty
+lists, duplicate (network, asset, `payTo`) combinations, and mixed deployment
+modes (local, testnet, mainnet).
 
 ```yaml
 payments:
   x402:
+    networks:
+      eip155:8453: { rpcUrl: ${BASE_RPC_URL} }
+      eip155:137: { rpcUrl: ${POLYGON_RPC_URL} }
     options:
       - network: eip155:8453
         payTo: ${MERCHANT_WALLET}
+      - network: eip155:137
+        payTo: ${MERCHANT_WALLET}
 ```
+
+Each network needs a distinct RPC endpoint for health checks. Set
+`payments.x402.networks.<id>.rpcUrl`, or use the shared `payments.x402.rpcUrl`
+as a fallback. All offers use the facilitator under `payments.x402`; it must
+advertise their networks and scheme.
+
+When options use default assets, price the resource in `USD` or their shared
+token symbol. Decimal precision cannot exceed the least precise option.
+
+The proof's `accepted` echo selects an offer before verification; zero or
+multiple matches are rejected. AP2 binds to the selected destination, network
+and asset, preventing a mandate for one offer from authorizing another.
 
 ### `payments.mpp`
 
@@ -427,7 +448,7 @@ settlement on those chains has not been demonstrated.
 
 Declare another EVM network with its `kind` to select the mainnet guardrails.
 Custom networks have no default asset: set all four asset fields. Built-in
-networks cannot be redeclared.
+networks cannot be redeclared; their entry may set `rpcUrl` only.
 
 ```yaml
 payments:

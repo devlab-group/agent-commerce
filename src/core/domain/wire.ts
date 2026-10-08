@@ -103,8 +103,14 @@ export interface PaymentRequiredEnvelope {
     readonly version: string;
     readonly amount: DecimalAmount;
     readonly currency: string;
-    readonly destination: string;
+    /**
+     * @deprecated Read each offer's `payTo` in `accepts`. Absent when the
+     * challenge offers several destinations.
+     */
+    readonly destination?: string;
+    /** @deprecated Read each offer's `network` in `accepts` */
     readonly network?: string;
+    /** @deprecated Read each offer's `asset` in `accepts` */
     readonly asset?: string;
     readonly expiresAt?: IsoTimestamp;
     /** Provider-native requirement objects, passed through verbatim */
@@ -198,7 +204,7 @@ export function toPaymentRequiredEnvelope(
       version: r.challenge.version,
       amount: r.amount,
       currency: r.currency,
-      destination: r.destination,
+      ...(r.destination !== undefined ? { destination: r.destination } : {}),
       ...(r.network !== undefined ? { network: r.network } : {}),
       ...(r.asset !== undefined ? { asset: r.asset } : {}),
       ...(r.expiresAt !== undefined ? { expiresAt: r.expiresAt } : {}),

@@ -98,7 +98,8 @@ function paymentRequiredResult(outcome: PaymentRequiredOutcome): CallToolResult 
   else if (mppRequired !== undefined) meta = { [MPP_MCP_PAYMENT_REQUIRED_META_KEY]: mppRequired };
   return structuredError(
     structured,
-    `Payment required: ${p.amount} ${p.currency} to ${p.destination} for resource "${outcome.resourceId}". Retry with an ${p.provider} payment proof in ${proofCarriers(p.provider)}.`,
+    // A challenge with several offers names no single destination
+    `Payment required: ${p.amount} ${p.currency}${p.destination !== undefined ? ` to ${p.destination}` : ''} for resource "${outcome.resourceId}". Retry with an ${p.provider} payment proof in ${proofCarriers(p.provider)}.`,
     meta,
   );
 }

@@ -137,11 +137,13 @@ async function main(): Promise<void> {
   if (x402?.enabled) {
     console.log('');
     console.log('  x402 settlement');
-    // Origin only: Alchemy, Infura and QuickNode put the API key in the URL,
-    // and REDACT_PATHS covers pino's structured fields, not console.log
-    console.log(`    network      ${x402.network}  via ${rpcOrigin(x402.rpcUrl)}`);
-    console.log(`    asset        ${x402.asset} (${x402.assetName} v${x402.assetVersion})`);
-    console.log(`    pays to      ${x402.payTo}   <- merchant-controlled, not the gateway`);
+    // Print each offer's RPC origin only: URLs may contain API keys, and
+    // pino's REDACT_PATHS does not protect console.log
+    for (const option of x402.options ?? [x402]) {
+      console.log(`    network      ${option.network}  via ${rpcOrigin(option.rpcUrl)}`);
+      console.log(`    asset        ${option.asset} (${option.assetName} v${option.assetVersion})`);
+      console.log(`    pays to      ${option.payTo}   <- merchant-controlled, not the gateway`);
+    }
     console.log(`    facilitator  ${x402.facilitator.mode}`);
     console.log('');
   }

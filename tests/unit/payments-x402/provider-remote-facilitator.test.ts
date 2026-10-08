@@ -521,3 +521,136 @@ describe('provider - a proof must echo the offer it pays', () => {
     },
   );
 });
+
+describe('provider - several offers', () => {
+  // Three tokens to three payees on one chain, so every offer is distinct
+  const OFFERS = [
+    { asset: ASSET, payTo: PAY_TO },
+    {
+      asset: '0x2222222222222222222222222222222222222222',
+      payTo: '0x3333333333333333333333333333333333333333',
+    },
+    {
+      asset: '0x4444444444444444444444444444444444444444',
+      payTo: '0x5555555555555555555555555555555555555555',
+    },
+  ] as const;
+
+  const makeMultiProvider = () =>
+    createX402PaymentProvider({
+      offers: OFFERS.map((offer) => ({
+        ...offer,
+        network: 'eip155:31337',
+        rpcUrl: RPC_URL,
+        assetName: 'MockUSDC',
+        assetVersion: '2',
+        assetDecimals: 6,
+      })),
+      facilitator: { mode: 'remote', url: FACILITATOR_URL, auth: { type: 'none' } },
+    });
+
+  // A proof built by the SDK client for the offer `pick` chooses
+  async function sdkProof(envelope: unknown, pick: number) {
+    const client = new x402Client((_version, accepts) => accepts[pick] as never);
+    registerExactEvmScheme(client, {
+      signer: privateKeyToAccount(BUYER_PRIVATE_KEY),
+      networks: ['eip155:31337'],
+    });
+    client.setSpendControls(false);
+    const payload = await client.createPaymentPayload(envelope as PaymentRequired);
+    return {
+      method: 'x402' as const,
+      payload: Buffer.from(JSON.stringify(payload)).toString('base64'),
+    };
+  }
+
+  beforeEach(() => {
+    verifyMock.mockReset();
+    settleMock.mockReset();
+  });
+
+  it('offers every option under one resource URL and names no single destination', async () => {
+    const requirement = await makeMultiProvider().createRequirement(paymentContext());
+    expect(requirement.challenge.accepts.map((a) => a['payTo'])).toEqual(
+      OFFERS.map((o) => o.payTo),
+    );
+    expect((requirement.challenge.envelope as unknown as PaymentRequired).resource.url).toBe(
+      'resource://agent-commerce/resources/demo.report',
+    );
+    expect(requirement.destination).toBeUndefined();
+    expect(requirement.network).toBeUndefined();
+    expect(requirement.asset).toBeUndefined();
+  });
+
+  it.each([0, 1, 2])(
+    'verifies and settles the offer the SDK client chose: offer %i',
+    async (pick) => {
+      const provider = makeMultiProvider();
+      const requirement = await provider.createRequirement(paymentContext());
+      const submission = await sdkProof(requirement.challenge.envelope, pick);
+      const context = { requestId: 'req-1', resource: RESOURCE, requirement, submission };
+
+      const selected = await provider.selectRequirement?.(context);
+      if (!selected) throw new Error('a provider with several offers selects one');
+      const offer = OFFERS[pick] as (typeof OFFERS)[number];
+      expect(selected).toMatchObject({
+        id: requirement.id,
+        destination: offer.payTo,
+        network: 'eip155:31337',
+        asset: offer.asset,
+        challenge: requirement.challenge,
+      });
+
+      verifyMock.mockResolvedValueOnce({ isValid: true });
+      const verification = await provider.verify({ ...context, requirement: selected });
+      expect(verification).toMatchObject({ status: 'verified', asset: offer.asset });
+      expect(verification.payee?.toLowerCase()).toBe(offer.payTo);
+
+      settleMock.mockResolvedValueOnce({
+        success: true,
+        transaction: `0x${'ab'.repeat(32)}`,
+        network: 'eip155:31337',
+      });
+      const settled = await provider.settle({ ...context, requirement: selected, verification });
+      expect(settled.status).toBe('settled');
+      // The facilitator settles exactly the chosen offer
+      expect(settleMock.mock.calls[0]?.[1]).toEqual(requirement.challenge.accepts[pick]);
+    },
+  );
+
+  it('leaves the requirement unselected when the echo matches no offer, and verify rejects it', async () => {
+    const provider = makeMultiProvider();
+    const requirement = await provider.createRequirement(paymentContext());
+    const proof = await sdkProof(requirement.challenge.envelope, 1);
+    const decoded = JSON.parse(Buffer.from(proof.payload, 'base64').toString('utf8'));
+    decoded.accepted.payTo = '0x6666666666666666666666666666666666666666';
+    const submission = {
+      method: 'x402' as const,
+      payload: Buffer.from(JSON.stringify(decoded)).toString('base64'),
+    };
+    const context = { requestId: 'req-1', resource: RESOURCE, requirement, submission };
+
+    expect(await provider.selectRequirement?.(context)).toBe(requirement);
+    const result = await provider.verify(context);
+    expect(result.rejectionReason).toBe('invalid_payment_requirements');
+    expect(verifyMock).not.toHaveBeenCalled();
+  });
+
+  it('selects per request, so concurrent buyers can pay different offers', async () => {
+    const provider = makeMultiProvider();
+    const [first, last] = await Promise.all(
+      [0, 2].map(async (pick) => {
+        const requirement = await provider.createRequirement(paymentContext());
+        const submission = await sdkProof(requirement.challenge.envelope, pick);
+        return provider.selectRequirement?.({
+          requestId: 'r',
+          resource: RESOURCE,
+          requirement,
+          submission,
+        });
+      }),
+    );
+    expect(first?.destination).toBe(OFFERS[0].payTo);
+    expect(last?.destination).toBe(OFFERS[2].payTo);
+  });
+});

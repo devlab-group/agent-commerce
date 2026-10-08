@@ -17,13 +17,16 @@ export function createConfiguredPaymentProviders(
   if (x402?.enabled) {
     providers.push(
       createX402PaymentProvider({
-        network: x402.network,
-        rpcUrl: x402.rpcUrl,
-        asset: x402.asset as `0x${string}`,
-        assetName: x402.assetName,
-        assetVersion: x402.assetVersion,
-        assetDecimals: x402.assetDecimals,
-        payTo: x402.payTo as `0x${string}`,
+        // Support manually built single-option configs without `options`
+        offers: (x402.options ?? [x402]).map((option) => ({
+          network: option.network,
+          rpcUrl: option.rpcUrl,
+          asset: option.asset as `0x${string}`,
+          assetName: option.assetName,
+          assetVersion: option.assetVersion,
+          assetDecimals: option.assetDecimals,
+          payTo: option.payTo as `0x${string}`,
+        })),
         maxTimeoutSeconds: x402.maxTimeoutSeconds,
         ...(x402.paymentFlow !== undefined ? { paymentFlow: x402.paymentFlow } : {}),
         ...(x402.resourcePaymentFlows !== undefined

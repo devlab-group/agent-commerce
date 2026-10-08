@@ -72,8 +72,17 @@ export interface WellKnownDocument {
       readonly payTo: string;
       readonly maxTimeoutSeconds: number;
       readonly facilitator: { readonly mode: 'local' | 'remote' };
-      /** `local`, `testnet` or `mainnet`, from the network and facilitator together */
+      /** `local`, `testnet` or `mainnet`, from the network */
       readonly mode: DeploymentMode;
+      /** Every offer, present only when there are several; the fields above repeat the first */
+      readonly options?: readonly {
+        readonly network: string;
+        readonly asset: string;
+        readonly assetName: string;
+        readonly assetVersion: string;
+        readonly assetDecimals: number;
+        readonly payTo: string;
+      }[];
     };
     /** Public settlement fields; excludes the challenge secret and facilitator credentials */
     readonly mpp?: {
@@ -157,6 +166,21 @@ export function buildWellKnownDocument(options: BuildWellKnownOptions): WellKnow
               mode: resolveDeploymentMode(
                 requireX402Network(x402.network, 'payments.x402.network', x402.networks),
               ),
+              // Public offer terms only: an option's RPC URL can carry an API key
+              ...(x402.options !== undefined && x402.options.length > 1
+                ? {
+                    options: x402.options.map(
+                      ({ network, asset, assetName, assetVersion, assetDecimals, payTo }) => ({
+                        network,
+                        asset,
+                        assetName,
+                        assetVersion,
+                        assetDecimals,
+                        payTo,
+                      }),
+                    ),
+                  }
+                : {}),
             },
           }
         : {}),

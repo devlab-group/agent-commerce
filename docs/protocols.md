@@ -570,6 +570,10 @@ facilitator is called. `maxTimeoutSeconds` and `extra` keys added by the client
 are not compared. The facilitator receives the payload without `resource`,
 since its `resource://` URL is the gateway's own identifier.
 
+With [several options](configuration.md#several-options), the challenge uses
+`resource://agent-commerce/resources/<id>`. The comparison above selects the
+proof's offer; zero or multiple matches yield `invalid_payment_requirements`.
+
 x402 v1 is not accepted. A payload declaring an `x402Version` other than 2 is
 refused as `invalid_x402_version` on every carrier. A request carrying only the
 v1 `X-PAYMENT` header gets the 402 challenge with

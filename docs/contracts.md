@@ -141,8 +141,25 @@ persistence must not fail the commerce flow.
   forwarded name or value is `INPUT_INVALID` before pricing. ACP is the only
   adapter that sets the field. A custom `BackendExecutor` that ignores it
   forwards nothing.
+- `PaymentProvider.selectRequirement` optionally selects a proof's offer
+  before `verify`. It returns the selected destination, network, asset and
+  metadata while preserving `id` and the full `challenge`. Verification,
+  authorization, replay reservation and settlement use this requirement.
+  Providers without the hook keep their existing path.
+- `PaymentRequirement.destination` and `PaymentRequiredEnvelope.payment.destination`
+  are optional. Multi-offer x402 challenges omit destination, network and
+  asset; single-offer and selected x402 requirements include all three. The
+  envelope fields are deprecated: read individual offers in `accepts`. With
+  `strictNullChecks`, callers passing either `destination` as a required
+  `string` must now handle `undefined`.
 
 ### Protocols and gateway
+
+- The x402 provider accepts `X402MultiOfferProviderOptions` with one shared
+  facilitator. Multi-offer challenges use the offer-independent URL
+  `resource://agent-commerce/resources/<id>`. `GatewayConfig.payments.x402.options`
+  holds resolved options; single-option fields mirror the first. `/.well-known`
+  includes `payments.x402.options` only for multiple offers and omits RPC URLs.
 
 - `ProtocolName` gained `a2a` and `acp`; `PROTOCOL_NAMES` is the runtime list
   used by validation. It is derived from a record keyed by the union, so a
@@ -300,8 +317,20 @@ export type X402FacilitatorConfig =
   | { readonly mode: 'local'; readonly signerPrivateKey: string }
   | { readonly mode: 'remote'; readonly url: string; readonly auth: FacilitatorAuth };
 
+/** One settlement option: the network, token and payee fields above */
+export type X402OfferOptions = Pick<
+  X402ProviderOptions,
+  'network' | 'rpcUrl' | 'asset' | 'assetName' | 'assetVersion' | 'assetDecimals' | 'payTo'
+>;
+
+/** Several offers per paid resource, settled through one facilitator */
+export interface X402MultiOfferProviderOptions
+  extends Omit<X402ProviderOptions, keyof X402OfferOptions> {
+  readonly offers: readonly X402OfferOptions[];
+}
+
 export function createX402PaymentProvider(
-  options: X402ProviderOptions,
+  options: X402ProviderOptions | X402MultiOfferProviderOptions,
 ): PaymentProvider;
 
 export type DeploymentMode = 'local' | 'testnet' | 'mainnet';

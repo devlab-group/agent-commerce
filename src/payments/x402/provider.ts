@@ -13,6 +13,7 @@ import type {
   PaymentRequired,
   PaymentRequirements,
   SettleResponse,
+  SupportedKind,
   VerifyResponse,
 } from '@x402/core/types';
 import {
@@ -54,7 +55,12 @@ import { assertDevKeyIsLocalOnly, assertPayToIsNotDevAddress, describeRpc } from
 import { createRemoteFacilitatorBinding, type FacilitatorBinding } from './facilitator';
 import { resolveX402Deployment, type X402FacilitatorConfig } from './guardrails';
 import { createLocalFacilitatorBinding } from './local-facilitator';
-import { type CustomNetworks, describeDeploymentMode } from './networks';
+import {
+  type CustomNetworks,
+  type DeploymentMode,
+  describeDeploymentMode,
+  type NetworkProfile,
+} from './networks';
 import {
   declaredX402Version,
   decodePaymentSubmission,
@@ -141,94 +147,175 @@ export interface X402ProviderOptions {
   readonly ids?: IdGenerator;
 }
 
+/** Settlement network, token and merchant payee for one offer */
+export interface X402OfferOptions {
+  /** CAIP-2 network identifier, e.g. `eip155:8453` */
+  readonly network: string;
+  /** RPC endpoint of that network, for health checks and a local facilitator */
+  readonly rpcUrl: string;
+  /** ERC-20 (EIP-3009) asset address used for settlement */
+  readonly asset: `0x${string}`;
+  /** EIP-712 domain name of the asset */
+  readonly assetName: string;
+  /** EIP-712 domain version of the asset */
+  readonly assetVersion: string;
+  readonly assetDecimals: number;
+  /** Merchant-controlled settlement destination. Never a gateway-owned wallet */
+  readonly payTo: `0x${string}`;
+}
+
+/**
+ * Offers for each paid resource, using one facilitator. The proof selects
+ * the offer the buyer pays.
+ */
+export interface X402MultiOfferProviderOptions
+  extends Omit<X402ProviderOptions, keyof X402OfferOptions> {
+  readonly offers: readonly X402OfferOptions[];
+}
+
 /** Prefixed random UUIDs, shared with the MPP rail */
 export const DEFAULT_IDS: IdGenerator = {
   next: (prefix?: string) => `${prefix ? `${prefix}_` : ''}${crypto.randomUUID()}`,
 };
 
-export function createX402PaymentProvider(options: X402ProviderOptions): PaymentProvider {
-  if (!isAddress(options.asset)) {
-    throw new CommerceError(
-      'CONFIG_INVALID',
-      `x402 provider: "asset" is not a valid EVM address: ${options.asset}`,
-    );
+// Requirement metadata naming the offer `selectRequirement` chose, by index
+const SELECTED_OFFER_KEY = 'x402.offer';
+
+// Everything one offer needs at request time, resolved and checked at startup
+interface Offer {
+  readonly network: Network;
+  readonly profile: NetworkProfile;
+  readonly asset: `0x${string}`;
+  readonly assetName: string;
+  readonly assetVersion: string;
+  readonly assetDecimals: number;
+  readonly payTo: `0x${string}`;
+  readonly rpcOrigin: string;
+  readonly healthClient: ReturnType<typeof createLocalPublicClient>;
+  readonly binding: FacilitatorBinding;
+}
+
+export function createX402PaymentProvider(
+  options: X402ProviderOptions | X402MultiOfferProviderOptions,
+): PaymentProvider {
+  const inputs: readonly X402OfferOptions[] = 'offers' in options ? options.offers : [options];
+  if (inputs.length === 0) {
+    throw new CommerceError('CONFIG_INVALID', 'x402 provider: "offers" is empty');
   }
-  if (!isAddress(options.payTo)) {
-    throw new CommerceError(
-      'CONFIG_INVALID',
-      `x402 provider: "payTo" is not a valid EVM address: ${options.payTo}`,
-    );
-  }
-  // In every facilitator mode. `resolveX402Deployment` below also refuses a dev
-  // payTo on any non-local deployment, whatever the RPC host.
-  assertPayToIsNotDevAddress(options.rpcUrl, options.payTo);
-  if (!Number.isInteger(options.assetDecimals) || options.assetDecimals < 0) {
-    throw new CommerceError(
-      'CONFIG_INVALID',
-      `x402 provider: "assetDecimals" must be a non-negative integer`,
-    );
-  }
-  // The chain id is signed into the buyer's EIP-712 domain, so a network it
-  // cannot be resolved from fails here, never at request time
-  const { profile: resolved, mode } = resolveX402Deployment({
-    network: options.network,
-    ...(options.customNetworks !== undefined ? { customNetworks: options.customNetworks } : {}),
-    payTo: options.payTo,
-    asset: options.asset,
-    assetName: options.assetName,
-    assetVersion: options.assetVersion,
-    facilitator: options.facilitator,
-    ...(options.allowMainnet !== undefined ? { allowMainnet: options.allowMainnet } : {}),
-    ...(options.allowUnauthenticatedFacilitator !== undefined
-      ? { allowUnauthenticatedFacilitator: options.allowUnauthenticatedFacilitator }
-      : {}),
-  });
-  if (resolved.family !== 'evm') {
-    throw new CommerceError(
-      'CONFIG_INVALID',
-      `x402 provider: "${options.network}" (${resolved.displayName}) is not an EVM network; this provider settles \`exact\` on EVM only`,
-    );
-  }
-  // Narrowed once: the request handlers below are hoisted declarations
-  const profile = resolved;
-  const network = options.network as Network;
-  // Built once, here, rather than in settle(): an unusable key fails the
-  // provider at startup, not on the first paid request after that buyer's
-  // replay key is already reserved
-  let binding: FacilitatorBinding;
-  if (options.facilitator.mode === 'local') {
-    assertDevKeyIsLocalOnly(options.rpcUrl, options.facilitator.signerPrivateKey);
-    let client: LocalFacilitatorClient;
-    try {
-      client = createLocalFacilitatorClient(
-        options.rpcUrl,
-        options.facilitator.signerPrivateKey as `0x${string}`,
-      );
-    } catch (cause) {
+  // Share one remote binding, created after the first offer passes validation
+  let remoteBinding: FacilitatorBinding | undefined;
+
+  let mode: DeploymentMode | undefined;
+  const seen = new Set<string>();
+  const offers = inputs.map((input, index): Offer => {
+    const field = (name: string) =>
+      inputs.length === 1 ? `"${name}"` : `"offers[${index}].${name}"`;
+    if (!isAddress(input.asset)) {
       throw new CommerceError(
         'CONFIG_INVALID',
-        'x402 provider: could not construct a local facilitator signer from ' +
-          'facilitator.signerPrivateKey. It must be a valid 32-byte hex private key.',
-        { cause },
+        `x402 provider: ${field('asset')} is not a valid EVM address: ${input.asset}`,
       );
     }
-    binding = createLocalFacilitatorBinding(client, network, isProviderUnavailableError);
-  } else {
-    binding = createRemoteFacilitatorBinding({
-      url: options.facilitator.url,
-      auth: options.facilitator.auth,
+    if (!isAddress(input.payTo)) {
+      throw new CommerceError(
+        'CONFIG_INVALID',
+        `x402 provider: ${field('payTo')} is not a valid EVM address: ${input.payTo}`,
+      );
+    }
+    // In every facilitator mode. `resolveX402Deployment` below also refuses a
+    // dev payTo on any non-local deployment, whatever the RPC host.
+    assertPayToIsNotDevAddress(input.rpcUrl, input.payTo);
+    if (!Number.isInteger(input.assetDecimals) || input.assetDecimals < 0) {
+      throw new CommerceError(
+        'CONFIG_INVALID',
+        `x402 provider: ${field('assetDecimals')} must be a non-negative integer`,
+      );
+    }
+    // The chain id is signed into the buyer's EIP-712 domain, so a network it
+    // cannot be resolved from fails here, never at request time
+    const deployment = resolveX402Deployment({
+      network: input.network,
+      ...(options.customNetworks !== undefined ? { customNetworks: options.customNetworks } : {}),
+      payTo: input.payTo,
+      asset: input.asset,
+      assetName: input.assetName,
+      assetVersion: input.assetVersion,
+      facilitator: options.facilitator,
+      ...(options.allowMainnet !== undefined ? { allowMainnet: options.allowMainnet } : {}),
+      ...(options.allowUnauthenticatedFacilitator !== undefined
+        ? { allowUnauthenticatedFacilitator: options.allowUnauthenticatedFacilitator }
+        : {}),
     });
-  }
+    const profile = deployment.profile;
+    if (profile.family !== 'evm') {
+      throw new CommerceError(
+        'CONFIG_INVALID',
+        `x402 provider: "${input.network}" (${profile.displayName}) is not an EVM network; this provider settles \`exact\` on EVM only`,
+      );
+    }
+    // Refuse offers mixing local, testnet and mainnet deployment modes
+    if (mode !== undefined && deployment.mode !== mode) {
+      throw new CommerceError(
+        'CONFIG_INVALID',
+        `x402 provider: offers mix ${mode} and ${deployment.mode} networks; every offer must be on a ${mode} network`,
+      );
+    }
+    mode = deployment.mode;
+    const key = `${input.network}|${input.asset.toLowerCase()}|${input.payTo.toLowerCase()}`;
+    if (seen.has(key)) {
+      throw new CommerceError(
+        'CONFIG_INVALID',
+        `x402 provider: ${field('network')} repeats an earlier offer of the same asset to the same payTo on ${input.network}`,
+      );
+    }
+    seen.add(key);
 
-  // health() reads the chain through its own client, whose timeout aborts the
-  // request. Verification and settlement go through the facilitator instead.
-  // Health details can reach logs, so they name the RPC by origin only.
-  const rpcOrigin = describeRpc(options.rpcUrl);
-  const healthPublicClient = createLocalPublicClient(
-    options.rpcUrl,
-    HEALTH_TIMEOUT_MS,
-    profile.chainId,
-  );
+    // Built once, here, rather than in settle(): an unusable key fails the
+    // provider at startup, not on the first paid request after that buyer's
+    // replay key is already reserved
+    let binding: FacilitatorBinding;
+    if (options.facilitator.mode === 'local') {
+      assertDevKeyIsLocalOnly(input.rpcUrl, options.facilitator.signerPrivateKey);
+      let client: LocalFacilitatorClient;
+      try {
+        client = createLocalFacilitatorClient(
+          input.rpcUrl,
+          options.facilitator.signerPrivateKey as `0x${string}`,
+        );
+      } catch (cause) {
+        throw new CommerceError(
+          'CONFIG_INVALID',
+          'x402 provider: could not construct a local facilitator signer from ' +
+            'facilitator.signerPrivateKey. It must be a valid 32-byte hex private key.',
+          { cause },
+        );
+      }
+      binding = createLocalFacilitatorBinding(client, input.network, isProviderUnavailableError);
+    } else {
+      remoteBinding ??= createRemoteFacilitatorBinding({
+        url: options.facilitator.url,
+        auth: options.facilitator.auth,
+      });
+      binding = remoteBinding;
+    }
+
+    return {
+      network: input.network as Network,
+      profile,
+      asset: input.asset,
+      assetName: input.assetName,
+      assetVersion: input.assetVersion,
+      assetDecimals: input.assetDecimals,
+      payTo: input.payTo,
+      // health() reads the chain through its own client, whose timeout aborts
+      // the request. Verification and settlement go through the facilitator
+      // instead. Health details can reach logs, so they name the RPC by origin.
+      rpcOrigin: describeRpc(input.rpcUrl),
+      healthClient: createLocalPublicClient(input.rpcUrl, HEALTH_TIMEOUT_MS, profile.chainId),
+      binding,
+    };
+  });
+  const deploymentMode = mode as DeploymentMode;
 
   const clock = options.clock ?? systemClock;
   const ids = options.ids ?? DEFAULT_IDS;
@@ -242,12 +329,13 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
     supportedSpec: `x402/v${X402_VERSION} scheme=exact family=eip155`,
     capabilities: [
       'exact-evm',
-      `${binding.kind}-facilitator`,
+      `${options.facilitator.mode}-facilitator`,
       'eip-3009',
       'caip-2',
-      `mode=${mode}`,
+      `mode=${deploymentMode}`,
       'authorization-flow',
       'upfront-flow',
+      ...(offers.length > 1 ? ['multiple-offers'] : []),
     ],
     status: 'stable',
     unsupported: [
@@ -259,19 +347,26 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
     ],
   };
 
+  // Use the selected or sole offer; multi-offer challenges require selection
+  function offerIndexOf(requirement: PaymentRequirement): number | undefined {
+    const selected = requirement.metadata?.[SELECTED_OFFER_KEY];
+    if (typeof selected === 'number') return selected;
+    // An empty list falls through to 'missing_payment_requirements'
+    return requirement.challenge.accepts.length <= 1 ? 0 : undefined;
+  }
+
   async function createRequirement(context: PaymentContext): Promise<PaymentRequirement> {
-    const amount = parseCanonicalAmount(context.amount, options.assetDecimals).toString();
     const paymentFlow =
       options.resourcePaymentFlows?.[context.resource.id] ??
       options.paymentFlow ??
       X402_DEFAULT_PAYMENT_FLOW;
 
-    const requirements: PaymentRequirements = {
+    const accepts: PaymentRequirements[] = offers.map((offer) => ({
       scheme: 'exact',
-      network,
-      asset: options.asset,
-      amount,
-      payTo: options.payTo,
+      network: offer.network,
+      asset: offer.asset,
+      amount: parseCanonicalAmount(context.amount, offer.assetDecimals).toString(),
+      payTo: offer.payTo,
       maxTimeoutSeconds,
       // `name`/`version` let the buyer and the facilitator build the same
       // EIP-712 domain without calling `version()` on the token.
@@ -280,27 +375,32 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
       // x402 requires an explicit non-default flow. Omit the default
       // `authorization` flow here.
       extra: {
-        name: options.assetName,
-        version: options.assetVersion,
+        name: offer.assetName,
+        version: offer.assetVersion,
         assetTransferMethod: 'eip3009',
         ...(paymentFlow === 'upfront' ? { paymentFlow } : {}),
       },
-    };
+    }));
+    const single = offers.length === 1 ? offers[0] : undefined;
 
     // The v2 challenge document as sent on the wire. The HTTP adapter
     // base64-encodes it into `PAYMENT-REQUIRED` and MCP passes it through, so
     // both surfaces offer the same challenge.
     //
-    // `resource.url` is outside the EIP-3009 signature. Include public
-    // network and payee terms so the buyer's echo can identify this offer.
+    // `resource.url` is outside the EIP-3009 signature. A single offer puts its
+    // network and payee in it, so the buyer's echo identifies the offer. With
+    // several, the URL stays the same whichever one the buyer pays.
+    const resourceId = encodeURIComponent(context.resource.id);
     const envelope: PaymentRequired = {
       x402Version: X402_VERSION,
       resource: {
-        url: `resource://agent-commerce/${encodeURIComponent(options.network)}/${options.payTo}/resources/${encodeURIComponent(context.resource.id)}`,
+        url: single
+          ? `resource://agent-commerce/${encodeURIComponent(single.network)}/${single.payTo}/resources/${resourceId}`
+          : `resource://agent-commerce/resources/${resourceId}`,
         description: context.resource.description ?? context.resource.name,
         mimeType: DEFAULT_MIME_TYPE,
       },
-      accepts: [requirements],
+      accepts,
     };
 
     const expiresAt = new Date(clock.now().getTime() + maxTimeoutSeconds * 1000).toISOString();
@@ -312,17 +412,46 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
       provider: 'x402',
       amount: context.amount,
       currency: context.currency,
-      destination: options.payTo,
-      network: options.network,
-      asset: options.asset,
+      // Several offers name several destinations; selection fills these in
+      ...(single
+        ? { destination: single.payTo, network: single.network, asset: single.asset }
+        : {}),
       expiresAt,
       challenge: {
         provider: 'x402',
         version: X402_PROTOCOL_VERSION,
-        accepts: [requirements as unknown as Record<string, unknown>],
+        accepts: accepts as unknown as Record<string, unknown>[],
         envelope: envelope as unknown as Record<string, unknown>,
       },
       metadata: { [SETTLE_AFTER_BACKEND_METADATA_KEY]: paymentFlow === 'authorization' },
+    };
+  }
+
+  /**
+   * Selects the unique offer matching `accepted`, leaving zero or multiple
+   * matches unchanged for `verify()` to reject. Selection identifies the
+   * claimed offer; verification still validates the proof.
+   */
+  async function selectRequirement(
+    context: PaymentVerificationContext,
+  ): Promise<PaymentRequirement> {
+    const { requirement, submission } = context;
+    const offered = requirement.challenge.accepts as unknown as PaymentRequirements[];
+    if (offered.length < 2) return requirement;
+    const payload = decodePaymentSubmission(submission.payload);
+    if (!payload) return requirement;
+    const matches = offered.flatMap((offer, index) =>
+      acceptedMatchesOffer(offer, payload.accepted) ? [index] : [],
+    );
+    const index = matches.length === 1 ? matches[0] : undefined;
+    const offer = index === undefined ? undefined : offers[index];
+    if (index === undefined || !offer) return requirement;
+    return {
+      ...requirement,
+      destination: offer.payTo,
+      network: offer.network,
+      asset: offer.asset,
+      metadata: { ...requirement.metadata, [SELECTED_OFFER_KEY]: index },
     };
   }
 
@@ -352,8 +481,14 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
       return rejected('wrong_provider');
     }
 
-    const requirements = requirement.challenge.accepts[0] as PaymentRequirements | undefined;
-    if (!requirements) {
+    // With several offers and none selected, the proof matched no single offer
+    const index = offerIndexOf(requirement);
+    if (index === undefined) {
+      return rejected('invalid_payment_requirements');
+    }
+    const offer = offers[index];
+    const requirements = requirement.challenge.accepts[index] as PaymentRequirements | undefined;
+    if (!offer || !requirements) {
       return rejected('missing_payment_requirements');
     }
 
@@ -372,7 +507,7 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
     // of a different asset.
     if (
       !isAddress(requirements.asset) ||
-      getAddress(requirements.asset) !== getAddress(options.asset)
+      getAddress(requirements.asset) !== getAddress(offer.asset)
     ) {
       return rejected('wrong_asset');
     }
@@ -400,7 +535,7 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
     }
     // `accepted.network` names the chain the buyer signed for, so a mismatch
     // means a signature bound to a chain we do not settle on
-    if (payload.accepted.network !== options.network) {
+    if (payload.accepted.network !== offer.network) {
       return rejected('invalid_network');
     }
     // The signature omits flow and resource. Check the echoed offer;
@@ -413,7 +548,7 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
     ) {
       return rejected('invalid_payment_requirements');
     }
-    if (getAddress(authorization.to) !== getAddress(options.payTo)) {
+    if (getAddress(authorization.to) !== getAddress(offer.payTo)) {
       return rejected('invalid_exact_evm_payload_recipient_mismatch');
     }
     let authorizedValue: bigint;
@@ -428,7 +563,7 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
       return rejected('invalid_exact_evm_payload_authorization_value_mismatch');
     }
 
-    const scope = binding.open();
+    const scope = offer.binding.open();
     let sdkResult: VerifyResponse;
     try {
       sdkResult = await scope.verify(withoutResource(payload), requirements);
@@ -440,7 +575,7 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
       }
       throw new CommerceError(
         'PAYMENT_PROVIDER_UNAVAILABLE',
-        `x402 provider: ${binding.kind} facilitator returned no verdict during verify()`,
+        `x402 provider: ${offer.binding.kind} facilitator returned no verdict during verify()`,
         { cause: err },
       );
     }
@@ -456,7 +591,7 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
         }
         throw new CommerceError(
           'PAYMENT_PROVIDER_UNAVAILABLE',
-          `x402 provider: ${binding.kind} facilitator unreachable during verify()`,
+          `x402 provider: ${offer.binding.kind} facilitator unreachable during verify()`,
         );
       }
       // The raw reason is logged at debug level. Only what the buyer sees and
@@ -470,10 +605,10 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
       return rejected(sanitizeReason(sdkResult.invalidReason, 'invalid_payment'));
     }
 
-    // `accepted.network` equals the configured network (checked above), so the
-    // profile's chain id is the one the authorization is bound to
+    // `accepted.network` equals the offer's network (checked above), so its
+    // chain id is the one the authorization is bound to
     const replayKey = computeReplayKey({
-      chainId: profile.chainId,
+      chainId: offer.profile.chainId,
       asset: getAddress(requirements.asset),
       from: getAddress(authorization.from),
       nonce: authorization.nonce,
@@ -484,7 +619,7 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
       provider: 'x402',
       payer: getAddress(authorization.from),
       payee: getAddress(authorization.to),
-      amount: formatUnits(authorizedValue, options.assetDecimals),
+      amount: formatUnits(authorizedValue, offer.assetDecimals),
       currency: requirement.currency,
       network: payload.accepted.network,
       asset: getAddress(requirements.asset),
@@ -502,8 +637,13 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
       );
     }
 
-    const requirements = requirement.challenge.accepts[0] as PaymentRequirements | undefined;
-    if (!requirements) {
+    const index = offerIndexOf(requirement);
+    const offer = index === undefined ? undefined : offers[index];
+    const requirements =
+      index === undefined
+        ? undefined
+        : (requirement.challenge.accepts[index] as PaymentRequirements | undefined);
+    if (!offer || !requirements) {
       throw new CommerceError(
         'PAYMENT_INVALID',
         'x402 provider: settle() found no payment requirements to settle against',
@@ -529,7 +669,7 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
       rejectionReason,
     });
 
-    const scope = binding.open();
+    const scope = offer.binding.open();
     let sdkResult: SettleResponse;
     try {
       sdkResult = await scope.settle(withoutResource(payload), requirements);
@@ -537,7 +677,7 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
       if (isProviderUnavailableError(err) || scope.transportFailed()) {
         throw new CommerceError(
           'PAYMENT_PROVIDER_UNAVAILABLE',
-          `x402 provider: ${binding.kind} facilitator unreachable during settle()`,
+          `x402 provider: ${offer.binding.kind} facilitator unreachable during settle()`,
           { cause: err },
         );
       }
@@ -626,83 +766,108 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
     };
   }
 
+  // One offer's chain, asset and facilitator support. `kinds` fetches the
+  // remote facilitator's `/supported` once per probe, shared by every offer.
+  async function offerHealth(
+    offer: Offer,
+    kinds: () => Promise<readonly SupportedKind[]>,
+  ): Promise<{ readonly status: 'pass' | 'fail'; readonly detail: string }> {
+    const { profile, rpcOrigin, healthClient, binding } = offer;
+    const chainId = await healthClient.getChainId();
+    if (chainId !== profile.chainId) {
+      return {
+        status: 'fail',
+        detail: `RPC at ${rpcOrigin} reports chain id ${chainId}, expected ${profile.chainId} (${profile.displayName})`,
+      };
+    }
+
+    const code = await healthClient.getCode({ address: offer.asset });
+    if (!code || code === '0x') {
+      return {
+        status: 'fail',
+        detail: `No contract code found at configured asset address ${offer.asset}`,
+      };
+    }
+
+    if (binding.kind === 'remote') {
+      // Reachable is not enough: a facilitator that does not carry our
+      // scheme on our network fails every payment after the buyer has signed
+      const supportsUs = (await kinds()).some(
+        (kind) =>
+          kind.x402Version === X402_VERSION &&
+          kind.scheme === 'exact' &&
+          kind.network === offer.network,
+      );
+      if (!supportsUs) {
+        return {
+          status: 'fail',
+          detail:
+            `Facilitator ${binding.describe} does not advertise x402 v${X402_VERSION} scheme=exact ` +
+            `on ${offer.network} (${profile.displayName}); no payment on this deployment can settle`,
+        };
+      }
+      return {
+        status: 'pass',
+        detail:
+          `${describeDeploymentMode(deploymentMode)}: RPC ${rpcOrigin} reachable, chain id ` +
+          `${profile.chainId} (${profile.displayName}), asset ${offer.asset} has code, ` +
+          `facilitator ${binding.describe} supports exact/${offer.network}`,
+      };
+    }
+
+    // An RPC reports whatever chain id it was started with, so the id cannot
+    // prove this is a dev chain. An Anvil-only RPC method must answer before
+    // a local facilitator counts as healthy.
+    const isAnvil = await probeIsAnvilNode(healthClient);
+    if (!isAnvil) {
+      return {
+        status: 'fail',
+        detail:
+          `RPC at ${rpcOrigin} reports chain id ${profile.chainId} but does not answer ` +
+          '"anvil_nodeInfo", so it does not look like a local Anvil dev node. Refusing to treat it ' +
+          'as safe for a local-facilitator dev key.',
+      };
+    }
+
+    return {
+      status: 'pass',
+      detail:
+        `${describeDeploymentMode(deploymentMode)}: RPC ${rpcOrigin} reachable, chain id ` +
+        `${profile.chainId}, asset ${offer.asset} has code, confirmed Anvil dev node`,
+    };
+  }
+
+  // Unhealthy offers fail readiness; challenges retain the complete offer list
   async function computeHealth(): Promise<AdapterHealth> {
     const startedAt = clock.monotonicMs();
     const checkedAt = clock.nowIso();
+    let supported: Promise<readonly SupportedKind[]> | undefined;
+    const kinds = () => {
+      supported ??= (remoteBinding as Extract<FacilitatorBinding, { kind: 'remote' }>)
+        .supported()
+        .then((response) => response.kinds);
+      return supported;
+    };
+    const label = (offer: Offer, index: number, detail: string) =>
+      offers.length === 1 ? detail : `offer ${index} (${offer.network}): ${detail}`;
 
     try {
-      const chainId = await healthPublicClient.getChainId();
-      if (chainId !== profile.chainId) {
-        return {
-          status: 'fail',
-          detail: `RPC at ${rpcOrigin} reports chain id ${chainId}, expected ${profile.chainId} (${profile.displayName})`,
-          checkedAt,
-          durationMs: clock.monotonicMs() - startedAt,
-        };
-      }
-
-      const code = await healthPublicClient.getCode({ address: options.asset });
-      if (!code || code === '0x') {
-        return {
-          status: 'fail',
-          detail: `No contract code found at configured asset address ${options.asset}`,
-          checkedAt,
-          durationMs: clock.monotonicMs() - startedAt,
-        };
-      }
-
-      if (binding.kind === 'remote') {
-        // Reachable is not enough: a facilitator that does not carry our
-        // scheme on our network fails every payment after the buyer has signed
-        const { kinds } = await binding.supported();
-        const supportsUs = kinds.some(
-          (kind) =>
-            kind.x402Version === X402_VERSION &&
-            kind.scheme === 'exact' &&
-            kind.network === options.network,
-        );
-        if (!supportsUs) {
+      const details: string[] = [];
+      for (const [index, offer] of offers.entries()) {
+        const result = await offerHealth(offer, kinds);
+        if (result.status === 'fail') {
           return {
             status: 'fail',
-            detail:
-              `Facilitator ${binding.describe} does not advertise x402 v${X402_VERSION} scheme=exact ` +
-              `on ${options.network} (${profile.displayName}); no payment on this deployment can settle`,
+            detail: label(offer, index, result.detail),
             checkedAt,
             durationMs: clock.monotonicMs() - startedAt,
           };
         }
-        return {
-          status: 'pass',
-          detail:
-            `${describeDeploymentMode(mode)}: RPC ${rpcOrigin} reachable, chain id ` +
-            `${profile.chainId} (${profile.displayName}), asset ${options.asset} has code, ` +
-            `facilitator ${binding.describe} supports exact/${options.network}`,
-          checkedAt,
-          durationMs: clock.monotonicMs() - startedAt,
-        };
+        details.push(label(offer, index, result.detail));
       }
-
-      // An RPC reports whatever chain id it was started with, so the id cannot
-      // prove this is a dev chain. An Anvil-only RPC method must answer before
-      // a local facilitator counts as healthy.
-      const isAnvil = await probeIsAnvilNode(healthPublicClient);
-      if (!isAnvil) {
-        return {
-          status: 'fail',
-          detail:
-            `RPC at ${rpcOrigin} reports chain id ${profile.chainId} but does not answer ` +
-            '"anvil_nodeInfo", so it does not look like a local Anvil dev node. Refusing to treat it ' +
-            'as safe for a local-facilitator dev key.',
-          checkedAt,
-          durationMs: clock.monotonicMs() - startedAt,
-        };
-      }
-
       return {
         status: 'pass',
-        detail:
-          `${describeDeploymentMode(mode)}: RPC ${rpcOrigin} reachable, chain id ` +
-          `${profile.chainId}, asset ${options.asset} has code, confirmed Anvil dev node`,
+        detail: details.join('; '),
         checkedAt,
         durationMs: clock.monotonicMs() - startedAt,
       };
@@ -748,6 +913,8 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
     name: 'x402',
     descriptor,
     createRequirement,
+    // A single offer needs no selection, so its path stays exactly as it was
+    ...(offers.length > 1 ? { selectRequirement } : {}),
     verify,
     settle,
     health,

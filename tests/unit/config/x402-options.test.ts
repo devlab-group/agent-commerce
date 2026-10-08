@@ -269,11 +269,108 @@ describe('configurations refused before startup', () => {
     expect(gated.message).toContain('not available yet');
     expect(pathOf(gated)).toBe('payments.x402.options[0].network');
   });
+});
 
-  it('refuses more than one option as not available yet', () => {
-    const error = refusal(
-      withX402({ ...operational(), facilitator: REMOTE, options: [MINIMAL, MINIMAL] }),
+describe('several options', () => {
+  const ARBITRUM_SEPOLIA = { network: 'eip155:421614', payTo: MERCHANT };
+  const RPCS = {
+    'eip155:84532': { rpcUrl: 'https://base-sepolia.example' },
+    'eip155:421614': { rpcUrl: 'https://arbitrum-sepolia.example' },
+  };
+  const remote = () => {
+    const { rpcUrl: _shared, ...rest } = operational();
+    return { ...rest, facilitator: REMOTE };
+  };
+
+  it('resolves each option in order, each with its own network RPC', () => {
+    const x402 = parseConfig(
+      withX402({ ...remote(), networks: RPCS, options: [MINIMAL, ARBITRUM_SEPOLIA] }),
+      {},
+    ).payments.x402;
+    expect(x402?.options?.map((o) => [o.network, o.rpcUrl, o.asset])).toEqual([
+      [
+        'eip155:84532',
+        'https://base-sepolia.example',
+        '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+      ],
+      [
+        'eip155:421614',
+        'https://arbitrum-sepolia.example',
+        '0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d',
+      ],
+    ]);
+    // The single-option fields repeat the first option
+    expect(x402).toMatchObject({ network: 'eip155:84532', rpcUrl: 'https://base-sepolia.example' });
+  });
+
+  it('refuses two networks on one RPC endpoint, a repeated option and a mix of kinds', () => {
+    const shared = { ...remote(), rpcUrl: 'https://rpc.example' };
+    expect(
+      refusal(withX402({ ...shared, options: [MINIMAL, ARBITRUM_SEPOLIA] })).message,
+    ).toContain('would use the same RPC endpoint');
+    expect(refusal(withX402({ ...shared, options: [MINIMAL, MINIMAL] })).message).toContain(
+      'repeats an earlier option',
     );
-    expect(error.message).toContain('more than one x402 option is not available yet');
+    const mixed = refusal(
+      withX402({
+        ...remote(),
+        allowMainnet: true,
+        networks: { ...RPCS, 'eip155:8453': { rpcUrl: 'https://base.example' } },
+        options: [MINIMAL, { network: 'eip155:8453', payTo: MERCHANT }],
+      }),
+    );
+    expect(pathOf(mixed)).toBe('payments.x402.options[1].network');
+  });
+
+  it('prices every default-asset option in their token or USD', () => {
+    const config = { ...remote(), networks: RPCS, options: [MINIMAL, ARBITRUM_SEPOLIA] };
+    for (const currency of ['USD', 'USDC']) {
+      expect(() => parseConfig(withX402(config, { amount: '0.01', currency }), {})).not.toThrow();
+    }
+    expect(pathOf(refusal(withX402(config, { amount: '0.01', currency: 'EUR' })))).toBe(
+      'resources.market_report.pricing.currency',
+    );
+  });
+
+  it('bounds the price by the option with the fewest decimals', () => {
+    const local = operational();
+    const coarse = {
+      network: 'eip155:31337',
+      payTo: MERCHANT,
+      asset: OTHER_TOKEN,
+      assetName: 'Coarse',
+      assetVersion: '1',
+      assetDecimals: 2,
+    };
+    const mock = (validRawConfig()['payments'] as { x402: Record<string, unknown> }).x402;
+    const fine = { ...coarse, asset: mock['asset'], assetName: 'MockUSDC', assetDecimals: 6 };
+    const error = refusal(
+      withX402({ ...local, options: [fine, coarse] }, { amount: '0.001', currency: 'USDC' }),
+    );
+    expect(error.message).toContain('2 decimals');
+  });
+
+  it('takes an RPC alone for a built-in network, and refuses half a declaration', () => {
+    expect(() =>
+      parseConfig(withX402({ ...remote(), networks: RPCS, ...MINIMAL }), {}),
+    ).not.toThrow();
+    const unknown = refusal(
+      withX402({
+        ...remote(),
+        ...MINIMAL,
+        rpcUrl: 'https://rpc.example',
+        networks: { 'eip155:10': { rpcUrl: 'https://op.example' } },
+      }),
+    );
+    expect(unknown.message).toContain('not a known network');
+    const half = refusal(
+      withX402({
+        ...remote(),
+        ...MINIMAL,
+        rpcUrl: 'https://rpc.example',
+        networks: { 'eip155:10': { kind: 'mainnet' } },
+      }),
+    );
+    expect(half.message).toContain('needs both kind and displayName');
   });
 });
