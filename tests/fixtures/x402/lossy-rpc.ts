@@ -6,9 +6,13 @@ export interface LossyRpc {
   close(): Promise<void>;
 }
 
-// Forwards JSON-RPC to `upstream`, but answers `eth_sendRawTransaction` with an
-// error after the node has accepted it: a broadcast whose response was lost
-export async function startLossyRpc(upstream: string): Promise<LossyRpc> {
+// Forwards JSON-RPC to `upstream`, but answers the broadcast method with an
+// error after the node has accepted it: a broadcast whose response was lost.
+// The method is EVM's by default; Solana's is `sendTransaction`.
+export async function startLossyRpc(
+  upstream: string,
+  broadcastMethod = 'eth_sendRawTransaction',
+): Promise<LossyRpc> {
   const server = createServer(async (request, response) => {
     const chunks: Buffer[] = [];
     for await (const chunk of request) chunks.push(chunk as Buffer);
@@ -22,7 +26,7 @@ export async function startLossyRpc(upstream: string): Promise<LossyRpc> {
     const call = JSON.parse(body) as { id?: unknown; method?: string };
     response.setHeader('content-type', 'application/json');
     response.end(
-      call.method === 'eth_sendRawTransaction'
+      call.method === broadcastMethod
         ? JSON.stringify({
             jsonrpc: '2.0',
             id: call.id,

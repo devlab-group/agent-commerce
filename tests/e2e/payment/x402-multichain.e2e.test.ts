@@ -85,10 +85,12 @@ beforeAll(async () => {
       deployLocalChain({ rpcUrl: anvilOf(index).rpcUrl, buyerInitialBalance: '10.00', chainId }),
     ),
   );
-  facilitator = await startLoopbackFacilitator(
-    CHAINS.map(({ network }, index) => ({ network, rpcUrl: anvilOf(index).rpcUrl })),
-    deploymentOf(0).facilitator.privateKey,
-  );
+  facilitator = await startLoopbackFacilitator({
+    evm: {
+      chains: CHAINS.map(({ network }, index) => ({ network, rpcUrl: anvilOf(index).rpcUrl })),
+      signerPrivateKey: deploymentOf(0).facilitator.privateKey,
+    },
+  });
 
   const config = parseConfig(
     {

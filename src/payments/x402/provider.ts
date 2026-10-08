@@ -1,6 +1,7 @@
 /**
- * x402 payment provider: protocol v2, `exact` scheme, EVM, EIP-3009
- * `transferWithAuthorization` or Permit2 through the x402 exact proxy.
+ * x402 payment provider: protocol v2, `exact` scheme. On EVM the buyer signs an
+ * EIP-3009 `transferWithAuthorization` or a Permit2 transfer through the x402
+ * exact proxy; on Solana, a token transfer whose fee the facilitator pays.
  *
  * `verify()` never moves funds. `settle()` does, and throws unless it is handed
  * a successful verification. Both run through a facilitator (see
@@ -15,6 +16,7 @@ import type {
   PaymentRequirements,
   SettleResponse,
   SupportedKind,
+  SupportedResponse,
   VerifyResponse,
 } from '@x402/core/types';
 import { PERMIT2_ADDRESS, x402ExactPermit2ProxyAddress } from '@x402/evm';
@@ -46,7 +48,9 @@ import {
 } from '../../core';
 import { redactedErrorText } from '../../core/errors';
 import { SETTLE_AFTER_BACKEND_METADATA_KEY } from '../../core/execution/settlement-order';
+import { isRecord } from '../../core/is-record';
 import { PACKAGE_VERSION } from '../../version';
+import { isTransactionReference, normalizeAddress, sameAddress } from './addresses';
 import { parseCanonicalAmount } from './amount';
 import {
   createLocalFacilitatorClient,
@@ -61,7 +65,8 @@ import {
   type CustomNetworks,
   type DeploymentMode,
   describeDeploymentMode,
-  type NetworkProfile,
+  findX402Network,
+  type X402Network,
 } from './networks';
 import type { X402AssetTransferMethod } from './options';
 import {
@@ -82,15 +87,30 @@ const HEALTH_TIMEOUT_MS = 4_000;
 // `SettleResponse.errorReason` the SDK uses for "broadcast, not confirmed"
 const SETTLEMENT_PENDING_REASON = 'settlement_pending';
 /**
- * The SDK's catch-all for a throw from the broadcast call, and its reason for
- * a mined transaction that reverted. Only the second carries a hash. A revert
- * the SDK recognizes during gas estimation gets its own reason instead. The
- * Permit2 path appends the thrown message as `: <message>`.
+ * Each family's catch-all for a throw from the broadcast call, and its reason
+ * for a transaction that failed on chain. Only the second carries a
+ * transaction reference. A failure the SDK recognizes before the broadcast gets
+ * its own reason instead. The EVM Permit2 path appends the thrown message as
+ * `: <message>`.
  */
-const TRANSACTION_FAILED_REASON = 'invalid_exact_evm_transaction_failed';
+const TRANSACTION_FAILED_REASONS = [
+  'invalid_exact_evm_transaction_failed',
+  'invalid_exact_svm_transaction_failed',
+];
 const isTransactionFailedReason = (reason: string | undefined): boolean =>
-  reason === TRANSACTION_FAILED_REASON ||
-  reason?.startsWith(`${TRANSACTION_FAILED_REASON}:`) === true;
+  reason !== undefined &&
+  TRANSACTION_FAILED_REASONS.some((known) => reason === known || reason.startsWith(`${known}:`));
+/**
+ * Solana outcomes that leave the payment unknown: the facilitator is already
+ * settling the same transaction for another request, or it confirmed the
+ * transaction but could not yet see the transfer
+ */
+const UNKNOWN_OUTCOME_REASONS: ReadonlySet<string> = new Set([
+  'duplicate_settlement',
+  'post_settlement_transfer_not_confirmed',
+]);
+// How long a `/supported` snapshot names the Solana fee payer of new offers
+const SUPPORTED_TTL_MS = 60_000;
 /**
  * `invalidReason`/`errorReason` are `z.string()` in the SDK schema, with no
  * length or charset bound. They reach the buyer's error, the persisted events
@@ -142,25 +162,29 @@ export interface X402ProviderOptions extends X402OfferOptions {
 /** Settlement network, token and merchant payee for one offer */
 export interface X402OfferOptions {
   /**
-   * CAIP-2 network identifier, e.g. `eip155:8453`. The chain id it carries is
-   * part of the EIP-712 domain the buyer signs, so it is read from this value
-   * rather than defaulted.
+   * CAIP-2 network identifier, e.g. `eip155:8453`. An EVM chain id it carries
+   * is part of the EIP-712 domain the buyer signs, so it is read from this
+   * value rather than defaulted.
    */
   readonly network: string;
   /** RPC endpoint of that network, for health checks and a local facilitator */
   readonly rpcUrl: string;
-  /** ERC-20 asset address used for settlement */
-  readonly asset: `0x${string}`;
+  /** ERC-20 contract or Solana mint used for settlement */
+  readonly asset: string;
   /** EIP-712 domain name of the asset, e.g. 'USDC'; required for EIP-3009 */
   readonly assetName?: string;
   /** EIP-712 domain version of the asset, e.g. '2'; required for EIP-3009 */
   readonly assetVersion?: string;
   readonly assetDecimals: number;
-  /** Merchant-controlled settlement destination. Never a gateway-owned wallet */
-  readonly payTo: `0x${string}`;
   /**
-   * `eip3009` (the default) or `permit2`. A Permit2 buyer approves the Permit2
-   * contract for the token beforehand; the gateway never sends approvals.
+   * Merchant-controlled settlement destination, never a gateway-owned wallet.
+   * On Solana it is the wallet; the transfer goes to its token account.
+   */
+  readonly payTo: string;
+  /**
+   * EVM only: `eip3009` (the default) or `permit2`. A Permit2 buyer approves
+   * the Permit2 contract for the token beforehand; the gateway never sends
+   * approvals.
    */
   readonly assetTransferMethod?: X402AssetTransferMethod;
 }
@@ -183,19 +207,34 @@ export const DEFAULT_IDS: IdGenerator = {
 const SELECTED_OFFER_KEY = 'x402.offer';
 
 // Everything one offer needs at request time, resolved and checked at startup
-interface Offer {
+interface OfferBase {
   readonly network: Network;
-  readonly profile: NetworkProfile;
+  readonly assetDecimals: number;
+  readonly rpcUrl: string;
+  readonly rpcOrigin: string;
+  readonly binding: FacilitatorBinding;
+}
+
+interface EvmOffer extends OfferBase {
+  readonly family: 'evm';
+  readonly profile: Extract<X402Network, { family: 'evm' }>;
   readonly method: X402AssetTransferMethod;
   readonly asset: `0x${string}`;
   readonly assetName: string | undefined;
   readonly assetVersion: string | undefined;
-  readonly assetDecimals: number;
   readonly payTo: `0x${string}`;
-  readonly rpcOrigin: string;
   readonly healthClient: ReturnType<typeof createLocalPublicClient>;
-  readonly binding: FacilitatorBinding;
 }
+
+// Always a remote facilitator: the in-process one serves only the Anvil chain
+interface SvmOffer extends OfferBase {
+  readonly family: 'svm';
+  readonly profile: Extract<X402Network, { family: 'svm' }>;
+  readonly asset: string;
+  readonly payTo: string;
+}
+
+type Offer = EvmOffer | SvmOffer;
 
 export function createX402PaymentProvider(
   options: X402ProviderOptions | X402MultiOfferProviderOptions,
@@ -212,34 +251,62 @@ export function createX402PaymentProvider(
   const offers = inputs.map((input, index): Offer => {
     const field = (name: string) =>
       inputs.length === 1 ? `"${name}"` : `"offers[${index}].${name}"`;
-    if (!isAddress(input.asset)) {
-      throw new CommerceError(
-        'CONFIG_INVALID',
-        `x402 provider: ${field('asset')} is not a valid EVM address: ${input.asset}`,
-      );
+    // The network decides how the other fields are read. An unknown one
+    // fails in `resolveX402Deployment` below.
+    const known = findX402Network(input.network, options.customNetworks);
+    if (known !== undefined && known.family !== 'evm') {
+      if (known.family !== 'svm') {
+        throw new CommerceError(
+          'CONFIG_INVALID',
+          `x402 provider: ${field('network')} "${input.network}" (${known.displayName}): TON settlement is not available yet`,
+        );
+      }
+      for (const name of ['asset', 'payTo'] as const) {
+        if (normalizeAddress(known, input[name]) === undefined) {
+          throw new CommerceError(
+            'CONFIG_INVALID',
+            `x402 provider: ${field(name)} is not a Solana address (base58, 32 bytes)`,
+          );
+        }
+      }
+      if (input.assetTransferMethod !== undefined) {
+        throw new CommerceError(
+          'CONFIG_INVALID',
+          `x402 provider: ${field('assetTransferMethod')} applies to EVM networks only`,
+        );
+      }
+    } else {
+      if (!isAddress(input.asset)) {
+        throw new CommerceError(
+          'CONFIG_INVALID',
+          `x402 provider: ${field('asset')} is not a valid EVM address: ${input.asset}`,
+        );
+      }
+      if (!isAddress(input.payTo)) {
+        throw new CommerceError(
+          'CONFIG_INVALID',
+          `x402 provider: ${field('payTo')} is not a valid EVM address: ${input.payTo}`,
+        );
+      }
+      // In every facilitator mode. `resolveX402Deployment` below also refuses
+      // a dev payTo on any non-local deployment, whatever the RPC host.
+      assertPayToIsNotDevAddress(input.rpcUrl, input.payTo);
+      // The buyer signs the token's EIP-712 domain under EIP-3009, so the
+      // requirement must name it. Permit2 has a domain of its own.
+      if (
+        (input.assetTransferMethod ?? 'eip3009') === 'eip3009' &&
+        (!input.assetName || !input.assetVersion)
+      ) {
+        throw new CommerceError(
+          'CONFIG_INVALID',
+          `x402 provider: an EIP-3009 offer needs ${field('assetName')} and ${field('assetVersion')}, the token's EIP-712 domain`,
+        );
+      }
     }
-    if (!isAddress(input.payTo)) {
-      throw new CommerceError(
-        'CONFIG_INVALID',
-        `x402 provider: ${field('payTo')} is not a valid EVM address: ${input.payTo}`,
-      );
-    }
-    // In every facilitator mode. `resolveX402Deployment` below also refuses a
-    // dev payTo on any non-local deployment, whatever the RPC host.
-    assertPayToIsNotDevAddress(input.rpcUrl, input.payTo);
     if (!Number.isInteger(input.assetDecimals) || input.assetDecimals < 0) {
       throw new CommerceError(
         'CONFIG_INVALID',
         `x402 provider: ${field('assetDecimals')} must be a non-negative integer`,
-      );
-    }
-    const method = input.assetTransferMethod ?? 'eip3009';
-    // The buyer signs the token's EIP-712 domain under EIP-3009, so the
-    // requirement must name it. Permit2 has a domain of its own.
-    if (method === 'eip3009' && (!input.assetName || !input.assetVersion)) {
-      throw new CommerceError(
-        'CONFIG_INVALID',
-        `x402 provider: an EIP-3009 offer needs ${field('assetName')} and ${field('assetVersion')}, the token's EIP-712 domain`,
       );
     }
     // The chain id is signed into the buyer's EIP-712 domain, so a network it
@@ -258,12 +325,6 @@ export function createX402PaymentProvider(
         : {}),
     });
     const profile = deployment.profile;
-    if (profile.family !== 'evm') {
-      throw new CommerceError(
-        'CONFIG_INVALID',
-        `x402 provider: "${input.network}" (${profile.displayName}) is not an EVM network; this provider settles \`exact\` on EVM only`,
-      );
-    }
     // Refuse offers mixing local, testnet and mainnet deployment modes
     if (mode !== undefined && deployment.mode !== mode) {
       throw new CommerceError(
@@ -272,7 +333,9 @@ export function createX402PaymentProvider(
       );
     }
     mode = deployment.mode;
-    const key = `${input.network}|${input.asset.toLowerCase()}|${input.payTo.toLowerCase()}`;
+    // EVM addresses compare without case; Solana's base58 is case-sensitive
+    const comparable = (value: string) => (profile.family === 'evm' ? value.toLowerCase() : value);
+    const key = `${input.network}|${comparable(input.asset)}|${comparable(input.payTo)}`;
     if (seen.has(key)) {
       throw new CommerceError(
         'CONFIG_INVALID',
@@ -310,21 +373,32 @@ export function createX402PaymentProvider(
       binding = remoteBinding;
     }
 
-    return {
+    // health() reads the chain itself, with a timeout. Verification and
+    // settlement go through the facilitator instead. Health details can reach
+    // logs, so they name the RPC by origin.
+    const base = {
       network: input.network as Network,
+      assetDecimals: input.assetDecimals,
+      rpcUrl: input.rpcUrl,
+      rpcOrigin: describeRpc(input.rpcUrl),
+      binding,
+    };
+    if (profile.family === 'svm') {
+      return { ...base, family: 'svm', profile, asset: input.asset, payTo: input.payTo };
+    }
+    if (profile.family !== 'evm') {
+      throw new CommerceError('CONFIG_INVALID', `x402 provider: ${field('network')} is not served`);
+    }
+    return {
+      ...base,
+      family: 'evm',
       profile,
-      method,
-      asset: input.asset,
+      method: input.assetTransferMethod ?? 'eip3009',
+      asset: input.asset as `0x${string}`,
       assetName: input.assetName,
       assetVersion: input.assetVersion,
-      assetDecimals: input.assetDecimals,
-      payTo: input.payTo,
-      // health() reads the chain through its own client, whose timeout aborts
-      // the request. Verification and settlement go through the facilitator
-      // instead. Health details can reach logs, so they name the RPC by origin.
-      rpcOrigin: describeRpc(input.rpcUrl),
+      payTo: input.payTo as `0x${string}`,
       healthClient: createLocalPublicClient(input.rpcUrl, HEALTH_TIMEOUT_MS, profile.chainId),
-      binding,
     };
   });
   const deploymentMode = mode as DeploymentMode;
@@ -334,16 +408,22 @@ export function createX402PaymentProvider(
   const logger = options.logger ?? NOOP_LOGGER;
   const maxTimeoutSeconds = options.maxTimeoutSeconds ?? DEFAULT_MAX_TIMEOUT_SECONDS;
 
+  const evmOffers = offers.filter((offer): offer is EvmOffer => offer.family === 'evm');
+  const hasSvm = offers.some((offer) => offer.family === 'svm');
   const descriptor: AdapterDescriptor = {
     name: 'x402',
     kind: 'payment',
     implementationVersion: PACKAGE_VERSION,
-    supportedSpec: `x402/v${X402_VERSION} scheme=exact family=eip155`,
+    supportedSpec: `x402/v${X402_VERSION} scheme=exact family=${[
+      ...(evmOffers.length > 0 ? ['eip155'] : []),
+      ...(hasSvm ? ['solana'] : []),
+    ].join(',')}`,
     capabilities: [
-      'exact-evm',
+      ...(evmOffers.length > 0 ? ['exact-evm'] : []),
+      ...(hasSvm ? ['exact-svm'] : []),
       `${options.facilitator.mode}-facilitator`,
-      'eip-3009',
-      ...(offers.some((offer) => offer.method === 'permit2') ? ['permit2'] : []),
+      ...(evmOffers.some((offer) => offer.method === 'eip3009') ? ['eip-3009'] : []),
+      ...(evmOffers.some((offer) => offer.method === 'permit2') ? ['permit2'] : []),
       'caip-2',
       `mode=${deploymentMode}`,
       'authorization-flow',
@@ -352,13 +432,77 @@ export function createX402PaymentProvider(
     ],
     status: 'stable',
     unsupported: [
-      'svm',
+      'tvm',
       'permit2 gas sponsoring extensions',
       'upto scheme',
       'batch-settlement scheme',
       'auth-capture scheme',
     ],
   };
+
+  // Loaded only with a Solana offer, so EVM-only deployments need no Solana peer
+  const svmModule = hasSvm ? loadSvmModule() : undefined;
+  const svm = async () => {
+    if (!svmModule) throw new Error('x402 provider: no Solana offer is configured');
+    return svmModule;
+  };
+
+  // A Solana offer carries the fee payer the facilitator names in `/supported`.
+  // A snapshot lasts SUPPORTED_TTL_MS, and a refresh keeps the previous fee
+  // payer while the facilitator still lists it, so a challenge and the retry
+  // that pays it agree.
+  let supportedSnapshot:
+    | { readonly at: number; readonly response: Promise<SupportedResponse> }
+    | undefined;
+  const feePayers = new Map<string, string>();
+
+  function currentSupported(): Promise<SupportedResponse> {
+    const now = clock.monotonicMs();
+    if (supportedSnapshot && now - supportedSnapshot.at < SUPPORTED_TTL_MS) {
+      return supportedSnapshot.response;
+    }
+    const remote = remoteBinding as Extract<FacilitatorBinding, { kind: 'remote' }>;
+    const response = remote.supported();
+    const snapshot = { at: now, response };
+    supportedSnapshot = snapshot;
+    // A failed fetch is not kept; the next challenge asks again
+    response.catch(() => {
+      if (supportedSnapshot === snapshot) supportedSnapshot = undefined;
+    });
+    return response;
+  }
+
+  async function svmFeePayer(offer: SvmOffer): Promise<string> {
+    let supported: SupportedResponse;
+    try {
+      supported = await currentSupported();
+    } catch (cause) {
+      throw new CommerceError(
+        'PAYMENT_PROVIDER_UNAVAILABLE',
+        `x402 provider: facilitator ${offer.binding.describe} did not answer /supported, which names the Solana fee payer`,
+        { cause },
+      );
+    }
+    const listed = supported.kinds.find(
+      (kind) =>
+        kind.x402Version === X402_VERSION &&
+        kind.scheme === 'exact' &&
+        kind.network === offer.network,
+    )?.extra?.['feePayer'];
+    const previous = feePayers.get(offer.network);
+    const stillSigns =
+      previous !== undefined &&
+      (previous === listed || Object.values(supported.signers).some((s) => s.includes(previous)));
+    const feePayer = stillSigns ? previous : listed;
+    if (typeof feePayer !== 'string' || normalizeAddress(offer.profile, feePayer) === undefined) {
+      throw new CommerceError(
+        'PAYMENT_PROVIDER_UNAVAILABLE',
+        `x402 provider: facilitator ${offer.binding.describe} names no Solana fee payer for ${offer.network}`,
+      );
+    }
+    feePayers.set(offer.network, feePayer);
+    return feePayer;
+  }
 
   // Use the selected or sole offer; multi-offer challenges require selection
   function offerIndexOf(requirement: PaymentRequirement): number | undefined {
@@ -374,26 +518,34 @@ export function createX402PaymentProvider(
       options.paymentFlow ??
       X402_DEFAULT_PAYMENT_FLOW;
 
-    const accepts: PaymentRequirements[] = offers.map((offer) => ({
-      scheme: 'exact',
-      network: offer.network,
-      asset: offer.asset,
-      amount: parseCanonicalAmount(context.amount, offer.assetDecimals).toString(),
-      payTo: offer.payTo,
-      maxTimeoutSeconds,
-      // `name`/`version` let the buyer and the facilitator build the same
-      // EIP-712 domain without calling `version()` on the token. They are
-      // required for EIP-3009; a Permit2 offer signs Permit2's own domain.
-      // `assetTransferMethod` names the method the client must sign with.
-      // x402 requires an explicit non-default flow. Omit the default
-      // `authorization` flow here.
-      extra: {
-        ...(offer.assetName !== undefined ? { name: offer.assetName } : {}),
-        ...(offer.assetVersion !== undefined ? { version: offer.assetVersion } : {}),
-        assetTransferMethod: offer.method,
-        ...(paymentFlow === 'upfront' ? { paymentFlow } : {}),
-      },
-    }));
+    // x402 requires an explicit non-default flow. Omit the default
+    // `authorization` flow here.
+    const flow = paymentFlow === 'upfront' ? { paymentFlow } : {};
+    const accepts: PaymentRequirements[] = await Promise.all(
+      offers.map(async (offer) => ({
+        scheme: 'exact',
+        network: offer.network,
+        asset: offer.asset,
+        amount: parseCanonicalAmount(context.amount, offer.assetDecimals).toString(),
+        payTo: offer.payTo,
+        maxTimeoutSeconds,
+        // EVM: `name`/`version` let the buyer and the facilitator build the
+        // same EIP-712 domain without calling `version()` on the token. They
+        // are required for EIP-3009; a Permit2 offer signs Permit2's own
+        // domain. `assetTransferMethod` names the method the client must sign
+        // with. Solana: the buyer's transaction names the facilitator's fee
+        // payer, as the SDK's server scheme adds it.
+        extra:
+          offer.family === 'svm'
+            ? { feePayer: await svmFeePayer(offer), ...flow }
+            : {
+                ...(offer.assetName !== undefined ? { name: offer.assetName } : {}),
+                ...(offer.assetVersion !== undefined ? { version: offer.assetVersion } : {}),
+                assetTransferMethod: offer.method,
+                ...flow,
+              },
+      })),
+    );
     const single = offers.length === 1 ? offers[0] : undefined;
 
     // The v2 challenge document as sent on the wire. The HTTP adapter
@@ -454,7 +606,7 @@ export function createX402PaymentProvider(
     const payload = decodePaymentSubmission(submission.payload);
     if (!payload) return requirement;
     const matches = offered.flatMap((offer, index) =>
-      acceptedMatchesOffer(offer, payload.accepted) ? [index] : [],
+      acceptedMatchesOffer(offer, payload.accepted, offers[index]?.profile) ? [index] : [],
     );
     const index = matches.length === 1 ? matches[0] : undefined;
     const offer = index === undefined ? undefined : offers[index];
@@ -506,8 +658,8 @@ export function createX402PaymentProvider(
     }
 
     // Defense in depth only: the pipeline builds a fresh requirement for every
-    // request, so this rarely fires. The real expiry is EIP-3009's
-    // `validBefore`, which the facilitator checks.
+    // request, so this rarely fires. The real expiry is the authorization's
+    // own, which the facilitator checks.
     if (
       requirement.expiresAt !== undefined &&
       Date.parse(requirement.expiresAt) < clock.now().getTime()
@@ -518,10 +670,7 @@ export function createX402PaymentProvider(
     // This provider built the requirement, so the asset always matches in
     // normal operation. A corrupted one must still never authorize a transfer
     // of a different asset.
-    if (
-      !isAddress(requirements.asset) ||
-      getAddress(requirements.asset) !== getAddress(offer.asset)
-    ) {
+    if (!sameAddress(offer.profile, requirements.asset, offer.asset)) {
       return rejected('wrong_asset');
     }
 
@@ -537,9 +686,19 @@ export function createX402PaymentProvider(
     if (payload.x402Version !== X402_VERSION) {
       return rejected('invalid_x402_version');
     }
-    const transfer = readTransfer(payload, offer);
-    if (typeof transfer === 'string') {
-      return rejected(transfer);
+    // EVM: the authorization names payer, payee and amount. Solana: the
+    // facilitator reads the transaction, and the gateway takes its identity.
+    let transfer: Transfer | undefined;
+    let replayKey: string;
+    if (offer.family === 'svm') {
+      const identity = (await svm()).svmReplayKey(payload.payload, offer.network);
+      if (typeof identity === 'string') return rejected(identity);
+      replayKey = identity.replayKey;
+    } else {
+      const read = readTransfer(payload, offer);
+      if (typeof read === 'string') return rejected(read);
+      transfer = read;
+      replayKey = read.replayKey;
     }
     // `accepted.network` names the chain the buyer signed for, so a mismatch
     // means a signature bound to a chain we do not settle on
@@ -551,24 +710,30 @@ export function createX402PaymentProvider(
     const offeredUrl = (requirement.challenge.envelope as PaymentRequired | undefined)?.resource
       ?.url;
     if (
-      !acceptedMatchesOffer(requirements, payload.accepted) ||
+      !acceptedMatchesOffer(requirements, payload.accepted, offer.profile) ||
       (payload.resource !== undefined && payload.resource.url !== offeredUrl)
     ) {
       return rejected('invalid_payment_requirements');
     }
-    if (transfer.to !== getAddress(offer.payTo)) {
-      return rejected(transfer.recipientMismatch);
-    }
-    let authorizedValue: bigint;
     let required: bigint;
     try {
-      authorizedValue = BigInt(transfer.value);
       required = BigInt(requirements.amount);
     } catch {
       return rejected('invalid_payload');
     }
-    if (authorizedValue !== required) {
-      return rejected(transfer.amountMismatch);
+    if (transfer) {
+      if (transfer.to !== getAddress(offer.payTo)) {
+        return rejected(transfer.recipientMismatch);
+      }
+      let authorizedValue: bigint;
+      try {
+        authorizedValue = BigInt(transfer.value);
+      } catch {
+        return rejected('invalid_payload');
+      }
+      if (authorizedValue !== required) {
+        return rejected(transfer.amountMismatch);
+      }
     }
 
     const scope = offer.binding.open();
@@ -613,16 +778,22 @@ export function createX402PaymentProvider(
       return rejected(sanitizeReason(sdkResult.invalidReason, 'invalid_payment'));
     }
 
+    // The Solana payer is the facilitator's reading of the transaction
+    const payer =
+      transfer?.from ??
+      (sdkResult.payer !== undefined && normalizeAddress(offer.profile, sdkResult.payer)
+        ? sdkResult.payer
+        : undefined);
     return {
       status: 'verified',
       provider: 'x402',
-      payer: transfer.from,
-      payee: transfer.to,
-      amount: formatUnits(authorizedValue, offer.assetDecimals),
+      ...(payer !== undefined ? { payer } : {}),
+      payee: transfer?.to ?? offer.payTo,
+      amount: formatUnits(required, offer.assetDecimals),
       currency: requirement.currency,
       network: payload.accepted.network,
-      asset: getAddress(requirements.asset),
-      replayKey: transfer.replayKey,
+      asset: offer.family === 'evm' ? getAddress(requirements.asset) : offer.asset,
+      replayKey,
     };
   }
 
@@ -650,13 +821,14 @@ export function createX402PaymentProvider(
     }
 
     const payload = decodePaymentSubmission(submission.payload);
-    const transfer = payload ? readTransfer(payload, offer) : undefined;
-    if (!payload || transfer === undefined || typeof transfer === 'string') {
+    const transfer = payload && offer.family === 'evm' ? readTransfer(payload, offer) : undefined;
+    if (!payload || typeof transfer === 'string') {
       throw new CommerceError(
         'PAYMENT_INVALID',
         'x402 provider: settle() received an undecodable payment payload',
       );
     }
+    const reference = (value: string) => isTransactionReference(offer.profile, value);
 
     const rejectedSettlement = (rejectionReason: string): PaymentResult => ({
       status: 'rejected',
@@ -705,6 +877,10 @@ export function createX402PaymentProvider(
       return rejectedSettlement('transaction_reverted');
     }
 
+    // verify() established the payer. The Solana scheme's settlement example
+    // names the fee payer there, while x402 v2 defines the payer's wallet.
+    const payer = verification.payer ?? sdkResult.payer;
+
     if (!sdkResult.success) {
       // "Broadcast, never confirmed" is not "did not happen": the transfer may
       // be on-chain, so it throws as an unavailable provider carrying the hash,
@@ -712,10 +888,7 @@ export function createX402PaymentProvider(
       // `rejected`. The SDK's catch-all without a hash is treated the same way,
       // because its throw may have followed a broadcast and viem reports an
       // RPC error on the send as a revert. Everything else is a real rejection.
-      if (
-        isTransactionFailedReason(sdkResult.errorReason) &&
-        !/^0x[0-9a-f]{64}$/i.test(sdkResult.transaction)
-      ) {
+      if (isTransactionFailedReason(sdkResult.errorReason) && !reference(sdkResult.transaction)) {
         // The appended message can carry an RPC URL
         logger.warn(
           { reportedReason: redactedErrorText(sdkResult.errorReason) },
@@ -726,7 +899,15 @@ export function createX402PaymentProvider(
           'x402 provider: settlement failed with an unclassified error; outcome unknown',
         );
       }
-      if (sdkResult.errorReason === SETTLEMENT_PENDING_REASON || scope.transportFailed()) {
+      // A broadcast the SDK could not confirm nor record for a retry comes
+      // back as its catch-all with the transaction, and a message starting
+      // `settlement_pending`
+      if (
+        sdkResult.errorReason === SETTLEMENT_PENDING_REASON ||
+        sdkResult.errorMessage?.startsWith(SETTLEMENT_PENDING_REASON) === true ||
+        UNKNOWN_OUTCOME_REASONS.has(sdkResult.errorReason ?? '') ||
+        scope.transportFailed()
+      ) {
         throw new CommerceError(
           'PAYMENT_PROVIDER_UNAVAILABLE',
           'x402 provider: settlement was broadcast but could not be confirmed',
@@ -746,15 +927,28 @@ export function createX402PaymentProvider(
       return {
         ...rejectedSettlement(sanitizeReason(sdkResult.errorReason, 'settlement_failed')),
         network: sdkResult.network,
-        ...(sdkResult.payer !== undefined ? { payer: sdkResult.payer } : {}),
+        ...(payer !== undefined ? { payer } : {}),
       };
+    }
+
+    // A success names the offer's network and a transaction in its family's
+    // form; anything else unlocks nothing, and the outcome stays unknown
+    if (!reference(sdkResult.transaction) || sdkResult.network !== offer.network) {
+      logger.warn(
+        { network: sdkResult.network },
+        'x402 settle(): the facilitator reported a success it did not identify; outcome unknown',
+      );
+      throw new CommerceError(
+        'PAYMENT_PROVIDER_UNAVAILABLE',
+        'x402 provider: the facilitator reported a settlement without a valid transaction; outcome unknown',
+      );
     }
 
     return {
       status: 'settled',
       provider: 'x402',
       externalReference: sdkResult.transaction,
-      ...(sdkResult.payer !== undefined ? { payer: sdkResult.payer } : {}),
+      ...(payer !== undefined ? { payer } : {}),
       payee: requirements.payTo,
       amount: verification.amount,
       currency: requirement.currency,
@@ -762,8 +956,9 @@ export function createX402PaymentProvider(
       ...(verification.asset !== undefined ? { asset: verification.asset } : {}),
       ...(verification.replayKey !== undefined ? { replayKey: verification.replayKey } : {}),
       settledAt: clock.nowIso(),
-      // `amount` is the display value; x402's settlement response reports base units
-      metadata: { amountBaseUnits: transfer.value },
+      // `amount` is the display value; x402's settlement response reports base
+      // units. verify() matched an EVM authorization's value to the offer.
+      metadata: { amountBaseUnits: transfer?.value ?? requirements.amount },
     };
   }
 
@@ -773,6 +968,7 @@ export function createX402PaymentProvider(
     offer: Offer,
     kinds: () => Promise<readonly SupportedKind[]>,
   ): Promise<{ readonly status: 'pass' | 'fail'; readonly detail: string }> {
+    if (offer.family === 'svm') return svmOfferHealth(offer, kinds);
     const { profile, rpcOrigin, healthClient, binding } = offer;
     const chainId = await healthClient.getChainId();
     if (chainId !== profile.chainId) {
@@ -848,6 +1044,63 @@ export function createX402PaymentProvider(
       detail:
         `${describeDeploymentMode(deploymentMode)}: RPC ${rpcOrigin} reachable, chain id ` +
         `${profile.chainId}, ${contracts} have code, confirmed Anvil dev node`,
+    };
+  }
+
+  // A Solana offer's cluster, mint and fee payer. The CAIP-2 reference is the
+  // start of the genesis hash, so the RPC proves which cluster it serves.
+  async function svmOfferHealth(
+    offer: SvmOffer,
+    kinds: () => Promise<readonly SupportedKind[]>,
+  ): Promise<{ readonly status: 'pass' | 'fail'; readonly detail: string }> {
+    const { profile, rpcOrigin, binding } = offer;
+    // A missing Solana peer fails readiness, not the first paid request
+    await svm();
+    const genesis = await solanaRpc(offer.rpcUrl, 'getGenesisHash', []);
+    const cluster = typeof genesis === 'string' ? `solana:${genesis.slice(0, 32)}` : undefined;
+    if (cluster !== offer.network) {
+      return {
+        status: 'fail',
+        detail: `RPC at ${rpcOrigin} serves ${cluster ?? 'an unknown cluster'}, expected ${offer.network} (${profile.displayName})`,
+      };
+    }
+    const mint = await solanaRpc(offer.rpcUrl, 'getAccountInfo', [
+      offer.asset,
+      { encoding: 'base64' },
+    ]);
+    const decimals = mintDecimals(mint);
+    if (decimals === undefined) {
+      return {
+        status: 'fail',
+        detail: `No initialized token mint found at configured asset address ${offer.asset}`,
+      };
+    }
+    if (decimals !== offer.assetDecimals) {
+      return {
+        status: 'fail',
+        detail: `Mint ${offer.asset} has ${decimals} decimals, configured ${offer.assetDecimals}`,
+      };
+    }
+    const feePayer = (await kinds()).find(
+      (kind) =>
+        kind.x402Version === X402_VERSION &&
+        kind.scheme === 'exact' &&
+        kind.network === offer.network,
+    )?.extra?.['feePayer'];
+    if (typeof feePayer !== 'string' || normalizeAddress(profile, feePayer) === undefined) {
+      return {
+        status: 'fail',
+        detail:
+          `Facilitator ${binding.describe} does not advertise x402 v${X402_VERSION} scheme=exact ` +
+          `on ${offer.network} (${profile.displayName}) with a fee payer; no payment on this deployment can settle`,
+      };
+    }
+    return {
+      status: 'pass',
+      detail:
+        `${describeDeploymentMode(deploymentMode)}: RPC ${rpcOrigin} serves ${profile.displayName}, ` +
+        `mint ${offer.asset} has ${decimals} decimals, facilitator ${binding.describe} supports ` +
+        `exact/${offer.network} with fee payer ${feePayer}`,
     };
   }
 
@@ -940,6 +1193,54 @@ const PERMIT2_CONTRACTS = [
   ['x402 exact Permit2 proxy', x402ExactPermit2ProxyAddress],
 ] as const;
 
+/**
+ * Loads the Solana inspection module, refusing with a clear error when its
+ * optional peers are missing
+ */
+function loadSvmModule(): Promise<typeof import('./svm')> {
+  const loading = import('./svm').catch((cause: unknown) => {
+    throw new CommerceError(
+      'PAYMENT_PROVIDER_UNAVAILABLE',
+      'x402 provider: Solana offers need the optional peers @x402/svm and @solana/kit',
+      { cause },
+    );
+  });
+  // verify() and health() report the failure; nothing else awaits it
+  loading.catch(() => {});
+  return loading;
+}
+
+const TOKEN_PROGRAMS: ReadonlySet<string> = new Set([
+  'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA',
+  'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb',
+]);
+
+// The decimals of an initialized SPL Token or Token-2022 mint, from a base64
+// `getAccountInfo` result: byte 44 holds them, byte 45 the initialized flag
+function mintDecimals(result: unknown): number | undefined {
+  const value = isRecord(result) ? result['value'] : undefined;
+  if (!isRecord(value) || !TOKEN_PROGRAMS.has(String(value['owner']))) return undefined;
+  const data = value['data'];
+  if (!Array.isArray(data) || typeof data[0] !== 'string') return undefined;
+  const bytes = Buffer.from(data[0], 'base64');
+  return bytes.length >= 82 && bytes[45] === 1 ? bytes[44] : undefined;
+}
+
+// One Solana JSON-RPC call for health(), bounded like the EVM client's
+async function solanaRpc(rpcUrl: string, method: string, params: unknown[]): Promise<unknown> {
+  const response = await fetch(rpcUrl, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+    signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS),
+  });
+  const body = (await response.json()) as { result?: unknown; error?: unknown };
+  if (body.error !== undefined) {
+    throw new Error(`Solana RPC ${method} failed: ${JSON.stringify(body.error)}`);
+  }
+  return body.result;
+}
+
 // What a payload authorizes, read the way the offer's method settles it
 interface Transfer {
   readonly from: `0x${string}`;
@@ -955,7 +1256,7 @@ interface Transfer {
  * Enforces the offer's method because the SDK facilitator chooses the method
  * from the payload.
  */
-function readTransfer(payload: PaymentPayload, offer: Offer): Transfer | string {
+function readTransfer(payload: PaymentPayload, offer: EvmOffer): Transfer | string {
   // verify() refuses an `accepted.network` other than the offer's, so this
   // chain id is the one the authorization is bound to
   const { chainId } = offer.profile;
@@ -997,14 +1298,17 @@ function readTransfer(payload: PaymentPayload, offer: Offer): Transfer | string 
 
 /**
  * Match echoed terms against the offer. Extra client keys and
- * `maxTimeoutSeconds` do not matter; addresses ignore case. Compare effective
- * payment flows so an upfront proof cannot pay a default authorization offer.
+ * `maxTimeoutSeconds` do not matter; EVM addresses ignore case, Solana's do
+ * not. Compare effective payment flows so an upfront proof cannot pay a default
+ * authorization offer.
  */
 function acceptedMatchesOffer(
   offered: PaymentRequirements,
   accepted: PaymentRequirements,
+  network: X402Network | undefined,
 ): boolean {
-  const sameAddress = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+  if (!network) return false;
+  const same = (a: string, b: string) => sameAddress(network, a, b);
   const offeredExtra = offered.extra ?? {};
   const acceptedExtra = accepted.extra ?? {};
   const flow = (extra: Record<string, unknown>) =>
@@ -1013,8 +1317,8 @@ function acceptedMatchesOffer(
     accepted.scheme === offered.scheme &&
     accepted.network === offered.network &&
     accepted.amount === offered.amount &&
-    sameAddress(accepted.asset, offered.asset) &&
-    sameAddress(accepted.payTo, offered.payTo) &&
+    same(accepted.asset, offered.asset) &&
+    same(accepted.payTo, offered.payTo) &&
     Object.entries(offeredExtra).every(([key, value]) => acceptedExtra[key] === value) &&
     flow(acceptedExtra) === flow(offeredExtra)
   );

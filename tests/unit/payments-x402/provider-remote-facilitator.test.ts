@@ -148,7 +148,7 @@ describe('provider - remote facilitator', () => {
     verifyMock.mockResolvedValueOnce({ isValid: true });
     settleMock.mockResolvedValueOnce({
       success: true,
-      transaction: '0xabc',
+      transaction: `0x${'ab'.repeat(32)}`,
       network: 'eip155:31337',
       payer: '0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC',
     });
@@ -169,7 +169,27 @@ describe('provider - remote facilitator', () => {
       verification,
     });
     expect(settlement.status).toBe('settled');
-    expect(settlement.externalReference).toBe('0xabc');
+    expect(settlement.externalReference).toBe(`0x${'ab'.repeat(32)}`);
+  });
+
+  it.each([
+    ['without a transaction hash', { transaction: '0xabc', network: 'eip155:31337' }],
+    ['on another network', { transaction: `0x${'ab'.repeat(32)}`, network: 'eip155:84532' }],
+  ])('leaves a reported success %s with an unknown outcome', async (_label, response) => {
+    const provider = makeProvider({ type: 'none' });
+    const { requirement, payload } = await proofFor(provider);
+    verifyMock.mockResolvedValueOnce({ isValid: true });
+    settleMock.mockResolvedValueOnce({ success: true, ...response });
+    const context = {
+      requestId: 'req-1',
+      resource: RESOURCE,
+      requirement,
+      submission: { method: 'x402' as const, payload },
+    };
+    const verification = await provider.verify(context);
+    await expect(provider.settle({ ...context, verification })).rejects.toSatisfy(
+      (err: unknown) => isCommerceError(err) && err.code === 'PAYMENT_PROVIDER_UNAVAILABLE',
+    );
   });
 
   it('treats a facilitator that produced no verdict as unavailable, not as a bad payment', async () => {

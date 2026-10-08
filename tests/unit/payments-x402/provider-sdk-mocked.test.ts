@@ -392,7 +392,7 @@ describe('provider - SDK-boundary branches (mocked x402/facilitator)', () => {
     });
     settleMock.mockResolvedValueOnce({
       success: true,
-      transaction: '0xdeadbeef',
+      transaction: `0x${'ab'.repeat(32)}`,
       network: 'eip155:31337',
       payer: '0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC',
     });
@@ -413,7 +413,7 @@ describe('provider - SDK-boundary branches (mocked x402/facilitator)', () => {
       },
     });
     expect(result.status).toBe('settled');
-    expect(result.externalReference).toBe('0xdeadbeef');
+    expect(result.externalReference).toBe(`0x${'ab'.repeat(32)}`);
     expect(result.payee).toBe(PAY_TO);
     expect(result.network).toBe('eip155:31337');
     expect(result.asset).toBe(ASSET);
@@ -430,7 +430,7 @@ describe('provider - SDK-boundary branches (mocked x402/facilitator)', () => {
     });
     settleMock.mockResolvedValueOnce({
       success: true,
-      transaction: '0xfeedface',
+      transaction: `0x${'fe'.repeat(32)}`,
       network: 'eip155:31337',
     });
 
@@ -617,14 +617,22 @@ describe('provider - SDK-boundary branches (mocked x402/facilitator)', () => {
     );
   });
 
-  it.each([
+  it.each<[string, string, string, string?]>([
     ['without a hash, as an unknown outcome', '', 'throws'],
     ['with a value that is not a hash, as an unknown outcome', 'not-a-hash', 'throws'],
     ['with a truncated hash, as an unknown outcome', '0xdeadbeef', 'throws'],
     ['with a hash, as a mined revert', `0x${'cd'.repeat(32)}`, 'rejected'],
+    // The SDK's answer when the receipt wait failed and its pending store could
+    // not record the broadcast
+    [
+      'with a hash for a broadcast it could not record, as an unknown outcome',
+      `0x${'cd'.repeat(32)}`,
+      'throws',
+      'settlement_pending, but failed to persist for retry: store offline',
+    ],
   ])(
     'settle() treats the SDK catch-all transaction failure %s',
-    async (_label, transaction, outcome) => {
+    async (_label, transaction, outcome, errorMessage) => {
       const provider = makeProvider();
       const requirement = await provider.createRequirement(paymentContext());
       const proof = await createPaymentProof({
@@ -634,6 +642,7 @@ describe('provider - SDK-boundary branches (mocked x402/facilitator)', () => {
       settleMock.mockResolvedValueOnce({
         success: false,
         errorReason: 'invalid_exact_evm_transaction_failed',
+        ...(errorMessage !== undefined ? { errorMessage } : {}),
         transaction,
         network: 'eip155:31337',
       });

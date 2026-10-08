@@ -178,6 +178,17 @@ persistence must not fail the commerce flow.
   - The invoke route returns 412 for a missing Permit2 allowance
     (`permit2_allowance_required`), preserving `PAYMENT-REQUIRED` as specified
     by the `exact` EVM scheme.
+- The x402 provider serves Solana offers (`solana:` networks) through a remote
+  facilitator.
+  - `X402OfferOptions.asset` and `payTo` widened from `0x${string}` to
+    `string` to carry a Solana mint and wallet. Code reading either field as
+    `0x${string}` must narrow it.
+  - The descriptor's `supportedSpec` names `family=eip155`, `family=solana`
+    or both; capabilities gain `exact-svm`, and `unsupported` lists `tvm`
+    instead of `svm`.
+  - A settlement success must name the offer's network and a transaction in
+    its family's form, for EVM offers too. Anything else unlocks nothing, and
+    the pipeline records the attempt `settlement-uncertain`.
 
 - `ProtocolName` gained `a2a` and `acp`; `PROTOCOL_NAMES` is the runtime list
   used by validation. It is derived from a record keyed by the union, so a
@@ -302,14 +313,14 @@ Published as `@devlab.group/agent-commerce/x402`.
 export interface X402OfferOptions {
   readonly network: string; // CAIP-2, for example 'eip155:84532'
   readonly rpcUrl: string;
-  readonly asset: `0x${string}`;
+  readonly asset: string; // ERC-20 contract or Solana mint
   /** The token's EIP-712 domain; an EIP-3009 offer needs both */
   readonly assetName?: string;
   readonly assetVersion?: string;
   readonly assetDecimals: number;
   /** Merchant-controlled settlement destination. */
-  readonly payTo: `0x${string}`;
-  /** Default 'eip3009'. A Permit2 buyer approves Permit2 for the token first */
+  readonly payTo: string; // on Solana, the wallet
+  /** EVM only. Default 'eip3009'. A Permit2 buyer approves Permit2 for the token first */
   readonly assetTransferMethod?: X402AssetTransferMethod;
 }
 

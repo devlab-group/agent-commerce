@@ -12,6 +12,9 @@ const BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvw
 const SOLANA_ADDRESS = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 // The all-zero key, which is the System Program and owns nothing recoverable
 const SOLANA_ZERO = '11111111111111111111111111111111';
+const EVM_TRANSACTION_HASH = /^0x[0-9a-fA-F]{64}$/;
+// A 64-byte Ed25519 signature is at most 88 base58 characters
+const SOLANA_SIGNATURE = /^[1-9A-HJ-NP-Za-km-z]{64,88}$/;
 
 const TON_RAW = /^(0|-1):[0-9a-fA-F]{64}$/;
 const TON_FRIENDLY = /^[A-Za-z0-9+/_-]{48}$/;
@@ -51,6 +54,21 @@ export function isBurnAddress(network: X402Network, wireAddress: string): boolea
 /** Compare EVM addresses case-insensitively and base58/raw TON addresses exactly */
 export function sameAddress(network: X402Network, a: string, b: string): boolean {
   return network.family === 'evm' ? a.toLowerCase() === b.toLowerCase() : a === b;
+}
+
+/**
+ * A settlement reference in its family's form: an EVM transaction hash or a
+ * Solana transaction signature. TON settlement is not built, so none passes.
+ */
+export function isTransactionReference(network: X402Network, value: string): boolean {
+  switch (network.family) {
+    case 'evm':
+      return EVM_TRANSACTION_HASH.test(value);
+    case 'svm':
+      return SOLANA_SIGNATURE.test(value) && base58ByteLength(value) === 64;
+    case 'tvm':
+      return false;
+  }
 }
 
 function base58ByteLength(value: string): number {

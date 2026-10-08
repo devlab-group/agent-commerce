@@ -415,11 +415,13 @@ describe.skipIf(!existsSync(libEntry))('optional-peer subpaths', () => {
 
   it('imports only its own peer, in each subpath', () => {
     expect(bareImportsOf(mcpEntry)).toEqual(['@modelcontextprotocol/server']);
-    // `@coinbase/x402` is a dynamic import, loaded only for facilitator auth.type `cdp`
+    // Dynamic imports: `@coinbase/x402` loads only for facilitator auth.type
+    // `cdp`, `@x402/svm` only for a Solana offer
     expect(bareImportsOf(x402Entry).sort()).toEqual([
       '@coinbase/x402',
       '@x402/core',
       '@x402/evm',
+      '@x402/svm',
       'viem',
     ]);
     // MPP settles through an x402 facilitator, so its entry also imports the x402 peers
@@ -427,6 +429,7 @@ describe.skipIf(!existsSync(libEntry))('optional-peer subpaths', () => {
       '@coinbase/x402',
       '@x402/core',
       '@x402/evm',
+      '@x402/svm',
       'mppx',
       'viem',
     ]);

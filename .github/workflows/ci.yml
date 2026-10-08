@@ -23,6 +23,10 @@ env:
   # Keep this version in sync with the Foundry image digest in
   # docker/chain.Dockerfile. A floating `nightly` would change test inputs.
   FOUNDRY_VERSION: 'v1.7.1'
+  # The Solana E2E starts solana-test-validator. The Agave release is pinned by
+  # version and by the SHA-256 GitHub records for the Linux archive.
+  AGAVE_VERSION: 'v4.1.1'
+  AGAVE_SHA256: 'a5c8e74b8ffa9ce906872b812849057c7fb21cf036ba08f219eb335e20fa4fb3'
 
 jobs:
   quality:
@@ -96,9 +100,18 @@ jobs:
       - uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09 # v1.9.1
         with:
           version: ${{ env.FOUNDRY_VERSION }}
+      - name: Install the Agave CLI
+        run: |
+          archive="$RUNNER_TEMP/agave.tar.bz2"
+          curl -sSfL -o "$archive" \
+            "https://github.com/anza-xyz/agave/releases/download/${AGAVE_VERSION}/solana-release-x86_64-unknown-linux-gnu.tar.bz2"
+          echo "${AGAVE_SHA256}  $archive" | sha256sum -c -
+          tar -xjf "$archive" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/solana-release/bin" >> "$GITHUB_PATH"
       - run: npm ci
-      # These tests start local Anvil, deploy MockUSDC and run local services;
-      # they do not need a public RPC or hosted facilitator.
+      # These tests start local Anvil and solana-test-validator, deploy or
+      # preload their tokens and run local services; they do not need a
+      # public RPC or hosted facilitator.
       - run: npm run test:e2e
 
   package:

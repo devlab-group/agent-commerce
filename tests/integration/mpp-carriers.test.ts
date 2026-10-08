@@ -25,6 +25,8 @@ import { createMcpAdapter } from '../../src/protocols/mcp';
 import { createSqliteReceiptStore } from '../../src/storage/receipts';
 import { createFakeStore } from '../unit/gateway/helpers';
 
+const SETTLED_TX = `0x${'ab'.repeat(32)}`;
+
 process.env['NODE_ENV'] = 'test';
 
 const facilitator = vi.hoisted(() => ({ verify: vi.fn(), settle: vi.fn() }));
@@ -54,7 +56,7 @@ beforeEach(() => {
   facilitator.verify.mockReset().mockResolvedValue({ isValid: true });
   facilitator.settle
     .mockReset()
-    .mockResolvedValue({ success: true, transaction: '0xabc', network: 'eip155:31337' });
+    .mockResolvedValue({ success: true, transaction: SETTLED_TX, network: 'eip155:31337' });
 });
 
 afterEach(async () => {
@@ -274,7 +276,7 @@ describe('MPP over HTTP', () => {
     // Check the EVM receipt's challenge and chain identifiers
     expect(receipt).toMatchObject({
       method: 'evm',
-      reference: '0xabc',
+      reference: SETTLED_TX,
       status: 'success',
       challengeId: Challenge.deserialize(String(challenged.headers['www-authenticate'])).id,
       chainId: 31337,
@@ -305,7 +307,7 @@ describe('MPP over HTTP', () => {
     expect(receipt?.payment).toMatchObject({
       provider: 'mpp',
       status: 'settled',
-      externalReference: '0xabc',
+      externalReference: SETTLED_TX,
       network: 'eip155:31337',
     });
     expect(facilitator.settle).toHaveBeenCalledTimes(1);
@@ -444,7 +446,7 @@ describe('MPP over HTTP', () => {
     expect(res.headers['payment-receipt']).toBeUndefined();
     expect(res.headers['payment-response']).toBeDefined();
     const receipt = Receipt.deserialize(String(res.json().details.payment.receipt));
-    expect(receipt).toMatchObject({ method: 'evm', reference: '0xabc', status: 'success' });
+    expect(receipt).toMatchObject({ method: 'evm', reference: SETTLED_TX, status: 'success' });
   });
 
   it('binds the digest of the request body bytes into the challenge', async () => {

@@ -21,9 +21,9 @@ export function createConfiguredPaymentProviders(
         offers: (x402.options ?? [x402]).map((option) => ({
           network: option.network,
           rpcUrl: option.rpcUrl,
-          asset: option.asset as `0x${string}`,
+          asset: option.asset,
           assetDecimals: option.assetDecimals,
-          payTo: option.payTo as `0x${string}`,
+          payTo: option.payTo,
           ...(option.assetName !== undefined ? { assetName: option.assetName } : {}),
           ...(option.assetVersion !== undefined ? { assetVersion: option.assetVersion } : {}),
           ...(option.assetTransferMethod !== undefined

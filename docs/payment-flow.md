@@ -131,15 +131,16 @@ rollback. The gateway records a `settled` payment attempt and a
 
 1. **On-chain.** EIP-3009 marks `authorizationState[from][nonce]` used; a second
    `transferWithAuthorization` with the same nonce reverts. Permit2 marks the
-   owner's nonce used in its own bitmap, across every token. This prevents a
-   double *spend*.
+   owner's nonce used in its own bitmap, across every token. A Solana cluster
+   refuses a transaction it has already processed, and one whose blockhash
+   has expired. This prevents a double *spend*.
 2. **In the gateway.** Concurrent submissions could unlock a second delivery
    before the first settles. The pipeline reserves `replayKey`, derived from
-   `(chainId, asset, payer, nonce)` or, for Permit2,
-   `(chainId, Permit2, owner, nonce)`, under a `UNIQUE` constraint **before**
-   calling `settle`. A duplicate returns `PAYMENT_REPLAYED`: 409 while the first
-   attempt is unfinished or its status is unavailable; 402 with a fresh
-   challenge when its stored status is treated as finished.
+   `(chainId, asset, payer, nonce)` for EIP-3009, `(chainId, Permit2, owner, nonce)`
+   for Permit2, or the network and SHA-256 of the transaction message for Solana,
+   under a `UNIQUE` constraint **before** calling `settle`. A duplicate returns
+   `PAYMENT_REPLAYED`: 409 while the first attempt is unfinished or its status is
+   unavailable; 402 with a fresh challenge when its stored status is treated as finished.
 
 Because the key comes from the authorization rather than the request, replaying
 it against another request still collides.

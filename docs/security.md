@@ -255,8 +255,10 @@ also checks RPC and local-key safety.
 
 A facilitator cannot change an EIP-3009 transfer's signed recipient, amount, or
 chain. A Permit2 signature binds the same terms and the x402 exact proxy as
-the only spender, which pays only the signed witness recipient. A facilitator
-can observe authorizations and refuse to broadcast them. A request without
+the only spender, which pays only the signed witness recipient. On Solana,
+the buyer signs the transaction message; the facilitator adds its fee payer
+signature without changing that message. A facilitator can observe
+authorizations and refuse to broadcast them. A request without
 facilitator credentials falls under the facilitator's anonymous-access terms
 and limits, so mainnet requires a separate acknowledgment for that
 configuration.
@@ -296,6 +298,15 @@ real funds.
 | **a gas-sponsoring extension in a Permit2 payload**                                                                                     | not forwarded: the facilitator receives no `extensions`                                                                                                                     | `tests/unit/payments-x402/provider-remote-facilitator.test.ts`                                                                             |
 | **one Permit2 authorization on two requests at once**                                                                                   | settles once; the other gets 409 `PAYMENT_REPLAYED`. The key is chain, Permit2, owner and nonce                                                                             | `tests/e2e/payment/x402-permit2.e2e.test.ts`                                                                                               |
 | **a Permit2 offer on a network without Permit2 or its x402 proxy**                                                                      | health fails, naming the missing contract                                                                                                                                   | `tests/e2e/payment/x402-permit2.e2e.test.ts`                                                                                               |
+| **a Solana transaction paying another wallet or a smaller amount, presented as the offer**                                              | the facilitator refuses it: `invalid_exact_svm_payload_recipient_mismatch` or `invalid_exact_svm_payload_amount_mismatch`; balances unchanged                               | `tests/e2e/payment/x402-solana.e2e.test.ts`                                                                                                |
+| **an echoed Solana offer with an address in another case, or a transaction that does not decode**                                       | `invalid_payment_requirements`, or an `invalid_exact_svm_payload_transaction*` code, before the facilitator is called                                                       | `tests/unit/payments-x402/provider-svm.test.ts`, `tests/unit/payments-x402/svm.test.ts`                                                    |
+| **the same Solana transaction with other signature bytes, while the first copy is settling**                                            | 409 `PAYMENT_REPLAYED`: the key is the network and the message hash, not the signatures; one transfer                                                                       | `tests/e2e/payment/x402-solana.e2e.test.ts`, `tests/unit/payments-x402/svm.test.ts`                                                        |
+| **a settled Solana transaction presented again**                                                                                        | the facilitator's simulation refuses it: `invalid_exact_svm_transaction_simulation_failed`; balances unchanged                                                              | `tests/e2e/payment/x402-solana.e2e.test.ts`                                                                                                |
+| **a Solana broadcast that lands but whose RPC response is an error**                                                                    | the SDK's catch-all without a signature: `settlement-uncertain`, no delivery                                                                                                | `tests/e2e/payment/x402-solana.e2e.test.ts`                                                                                                |
+| **a Solana settlement already in flight at the facilitator, or confirmed without a visible transfer**                                   | `duplicate_settlement` or `post_settlement_transfer_not_confirmed`: `settlement-uncertain`, no delivery                                                                     | `tests/unit/payments-x402/provider-svm.test.ts`                                                                                            |
+| **an unconfirmed broadcast the facilitator could not record for a retry**                                                               | the catch-all with a transaction and an `errorMessage` starting `settlement_pending`: `settlement-uncertain`, no delivery                                                   | `tests/unit/payments-x402/provider-svm.test.ts`, `tests/unit/payments-x402/provider-sdk-mocked.test.ts`                                    |
+| **a settlement success naming another network, or no transaction in its family's form**                                                 | outcome unknown: `settlement-uncertain`, no delivery                                                                                                                        | `tests/unit/payments-x402/provider-svm.test.ts`, `tests/unit/payments-x402/provider-remote-facilitator.test.ts`                            |
+| **a Solana RPC serving another cluster, a mint with other decimals, or a facilitator without a fee payer**                              | health fails; without a fee payer no challenge is built either                                                                                                              | `tests/unit/payments-x402/provider-svm.test.ts`, `tests/e2e/payment/x402-solana.e2e.test.ts`                                               |
 | **x402 options on two networks sharing one RPC endpoint, or mixing testnet and mainnet**                                                | `CONFIG_INVALID` at load                                                                                                                                                    | `tests/unit/config/x402-options.test.ts`                                                                                                   |
 | replay, sequentially                                                                                                                    | refused, no second transfer                                                                                                                                                 | `tests/e2e/payment/x402-settlement.e2e.test.ts`, `tests/mainnet/base.smoke.test.ts`                                                        |
 | **duplicate concurrent request**                                                                                                        | settles once, other gets `PAYMENT_REPLAYED`                                                                                                                                 | `tests/integration/adversarial-payment.test.ts`                                                                                            |
@@ -433,13 +444,17 @@ settlement throw becomes `PAYMENT_PROVIDER_UNAVAILABLE`; the pipeline records
 the attempt `settlement-uncertain` and returns `PAYMENT_SETTLEMENT_FAILED`.
 
 For a failure it catches, the SDK returns `invalid_exact_evm_transaction_failed`
-unless the error message matches a known EIP-3009 or Permit2 failure such as a
-used nonce, with a valid transaction hash only when a mined transaction
-reverted. On the Permit2 path the reason also carries the error message after a
-colon. Without a hash the provider cannot tell a refused call from a lost response,
-because of that viem behavior, so it throws `PAYMENT_PROVIDER_UNAVAILABLE`. A
-revert during gas estimation that the SDK does not recognize is therefore also
-recorded `settlement-uncertain`, although nothing was sent.
+(`invalid_exact_svm_transaction_failed` on Solana) unless the error message
+matches a known failure such as a used nonce. On the Permit2 path the reason
+also carries the error message after a colon. The reason comes with a
+transaction in two cases: the transaction failed on chain, or the SDK could not
+confirm it and could not record it for a retry. The second has an
+`errorMessage` starting with `settlement_pending`, and the provider treats it
+as an unknown outcome. Without a transaction the provider cannot tell a refused
+call from a lost response, because of that viem behavior, so it throws
+`PAYMENT_PROVIDER_UNAVAILABLE`. A revert during gas estimation that the SDK
+does not recognize is therefore also recorded `settlement-uncertain`, although
+nothing was sent.
 
 Facilitator rejection reasons reach clients and storage only after trimming and
 a 64-character, `[A-Za-z0-9_.-]` check. Other values become the fixed token

@@ -382,6 +382,34 @@ Health checks require code at Permit2 and the proxy,
 check only that it advertises `exact` on the network, not that it settles
 Permit2.
 
+### Solana
+
+Solana options settle the network's USDC through a remote facilitator that
+pays transaction fees. They require the optional peers `@x402/svm` and
+`@solana/kit`, loaded only for Solana options.
+
+```yaml
+payments:
+  x402:
+    network: solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1 # built-in Solana Devnet
+    rpcUrl: ${SOLANA_DEVNET_RPC_URL}
+    payTo: ${SOLANA_MERCHANT_WALLET} # no asset fields: the network's USDC
+    facilitator:
+      mode: remote
+      url: ${X402_FACILITATOR_URL}
+```
+
+- `payTo` is the merchant's wallet; its USDC token account must already exist.
+  The SDK client does not create it.
+- Each offer names the facilitator's fee payer, read from its `/supported`
+  response. Without one, readiness fails and no challenge is built.
+- Health checks that the RPC's genesis hash matches the network id, that the
+  mint has the configured decimals, and that the facilitator lists the network
+  with a fee payer.
+- A transaction expires with its blockhash, about 60 to 90 seconds after the
+  buyer signs. The default `authorization` flow settles after the backend, so
+  use `upfront` for a handler that can take longer.
+
 ### Several options
 
 Use `options` to offer x402 resources on several networks or in several
@@ -461,20 +489,22 @@ development address, and either a facilitator credential or
 
 `network` is a CAIP-2 identifier, either built in or declared:
 
-| `network`       | Network           | Kind    | Notes                                      |
-| --------------- | ----------------- | ------- | ------------------------------------------ |
-| `eip155:31337`  | Local Anvil       | local   | Anvil's default chain id; no default asset |
-| `eip155:84532`  | Base Sepolia      | testnet |                                            |
-| `eip155:8453`   | Base              | mainnet |                                            |
-| `eip155:1`      | Ethereum          | mainnet |                                            |
-| `eip155:137`    | Polygon           | mainnet |                                            |
-| `eip155:42161`  | Arbitrum One      | mainnet |                                            |
-| `eip155:421614` | Arbitrum Sepolia  | testnet |                                            |
-| `eip155:43114`  | Avalanche C-Chain | mainnet |                                            |
+| `network`                                 | Network           | Kind    | Notes                                      |
+| ----------------------------------------- | ----------------- | ------- | ------------------------------------------ |
+| `eip155:31337`                            | Local Anvil       | local   | Anvil's default chain id; no default asset |
+| `eip155:84532`                            | Base Sepolia      | testnet |                                            |
+| `eip155:8453`                             | Base              | mainnet |                                            |
+| `eip155:1`                                | Ethereum          | mainnet |                                            |
+| `eip155:137`                              | Polygon           | mainnet |                                            |
+| `eip155:42161`                            | Arbitrum One      | mainnet |                                            |
+| `eip155:421614`                           | Arbitrum Sepolia  | testnet |                                            |
+| `eip155:43114`                            | Avalanche C-Chain | mainnet |                                            |
+| `solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp` | Solana            | mainnet | [remote facilitator only](#solana)         |
+| `solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1` | Solana Devnet     | testnet | [remote facilitator only](#solana)         |
 
-Settlement has been demonstrated on Base Sepolia and Base. The other listed
-networks use the same provider through a remote facilitator advertising them;
-settlement on those chains has not been demonstrated.
+Settlement has been demonstrated on Base Sepolia and Base; Solana has been
+tested only on a local validator. Other listed networks require a remote
+facilitator advertising them and have no demonstrated settlement.
 
 Declare another EVM network with its `kind` to select the mainnet guardrails.
 Custom networks have no default asset: set all four asset fields. Built-in

@@ -4,6 +4,7 @@
  * request collides in the receipt store's reservation. The MPP provider uses
  * the EIP-3009 derivation.
  */
+import { createHash } from 'node:crypto';
 import { PERMIT2_ADDRESS } from '@x402/evm';
 import { encodeAbiParameters, keccak256 } from 'viem';
 
@@ -50,4 +51,23 @@ export function computePermit2ReplayKey(input: {
       ],
     ),
   );
+}
+
+/**
+ * Identifies a Solana `exact` payment by network and SHA-256 of the signed
+ * message bytes. Excludes signatures, including the facilitator's fee payer
+ * slot, so altered signatures keep the same key. `messageHash` is the SDK's
+ * base64 `transactionMessageHash`.
+ */
+export function computeSvmReplayKey(input: {
+  readonly network: string;
+  readonly messageHash: string;
+}): string {
+  const digest = createHash('sha256')
+    .update('x402/exact/svm/v1\0')
+    .update(input.network)
+    .update('\0')
+    .update(Buffer.from(input.messageHash, 'base64'))
+    .digest('hex');
+  return `0x${digest}`;
 }

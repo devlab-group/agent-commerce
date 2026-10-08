@@ -260,8 +260,9 @@ describe('configurations refused before startup', () => {
     expect(pathOf(error)).toBe('payments.x402.facilitator.mode');
   });
 
-  it('checks Solana and TON options, then refuses them as not available yet', () => {
+  it('checks a Solana option and serves it beside EVM ones; refuses TON as not available yet', () => {
     const solana = { network: 'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1' };
+    const wallet = '9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM';
     const badKey = refusal(
       withX402({
         ...operational(),
@@ -270,15 +271,36 @@ describe('configurations refused before startup', () => {
       }),
     );
     expect(badKey.message).toContain('not a plausible address');
-    const gated = refusal(
+
+    const { rpcUrl: _shared, ...shared } = operational();
+    const x402 = parseConfig(
+      withX402({
+        ...shared,
+        facilitator: REMOTE,
+        networks: {
+          'eip155:84532': { rpcUrl: 'https://base-sepolia.example' },
+          [solana.network]: { rpcUrl: 'https://solana-devnet.example' },
+        },
+        options: [MINIMAL, { ...solana, payTo: wallet }],
+      }),
+      {},
+    ).payments.x402;
+    expect(x402?.options?.[1]).toMatchObject({
+      network: solana.network,
+      payTo: wallet,
+      asset: '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU',
+      assetDecimals: 6,
+    });
+
+    const ton = refusal(
       withX402({
         ...operational(),
         facilitator: REMOTE,
-        options: [{ ...solana, payTo: '9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM' }],
+        options: [{ network: 'tvm:-3', payTo: `0:${'ab'.repeat(32)}` }],
       }),
     );
-    expect(gated.message).toContain('not available yet');
-    expect(pathOf(gated)).toBe('payments.x402.options[0].network');
+    expect(ton.message).toContain('not available yet');
+    expect(pathOf(ton)).toBe('payments.x402.options[0].network');
   });
 });
 

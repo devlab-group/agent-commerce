@@ -4,16 +4,16 @@ This page records the implemented subset and pinned revision for each protocol.
 
 ## Support matrix
 
-| Protocol | Status       | Revision                                                                       | Implemented subset                                                                                         |
-| -------- | ------------ | ------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------- |
-| **HTTP** | Supported    | native                                                                         | resource routes and rail-specific payment headers                                                          |
-| **MCP**  | Supported    | MCP `2026-07-28` and `2025-11-25` through `@modelcontextprotocol/server@2.3.0` | tool discovery, invocation, payment-required and error mapping                                             |
-| **x402** | Supported    | x402 v2, `@x402/core@2.25.0`, `@x402/evm@2.25.0`                               | `exact` EVM through EIP-3009, or Permit2 (partial): challenge, verification, settlement and replay binding |
-| **A2A**  | Experimental | v1.0.1; negotiation `1.0`; `JSONRPC` binding                                   | Agent Card, `SendMessage`, paid flow and the x402 extension                                                |
-| **ACP**  | Experimental | stable snapshot `2026-04-17`; REST binding                                     | discovery and the five checkout operations                                                                 |
-| **AP2**  | Experimental | v0.2.0, tag 2026-04-28, commit `b4587ac`; Direct mode                          | closed Checkout Mandate verification before settlement                                                     |
-| **MPP**  | Experimental | drafts at `tempoxyz/mpp-specs@806fdb8`; `mppx@0.13.1`                          | `charge`/`evm`/EIP-3009 over HTTP, MCP and A2A                                                             |
-| UCP      | Planned      | -                                                                              | no implementation                                                                                          |
+| Protocol | Status       | Revision                                                                       | Implemented subset                                                                                                                     |
+| -------- | ------------ | ------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
+| **HTTP** | Supported    | native                                                                         | resource routes and rail-specific payment headers                                                                                      |
+| **MCP**  | Supported    | MCP `2026-07-28` and `2025-11-25` through `@modelcontextprotocol/server@2.3.0` | tool discovery, invocation, payment-required and error mapping                                                                         |
+| **x402** | Supported    | x402 v2, `@x402/core@2.25.0`, `@x402/evm@2.25.0`, `@x402/svm@2.25.0`           | `exact` on EVM through EIP-3009, or Permit2 (partial), and on Solana (partial): challenge, verification, settlement and replay binding |
+| **A2A**  | Experimental | v1.0.1; negotiation `1.0`; `JSONRPC` binding                                   | Agent Card, `SendMessage`, paid flow and the x402 extension                                                                            |
+| **ACP**  | Experimental | stable snapshot `2026-04-17`; REST binding                                     | discovery and the five checkout operations                                                                                             |
+| **AP2**  | Experimental | v0.2.0, tag 2026-04-28, commit `b4587ac`; Direct mode                          | closed Checkout Mandate verification before settlement                                                                                 |
+| **MPP**  | Experimental | drafts at `tempoxyz/mpp-specs@806fdb8`; `mppx@0.13.1`                          | `charge`/`evm`/EIP-3009 over HTTP, MCP and A2A                                                                                         |
+| UCP      | Planned      | -                                                                              | no implementation                                                                                                                      |
 
 Experimental components are disabled unless configured and support only the
 subsets below. Planned means there is no adapter or endpoint.
@@ -69,10 +69,11 @@ use their native payment format:
 | x402 | v2 `PaymentRequired` in `structuredContent`, `content[0].text` and `_meta["x402/error"]` | `_meta["x402/payment"]`, a `PaymentPayload` object or its base64 JSON string | `_meta["x402/payment-response"]`   |
 | MPP  | `_meta["org.paymentauth/payment-required"]` with the challenges                          | `_meta["org.paymentauth/credential"]`, a credential object                   | `_meta["org.paymentauth/receipt"]` |
 
-The x402 MCP transport defines an object proof. The gateway also emits challenges in `_meta["x402/error"]` and accepts
-base64 string proofs used by the `cloudflare/agents` client; that client has
-not been tested here. An undecodable string gets `PAYMENT_INVALID` and a fresh challenge. The MPP
-credential and receipt carriers follow `draft-payment-transport-mcp-00`.
+The x402 MCP transport defines an object proof. The gateway also emits challenges in
+`_meta["x402/error"]` and accepts base64 string proofs used by the `cloudflare/agents`
+client; that client has not been tested here. An undecodable string gets `PAYMENT_INVALID`
+and a fresh challenge. The MPP credential and receipt carriers follow
+`draft-payment-transport-mcp-00`.
 
 If both carriers are present, the rail's `_meta` proof wins. A placeholder
 in `_payment` therefore cannot break a client wrapper's paid retry. Tool
@@ -84,10 +85,9 @@ but the draft does not define. MCP `2026-07-28` reserves `-32042` for protocol
 use. The gateway reads payment `_meta` only inside `params` and does not
 advertise payment support in its capabilities.
 
-Without a proof, the tool returns `isError: true` and the gateway's
-payment-required envelope in `structuredContent`. For x402, the v2
-`PaymentRequired` fields appear alongside that envelope so x402 clients can
-read them:
+Without a proof, the tool returns `isError: true` and the gateway's payment-required
+envelope in `structuredContent`. For x402, the v2 `PaymentRequired` fields appear
+alongside that envelope so x402 clients can read them:
 
 ```jsonc
 {
@@ -137,9 +137,8 @@ exception messages and stack traces are omitted.
 
 The adapter does not implement MCP resources, prompts, sampling, completions,
 elicitation, roots, logging, tasks or tool-list-change notifications. It has
-no MCP authorization, sessions, subscriptions, pagination or HTTP+SSE
-transport. The gateway, rather than the MCP adapter, enforces Host and Origin
-checks.
+no MCP authorization, sessions, subscriptions, pagination or HTTP+SSE transport.
+The gateway, rather than the MCP adapter, enforces Host and Origin checks.
 
 The MCP adapter maps payment carriers and results. It does not verify or
 settle payments or call merchant backends.
@@ -376,11 +375,10 @@ has been tested against this path.
 | `completeCheckoutSession` | `POST {mount}/checkout_sessions/{id}/complete` | `200`   | `{ path, body }`                    |
 | `cancelCheckoutSession`   | `POST {mount}/checkout_sessions/{id}/cancel`   | `200`   | `{ path }`, plus `body` if supplied |
 
-Each operation maps to a resource in
-`protocols.acp.checkout.operations`. All five mappings are required, and each
-operation must use a different resource. Each resource must include
-`expose: [acp]`, be free at the Agent Commerce invocation layer and have an
-empty payments list.
+Each operation maps to a resource in `protocols.acp.checkout.operations`.
+All five mappings are required, and each operation must use a different resource.
+Each resource must include `expose: [acp]`, be free at the Agent Commerce invocation
+layer and have an empty payments list.
 
 Request bodies are validated against the pinned schema before pipeline
 execution; an invalid request returns `400 invalid_request_body`. Successful
@@ -552,17 +550,20 @@ No ACP SDK ships. Conformance tests use the vendored official schema and example
 ## x402
 
 The x402 provider supports v2 `exact` on EVM through EIP-3009
-`transferWithAuthorization` or, per option, Permit2. Permit2 support is
-partial: it has settled on Anvil against the deployed Permit2 and proxy code,
-not on a public network. Each requirement names its method in
-`extra.assetTransferMethod`. EIP-3009 requirements also include the token
-name and version used by the EIP-712 domain.
+`transferWithAuthorization` or, per option, Permit2, and on Solana. Permit2
+and Solana support are partial: settlement has run against deployed Permit2
+and proxy code on Anvil and on a local Solana validator, respectively, with
+no public-network settlement demonstrated for either. EVM requirements name
+the method in `extra.assetTransferMethod`; EIP-3009 also includes the token's
+EIP-712 domain name and version.
 
 Verification checks the scheme, signature, recipient, amount, validity window,
 payer balance, network and asset. Local refusals use x402 error codes where
 available, such as `invalid_network`. The provider derives a replay key from
 the authorization, which the pipeline reserves before settlement. A successful
-settlement records the transaction hash.
+settlement records the transaction hash, or the signature on Solana. A success
+that names another network, or no transaction in its family's form, unlocks
+nothing and leaves the payment's outcome unknown.
 
 A Permit2 proof must name the x402 exact Permit2 proxy as spender and match
 the offer's token, amount and `payTo` witness recipient. The gateway checks
@@ -573,16 +574,28 @@ authorizations is `unsupported_scheme`: the SDK facilitator chooses Permit2
 whenever that authorization is present. Since an owner's Permit2 nonce spans
 all tokens, the replay key uses the chain id, Permit2 address, owner and nonce.
 
+On Solana, the buyer signs a token transfer with the facilitator's fee payer,
+named in `extra.feePayer` from `/supported`. The facilitator checks the fee
+payer, signatures, instruction layout, mint, recipient token account and
+amount, then simulates the transaction. The gateway matches the echoed offer's
+addresses case-sensitively. Its replay key uses the network and SHA-256 of the
+transaction message, excluding signatures, so changing signature bytes,
+including the fee payer's, still collides. Unconfirmed broadcasts, duplicate
+settlements in flight, and confirmed transactions whose transfers are not yet
+visible leave the outcome unknown. The payer recorded is the one verification
+reported: the Solana scheme's settlement example names the fee payer as `payer`,
+where x402 v2 defines the payer's wallet.
+
 The signature covers neither the flow nor the resource, so the proof's
-`accepted` must match the offer: amount, asset, `payTo` ignoring letter case,
-and every `extra` key the gateway sent, where an absent `extra.paymentFlow`
-means `authorization`. A `resource.url` in the proof must equal the
-challenge's. A mismatch is `invalid_payment_requirements`, refused before the
-facilitator is called. `maxTimeoutSeconds` and `extra` keys added by the client
-are not compared. The facilitator receives the payload without `resource`,
-since its `resource://` URL is the gateway's own identifier, and without
-`extensions`: the gateway advertises none, and the SDK facilitator would act
-on a Permit2 gas-sponsoring extension.
+`accepted` must match the offer: amount, asset, `payTo` (case-insensitive on
+EVM, case-sensitive on Solana), and every `extra` key the gateway sent, where
+an absent `extra.paymentFlow` means `authorization`. A `resource.url` in the
+proof must equal the challenge's. A mismatch is `invalid_payment_requirements`,
+refused before the facilitator is called. `maxTimeoutSeconds` and `extra` keys
+added by the client are not compared. The facilitator receives the payload
+without `resource`, since its `resource://` URL is the gateway's own identifier,
+and without `extensions`: the gateway advertises none, and the SDK facilitator
+would act on a Permit2 gas-sponsoring extension.
 
 With [several options](configuration.md#several-options), the challenge uses
 `resource://agent-commerce/resources/<id>`. The comparison above selects the
@@ -619,7 +632,7 @@ this gateway, although its nonce stays unused on chain. Presenting the same
 proof again returns 402 with `invalid_exact_evm_nonce_already_used`; the client
 signs a fresh authorization.
 
-Unsupported: SVM, the Permit2 gas-sponsoring extensions
+Unsupported: TON, the Permit2 gas-sponsoring extensions
 (`eip2612GasSponsoring`, `erc20ApprovalGasSponsoring`), the `upto`,
 `batch-settlement` and `auth-capture` schemes, multi-asset routing and
 dynamic pricing.

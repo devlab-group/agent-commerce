@@ -50,8 +50,8 @@ export type FacilitatorBinding =
       readonly kind: 'remote';
       /**
        * SDK-parsed `/supported` response, including kinds and their `extra`
-       * (such as Solana's fee payer), extensions and signers. Used by health(),
-       * not by the payment path
+       * (such as Solana's fee payer), extensions and signers. health() reads
+       * it, and so does a Solana challenge, which names the fee payer
        */
       supported(): Promise<SupportedResponse>;
     });

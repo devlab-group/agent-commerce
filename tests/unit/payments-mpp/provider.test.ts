@@ -818,7 +818,7 @@ describe('MPP verify', () => {
 
 const SETTLED = {
   success: true,
-  transaction: '0xabc',
+  transaction: `0x${'ab'.repeat(32)}`,
   network: 'eip155:31337',
 };
 
@@ -850,7 +850,7 @@ describe('MPP settle', () => {
     expect(result).toMatchObject({
       status: 'settled',
       provider: 'mpp',
-      externalReference: '0xabc',
+      externalReference: `0x${'ab'.repeat(32)}`,
       payer: buyer.address,
       payee: recipient,
       amount: '0.01',
