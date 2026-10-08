@@ -9,7 +9,7 @@ import {
 } from '../../../src/cli/lib/manifest-env';
 
 const MANIFEST = {
-  chainId: 84532,
+  chainId: 31337,
   rpcUrl: 'http://127.0.0.1:8545',
   asset: '0x5fbdb2315678afecb367f032d93f642f64180aa3',
   assetName: 'MockUSDC',

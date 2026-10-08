@@ -57,7 +57,7 @@ function baseConfig(dir: string): RawConfig {
     payments: {
       x402: {
         enabled: true,
-        network: 'eip155:84532',
+        network: 'eip155:31337',
         rpcUrl: RPC_URL,
         asset: '0x1111111111111111111111111111111111111111',
         assetName: 'MockUSDC',
@@ -147,6 +147,7 @@ function fullConfig(dir: string) {
   report['payments'] = ['x402', 'mpp'];
   report['authorization'] = { required: ['ap2'] };
   config.payments['mpp'] = {
+    network: 'eip155:31337',
     enabled: true,
     rpcUrl: RPC_URL,
     asset: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',

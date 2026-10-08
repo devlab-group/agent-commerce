@@ -96,7 +96,7 @@ function rawConfig(options: GatewayOptions): Record<string, unknown> {
         ? {
             x402: {
               enabled: true,
-              network: 'eip155:84532',
+              network: 'eip155:31337',
               rpcUrl: anvil.rpcUrl,
               asset: deployment.asset,
               assetName: deployment.assetName,
@@ -110,6 +110,7 @@ function rawConfig(options: GatewayOptions): Record<string, unknown> {
         : {}),
       mpp: {
         enabled: true,
+        network: 'eip155:31337',
         rpcUrl: anvil.rpcUrl,
         asset: deployment.asset,
         assetName: deployment.assetName,

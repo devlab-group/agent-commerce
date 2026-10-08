@@ -310,7 +310,7 @@ idempotency store; and a `clockSkewSeconds` above the ceiling.
 payments:
   x402:
     enabled: true
-    network: ${X402_NETWORK} # CAIP-2; eip155:84532 locally
+    network: ${X402_NETWORK} # CAIP-2; eip155:31337 locally
     rpcUrl: ${X402_RPC_URL}
     payTo: ${MERCHANT_WALLET} # merchant-controlled. NEVER the gateway's.
     # Optional on a built-in network, which settles in its USDC. Set all four
@@ -346,11 +346,11 @@ USDC address, EIP-712 domain and decimals. Resources using this default must
 be priced in `USDC` or `USD`. `USD` treats USDC at face value, without an
 exchange-rate lookup.
 
-For another token on a testnet or declared EVM network, set `asset`,
-`assetName`, `assetVersion` and `assetDecimals` together. No fields are
-inherited from USDC. Overrides for the default token must match its metadata.
-An explicitly configured `asset` preserves the resource's currency label;
-built-in mainnets require their canonical USDC.
+Public built-in networks, testnet or mainnet, settle only in their USDC. On the
+local chain or a declared EVM network, set `asset`, `assetName`,
+`assetVersion` and `assetDecimals` together; no fields are inherited from
+USDC. Overrides for the default token must match its metadata. An explicitly
+configured `asset` preserves the resource's currency label.
 
 Alternatively, put these fields in a one-entry `options` array. Both forms
 resolve identically; config load rejects mixed forms, empty arrays and
@@ -366,9 +366,10 @@ payments:
 
 ### `payments.mpp`
 
-MPP accepts the `USDC` currency label on `eip155:84532`, shared by Base Sepolia
-and the local development chain, and on Base mainnet `eip155:8453`. It defaults
-to `eip155:84532`; `asset` selects the token contract. The gateway builds its
+MPP accepts the `USDC` currency label on the local chain `eip155:31337`, Base
+Sepolia `eip155:84532` and Base mainnet `eip155:8453`. It defaults to Base
+Sepolia, so a local config names `eip155:31337`; `asset` selects the token
+contract. The gateway builds its
 settlement provider from this block, so `payments.x402` need not be enabled as a
 resource rail.
 
@@ -376,7 +377,7 @@ resource rail.
 payments:
   mpp:
     enabled: true
-    network: eip155:84532 # optional; eip155:8453 is Base mainnet
+    network: eip155:31337 # optional; defaults to eip155:84532 (Base Sepolia)
     rpcUrl: ${MPP_RPC_URL}
     asset: ${MPP_ASSET} # token contract on the selected RPC
     assetName: USDC # EIP-712 domain name
@@ -411,7 +412,8 @@ development address, and either a facilitator credential or
 
 | `network`       | Network           | Kind    | Notes                                      |
 | --------------- | ----------------- | ------- | ------------------------------------------ |
-| `eip155:84532`  | Base Sepolia      | testnet | the chain id the local dev chain also uses |
+| `eip155:31337`  | Local Anvil       | local   | Anvil's default chain id; no default asset |
+| `eip155:84532`  | Base Sepolia      | testnet |                                            |
 | `eip155:8453`   | Base              | mainnet |                                            |
 | `eip155:1`      | Ethereum          | mainnet |                                            |
 | `eip155:137`    | Polygon           | mainnet |                                            |
@@ -441,11 +443,13 @@ the buyer's signed EIP-712 domain and must resolve explicitly.
 
 ```yaml
 facilitator:
-  mode: local # in-process signer; eip155:84532 only
+  mode: local # in-process signer; eip155:31337 only
   signerPrivateKey: ${X402_FACILITATOR_PRIVATE_KEY}
 ```
 
-Local mode requires Anvil on `eip155:84532`. Other networks require remote mode.
+Local mode requires Anvil on `eip155:31337`. Other networks require remote mode.
+A config that still pairs the local facilitator with `eip155:84532`, the id the
+local chain used before, is refused with a pointer to `eip155:31337`.
 
 ```yaml
 facilitator:
@@ -460,10 +464,11 @@ Use it only with a facilitator that accepts anonymous requests. Supported types
 are `none`, `bearer` (a static token) and `cdp` (a fresh JWT per request).
 The `cdp` type requires the optional `@coinbase/x402` peer.
 
-Deployment mode - `local`, `testnet` or `mainnet` - comes from the network and
-facilitator together. Chain id 84532 identifies both the local chain and public
-Base Sepolia. `doctor`, `health()` and `/.well-known/agent-commerce` report the
-resolved mode.
+Deployment mode - `local`, `testnet` or `mainnet` - comes from the network:
+`eip155:31337` is local, and every other network is the testnet or mainnet it
+names. `doctor`, `health()` and `/.well-known/agent-commerce` report it. In local
+mode `health()` also requires the RPC to answer Anvil's `anvil_nodeInfo`,
+because an RPC can report any chain id.
 
 ## Mainnet guardrails
 

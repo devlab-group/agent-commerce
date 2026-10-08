@@ -57,7 +57,7 @@ resources:
 payments:
   x402:
     enabled: true
-    network: ${X402_NETWORK:-eip155:84532}
+    network: ${X402_NETWORK:-eip155:31337}
     rpcUrl: ${X402_RPC_URL:-http://127.0.0.1:8545}
     # Placeholder: replace with the deployed MockUSDC address from
     # `.deploy/local.json` after `npm run chain:deploy` (see README.md)

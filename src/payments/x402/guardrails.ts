@@ -71,6 +71,8 @@ export interface X402Deployment {
   readonly mode: DeploymentMode;
 }
 
+const BASE_SEPOLIA = 'eip155:84532';
+
 function invalid(message: string, path: string): CommerceError {
   return new CommerceError('CONFIG_INVALID', message, { details: { path } });
 }
@@ -84,7 +86,7 @@ export function resolveX402Deployment(input: X402DeploymentInput): X402Deploymen
   const at = input.configPath ?? 'payments.x402';
   const payTo = input.payToField ?? 'payTo';
   const profile = requireX402Network(input.network, `${at}.network`, input.customNetworks);
-  const mode = resolveDeploymentMode(profile, input.facilitator.mode);
+  const mode = resolveDeploymentMode(profile);
 
   // Local mode keeps a gas-paying key in the gateway process. A compromise
   // could expose that key, so mainnet requires a remote facilitator.
@@ -94,10 +96,13 @@ export function resolveX402Deployment(input: X402DeploymentInput): X402Deploymen
       `${at}.facilitator.mode`,
     );
   }
-  // The local signer uses Anvil's chain ID; reject other networks before settlement
-  if (input.facilitator.mode === 'local' && profile.id !== `eip155:${LOCAL_CHAIN_ID}`) {
+  // The in-process facilitator signs with a client built for the Anvil chain
+  // id, so on any other chain every settlement would fail
+  if (input.facilitator.mode === 'local' && mode !== 'local') {
     throw invalid(
-      `${at}: facilitator.mode "local" serves the local Anvil chain (eip155:${LOCAL_CHAIN_ID}) only, not "${profile.id}" (${profile.displayName}). Use a remote facilitator.`,
+      profile.id === BASE_SEPOLIA
+        ? `${at}: the local Anvil chain is eip155:${LOCAL_CHAIN_ID}, Anvil's default chain id; "${BASE_SEPOLIA}" is public Base Sepolia. Set ${at}.network to eip155:${LOCAL_CHAIN_ID}, start Anvil with its default chain id and redeploy the local contracts (npm run chain:start, npm run chain:deploy).`
+        : `${at}: facilitator.mode "local" serves the local Anvil chain (eip155:${LOCAL_CHAIN_ID}) only, not "${profile.id}" (${profile.displayName}). Use a remote facilitator.`,
       `${at}.facilitator.mode`,
     );
   }
@@ -156,12 +161,13 @@ export function resolveX402Deployment(input: X402DeploymentInput): X402Deploymen
     );
   }
 
-  // Mainnet only: a testnet is where pointing at a mock token is normal
+  // A public built-in network settles only in its USDC. The local chain and
+  // declared networks have no default asset and name their token.
   const canonical = profile.canonicalAsset;
-  if (mode === 'mainnet' && canonical) {
+  if (canonical) {
     if (!sameAddress(profile, input.asset, canonical.address)) {
       throw invalid(
-        `${at}: asset ${input.asset} is not ${canonical.symbol} on ${profile.displayName} (expected ${canonical.address}). Settling a mainnet payment in an unintended token is refused.`,
+        `${at}: asset ${input.asset} is not ${canonical.symbol} on ${profile.displayName} (expected ${canonical.address}). A built-in network settles only in its ${canonical.symbol}.`,
         `${at}.asset`,
       );
     }

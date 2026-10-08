@@ -158,38 +158,25 @@ describe('asset overrides', () => {
     expect(named.message).toContain('EIP-712 domain name "USDC"');
   });
 
-  it('borrows nothing from the default for another token', () => {
-    const error = refusal(withX402({ ...base, ...MINIMAL, asset: OTHER_TOKEN, assetDecimals: 6 }));
-    expect(error.message).toContain('needs assetName, assetVersion');
-    expect(() =>
-      parseConfig(
-        withX402({
-          ...base,
-          ...MINIMAL,
-          asset: OTHER_TOKEN,
-          assetName: 'Other',
-          assetVersion: '1',
-          assetDecimals: 18,
-        }),
-        {},
-      ),
-    ).not.toThrow();
+  it('needs every asset field on the local chain, which has no default token', () => {
+    const local = { ...operational(), network: 'eip155:31337', payTo: MERCHANT };
+    const error = refusal(withX402({ ...local, asset: OTHER_TOKEN, assetDecimals: 6 }));
+    expect(error.message).toContain(
+      'has no default asset, so the option needs assetName, assetVersion',
+    );
+    const token = { asset: OTHER_TOKEN, assetName: 'Other', assetVersion: '1', assetDecimals: 18 };
+    expect(() => parseConfig(withX402({ ...local, ...token }), {})).not.toThrow();
   });
 
-  it('refuses another token on a built-in mainnet', () => {
-    const error = refusal(
-      withX402({
-        ...base,
-        allowMainnet: true,
-        network: 'eip155:1',
-        payTo: MERCHANT,
-        asset: OTHER_TOKEN,
-        assetName: 'Other',
-        assetVersion: '1',
-        assetDecimals: 6,
-      }),
+  it('refuses another token on a public network, testnet or mainnet', () => {
+    const token = { asset: OTHER_TOKEN, assetName: 'Other', assetVersion: '1', assetDecimals: 6 };
+    expect(refusal(withX402({ ...base, ...MINIMAL, ...token })).message).toContain(
+      'is not USDC on Base Sepolia',
     );
-    expect(error.message).toContain('is not USDC on Ethereum');
+    const mainnet = { ...base, allowMainnet: true, network: 'eip155:1', payTo: MERCHANT };
+    expect(refusal(withX402({ ...mainnet, ...token })).message).toContain(
+      'is not USDC on Ethereum',
+    );
   });
 });
 
@@ -249,6 +236,12 @@ describe('payments.x402.networks', () => {
 });
 
 describe('configurations refused before startup', () => {
+  it('points a local config still on eip155:84532 at the local chain id', () => {
+    const error = refusal(withX402({ ...operational(), network: 'eip155:84532', payTo: MERCHANT }));
+    expect(error.message).toContain('the local Anvil chain is eip155:31337');
+    expect(pathOf(error)).toBe('payments.x402.facilitator.mode');
+  });
+
   it('keeps the in-process facilitator on the Anvil chain id', () => {
     const error = refusal(
       withX402({ ...operational(), network: 'eip155:421614', payTo: MERCHANT }),

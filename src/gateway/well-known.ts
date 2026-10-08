@@ -154,11 +154,8 @@ export function buildWellKnownDocument(options: BuildWellKnownOptions): WellKnow
               // Only local or remote is public: the facilitator URL can carry
               // a tenant path or an API key, and the signer key is secret
               facilitator: { mode: x402.facilitator.mode },
-              // Chain id 84532 is both the local dev chain and public Base
-              // Sepolia, so the network id alone cannot say which one this is
               mode: resolveDeploymentMode(
                 requireX402Network(x402.network, 'payments.x402.network', x402.networks),
-                x402.facilitator.mode,
               ),
             },
           }
@@ -174,10 +171,7 @@ export function buildWellKnownDocument(options: BuildWellKnownOptions): WellKnow
               assetDecimals: MPP_PROFILE.assetDecimals,
               recipient: mpp.recipient,
               facilitator: { mode: mpp.facilitator.mode },
-              mode: resolveDeploymentMode(
-                requireX402Network(mpp.network, 'payments.mpp.network'),
-                mpp.facilitator.mode,
-              ),
+              mode: resolveDeploymentMode(requireX402Network(mpp.network, 'payments.mpp.network')),
             },
           }
         : {}),

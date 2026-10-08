@@ -154,9 +154,9 @@ asset supports is a configuration error, not a rounding opportunity.
 
 The demo and CI settle for real, on a chain they own:
 
-- Anvil, `--chain-id 84532`, advertised as the CAIP-2 network `eip155:84532`.
-  That id is shared with the public Base Sepolia testnet, so nothing infers
-  "public network" from it; `health()` probes for `anvil_nodeInfo` instead.
+- Anvil on its default chain id 31337, advertised as the CAIP-2 network
+  `eip155:31337`. `health()` also probes for `anvil_nodeInfo`, because an RPC
+  can report any chain id.
 - `MockUSDC`: 6 decimals, EIP-3009, EIP-712 domain `("MockUSDC", "2")`.
 - Anvil's well-known accounts as deployer/facilitator, merchant and buyer,
   labeled `LOCAL DEVELOPMENT ONLY - DO NOT FUND`.
@@ -171,10 +171,9 @@ Both x402 and MPP have settled on Base Sepolia (`eip155:84532`) and Base
 mainnet (`eip155:8453`) through the same pipeline and remote facilitator model.
 Public-network configuration follows these rules:
 
-- **The deployment mode is derived, not declared.** `local`, `testnet` and
-  `mainnet` come from the network *and* the facilitator together, because chain
-  id 84532 belongs to both the local dev chain and public Base Sepolia. Nothing
-  infers "public network" from the id alone.
+- **The deployment mode comes from the network.** `eip155:31337` is the local
+  chain; every other network is the testnet or mainnet it names, and the
+  in-process facilitator is refused on all of them.
 - **Mainnet is refused unless every guardrail is satisfied** - an explicit
   `allowMainnet`, a remote facilitator over HTTPS, a second explicit
   acknowledgment if no facilitator credential is configured, a non-development

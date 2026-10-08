@@ -407,7 +407,7 @@ payments: {}
       MPP_CHALLENGE_SECRET: 'MPP-CHALLENGE-SECRET-0123456789abcdef',
     };
     const rail = `
-    network: eip155:84532
+    network: eip155:31337
     rpcUrl: "https://rpc.example/v2/\${RPC_KEY}"
     asset: "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
     assetName: USDC

@@ -87,7 +87,10 @@ export interface MppProviderOptions {
    * authorization to expire at the same moment.
    */
   readonly challengeTtlSeconds?: number;
-  /** CAIP-2 network; accepts `eip155:84532` or `eip155:8453` and defaults to the former */
+  /**
+   * CAIP-2 network: `eip155:31337` (local Anvil), `eip155:84532` (Base
+   * Sepolia, the default) or `eip155:8453` (Base)
+   */
   readonly network?: string;
   /** Same flow values as x402; `authorization` settles after the backend */
   readonly paymentFlow?: X402PaymentFlow;

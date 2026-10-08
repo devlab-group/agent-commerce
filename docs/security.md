@@ -258,11 +258,11 @@ without facilitator credentials falls under the facilitator's anonymous-access
 terms and limits, so mainnet requires a separate acknowledgment for that
 configuration.
 
-The in-process facilitator serves only `eip155:84532`; mainnet forbids it
-because its gas-paying key lives in the gateway process. Config accepts any
-non-empty local key, but provider construction requires 32-byte hex and rejects
-well-known Anvil keys against public RPCs. Local health checks require Anvil,
-so public Base Sepolia needs remote mode for readiness.
+The in-process facilitator serves only the local chain, `eip155:31337`, which
+keeps its gas-paying key off every public network. Config accepts any non-empty
+local key, but provider construction requires 32-byte hex and rejects
+well-known Anvil keys against public RPCs. Local health checks also require the
+RPC to answer as Anvil, since an RPC can report any chain id.
 
 ## Adversarial scenarios, and where each is tested
 
@@ -300,8 +300,8 @@ real funds.
 | a `{param}` in the host position of `backend.url`                                                                                       | refused at config load                                                                                                                                                      | `tests/unit/config/schema.test.ts`                                                                                                         |
 | an unknown key nested under an `additionalProperties` schema                                                                            | rejected by the closed schema                                                                                                                                               | same                                                                                                                                       |
 | **a built-in mainnet redeclared as a testnet under `payments.x402.networks`**                                                           | `CONFIG_INVALID` at load; a built-in network cannot be redeclared                                                                                                           | `tests/unit/config/x402-options.test.ts`                                                                                                   |
-| **the in-process facilitator configured for a chain other than `eip155:84532`**                                                         | `CONFIG_INVALID` at load                                                                                                                                                    | same                                                                                                                                       |
-| **an asset field that contradicts the network's USDC, or another token on a built-in mainnet**                                          | `CONFIG_INVALID` at load                                                                                                                                                    | same                                                                                                                                       |
+| **the in-process facilitator configured for any network but the local `eip155:31337`**                                                  | `CONFIG_INVALID` at load; `eip155:84532` gets a pointer to the local id                                                                                                     | same                                                                                                                                       |
+| **an asset field that contradicts the network's USDC, or another token on a public built-in network**                                   | `CONFIG_INVALID` at load                                                                                                                                                    | same                                                                                                                                       |
 | remote facilitator timeout during settlement                                                                                            | provider throws `PAYMENT_PROVIDER_UNAVAILABLE`; pipeline marks the attempt uncertain and returns `PAYMENT_SETTLEMENT_FAILED`                                                | `tests/unit/payments-x402/provider-remote-facilitator.test.ts`, `tests/unit/core/execution/pipeline.test.ts`                               |
 | an unclassified local `settle()` throw                                                                                                  | provider throws `PAYMENT_PROVIDER_UNAVAILABLE`; pipeline marks the attempt uncertain and returns `PAYMENT_SETTLEMENT_FAILED`                                                | `tests/unit/payments-x402/provider-sdk-mocked.test.ts`, `tests/unit/core/execution/pipeline.test.ts`                                       |
 | a local `settle()` throw wrapping an RPC error, not a revert                                                                            | same as an unclassified throw; not `transaction_reverted`                                                                                                                   | `tests/unit/payments-x402/provider-sdk-mocked.test.ts`                                                                                     |

@@ -24,7 +24,7 @@ const BUYER_PRIVATE_KEY =
 
 function makeProvider(overrides: Partial<X402ProviderOptions> = {}) {
   return createX402PaymentProvider({
-    network: 'eip155:84532',
+    network: 'eip155:31337',
     rpcUrl: UNREACHABLE_RPC_URL,
     asset: ASSET,
     assetName: 'MockUSDC',
@@ -88,14 +88,14 @@ describe('createRequirement', () => {
     expect(requirement.requestId).toBe('req-1');
     expect(requirement.amount).toBe('0.01');
     expect(requirement.destination).toBe(PAY_TO);
-    expect(requirement.network).toBe('eip155:84532');
+    expect(requirement.network).toBe('eip155:31337');
     expect(requirement.asset).toBe(ASSET);
     expect(requirement.challenge.provider).toBe('x402');
     expect(requirement.challenge.accepts).toHaveLength(1);
 
     const accepted = requirement.challenge.accepts[0] as Record<string, unknown>;
     expect(accepted['scheme']).toBe('exact');
-    expect(accepted['network']).toBe('eip155:84532');
+    expect(accepted['network']).toBe('eip155:31337');
     expect(accepted['amount']).toBe('10000'); // 0.01 * 10^6
     expect(accepted['payTo']).toBe(PAY_TO);
     expect(accepted['asset']).toBe(ASSET);

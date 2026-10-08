@@ -43,7 +43,7 @@ const RESOURCE_ID = 'market_report';
 const INPUT = { city: 'Berlin' };
 const AMOUNT = '1.00';
 const CURRENCY = 'USDC';
-const NETWORK = 'eip155:84532';
+const NETWORK = 'eip155:31337';
 
 type EvmChallenge = Parameters<ReturnType<typeof clientCharge>['createCredential']>[0]['challenge'];
 
@@ -94,6 +94,7 @@ function rawConfig(): Record<string, unknown> {
     payments: {
       mpp: {
         enabled: true,
+        network: 'eip155:31337',
         rpcUrl: anvil.rpcUrl,
         asset: deployment.asset,
         assetName: deployment.assetName,

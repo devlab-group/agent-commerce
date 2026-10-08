@@ -60,7 +60,7 @@ export async function deployLocalChain(
     throw new CommerceError(
       'CONFIG_INVALID',
       `Local chain at ${options.rpcUrl} reports chain id ${chainId}, expected ${LOCAL_CHAIN_ID}. ` +
-        'Start it with "npm run chain:start" (anvil --chain-id 84532 ...).',
+        `Start it with "npm run chain:start" (anvil --chain-id ${LOCAL_CHAIN_ID} ...).`,
     );
   }
 

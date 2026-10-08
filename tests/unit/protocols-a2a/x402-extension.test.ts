@@ -90,7 +90,7 @@ describe('payment messages', () => {
           status: 'settled',
           provider: 'x402',
           currency: 'USDC',
-          network: 'eip155:84532',
+          network: 'eip155:31337',
           externalReference: '0xabc',
         },
       },
@@ -127,14 +127,14 @@ describe('payment messages', () => {
     const refused = new CommerceError('PAYMENT_INVALID', 'Refused', {
       details: { reason: 'insufficient_funds' },
     });
-    expect(paymentFailureMetadata(refused, 'eip155:84532')).toMatchObject({
-      'x402.payment.receipts': [{ success: false, network: 'eip155:84532' }],
+    expect(paymentFailureMetadata(refused, 'eip155:31337')).toMatchObject({
+      'x402.payment.receipts': [{ success: false, network: 'eip155:31337' }],
     });
 
     const named = new CommerceError('PAYMENT_SETTLEMENT_FAILED', 'Refused', {
       details: { reason: 'unexpected_settle_error', network: 'eip155:8453' },
     });
-    expect(paymentFailureMetadata(named, 'eip155:84532')).toMatchObject({
+    expect(paymentFailureMetadata(named, 'eip155:31337')).toMatchObject({
       'x402.payment.receipts': [{ network: 'eip155:8453' }],
     });
   });

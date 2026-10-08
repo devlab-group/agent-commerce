@@ -45,7 +45,7 @@ const RESOURCE_ID = 'market_report';
 const INPUT = { city: 'Berlin' };
 const MERCHANT = '0x70997970C51812dc3A010C7d01b50e0d17dc79C8';
 const ASSET = '0x1111111111111111111111111111111111111111';
-const NETWORK = 'eip155:84532';
+const NETWORK = 'eip155:31337';
 const PROOF = 'x402-proof-1';
 
 let parties: Party;

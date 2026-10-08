@@ -52,7 +52,7 @@ beforeEach(async () => {
   facilitator.verify.mockReset().mockResolvedValue({ isValid: true, payer: buyer.address });
   facilitator.settle.mockReset().mockImplementation(async () => {
     order.push('settle');
-    return { success: true, transaction: TX, network: 'eip155:84532', payer: buyer.address };
+    return { success: true, transaction: TX, network: 'eip155:31337', payer: buyer.address };
   });
   const config = parseConfig(
     {
@@ -65,7 +65,7 @@ beforeEach(async () => {
       payments: {
         x402: {
           enabled: true,
-          network: 'eip155:84532',
+          network: 'eip155:31337',
           rpcUrl: 'http://127.0.0.1:19321',
           asset: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
           assetName: 'USDC',
@@ -121,7 +121,7 @@ async function paid(resourceId: string) {
     challenged.json(),
   ) as PaymentRequired;
   const payments = new x402Client();
-  registerExactEvmScheme(payments, { signer: buyer, networks: ['eip155:84532'] });
+  registerExactEvmScheme(payments, { signer: buyer, networks: ['eip155:31337'] });
   payments.setSpendControls(false); // the test token is not in the SDK's list
   const payload = await payments.createPaymentPayload(required);
   return {
@@ -174,7 +174,7 @@ describe('x402 payment flows', () => {
       success: false,
       errorReason: 'insufficient_funds',
       transaction: '',
-      network: 'eip155:84532',
+      network: 'eip155:31337',
     });
 
     const { response } = await paid('default_flow');

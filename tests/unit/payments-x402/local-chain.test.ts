@@ -113,7 +113,7 @@ describeWithAnvil('deployLocalChain (real ephemeral anvil)', () => {
   it('deploys fresh, mints exactly the target buyer balance, and reports freshlyDeployed', async () => {
     const result = await deployLocalChain({ rpcUrl: anvil.rpcUrl, buyerInitialBalance: '10.00' });
     expect(result.freshlyDeployed).toBe(true);
-    expect(result.chainId).toBe(84532);
+    expect(result.chainId).toBe(31337);
     expect(result.assetDecimals).toBe(6);
     expect(result.asset).toMatch(/^0x[0-9a-fA-F]{40}$/);
     expect(await balanceOf(result.asset, result.buyer.address)).toBe(10_000_000n);
@@ -157,8 +157,9 @@ describeWithAnvil('deployLocalChain (real ephemeral anvil)', () => {
 });
 
 describeWithAnvil('deployLocalChain - wrong chain id', () => {
-  it('rejects when pointed at a chain that is not id 84532', async () => {
-    const wrongChain = await startAnvil({ port: 18714, chainId: 31337, silent: true });
+  it('rejects when pointed at a chain that is not the local id 31337', async () => {
+    // Base Sepolia's id, the one the local chain used to share
+    const wrongChain = await startAnvil({ port: 18714, chainId: 84532, silent: true });
     try {
       await expect(
         deployLocalChain({ rpcUrl: wrongChain.rpcUrl, buyerInitialBalance: '1.00' }),

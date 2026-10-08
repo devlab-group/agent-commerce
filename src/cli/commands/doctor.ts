@@ -190,12 +190,9 @@ function findX402Mismatch(
 }
 
 /**
- * Where a rail settles and through which facilitator. Chain id 84532 is both
- * the local dev chain and public Base Sepolia, so the deployment mode (network
- * plus facilitator) says which one this is. Local mode names the public
- * network only as sharing its chain id, never as the place of settlement.
- * `parseConfig` refuses an unknown network, so an absent profile means another
- * loader produced this config, and the text says so rather than guessing.
+ * Where a rail settles and through which facilitator. `parseConfig` refuses an
+ * unknown network, so an absent profile means another loader produced this
+ * config, and the text says so rather than guessing.
  */
 function describeSettlement(
   network: string,
@@ -203,12 +200,12 @@ function describeSettlement(
   customNetworks?: CustomNetworks,
 ): { readonly mode: DeploymentMode | undefined; readonly where: string; readonly via: string } {
   const profile = findX402Network(network, customNetworks);
-  const mode = profile ? resolveDeploymentMode(profile, facilitator.mode) : undefined;
+  const mode = profile ? resolveDeploymentMode(profile) : undefined;
   const where =
     profile === undefined || mode === undefined
       ? `unknown network ${network}`
       : mode === 'local'
-        ? `LOCAL dev chain (${network}, chain id shared with ${profile.displayName})`
+        ? `LOCAL dev chain (${network})`
         : `${describeDeploymentMode(mode)} on ${profile.displayName} (${network})`;
   const via =
     facilitator.mode === 'local' ? 'local (in-process)' : `remote (auth=${facilitator.auth.type})`;

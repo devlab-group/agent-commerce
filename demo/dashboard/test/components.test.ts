@@ -116,7 +116,7 @@ describe('StatusPanel', () => {
         payments: {
           x402: {
             enabled: true,
-            network: 'eip155:84532',
+            network: 'eip155:31337',
             asset: '0x5fbdb2315678afecb367f032d93f642f64180aa3',
             assetName: 'MockUSDC',
             assetVersion: '2',
@@ -129,7 +129,7 @@ describe('StatusPanel', () => {
         },
       },
     });
-    expect(html).toContain('eip155:84532');
+    expect(html).toContain('eip155:31337');
     expect(html).toContain('0x70997970C51812dc3A010C7d01b50e0d17dc79C8');
     // Config accepts a local facilitator off the dev chain too, so the label
     // says where it runs, not which chain it is on

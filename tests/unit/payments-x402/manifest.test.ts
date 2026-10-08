@@ -9,7 +9,7 @@ import {
 } from '../../../src/payments/x402/local-chain/manifest';
 
 const VALID_MANIFEST: LocalChainManifest = {
-  chainId: 84532,
+  chainId: 31337,
   rpcUrl: 'http://127.0.0.1:8545',
   asset: '0x5FbDB2315678afecb367f032d93F642f64180aa3',
   assetName: 'MockUSDC',

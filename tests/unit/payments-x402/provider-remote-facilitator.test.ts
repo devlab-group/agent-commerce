@@ -76,8 +76,7 @@ function makeProvider(
   overrides: Partial<X402ProviderOptions> = {},
 ) {
   return createX402PaymentProvider({
-    ...overrides,
-    network: 'eip155:84532',
+    network: 'eip155:31337',
     rpcUrl: RPC_URL,
     asset: ASSET,
     assetName: 'MockUSDC',
@@ -85,6 +84,7 @@ function makeProvider(
     assetDecimals: 6,
     payTo: PAY_TO,
     facilitator: { mode: 'remote', url: FACILITATOR_URL, auth },
+    ...overrides,
   });
 }
 
@@ -106,7 +106,15 @@ describe('provider - remote facilitator', () => {
   });
 
   it('holds no signing key and reports itself as a remote testnet deployment', () => {
-    const provider = makeProvider({ type: 'none' });
+    // Public Base Sepolia, which settles only in its USDC
+    const provider = makeProvider(
+      { type: 'none' },
+      {
+        network: 'eip155:84532',
+        asset: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+        assetName: 'USDC',
+      },
+    );
     expect(provider.descriptor.capabilities).toContain('remote-facilitator');
     expect(provider.descriptor.capabilities).toContain('mode=testnet');
   });
@@ -140,7 +148,7 @@ describe('provider - remote facilitator', () => {
     settleMock.mockResolvedValueOnce({
       success: true,
       transaction: '0xabc',
-      network: 'eip155:84532',
+      network: 'eip155:31337',
       payer: '0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC',
     });
 
@@ -288,7 +296,7 @@ describe('provider - remote facilitator', () => {
         success: false,
         errorReason: 'insufficient_funds',
         transaction: '',
-        network: 'eip155:84532',
+        network: 'eip155:31337',
       }),
     );
 
@@ -320,7 +328,7 @@ describe('provider - remote facilitator', () => {
           success: false,
           ...(errorReason !== undefined ? { errorReason } : {}),
           transaction,
-          network: 'eip155:84532',
+          network: 'eip155:31337',
         }),
       );
 
@@ -490,7 +498,7 @@ describe('provider - a proof must echo the offer it pays', () => {
       const client = new x402Client();
       registerExactEvmScheme(client, {
         signer: privateKeyToAccount(BUYER_PRIVATE_KEY),
-        networks: ['eip155:84532'],
+        networks: ['eip155:31337'],
       });
       client.setSpendControls(false); // the test token is not in the SDK's list
       const sdkPayload = await client.createPaymentPayload(

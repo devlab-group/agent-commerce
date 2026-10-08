@@ -363,10 +363,9 @@ from [faucet.circle.com](https://faucet.circle.com); the buyer needs no ETH.
 `npm run test:testnet` drives the whole flow and reads the result back off the
 chain.
 
-Chain id 84532 belongs to **both** Base Sepolia and this project's local dev
-chain, deliberately. Nothing infers "public network" from it - `local`,
-`testnet` and `mainnet` are derived from the network *and* the facilitator
-together, and reported by `doctor`, `health()` and `/.well-known`.
+The local dev chain is `eip155:31337`, Anvil's default chain id, so the network
+says whether a deployment is local, testnet or mainnet. `doctor`, `health()`
+and `/.well-known` report it.
 
 ### Base mainnet
 
@@ -405,7 +404,7 @@ PASS  Protocols            http=on mcp=on (/mcp) a2a=off acp=off
 INFO  A2A                  disabled
 INFO  ACP                  disabled
 INFO  AP2                  disabled
-PASS  Payments             x402 v2 (scheme=exact) enabled - LOCAL dev chain (eip155:84532, chain id shared with Base Sepolia), destination=0x7099…79C8, facilitator=local (in-process), paymentFlow=authorization
+PASS  Payments             x402 v2 (scheme=exact) enabled - LOCAL dev chain (eip155:31337), destination=0x7099…79C8, facilitator=local (in-process), paymentFlow=authorization
 INFO  Payments (MPP)       MPP not configured
 PASS  Storage              sqlite schema v2 writable; receipts=2
 PASS  Protocol versions    reported by gateway /.well-known/agent-commerce

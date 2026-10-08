@@ -144,7 +144,7 @@ function fakeProvider(): PaymentProvider & { settleCalls: () => number } {
       amount: ctx.amount,
       currency: ctx.currency,
       destination: '0x70997970C51812dc3A010C7d01b50e0d17dc79C8',
-      network: 'eip155:84532',
+      network: 'eip155:31337',
       challenge: { provider: 'x402', version: '2', accepts: [{ scheme: 'exact' }] },
     }),
     verify: async (ctx: PaymentVerificationContext): Promise<PaymentResult> => {

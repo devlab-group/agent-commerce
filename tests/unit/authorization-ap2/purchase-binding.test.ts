@@ -48,7 +48,7 @@ function requirement(overrides: Partial<PaymentRequirement> = {}): PaymentRequir
     amount: '0.01',
     currency: 'USDC',
     destination: '0x70997970C51812dc3A010C7d01b50e0d17dc79C8',
-    network: 'eip155:84532',
+    network: 'eip155:31337',
     asset: '0x1111111111111111111111111111111111111111',
     challenge: { provider: 'x402', version: '2', accepts: [] },
     ...overrides,
@@ -84,7 +84,7 @@ function profileClaims(overrides: Record<string, unknown> = {}): Record<string, 
     currency: 'USDC',
     payment_method: 'x402',
     destination: '0x70997970C51812dc3A010C7d01b50e0d17dc79C8',
-    network: 'eip155:84532',
+    network: 'eip155:31337',
     asset: '0x1111111111111111111111111111111111111111',
     ...overrides,
   };
@@ -199,7 +199,7 @@ describe('binding a mandate to the resolved purchase', () => {
   });
 
   it('compares network identifiers exactly', async () => {
-    await bindRejection(await mandateFor(profileClaims({ network: 'EIP155:84532' })));
+    await bindRejection(await mandateFor(profileClaims({ network: 'EIP155:31337' })));
   });
 
   it.each(['profile', 'resource_id', 'input_hash', 'amount', 'currency', 'payment_method'])(

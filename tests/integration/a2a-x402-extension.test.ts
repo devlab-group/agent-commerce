@@ -83,7 +83,7 @@ beforeEach(async () => {
   facilitator.settle.mockReset().mockResolvedValue({
     success: true,
     transaction: TX,
-    network: 'eip155:84532',
+    network: 'eip155:31337',
     payer: buyer.address,
   });
   gateway = await createGateway({
@@ -91,7 +91,7 @@ beforeEach(async () => {
     store: createFakeStore(),
     paymentProviders: [
       createX402PaymentProvider({
-        network: 'eip155:84532',
+        network: 'eip155:31337',
         rpcUrl: RPC_URL,
         asset: ASSET,
         assetName: AUTHORIZATION.name,
@@ -101,6 +101,7 @@ beforeEach(async () => {
         facilitator: REMOTE,
       }),
       createMppPaymentProvider({
+        network: 'eip155:31337',
         recipient: PAY_TO,
         asset: ASSET,
         assetName: AUTHORIZATION.name,
@@ -194,7 +195,7 @@ function pay(task: A2aTask, metadata: Record<string, unknown>): Record<string, u
 
 async function paymentPayload(task: A2aTask): Promise<Record<string, unknown>> {
   const payments = new x402Client();
-  registerExactEvmScheme(payments, { signer: buyer, networks: ['eip155:84532'] });
+  registerExactEvmScheme(payments, { signer: buyer, networks: ['eip155:31337'] });
   // The test token is not in the SDK's spend-control asset list
   payments.setSpendControls(false);
   const required = task.status.message?.metadata?.['x402.payment.required'] as PaymentRequired;
@@ -235,7 +236,7 @@ describe('x402 A2A extension', () => {
         'x402.payment.status': 'payment-required',
         'x402.payment.required': {
           x402Version: 2,
-          accepts: [expect.objectContaining({ scheme: 'exact', network: 'eip155:84532' })],
+          accepts: [expect.objectContaining({ scheme: 'exact', network: 'eip155:31337' })],
         },
       },
     });
@@ -263,7 +264,7 @@ describe('x402 A2A extension', () => {
     expect(paid?.status.message?.metadata).toMatchObject({
       'x402.payment.status': 'payment-completed',
       'x402.payment.receipts': [
-        expect.objectContaining({ success: true, transaction: TX, network: 'eip155:84532' }),
+        expect.objectContaining({ success: true, transaction: TX, network: 'eip155:31337' }),
       ],
     });
     expect(paid?.artifacts[0]?.parts[0]?.data).toEqual({ report: 'paid' });
@@ -305,7 +306,7 @@ describe('x402 A2A extension', () => {
       'x402.payment.status': 'payment-failed',
       'x402.payment.error': 'insufficient_funds',
       'x402.payment.receipts': [
-        expect.objectContaining({ success: false, network: 'eip155:84532' }),
+        expect.objectContaining({ success: false, network: 'eip155:31337' }),
       ],
     });
     expect(backendCalls).toBe(0);

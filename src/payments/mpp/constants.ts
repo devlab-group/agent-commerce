@@ -52,11 +52,11 @@ export const MPP_PROFILE = {
 } as const;
 
 /** Supported CAIP-2 networks; gateway config applies the x402 mainnet guardrails */
-export const MPP_NETWORKS = ['eip155:84532', 'eip155:8453'] as const;
+export const MPP_NETWORKS = ['eip155:31337', 'eip155:84532', 'eip155:8453'] as const;
 
 export type MppNetwork = (typeof MPP_NETWORKS)[number];
 
-/** Default network ID, shared by Base Sepolia and the local development chain */
+/** Default network: Base Sepolia. The local Anvil chain is `eip155:31337` */
 export const MPP_DEFAULT_NETWORK: MppNetwork = 'eip155:84532';
 
 export function isMppNetwork(value: string): value is MppNetwork {

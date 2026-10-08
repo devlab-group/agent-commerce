@@ -312,7 +312,9 @@ export interface NetworkProfile {
   readonly chainId: number;
   readonly displayName: string;
   readonly kind: 'testnet' | 'mainnet';
-  /** The network's USDC and its EIP-712 domain: the default asset, required on mainnet */
+  /** The local Anvil dev chain, where the in-process facilitator runs */
+  readonly local?: boolean;
+  /** The network's USDC and its EIP-712 domain; a public network settles only in it */
   readonly canonicalAsset?: {
     readonly symbol: string;
     readonly address: string;
@@ -350,7 +352,7 @@ export interface MppProviderOptions {
   readonly allowUnauthenticatedFacilitator?: boolean;
   readonly logger?: Logger;
   readonly challengeTtlSeconds?: number; // default 300
-  /** CAIP-2 network: 'eip155:84532' (default) or 'eip155:8453' */
+  /** CAIP-2 network: 'eip155:31337' (local), 'eip155:84532' (default) or 'eip155:8453' */
   readonly network?: string;
   /** 'authorization' (default) settles after a successful backend call; 'upfront' first */
   readonly paymentFlow?: X402PaymentFlow;
@@ -367,7 +369,7 @@ Construction fails with `CONFIG_INVALID` for a recipient or asset that is not
 an address, an empty EIP-712 domain name or version, an empty or multi-line
 realm, a challenge secret with length below 32, a TTL that is not a
 positive whole number, or an unsupported `network`. The supported networks are
-`eip155:84532` and `eip155:8453`. The provider then builds an internal x402
+`eip155:31337` (local), `eip155:84532` and `eip155:8453`. The provider then builds an internal x402
 provider from the same network, asset, recipient and facilitator options, so
 every x402 construction check applies, including the mainnet guardrails.
 `X402FacilitatorConfig` is the type exported by the `./x402` entry.
@@ -607,7 +609,7 @@ export interface GatewayConfig {
     };
     readonly mpp?: {
       readonly enabled: boolean;
-      readonly network: 'eip155:84532' | 'eip155:8453';
+      readonly network: 'eip155:31337' | 'eip155:84532' | 'eip155:8453';
       readonly rpcUrl: string;
       readonly asset: string;
       readonly assetName: string;
@@ -656,7 +658,7 @@ accepted.
 
 ```json
 {
-  "chainId": 84532,
+  "chainId": 31337,
   "rpcUrl": "http://127.0.0.1:8545",
   "hostRpcUrl": "http://127.0.0.1:8545",
   "asset": "0x...",

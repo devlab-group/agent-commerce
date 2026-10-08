@@ -18,6 +18,7 @@
 import { stringify } from 'yaml';
 // Narrow module, not the `testing.ts` barrel: see manifest-env.ts
 import { ANVIL_WELL_KNOWN_ACCOUNTS } from '../../payments/x402/local-chain/accounts';
+import { LOCAL_CHAIN_ID } from '../../payments/x402/networks';
 
 /** Anvil account #1: the merchant settlement destination, never the facilitator */
 export const LOCAL_DEV_MERCHANT_ADDRESS = ANVIL_WELL_KNOWN_ACCOUNTS[1].address;
@@ -117,7 +118,7 @@ export function buildInitConfigObject(answers: InitAnswers): Record<string, unkn
       ? {
           x402: {
             enabled: true,
-            network: 'eip155:84532',
+            network: `eip155:${LOCAL_CHAIN_ID}`,
             rpcUrl: 'http://127.0.0.1:8545',
             asset: PLACEHOLDER_ASSET_ADDRESS,
             assetName: 'MockUSDC',

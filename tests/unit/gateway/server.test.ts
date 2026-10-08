@@ -123,7 +123,7 @@ function x402Provider(overrides: Parameters<typeof createFakePaymentProvider>[0]
       amount: ctx.amount,
       currency: ctx.currency,
       destination: '0xMERCHANT',
-      network: 'eip155:84532',
+      network: 'eip155:31337',
       challenge: {
         provider: 'x402',
         version: '2',
@@ -256,7 +256,7 @@ describe('createGateway HTTP surface', () => {
     const body = res.json();
     expect(body.merchant.id).toBe('demo-store');
     expect(body.payments.x402.payTo).toBe('0x70997970C51812dc3A010C7d01b50e0d17dc79C8');
-    expect(body.payments.x402.network).toBe('eip155:84532');
+    expect(body.payments.x402.network).toBe('eip155:31337');
     expect(body.adapters).toHaveLength(1);
     expect(body.paymentProviders).toHaveLength(1);
     expect(body.store.name).toBe('fake-store');
@@ -529,7 +529,7 @@ describe('createGateway HTTP surface', () => {
         provider: 'x402',
         amount: '0.01',
         currency: 'USDC',
-        network: 'eip155:84532',
+        network: 'eip155:31337',
         payer: '0xBUYER',
         externalReference: 'tx-1',
         metadata: { amountBaseUnits: '10000' },
@@ -541,7 +541,7 @@ describe('createGateway HTTP surface', () => {
     expect(decodeHeader(res.headers[PAYMENT_RESPONSE_HEADER])).toMatchObject({
       success: true,
       transaction: 'tx-1',
-      network: 'eip155:84532',
+      network: 'eip155:31337',
       payer: '0xBUYER',
       // The x402 settlement amount uses base units
       amount: '10000',
@@ -759,7 +759,7 @@ describe('createGateway HTTP surface', () => {
         provider: 'x402',
         amount: '0.01',
         currency: 'USDC',
-        network: 'eip155:84532',
+        network: 'eip155:31337',
         payer: '0xBUYER',
         rejectionReason: 'insufficient_funds',
       }),
@@ -772,7 +772,7 @@ describe('createGateway HTTP surface', () => {
       success: false,
       errorReason: 'insufficient_funds',
       transaction: '',
-      network: 'eip155:84532',
+      network: 'eip155:31337',
       payer: '0xBUYER',
     });
     // x402 answers a refused settlement with PAYMENT-RESPONSE alone
@@ -797,7 +797,7 @@ describe('createGateway HTTP surface', () => {
       success: false,
       errorReason: 'settlement_pending',
       transaction: '0xabc',
-      network: 'eip155:84532',
+      network: 'eip155:31337',
     });
     expect(res.headers[PAYMENT_REQUIRED_HEADER]).toBeUndefined();
   });
@@ -1053,8 +1053,8 @@ describe('createGateway HTTP surface', () => {
           enabled: true,
           network: 'eip155:84532',
           rpcUrl: 'http://127.0.0.1:8545',
-          asset: '0x1111111111111111111111111111111111111111',
-          assetName: 'MockUSDC',
+          asset: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+          assetName: 'USDC',
           assetVersion: '2',
           assetDecimals: 6,
           payTo: '0x70997970C51812dc3A010C7d01b50e0d17dc79C8',

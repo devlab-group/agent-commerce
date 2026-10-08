@@ -33,7 +33,7 @@ function healthyFetch(overrides: Record<string, () => Response | Promise<Respons
 
 const X402_CONFIG = {
   enabled: true,
-  network: 'eip155:84532',
+  network: 'eip155:31337',
   rpcUrl: 'http://127.0.0.1:8545',
   // Deliberately NOT the init placeholder (0x…dEaD): doctor WARNs on that,
   // which would mask every other assertion in this file
@@ -516,16 +516,15 @@ describe('runDoctor: degraded scenarios report the failure', () => {
     };
     const testnet = { network: 'eip155:84532', allowMainnet: false };
 
-    // Chain id 84532 is both the local dev chain and public Base Sepolia, so the
-    // facilitator mode decides which one the report names
+    // The network decides which environment the report names
     it.each([
       [
-        'a local facilitator on 84532',
+        'the local chain',
         X402_CONFIG,
-        'LOCAL dev chain (eip155:84532, chain id shared with Base Sepolia), destination=0xf39F…2266, facilitator=local (in-process)',
+        'LOCAL dev chain (eip155:31337), destination=0xf39F…2266, facilitator=local (in-process)',
       ],
       [
-        'a remote facilitator on 84532',
+        'a remote facilitator on Base Sepolia',
         { ...mainnetX402({ type: 'bearer', token: 'T' }), ...testnet },
         'TESTNET on Base Sepolia (eip155:84532), destination=0x1111…1111, facilitator=remote (auth=bearer)',
       ],
@@ -639,7 +638,7 @@ describe('runDoctor: degraded scenarios report the failure', () => {
     );
     const payments = report.checks.find((c) => c.name === 'Payments');
     expect(payments?.status).toBe('FAIL');
-    expect(payments?.detail).toContain('eip155:84532');
+    expect(payments?.detail).toContain('eip155:31337');
     expect(payments?.detail).toContain('"base"');
   });
 

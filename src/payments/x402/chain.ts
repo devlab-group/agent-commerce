@@ -6,9 +6,8 @@
  * Despite the `Local` names, `createLocalFacilitatorClient` sits on the
  * settlement path and `createLocalPublicClient` backs `health()`. The health
  * client is built for whichever network is configured. The facilitator client
- * always uses chain id 84532: an in-process facilitator is refused on a
- * mainnet, and Base Sepolia is the registry's only testnet. Registering a
- * second testnet means building this client for the configured chain.
+ * always uses the local chain id: the in-process facilitator is refused on
+ * every network but the local Anvil chain.
  */
 import {
   type Account,

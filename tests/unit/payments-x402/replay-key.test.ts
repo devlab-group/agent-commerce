@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { computeReplayKey } from '../../../src/payments/x402/replay-key';
 
 const BASE = {
-  chainId: 84532,
+  chainId: 31337,
   asset: '0x5FbDB2315678afecb367f032d93F642f64180aa3' as const,
   from: '0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC' as const,
   nonce: `0x${'11'.repeat(32)}` as const,

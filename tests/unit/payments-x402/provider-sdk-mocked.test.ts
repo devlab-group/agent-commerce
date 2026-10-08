@@ -112,7 +112,7 @@ describe('provider - SDK-boundary branches (mocked x402/facilitator)', () => {
 
   function makeProvider() {
     return createX402PaymentProvider({
-      network: 'eip155:84532',
+      network: 'eip155:31337',
       rpcUrl: RPC_URL,
       asset: ASSET,
       assetName: 'MockUSDC',
@@ -142,7 +142,7 @@ describe('provider - SDK-boundary branches (mocked x402/facilitator)', () => {
 
     function baseOptions() {
       return {
-        network: 'eip155:84532',
+        network: 'eip155:31337',
         rpcUrl: RPC_URL,
         asset: ASSET,
         assetName: 'MockUSDC',
@@ -209,7 +209,7 @@ describe('provider - SDK-boundary branches (mocked x402/facilitator)', () => {
     const { nonce } = JSON.parse(Buffer.from(proof, 'base64').toString('utf8')).payload
       .authorization;
     expect(result.replayKey).toBe(
-      computeReplayKey({ chainId: 84532, asset: ASSET, from: BUYER_ADDRESS, nonce }),
+      computeReplayKey({ chainId: 31337, asset: ASSET, from: BUYER_ADDRESS, nonce }),
     );
     expect(result.payer).toBe(BUYER_ADDRESS);
     expect(verifyMock).toHaveBeenCalledOnce();
@@ -236,7 +236,7 @@ describe('provider - SDK-boundary branches (mocked x402/facilitator)', () => {
     settleMock.mockResolvedValueOnce({
       success: true,
       transaction: `0x${'ab'.repeat(32)}`,
-      network: 'eip155:84532',
+      network: 'eip155:31337',
     });
 
     const verification = await provider.verify({
@@ -272,7 +272,7 @@ describe('provider - SDK-boundary branches (mocked x402/facilitator)', () => {
     settleMock.mockResolvedValueOnce({
       success: true,
       transaction: `0x${'ab'.repeat(32)}`,
-      network: 'eip155:84532',
+      network: 'eip155:31337',
     });
 
     const verification = await provider.verify({
@@ -393,7 +393,7 @@ describe('provider - SDK-boundary branches (mocked x402/facilitator)', () => {
     settleMock.mockResolvedValueOnce({
       success: true,
       transaction: '0xdeadbeef',
-      network: 'eip155:84532',
+      network: 'eip155:31337',
       payer: '0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC',
     });
 
@@ -407,7 +407,7 @@ describe('provider - SDK-boundary branches (mocked x402/facilitator)', () => {
         provider: 'x402',
         amount: '0.01',
         currency: 'USD',
-        network: 'eip155:84532',
+        network: 'eip155:31337',
         asset: ASSET,
         replayKey: '0xabc',
       },
@@ -415,7 +415,7 @@ describe('provider - SDK-boundary branches (mocked x402/facilitator)', () => {
     expect(result.status).toBe('settled');
     expect(result.externalReference).toBe('0xdeadbeef');
     expect(result.payee).toBe(PAY_TO);
-    expect(result.network).toBe('eip155:84532');
+    expect(result.network).toBe('eip155:31337');
     expect(result.asset).toBe(ASSET);
     expect(result.replayKey).toBe('0xabc');
     expect(result.settledAt).toBeDefined();
@@ -431,7 +431,7 @@ describe('provider - SDK-boundary branches (mocked x402/facilitator)', () => {
     settleMock.mockResolvedValueOnce({
       success: true,
       transaction: '0xfeedface',
-      network: 'eip155:84532',
+      network: 'eip155:31337',
     });
 
     const result = await provider.settle({
@@ -455,7 +455,7 @@ describe('provider - SDK-boundary branches (mocked x402/facilitator)', () => {
 
     settleMock.mockResolvedValueOnce({
       success: false,
-      network: 'eip155:84532',
+      network: 'eip155:31337',
       errorReason: 'insufficient_funds',
       payer: '0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC',
     });
@@ -479,7 +479,7 @@ describe('provider - SDK-boundary branches (mocked x402/facilitator)', () => {
     expect(withReason.asset).toBe(ASSET);
     expect(withReason.replayKey).toBe('0xdef');
 
-    settleMock.mockResolvedValueOnce({ success: false, network: 'eip155:84532' });
+    settleMock.mockResolvedValueOnce({ success: false, network: 'eip155:31337' });
     const withoutReason = await provider.settle({
       requestId: 'req-1',
       resource: RESOURCE,
@@ -507,7 +507,7 @@ describe('provider - SDK-boundary branches (mocked x402/facilitator)', () => {
     });
     settleMock.mockResolvedValueOnce({
       success: false,
-      network: 'eip155:84532',
+      network: 'eip155:31337',
       errorReason,
     });
 
@@ -543,14 +543,14 @@ describe('provider - SDK-boundary branches (mocked x402/facilitator)', () => {
         provider: 'x402',
         amount: '0.01',
         currency: 'USD',
-        network: 'eip155:84532',
+        network: 'eip155:31337',
         asset: ASSET,
         replayKey: '0xreverted',
       },
     });
     expect(reverted.status).toBe('rejected');
     expect(reverted.rejectionReason).toBe('transaction_reverted');
-    expect(reverted.network).toBe('eip155:84532');
+    expect(reverted.network).toBe('eip155:31337');
     expect(reverted.asset).toBe(ASSET);
     expect(reverted.replayKey).toBe('0xreverted');
 
@@ -635,7 +635,7 @@ describe('provider - SDK-boundary branches (mocked x402/facilitator)', () => {
         success: false,
         errorReason: 'invalid_exact_evm_transaction_failed',
         transaction,
-        network: 'eip155:84532',
+        network: 'eip155:31337',
       });
 
       const settled = provider.settle({
@@ -675,7 +675,7 @@ describe('provider - SDK-boundary branches (mocked x402/facilitator)', () => {
       success: false,
       errorReason: 'settlement_pending',
       transaction: BROADCAST_TX_HASH,
-      network: 'eip155:84532',
+      network: 'eip155:31337',
       payer: '0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC',
     });
 
@@ -751,7 +751,7 @@ describe('provider - a failed signer call is classified as an outage or a verdic
 
   function makeProvider() {
     return createX402PaymentProvider({
-      network: 'eip155:84532',
+      network: 'eip155:31337',
       rpcUrl: RPC_URL,
       asset: ASSET,
       assetName: 'MockUSDC',
@@ -780,12 +780,12 @@ describe('provider - a failed signer call is classified as an outage or a verdic
     );
     settleMock.mockImplementationOnce(async () =>
       (await signerCall(method))
-        ? { success: true, transaction: `0x${'ab'.repeat(32)}`, network: 'eip155:84532' }
+        ? { success: true, transaction: `0x${'ab'.repeat(32)}`, network: 'eip155:31337' }
         : {
             success: false,
             errorReason: 'invalid_exact_evm_signature',
             transaction: '',
-            network: 'eip155:84532',
+            network: 'eip155:31337',
           },
     );
     const provider = makeProvider();

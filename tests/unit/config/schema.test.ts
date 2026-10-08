@@ -321,6 +321,12 @@ describe('parseConfig', () => {
   describe('x402 deployment guardrails', () => {
     const MERCHANT = '0x1111111111111111111111111111111111111111';
     const BASE_USDC = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
+    // Public Base Sepolia, which settles only in its USDC
+    const BASE_SEPOLIA = {
+      network: 'eip155:84532',
+      asset: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+      assetName: 'USDC',
+    };
 
     function withX402(overrides: Record<string, unknown>): Record<string, unknown> {
       const raw = validRawConfig();
@@ -357,6 +363,7 @@ describe('parseConfig', () => {
     it('accepts a remote facilitator on a testnet', () => {
       const config = parseConfig(
         withX402({
+          ...BASE_SEPOLIA,
           payTo: MERCHANT,
           facilitator: { mode: 'remote', url: 'https://facilitator.example.com' },
         }),
@@ -508,7 +515,10 @@ describe('parseConfig', () => {
     it('rejects a well-known development payTo on a non-local deployment', () => {
       // The fixture's payTo is Anvil account #1, whose private key is public
       const message = messageFor(
-        withX402({ facilitator: { mode: 'remote', url: 'https://facilitator.example.com' } }),
+        withX402({
+          ...BASE_SEPOLIA,
+          facilitator: { mode: 'remote', url: 'https://facilitator.example.com' },
+        }),
       );
       expect(message).toContain('well-known Anvil development address');
     });

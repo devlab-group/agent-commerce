@@ -188,7 +188,7 @@ jobs:
             // Subpaths must share CommerceError with the main entry; separate
             // bundled copies would fail the instanceof check.
             let caught;
-            try { x402({ asset: 'nope', payTo: '0x0', network: 'eip155:84532' }); } catch (e) { caught = e; }
+            try { x402({ asset: 'nope', payTo: '0x0', network: 'eip155:31337' }); } catch (e) { caught = e; }
             if (!(caught instanceof CommerceError)) throw new Error('CommerceError identity broken across subpaths');
             console.log('subpath install ok: mcp + x402 compose with the main entry');
           "

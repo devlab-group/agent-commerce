@@ -7,13 +7,15 @@
  * Profiles copy SDK asset defaults to keep config load and the CLI SDK-free.
  * Tests compare each profile with the pinned SDK tables.
  *
- * Local Anvil shares Base Sepolia's `eip155:84532`. Deployment mode also uses
- * facilitator mode, and local health checks require an Anvil response.
+ * The local Anvil chain has a profile of its own, `eip155:31337` (Anvil's
+ * default chain id), so the network alone tells a local deployment from a
+ * public one. Local health checks still require an Anvil response, because an
+ * RPC endpoint can report any chain id.
  */
 import { CommerceError } from '../../core';
 
-/** Chain id of the local dev chain, which Base Sepolia uses too */
-export const LOCAL_CHAIN_ID = 84532;
+/** Chain id of the local Anvil dev chain, Anvil's default */
+export const LOCAL_CHAIN_ID = 31337;
 
 export type X402NetworkFamily = 'evm' | 'svm' | 'tvm';
 
@@ -27,9 +29,11 @@ export interface NetworkProfile {
   readonly chainId: number;
   readonly displayName: string;
   readonly kind: NetworkKind;
+  /** The local Anvil dev chain, where the in-process facilitator runs */
+  readonly local?: boolean;
   /**
-   * Default USDC deployment and EIP-712 domain. When present, it is required
-   * on mainnet; testnets may use mock tokens.
+   * Default USDC deployment and EIP-712 domain. A public network's offers
+   * settle only in it; the local chain has none and names its mock token.
    *
    * `name` is the signed EIP-712 domain name, not the symbol, and deployments
    * differ: `"USDC"` on Base Sepolia, `"USD Coin"` on Base.
@@ -73,6 +77,14 @@ const usdc = (address: string, name: string) =>
   ({ symbol: 'USDC', address, name, version: '2', decimals: 6 }) as const;
 
 const PROFILES: readonly X402Network[] = [
+  {
+    family: 'evm',
+    id: `eip155:${LOCAL_CHAIN_ID}`,
+    chainId: LOCAL_CHAIN_ID,
+    displayName: 'Local Anvil',
+    kind: 'testnet',
+    local: true,
+  },
   {
     family: 'evm',
     id: 'eip155:84532',
@@ -249,20 +261,14 @@ export function validateCustomNetworks(custom: CustomNetworks, path: string): vo
   }
 }
 
-/**
- * What a deployment is, as opposed to the network it names. `local` comes from
- * the facilitator: the in-process facilitator makes a deployment local whatever
- * CAIP-2 id it is configured with, which lets diagnostics show `eip155:84532`
- * without claiming public Base Sepolia.
- */
+/** What a deployment is: the local dev chain, or a public testnet or mainnet */
 export type DeploymentMode = 'local' | 'testnet' | 'mainnet';
 
-export function resolveDeploymentMode(
-  profile: { readonly kind: NetworkKind },
-  facilitatorMode: 'local' | 'remote',
-): DeploymentMode {
-  if (facilitatorMode === 'local') return 'local';
-  return profile.kind;
+export function resolveDeploymentMode(profile: {
+  readonly kind: NetworkKind;
+  readonly local?: boolean;
+}): DeploymentMode {
+  return profile.local ? 'local' : profile.kind;
 }
 
 // The banner an operator must not miss. Printed for mainnet only

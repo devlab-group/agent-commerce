@@ -40,7 +40,7 @@ const RESOURCE_ID = 'market_report';
 const INPUT = { city: 'Berlin' };
 const AMOUNT = '1.00';
 const CURRENCY = 'USD';
-const NETWORK = 'eip155:84532';
+const NETWORK = 'eip155:31337';
 
 let anvil: AnvilHandle;
 let deployment: Awaited<ReturnType<typeof deployLocalChain>>;

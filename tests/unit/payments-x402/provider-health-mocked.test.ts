@@ -47,6 +47,7 @@ function mockAsGenuineAnvilNode(): void {
 }
 
 const ASSET = '0x5FbDB2315678afecb367f032d93F642f64180aa3' as const;
+const BASE_SEPOLIA_USDC = '0x036CbD53842c5426634e7929541eC2318f3dCF7e' as const;
 const PAY_TO = '0x70997970C51812dc3A010C7d01b50e0d17dc79C8' as const;
 // A dev payTo is refused on any non-local deployment, so remote mode needs another
 const REMOTE_PAY_TO = '0x1111111111111111111111111111111111111111' as const;
@@ -59,11 +60,13 @@ async function makeProvider(
   rpcUrl = 'http://127.0.0.1:19322',
 ) {
   const { createX402PaymentProvider } = await import('../../../src/payments/x402/provider');
+  // Remote mode stands for public Base Sepolia, which settles only in its USDC
+  const local = facilitatorMode === 'local';
   return createX402PaymentProvider({
-    network: 'eip155:84532',
+    network: local ? 'eip155:31337' : 'eip155:84532',
     rpcUrl,
-    asset: ASSET,
-    assetName: 'MockUSDC',
+    asset: local ? ASSET : BASE_SEPOLIA_USDC,
+    assetName: local ? 'MockUSDC' : 'USDC',
     assetVersion: '2',
     assetDecimals: 6,
     payTo: facilitatorMode === 'local' ? PAY_TO : REMOTE_PAY_TO,
@@ -96,7 +99,7 @@ describe('health() - mocked RPC client', () => {
   });
 
   it('passes when chain id matches, the asset has code, and the RPC confirms it is Anvil', async () => {
-    getChainIdMock.mockResolvedValueOnce(84532);
+    getChainIdMock.mockResolvedValueOnce(31337);
     getCodeMock.mockResolvedValueOnce('0x6080604052');
     mockAsGenuineAnvilNode();
     const provider = await makeProvider();
@@ -104,8 +107,8 @@ describe('health() - mocked RPC client', () => {
     expect(health.status).toBe('pass');
   });
 
-  it('fails when the chain id matches (84532) but the RPC does not answer anvil_nodeInfo - e.g. real Base Sepolia', async () => {
-    getChainIdMock.mockResolvedValueOnce(84532);
+  it('fails when the chain id matches but the RPC does not answer anvil_nodeInfo - e.g. a Hardhat node on 31337', async () => {
+    getChainIdMock.mockResolvedValueOnce(31337);
     getCodeMock.mockResolvedValueOnce('0x6080604052');
     requestMock.mockRejectedValueOnce(new Error('the method anvil_nodeInfo does not exist'));
     const provider = await makeProvider();
@@ -181,7 +184,7 @@ describe('health() - mocked RPC client', () => {
   });
 
   it('fails when the asset address has no code', async () => {
-    getChainIdMock.mockResolvedValueOnce(84532);
+    getChainIdMock.mockResolvedValueOnce(31337);
     getCodeMock.mockResolvedValueOnce('0x');
     const provider = await makeProvider();
     const health = await provider.health();
@@ -190,7 +193,7 @@ describe('health() - mocked RPC client', () => {
   });
 
   it('fails when getCode returns undefined', async () => {
-    getChainIdMock.mockResolvedValueOnce(84532);
+    getChainIdMock.mockResolvedValueOnce(31337);
     getCodeMock.mockResolvedValueOnce(undefined);
     const provider = await makeProvider();
     const health = await provider.health();
@@ -212,7 +215,7 @@ describe('health() - caching / single-flight', () => {
   });
 
   it('collapses a burst of concurrent calls into a single underlying probe', async () => {
-    getChainIdMock.mockResolvedValueOnce(84532);
+    getChainIdMock.mockResolvedValueOnce(31337);
     getCodeMock.mockResolvedValueOnce('0x6080604052');
     mockAsGenuineAnvilNode();
     const provider = await makeProvider();
@@ -226,7 +229,7 @@ describe('health() - caching / single-flight', () => {
   });
 
   it('serves the cached result for a second call within the TTL - no new RPC round-trip', async () => {
-    getChainIdMock.mockResolvedValueOnce(84532);
+    getChainIdMock.mockResolvedValueOnce(31337);
     getCodeMock.mockResolvedValueOnce('0x6080604052');
     mockAsGenuineAnvilNode();
     const { clock, advance } = makeFakeClock();
@@ -241,7 +244,7 @@ describe('health() - caching / single-flight', () => {
   });
 
   it('issues a fresh probe once the TTL elapses', async () => {
-    getChainIdMock.mockResolvedValueOnce(84532);
+    getChainIdMock.mockResolvedValueOnce(31337);
     getCodeMock.mockResolvedValueOnce('0x6080604052');
     mockAsGenuineAnvilNode();
     const { clock, advance } = makeFakeClock();

@@ -50,9 +50,7 @@ MERCHANT_WALLET=0xYourMerchantAddress \
   npm run agent-commerce -- doctor --config examples/base-sepolia/config.yaml
 ```
 
-`doctor` reports the deployment as `TESTNET on Base Sepolia (eip155:84532)`,
-not as local. Chain id 84532 belongs to both, so the facilitator is what
-distinguishes them.
+`doctor` reports the deployment as `TESTNET on Base Sepolia (eip155:84532)`.
 
 ## Proving it settles
 

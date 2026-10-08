@@ -682,9 +682,9 @@ export function createX402PaymentProvider(options: X402ProviderOptions): Payment
         };
       }
 
-      // Chain id alone cannot prove this is a dev chain, because Base Sepolia
-      // reports the same 84532 as the local chain. An Anvil-only RPC method
-      // must answer before a local facilitator counts as healthy.
+      // An RPC reports whatever chain id it was started with, so the id cannot
+      // prove this is a dev chain. An Anvil-only RPC method must answer before
+      // a local facilitator counts as healthy.
       const isAnvil = await probeIsAnvilNode(healthPublicClient);
       if (!isAnvil) {
         return {

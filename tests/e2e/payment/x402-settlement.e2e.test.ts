@@ -115,7 +115,7 @@ async function startGateway(): Promise<void> {
       payments: {
         x402: {
           enabled: true,
-          network: 'eip155:84532',
+          network: 'eip155:31337',
           rpcUrl: anvil.rpcUrl,
           asset: deployment.asset,
           assetName: deployment.assetName,
@@ -231,7 +231,7 @@ beforeAll(async () => {
   anvil = await startAnvil({ port: PORT, silent: true });
   deployment = await deployLocalChain({ rpcUrl: anvil.rpcUrl, buyerInitialBalance: '100.00' });
   provider = createX402PaymentProvider({
-    network: 'eip155:84532',
+    network: 'eip155:31337',
     rpcUrl: anvil.rpcUrl,
     asset: deployment.asset,
     assetName: deployment.assetName,
@@ -523,7 +523,7 @@ describe('x402 settlement - real local chain', () => {
 
   it('10. provider failure: RPC unreachable yields PAYMENT_PROVIDER_UNAVAILABLE, not a silent pass', async () => {
     const unavailableProvider = createX402PaymentProvider({
-      network: 'eip155:84532',
+      network: 'eip155:31337',
       rpcUrl: await unreachableRpcUrl(),
       asset: deployment.asset,
       assetName: deployment.assetName,
@@ -562,7 +562,7 @@ describe('x402 settlement - real local chain', () => {
     const rpc = await startLossyRpc(anvil.rpcUrl);
     try {
       const lossyProvider = createX402PaymentProvider({
-        network: 'eip155:84532',
+        network: 'eip155:31337',
         rpcUrl: rpc.url,
         asset: deployment.asset,
         assetName: deployment.assetName,
@@ -617,7 +617,7 @@ describe('x402 settlement - real local chain', () => {
     // This one pays with the SDK's own client, as an off-the-shelf buyer would.
     const buyer = privateKeyToAccount(deployment.buyer.privateKey);
     const client = new x402Client();
-    registerExactEvmScheme(client, { signer: buyer, networks: ['eip155:84532'] });
+    registerExactEvmScheme(client, { signer: buyer, networks: ['eip155:31337'] });
     // The SDK's default spend controls allow only assets it recognizes, and
     // MockUSDC is not one, so they are off for this local-only case. A real
     // buyer would allowlist its asset.
@@ -724,7 +724,7 @@ describe('x402 settlement - real local chain', () => {
     const client = new x402Client();
     registerExactEvmScheme(client, {
       signer: privateKeyToAccount(deployment.buyer.privateKey),
-      networks: ['eip155:84532'],
+      networks: ['eip155:31337'],
     });
     client.setSpendControls(false); // MockUSDC is not in the SDK's asset list
     const payload = await client.createPaymentPayload(

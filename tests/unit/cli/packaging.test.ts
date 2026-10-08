@@ -471,7 +471,7 @@ describe.skipIf(!existsSync(libEntry))('optional-peer subpaths', () => {
         `import { CommerceError } from ${JSON.stringify(libEntry)};
          import { x402 } from ${JSON.stringify(x402Entry)};
          let caught;
-         try { x402({ asset: 'not-an-address', payTo: '0x0', network: 'eip155:84532' }); }
+         try { x402({ asset: 'not-an-address', payTo: '0x0', network: 'eip155:31337' }); }
          catch (e) { caught = e; }
          process.stdout.write(String(caught instanceof CommerceError));`,
       ],
