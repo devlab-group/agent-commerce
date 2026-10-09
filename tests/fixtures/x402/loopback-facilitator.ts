@@ -3,9 +3,11 @@
  * EVM uses the local binding on custom-id Anvil chains; Solana and NEAR use
  * SDK schemes on a local validator and sandbox. Each configured Solana or NEAR
  * facilitator is reused across requests to share its duplicate-settlement
- * cache, as in deployment. LOCAL DEVELOPMENT ONLY.
+ * cache, as in deployment. The smoke harness also uses it as a local
+ * facilitator for public NEAR networks, over https.
  */
-import { createServer, type IncomingMessage, type Server } from 'node:http';
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { createServer as createHttpsServer } from 'node:https';
 import type { AddressInfo } from 'node:net';
 import type { KeyPairString } from '@near-js/crypto';
 import type { KeyPairSigner } from '@solana/kit';
@@ -45,7 +47,7 @@ export interface LoopbackSolana {
 export interface LoopbackNear {
   readonly network: string;
   readonly rpcUrl: string;
-  /** Submits delegate actions and pays their gas; LOCAL DEVELOPMENT ONLY */
+  /** Submits delegate actions and pays their gas: a sandbox account, or a funded public-network one */
   readonly relayer: { readonly accountId: string; readonly secretKey: KeyPairString };
 }
 
@@ -56,6 +58,8 @@ export async function startLoopbackFacilitator(options: {
   };
   readonly svm?: LoopbackSolana;
   readonly near?: LoopbackNear;
+  /** Serves https with this certificate, since a mainnet gateway refuses a plain-HTTP facilitator */
+  readonly tls?: { readonly key: string; readonly cert: string };
 }): Promise<LoopbackFacilitator> {
   const chains = options.evm?.chains ?? [];
   const bindings = new Map<string, FacilitatorBinding>(
@@ -92,7 +96,7 @@ export async function startLoopbackFacilitator(options: {
     );
   }
 
-  const server: Server = createServer((req, res) => {
+  const handle = (req: IncomingMessage, res: ServerResponse) => {
     const reply = (status: number, body: unknown) => {
       res.statusCode = status;
       res.setHeader('content-type', 'application/json');
@@ -145,11 +149,12 @@ export async function startLoopbackFacilitator(options: {
         );
       })
       .catch((err: unknown) => reply(500, { error: String(err) }));
-  });
+  };
 
+  const server = options.tls ? createHttpsServer(options.tls, handle) : createServer(handle);
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   return {
-    url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+    url: `${options.tls ? 'https' : 'http'}://127.0.0.1:${(server.address() as AddressInfo).port}`,
     close: () => new Promise<void>((resolve) => server.close(() => resolve())),
   };
 }

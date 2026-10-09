@@ -354,8 +354,9 @@ Public built-in networks, testnet or mainnet, settle only in their USDC. On the
 local chain or a declared EVM network, set `asset`, `assetName`,
 `assetVersion` and `assetDecimals` together; no fields are inherited from
 USDC. A [Permit2](#permit2) token needs only `asset` and `assetDecimals`.
-Overrides for the default token must match its metadata. An explicitly
-configured `asset` preserves the resource's currency label.
+Overrides for the default token must match its metadata. An explicit `asset`
+allows another resource currency label, but payments in the network's default
+token still record its symbol; other tokens use the resource's label.
 
 ### Permit2
 
@@ -418,7 +419,8 @@ payments:
 
 NEAR options settle the network's NEP-141 USDC through a remote facilitator.
 The buyer signs a NEP-366 delegate action containing one `ft_transfer`; the
-facilitator's relayer submits it and pays gas, so the buyer needs no NEAR.
+facilitator's relayer submits it and pays gas. The buyer needs no NEAR for
+payment fees, but an implicit account must first receive NEAR to exist.
 The optional peer `@x402/near` loads only for NEAR options.
 
 ```yaml
@@ -532,7 +534,7 @@ payments:
     realm: api.example.com # the challenge realm, single line
     challengeSecret: ${MPP_CHALLENGE_SECRET} # minimum length 32
     challengeTtlSeconds: 300 # optional
-    paymentFlow: authorization # default; or upfront
+    paymentFlow: upfront # default; or authorization
     facilitator:
       mode: remote
       url: ${MPP_FACILITATOR_URL}
@@ -571,14 +573,19 @@ development address, and either a facilitator credential or
 | `near:mainnet`                            | NEAR              | mainnet | [remote facilitator only](#near)           |
 | `near:testnet`                            | NEAR Testnet      | testnet | [remote facilitator only](#near)           |
 
-Settlement has been demonstrated on Base Sepolia and Base. Solana has been
-tested only on a local validator, and NEAR only on a local sandbox. Other
-listed networks require a remote facilitator advertising them and have no
-demonstrated settlement.
+Every built-in EVM network is supported: the signing code is the same on
+each, and on 2026-10-10 each network's USDC signing domain matched the chain
+and Permit2 and its x402 proxy were deployed. Settlement has been demonstrated
+on Base Sepolia and Base, through both EIP-3009 and Permit2, and on Solana
+devnet and mainnet. NEAR has settled on testnet and mainnet through the SDK
+facilitator run for the test. Every network also needs a facilitator that
+lists it; health fails otherwise.
 
 Declare another EVM network with its `kind` to select the mainnet guardrails.
-Custom networks have no default asset: set all four asset fields. Built-in
-networks cannot be redeclared; their entry may set `rpcUrl` only.
+Custom networks have no default asset: set all four asset fields. Support for
+them is partial, since the gateway cannot check a chain and token you supply
+in advance. Built-in networks cannot be redeclared; their entry may set
+`rpcUrl` only.
 
 ```yaml
 payments:
@@ -656,10 +663,15 @@ mismatch before startup.
 
 Working configurations live in `examples/base-sepolia/` and
 `examples/base-mainnet/` (plus `examples/base-mainnet-payai/`, which uses an
-unauthenticated facilitator). `npm run test:testnet` and `npm run test:mainnet`
-drive the whole flow against the real chains and read balances and the transaction
-receipt back off them. The testnet suite spends test USDC and the mainnet suite
-real USDC; both skip themselves without credentials and never run in CI.
+unauthenticated facilitator). Additional examples cover Arbitrum Sepolia
+(`examples/arbitrum-sepolia/`, not yet run), Solana devnet
+(`examples/solana-devnet/`) and NEAR testnet (`examples/near-testnet/`).
+`examples/multi-network-mainnet/` combines Base and Solana, which have
+settled, with Polygon and Arbitrum One, which have not run.
+`npm run test:testnet` and `npm run test:mainnet` drive the whole flow against
+the real chains and read each settlement back from them. The testnet
+suite spends test USDC and the mainnet suite real USDC; both skip themselves
+without credentials and never run in CI. See [smoke tests](smoke-tests.md).
 
 ## Unsupported JSON Schema keywords have a cost
 

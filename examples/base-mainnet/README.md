@@ -52,6 +52,7 @@ With every value set, `doctor` reports the deployment as
 
 ```bash
 export ALLOW_X402_MAINNET=true
+export X402_SMOKE_TARGETS=base
 export X402_MAINNET_BUYER_PRIVATE_KEY=0x...   # funded with USDC on Base
 export X402_MAINNET_MERCHANT_ADDRESS=0x...
 export X402_FACILITATOR_URL=https://...
@@ -59,9 +60,10 @@ export CDP_API_KEY_ID=...  CDP_API_KEY_SECRET=...   # optional; or X402_FACILITA
 npm run test:mainnet
 ```
 
-**Each successful x402 smoke run spends `X402_MAINNET_AMOUNT` (default
+**Each successful x402 smoke run spends `X402_SMOKE_AMOUNT` (default
 `0.01`) of real USDC.** The x402 suite skips itself, naming missing settings,
-unless the opt-in, buyer key, merchant address and facilitator URL are set.
+unless `X402_SMOKE_TARGETS` names `base`; a named target then fails without the
+opt-in, buyer key, merchant address or facilitator URL.
 The facilitator credential is optional. Setting `ALLOW_MPP_MAINNET=true` also
 enables the separate, paid MPP smoke suite.
 
@@ -69,7 +71,8 @@ It proves, in order: the guard refuses a config that has not opted in · the
 deployment reports itself as live mainnet · a payment settles on Base · the
 receipt carries the settlement reference and a 2xx backend status · the
 resource is delivered exactly once · the same authorization presented again is
-refused with no second transfer · no credential appears in anything logged.
-Balances and the transaction receipt are read back from the chain.
+refused, and the backend is not called again · no credential appears in
+anything logged. The USDC `Transfer` is read back from the transaction receipt.
+See [smoke tests](../../docs/smoke-tests.md).
 
 It never runs in CI; see the [main README](../../README.md#base-mainnet) for why.

@@ -250,7 +250,7 @@ See [docs/configuration.md](docs/configuration.md).
 | -------- | ------------ | ------------------------------------------------------------------------------------------------------------ |
 | **HTTP** | Supported    | native routes                                                                                                |
 | **MCP**  | Supported    | `2026-07-28` and `2025-11-25`, `@modelcontextprotocol/server@2.3.0`                                          |
-| **x402** | Supported    | x402 v2 (`@x402/core`, `@x402/evm`, `@x402/svm`, `@x402/near`), scheme `exact`, EVM; Solana and NEAR partial |
+| **x402** | Supported    | x402 v2 (`@x402/core`, `@x402/evm`, `@x402/svm`, `@x402/near`), scheme `exact`, EVM and Solana; NEAR partial |
 | **MPP**  | Experimental | `mppx@0.13.1`, `charge` + `evm` + EIP-3009, USDC on Base Sepolia and Base                                    |
 | **A2A**  | Experimental | A2A v1.0.1, binding `JSONRPC`, method `SendMessage`, x402 extension                                          |
 | **ACP**  | Experimental | ACP `2026-04-17`, REST checkout + discovery                                                                  |
@@ -271,6 +271,14 @@ converted into a gateway payment proof.
 `GET /.well-known/agent-commerce` reports `supportedSpec`, `capabilities` and
 `unsupported` for registered adapters and providers. `agent-commerce doctor`
 prints the `unsupported` lists for A2A, ACP and AP2 when they are enabled.
+
+### Versioning
+
+Minor releases may break experimental configurations, integrations or types.
+This applies to MPP, A2A, ACP, AP2 and `agent-commerce import openapi`.
+Runtime adapters and providers report `status: experimental` in
+`GET /.well-known/agent-commerce`. Pin an exact version and test upgrades
+before deploying them.
 
 ## Payment model
 
@@ -303,21 +311,30 @@ Choose the network in config; Base mainnet also requires `allowMainnet: true`.
 These transactions each moved 0.01 USDC from a buyer to a merchant through a
 remote facilitator:
 
-| Rail | Network      | Transaction                                                                                                           |
-| ---- | ------------ | --------------------------------------------------------------------------------------------------------------------- |
-| x402 | Base Sepolia | [`0xea41b234c4…`](https://sepolia.basescan.org/tx/0xea41b234c4645a4d335589ec9753646aa7cccd1b97e9e15823b88bff7b54a247) |
-| x402 | Base         | [`0x57ec81c2a3…`](https://basescan.org/tx/0x57ec81c2a360d14d59a43cf4e24be09a6bd75cbe6185016372895bda73e42763)         |
-| MPP  | Base Sepolia | [`0x5d9fcd111b…`](https://sepolia.basescan.org/tx/0x5d9fcd111b615bb8fc9e56d55096f119fc81c3c72c334f813cfaecee402d0ac3) |
-| MPP  | Base         | [`0xf4255bd7ec…`](https://basescan.org/tx/0xf4255bd7ec46ed06505dedfb5f9537924bd2633816e7952ec6f2b468395b1087)         |
+| Rail | Network       | Method           | Transaction                                                                                                                                             |
+| ---- | ------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| x402 | Base Sepolia  | EIP-3009         | [`0xea41b234c4…`](https://sepolia.basescan.org/tx/0xea41b234c4645a4d335589ec9753646aa7cccd1b97e9e15823b88bff7b54a247)                                   |
+| x402 | Base Sepolia  | Permit2          | [`0xa66f56cf39…`](https://sepolia.basescan.org/tx/0xa66f56cf39daeae958b5067c99383da4974c2ae6450786c0f9088700fa6439fe)                                   |
+| x402 | Base          | EIP-3009         | [`0x57ec81c2a3…`](https://basescan.org/tx/0x57ec81c2a360d14d59a43cf4e24be09a6bd75cbe6185016372895bda73e42763)                                           |
+| x402 | Base          | Permit2          | [`0x79d3da1145…`](https://basescan.org/tx/0x79d3da114522d4b056b29fad34d6492ce5662b92efd8ef2fd1ac21295ab71a42)                                           |
+| x402 | Solana Devnet | SPL transfer     | [`5289xbeyHJ…`](https://explorer.solana.com/tx/5289xbeyHJPX1vX9DsLwGGJaGJJCH45qUtArhoTyxdgmWbXqZSjVPuJ3jyyLG4VrT9mFTCkLKhcoNfb1tuJ5qheb?cluster=devnet) |
+| x402 | Solana        | SPL transfer     | [`E7gAuG8pMA…`](https://explorer.solana.com/tx/E7gAuG8pMArQjgRvGCwqm6S4qpt4xFNuhUTxeaZ5M1M1z1VA8eybyJJAXyo9paecCKnyrxYEuppoAemhntnnzTa)                 |
+| x402 | NEAR Testnet  | NEP-141 transfer | [`5tdtGLv4TB…`](https://testnet.nearblocks.io/txns/5tdtGLv4TBifK7c12hEdRuvxvNNrWjcWDH4e1ApUcE1W)                                                        |
+| x402 | NEAR          | NEP-141 transfer | [`7hU3imHepV…`](https://nearblocks.io/txns/7hU3imHepVZazGv53QfWYMGnWX5sVFxJAepemmwVSzt2)                                                                |
+| MPP  | Base Sepolia  | EIP-3009         | [`0x5d9fcd111b…`](https://sepolia.basescan.org/tx/0x5d9fcd111b615bb8fc9e56d55096f119fc81c3c72c334f813cfaecee402d0ac3)                                   |
+| MPP  | Base          | EIP-3009         | [`0xf4255bd7ec…`](https://basescan.org/tx/0xf4255bd7ec46ed06505dedfb5f9537924bd2633816e7952ec6f2b468395b1087)                                           |
 
-The buyer signed each EIP-3009 authorization without ETH; the remote facilitator
-paid gas and broadcast it. The gateway path received no buyer or merchant key.
-The public-network smoke suites verify balance changes and fetch the transaction
-receipt from the chain instead of trusting the gateway's response.
+Facilitators broadcast these payments and paid their ETH, SOL or NEAR fees.
+Permit2 requires an initial, gas-paying token approval from the buyer. The
+NEAR runs used the suite's SDK facilitator and relayer; support remains
+partial pending hosted-facilitator settlement. Buyer and merchant keys stayed
+outside the gateway. The smoke suites verified settlement on-chain.
 
 Reproduce with `npm run test:testnet`, which spends test USDC, or
 `npm run test:mainnet`, which spends real USDC. Both run only by hand; see
-[Base mainnet](#base-mainnet).
+[Base mainnet](#base-mainnet) and [smoke tests](docs/smoke-tests.md). The
+suites also cover NEAR testnet and mainnet (settled) and Arbitrum Sepolia (not
+yet run).
 
 ### The facilitator model
 
@@ -461,10 +478,11 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Roadmap
 
-**Now** - MCP, x402 v2, settlement on the local chain, Base Sepolia and Base
-mainnet, receipts, doctor, deterministic demo, experimental A2A v1.0.1 and ACP
-`2026-04-17` checkout adapters, experimental AP2 v0.2.0 mandate verification,
-experimental MPP `charge` payments, and experimental OpenAPI import.
+**Now** - MCP, x402 v2, settlement on the local chain, Base Sepolia, Base
+mainnet, Solana devnet and Solana mainnet, receipts, doctor, deterministic
+demo, experimental A2A v1.0.1 and ACP `2026-04-17` checkout adapters,
+experimental AP2 v0.2.0 mandate verification, experimental MPP `charge`
+payments, and experimental OpenAPI import.
 
 **Next** - a `doctor` GitHub Action · UCP ·
 autonomous-mode AP2 (open mandates, agent key binding, constraint evaluation) ·

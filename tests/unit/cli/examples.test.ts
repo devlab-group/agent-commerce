@@ -24,10 +24,21 @@ const EXAMPLES = ['simple-paid-api', 'free-and-premium', 'paid-mcp-tool', 'acp-c
  * guardrails refuse outside local mode. So these are validated with a wallet
  * supplied rather than dropped from the sweep.
  */
-const PUBLIC_EXAMPLES = ['base-sepolia', 'base-mainnet', 'base-mainnet-payai'] as const;
+const PUBLIC_EXAMPLES = [
+  'base-sepolia',
+  'arbitrum-sepolia',
+  'solana-devnet',
+  'near-testnet',
+  'base-mainnet',
+  'base-mainnet-payai',
+  'multi-network-mainnet',
+] as const;
 
 const PUBLIC_ENV = {
   MERCHANT_WALLET: '0x1111111111111111111111111111111111111111',
+  SOLANA_MERCHANT_WALLET: '9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM',
+  NEAR_MERCHANT_ACCOUNT: 'merchant.testnet',
+  X402_FACILITATOR_TOKEN: 'facilitator-token',
   ALLOW_X402_MAINNET: 'true',
   GATEWAY_PUBLIC_BASE_URL: 'https://gateway.example.com',
   ADMIN_TOKEN: 'admin-token',

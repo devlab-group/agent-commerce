@@ -21,6 +21,7 @@ import {
   startLoopbackFacilitator,
 } from '../../fixtures/x402/loopback-facilitator';
 import { expectRealSettlement, readBalances } from '../../fixtures/x402/settlement';
+import { assertTransferOnChain } from '../../fixtures/x402/smoke/evidence';
 
 const RESOURCE_ID = 'market_report';
 // Offers only the second chain
@@ -196,6 +197,19 @@ describe('x402 settlement on two EVM chains', () => {
       txHash: settlement.transaction,
     });
     expect(await balancesOn(other)).toEqual(otherBefore);
+
+    // The public-network smoke harness reads the same evidence from the receipt's logs
+    const transfer = {
+      asset: deploymentOf(pick).asset,
+      from: deploymentOf(pick).buyer.address,
+      to: MERCHANT,
+      amount: 1_000_000n,
+      reference: settlement.transaction,
+    };
+    await assertTransferOnChain('evm', anvilOf(pick).rpcUrl, transfer);
+    await expect(
+      assertTransferOnChain('evm', anvilOf(pick).rpcUrl, { ...transfer, amount: 999_999n }),
+    ).rejects.toThrow(/no .* Transfer of 999999/);
 
     const [receipt] = await store.listReceipts({ limit: 1 });
     expect(receipt?.payment?.network).toBe(CHAINS[pick]?.network);

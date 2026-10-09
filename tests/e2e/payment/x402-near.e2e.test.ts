@@ -35,6 +35,7 @@ import {
   startNearSandbox,
   waitForFinal,
 } from '../../fixtures/x402/near-sandbox';
+import { assertTransferOnChain } from '../../fixtures/x402/smoke/evidence';
 
 const NETWORK = 'near:testnet';
 const RPC_PORT = 19030;
@@ -233,6 +234,21 @@ describeWithSandbox('x402 NEAR settlement on a local sandbox', () => {
     for (const receipt of tokenReceipts)
       expect(receipt.outcome.status).toHaveProperty('SuccessValue');
     await expectBalances({ buyer: before.buyer - PRICE, merchant: before.merchant + PRICE });
+
+    // The public-network smoke harness reads the ft_transfer from the transaction's receipts
+    const transfer = {
+      asset: NEAR_TESTNET_USDC,
+      from: buyer.accountId,
+      to: merchant.accountId,
+      amount: PRICE,
+      reference: settlement.transaction,
+    };
+    await assertTransferOnChain('near', sandbox.rpcUrl, transfer, [relayer.accountId]);
+    await expect(
+      assertTransferOnChain('near', sandbox.rpcUrl, { ...transfer, amount: PRICE + 1n }, [
+        relayer.accountId,
+      ]),
+    ).rejects.toThrow(/no ft_transfer of/);
 
     const [receipt] = await store.listReceipts({ limit: 1 });
     expect(receipt?.payment).toMatchObject({

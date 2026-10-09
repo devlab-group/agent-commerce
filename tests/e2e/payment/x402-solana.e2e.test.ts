@@ -21,6 +21,7 @@ import {
   startLoopbackFacilitator,
 } from '../../fixtures/x402/loopback-facilitator';
 import { startLossyRpc } from '../../fixtures/x402/lossy-rpc';
+import { assertTransferOnChain } from '../../fixtures/x402/smoke/evidence';
 import {
   associatedTokenAddress,
   isSolanaValidatorAvailable,
@@ -207,6 +208,19 @@ describeWithValidator('x402 Solana settlement on a local validator', () => {
     expect(status.value[0]).toMatchObject({ err: null });
     expect(['confirmed', 'finalized']).toContain(status.value[0]?.confirmationStatus);
     await waitForBalances({ buyer: before.buyer - PRICE, merchant: before.merchant + PRICE });
+
+    // The public-network smoke harness reads the token movement from the transaction itself
+    const transfer = {
+      asset: USDC,
+      from: buyer.address,
+      to: merchant,
+      amount: PRICE,
+      reference: settlement.transaction,
+    };
+    await assertTransferOnChain('svm', validator.rpcUrl, transfer);
+    await expect(
+      assertTransferOnChain('svm', validator.rpcUrl, { ...transfer, amount: PRICE + 1n }),
+    ).rejects.toThrow(/payee's .* change/);
 
     const [receipt] = await store.listReceipts({ limit: 1 });
     expect(receipt?.payment).toMatchObject({
