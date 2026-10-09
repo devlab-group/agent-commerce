@@ -61,11 +61,16 @@ let relayer: NearTestAccount;
 let backendCalls = 0;
 // Holds a request between reservation and settlement, which follows the backend
 let backendDelayMs = 0;
+let backendFails = false;
+// Runs inside the backend call, after reservation and before settlement
+let duringBackend: (() => Promise<void>) | undefined;
 
 const backend: BackendExecutor = {
   async call() {
     backendCalls += 1;
     await new Promise((resolve) => setTimeout(resolve, backendDelayMs));
+    await duringBackend?.();
+    if (backendFails) throw new Error('backend down');
     return { status: 200, body: { report: 'ok' }, headers: {}, durationMs: 1 };
   },
 };
@@ -119,6 +124,9 @@ async function challenge(): Promise<PaymentRequired> {
     (name) => unpaid.headers[name.toLowerCase()] as string | undefined,
   );
 }
+
+const nonceOf = (proof: NearProof) =>
+  decodeSignedDelegateB64(proof.payload.signedDelegateAction).delegate.nonce;
 
 const header = (proof: unknown) => ({
   'payment-signature': Buffer.from(JSON.stringify(proof)).toString('base64'),
@@ -362,6 +370,81 @@ describeWithSandbox('x402 NEAR settlement on a local sandbox', () => {
       'invalid_exact_near_payload_delegate_action_nonce_already_used',
     );
     expect(await balances()).toEqual(after);
+  });
+
+  it('pays once when the reference client retries a failed backend call with the same nonce', async () => {
+    const first = await sign(await challenge());
+    const before = await balances();
+    const calls = backendCalls;
+    backendFails = true;
+    try {
+      const failed = await invoke(header(first));
+      expect(failed.statusCode).toBe(502);
+      expect(failed.json().code).toBe('BACKEND_ERROR');
+    } finally {
+      backendFails = false;
+    }
+    expect(await balances()).toEqual(before);
+
+    // Nothing reached the chain, so the client's next delegate repeats the nonce
+    const retry = await sign(await challenge());
+    expect(nonceOf(retry)).toBe(nonceOf(first));
+    const paid = await invoke(header(retry));
+
+    expect(paid.statusCode).toBe(200);
+    expect(backendCalls - calls).toBe(2);
+    await expectBalances({ buyer: before.buyer - PRICE, merchant: before.merchant + PRICE });
+  });
+
+  it('pays once when the reference client retries a settlement refused before submission', async () => {
+    // A second full-access key moves the buyer's tokens without spending the
+    // nonce of the key that signs delegates
+    const spare = KeyPair.fromRandom('ed25519');
+    await sandbox.account(buyer.accountId, buyer.keyPair).addFullAccessKey(spare.getPublicKey());
+    await waitForFinal(async () => {
+      await finalNonceOf(buyer.accountId, spare.getPublicKey().toString());
+      return true;
+    });
+    const ftTransfer = (from: string, keyPair: KeyPair, to: string, amount: bigint) =>
+      sandbox.account(from, keyPair).functionCall({
+        contractId: NEAR_TESTNET_USDC,
+        methodName: 'ft_transfer',
+        args: { receiver_id: to, amount: amount.toString() },
+        gas: 30_000_000_000_000n,
+        attachedDeposit: 1n,
+      });
+    const first = await sign(await challenge());
+    const before = await balances();
+    const calls = backendCalls;
+
+    // Verified with funds, then drained while the backend runs: the
+    // facilitator's check at settle refuses before submitting anything
+    duringBackend = async () => {
+      await ftTransfer(buyer.accountId, spare, merchant.accountId, before.buyer);
+      await waitForFinal(async () => (await balances()).buyer === 0n);
+    };
+    try {
+      const refused = await invoke(header(first));
+      expect(refused.statusCode).toBe(402);
+    } finally {
+      duringBackend = undefined;
+    }
+    const [attempt] = await store.listPaymentAttempts({ limit: 1 });
+    expect(attempt).toMatchObject({ status: 'rejected', rejectionReason: 'insufficient_funds' });
+    expect(
+      await finalNonceOf(buyer.accountId, buyer.keyPair.getPublicKey().toString()),
+    ).toBeLessThan(nonceOf(first));
+
+    await ftTransfer(merchant.accountId, merchant.keyPair, buyer.accountId, before.buyer);
+    await expectBalances(before);
+    // The nonce is still unused, so the client's next delegate repeats it
+    const retry = await sign(await challenge());
+    expect(nonceOf(retry)).toBe(nonceOf(first));
+    const paid = await invoke(header(retry));
+
+    expect(paid.statusCode).toBe(200);
+    expect(backendCalls - calls).toBe(2);
+    await expectBalances({ buyer: before.buyer - PRICE, merchant: before.merchant + PRICE });
   });
 
   it('a submission whose RPC response is lost is uncertain, never a rejection', async () => {

@@ -761,7 +761,7 @@ describe('x402 settlement - real local chain', () => {
     });
   });
 
-  it('15. leaves funds untouched when the backend fails before settlement', async () => {
+  it('15. leaves funds untouched when the backend fails before settlement, and the same proof pays once on retry', async () => {
     const proof = await gatewayProof();
     const receiptsBefore = (await store.listReceipts()).length;
     const before = await balances();
@@ -780,6 +780,22 @@ describe('x402 settlement - real local chain', () => {
     expect(after.buyer).toBe(before.buyer);
     expect(after.merchant).toBe(before.merchant);
     expect(await store.listReceipts()).toHaveLength(receiptsBefore);
+
+    // The authorization is unspent, so presenting it again settles it once
+    const again = await invoke({ [PAYMENT_HEADER]: proof });
+
+    expect(again.statusCode).toBe(200);
+    const [receipt] = await store.listReceipts({ limit: 1 });
+    await expectRealSettlement({
+      rpcUrl: anvil.rpcUrl,
+      asset: deployment.asset,
+      buyer: deployment.buyer.address,
+      merchant: deployment.merchant.address,
+      before,
+      after: await balances(),
+      amountBaseUnits: 1_000_000n,
+      txHash: receipt?.payment?.externalReference as string,
+    });
   });
 });
 

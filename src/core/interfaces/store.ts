@@ -17,6 +17,12 @@ export interface PaymentAttemptReservation {
   readonly currency: string;
   readonly payer?: string;
   readonly payee?: string;
+  /**
+   * Reclaim this `replayKey` if the same `provider` rejected it, which
+   * settled nothing. Set only for rails whose authorizations remain reusable
+   * until settled.
+   */
+  readonly reclaimRejected?: boolean;
 }
 
 export interface PaymentAttemptUpdate {
@@ -42,6 +48,10 @@ export interface ReceiptStore {
    * `replayKey` is already reserved, throws `CommerceError('PAYMENT_REPLAYED')`
    * with the existing attempt's `PaymentAttempt.status` in
    * `details.attemptStatus` when available.
+   *
+   * With `reclaimRejected`, replace the same provider's `rejected` attempt,
+   * which settled nothing. Only one concurrent claim can replace it with the
+   * new reservation.
    */
   reservePaymentAttempt(reservation: PaymentAttemptReservation): Promise<PaymentAttempt>;
 

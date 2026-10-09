@@ -49,7 +49,10 @@ import {
   systemClock,
 } from '../../core';
 import { redactedErrorText } from '../../core/errors';
-import { SETTLE_AFTER_BACKEND_METADATA_KEY } from '../../core/execution/settlement-order';
+import {
+  REUSE_REJECTED_AUTHORIZATION_METADATA_KEY,
+  SETTLE_AFTER_BACKEND_METADATA_KEY,
+} from '../../core/execution/settlement-order';
 import { isRecord } from '../../core/is-record';
 import { PACKAGE_VERSION } from '../../version';
 import { isTransactionReference, normalizeAddress, sameAddress } from './addresses';
@@ -651,7 +654,12 @@ export function createX402PaymentProvider(
         accepts: accepts as unknown as Record<string, unknown>[],
         envelope: envelope as unknown as Record<string, unknown>,
       },
-      metadata: { [SETTLE_AFTER_BACKEND_METADATA_KEY]: paymentFlow === 'authorization' },
+      metadata: {
+        [SETTLE_AFTER_BACKEND_METADATA_KEY]: paymentFlow === 'authorization',
+        // The SDK server keeps no record of a payload whose handler or
+        // settlement failed and verifies it again; the chain spends it once
+        [REUSE_REJECTED_AUTHORIZATION_METADATA_KEY]: true,
+      },
     };
   }
 
@@ -1194,8 +1202,7 @@ export function createX402PaymentProvider(
   }
 
   // A NEAR offer's chain, token and merchant registration. The RPC's `status`
-  // names the chain it serves; an account suffix such as `.testnet` proves
-  // nothing.
+  // names the chain it serves; an account suffix such as `.testnet` proves nothing.
   async function nearOfferHealth(
     offer: NearOffer,
     kinds: () => Promise<readonly SupportedKind[]>,

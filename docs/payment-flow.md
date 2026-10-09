@@ -120,7 +120,7 @@ to redirect them.
 | copy reaches gateway reservation before the original settles | `PAYMENT_REPLAYED`                       | no                                    |
 | provider/RPC unavailable during verification                 | `PAYMENT_PROVIDER_UNAVAILABLE`           | no                                    |
 | settlement transaction fails                                 | `PAYMENT_SETTLEMENT_FAILED`              | no                                    |
-| backend fails before settlement (`authorization` flow)       | `BACKEND_ERROR` / `BACKEND_TIMEOUT`      | no; no payment settled                |
+| backend fails before settlement (`authorization` flow)       | `BACKEND_ERROR` / `BACKEND_TIMEOUT`      | no; nothing settled; x402 can retry   |
 | backend fails after settlement (`upfront` flow)              | `BACKEND_ERROR` / `BACKEND_TIMEOUT`      | no; payment recorded, delivery failed |
 
 After settlement, a backend failure needs reconciliation rather than a
@@ -143,6 +143,9 @@ rollback. The gateway records a `settled` payment attempt and a
    constraint **before** calling `settle`. A duplicate returns
    `PAYMENT_REPLAYED`: 409 while the first attempt is unfinished or its status is
    unavailable; 402 with a fresh challenge when its stored status is treated as finished.
+   A rejected x402 attempt, from a backend failure or a refused settlement,
+   settled nothing, so the same authorization reserves it again instead. MPP
+   keeps the 402: a credential is single-use per challenge.
 
 Because the key comes from the authorization rather than the request, replaying
 it against another request still collides.

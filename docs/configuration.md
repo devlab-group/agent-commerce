@@ -442,12 +442,11 @@ payments:
 - The signed delegate names no chain. The offer's network and the RPC the
   facilitator uses keep a proof on one network; use separate buyer keys for
   mainnet and testnet.
-- The gateway reserves the access key's nonce. If an attempt settles nothing,
-  because the backend failed under `authorization` or the settlement was
-  refused before submission, for example after the delegate's block window
-  passed during a slow backend, that nonce stays reserved although the chain
-  never used it. The buyer must then sign with a higher nonce or another key,
-  but the SDK's reference client always signs the key's next nonce. Use
+- The gateway reserves the access key's nonce. The SDK reference client
+  retries with the same nonce until a transaction uses it. A rejected attempt,
+  from a backend failure or a settlement refused before submission, settled
+  nothing, so the gateway permits that retry. A delegate that expires during a
+  slow backend call is refused at settlement, and the client signs again; use
   `upfront` for handlers that can outlast `maxTimeoutSeconds`.
 
 ### Several options

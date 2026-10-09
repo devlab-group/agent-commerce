@@ -40,7 +40,10 @@ import type { Clock, IdGenerator } from '../interfaces/runtime';
 import type { ReceiptStore } from '../interfaces/store';
 import { isRecord } from '../is-record';
 import { validateBackendRequestShape } from './backend-http';
-import { SETTLE_AFTER_BACKEND_METADATA_KEY } from './settlement-order';
+import {
+  REUSE_REJECTED_AUTHORIZATION_METADATA_KEY,
+  SETTLE_AFTER_BACKEND_METADATA_KEY,
+} from './settlement-order';
 import { compileJsonSchema, type Validator } from './validation';
 
 export interface CreateExecutionPipelineOptions {
@@ -354,8 +357,9 @@ export function createExecutionPipeline(
     return settlement;
   }
 
-  // The backend failed before settlement. Keep the payment replay key,
-  // record rejection, and release the separate authorization hold.
+  // Record the pre-settlement backend failure and release the authorization
+  // hold. Rails with reuse metadata can reserve the unspent replay key again,
+  // as after any rejection.
   async function abandonSettlement(args: SettleArgs, backendErrorCode: string): Promise<void> {
     const { request, resource, provider, replayKey, hold } = args;
     await hold?.finalize('release');
@@ -636,6 +640,9 @@ export function createExecutionPipeline(
           currency: verification.currency,
           ...(verification.payer !== undefined ? { payer: verification.payer } : {}),
           ...(verification.payee !== undefined ? { payee: verification.payee } : {}),
+          ...(requirement.metadata?.[REUSE_REJECTED_AUTHORIZATION_METADATA_KEY] === true
+            ? { reclaimRejected: true }
+            : {}),
         });
       } catch (error) {
         // A duplicate replayKey arrives as PAYMENT_REPLAYED and is kept. Any

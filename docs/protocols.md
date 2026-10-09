@@ -647,10 +647,11 @@ withholds the backend response. Use `upfront` when backend side effects must
 follow payment. Backend time counts toward `maxTimeoutSeconds`: the payment
 authorization must remain valid at settlement.
 
-A backend failure under `authorization` still consumes the authorization at
-this gateway, although its nonce stays unused on chain. Presenting the same
-proof again returns 402 with `invalid_exact_evm_nonce_already_used`; the client
-signs a fresh authorization.
+After a rejected x402 attempt, from a backend failure under `authorization` or
+a refused settlement, the client can retry the unspent payload and reclaim the
+attempt; it still settles at most once, because the chain spends its nonce
+once. MPP credentials are single-use per challenge, so a retry returns 402
+`PAYMENT_REPLAYED` with a fresh challenge.
 
 Unsupported: the Permit2 gas-sponsoring extensions
 (`eip2612GasSponsoring`, `erc20ApprovalGasSponsoring`), the `upto`,

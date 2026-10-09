@@ -267,6 +267,7 @@ interface PaymentAttemptReservation {
     readonly payee?: string;
     readonly payer?: string;
     readonly provider: string;
+    readonly reclaimRejected?: boolean;
     readonly replayKey: string;
     readonly requestId: string;
     readonly resourceId: string;

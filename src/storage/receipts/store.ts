@@ -122,6 +122,15 @@ export function createSqliteReceiptStore(options: SqliteReceiptStoreOptions): Re
      VALUES (@id, @request_id, @resource_id, @provider, @replay_key, @status, @amount, @currency, @payer, @payee, @external_reference, @rejection_reason, @created_at, @updated_at)
      RETURNING *`,
   );
+  // One statement, so two retries cannot both reclaim the attempt
+  const reclaimPaymentAttemptStmt = db.prepare<Record<string, unknown>, PaymentAttemptRow>(
+    `UPDATE payment_attempts SET id = @id, request_id = @request_id, resource_id = @resource_id,
+       status = 'reserved', amount = @amount, currency = @currency,
+       payer = @payer, payee = @payee, external_reference = NULL, rejection_reason = NULL,
+       created_at = @created_at, updated_at = @updated_at
+     WHERE replay_key = @replay_key AND provider = @provider AND status = 'rejected'
+     RETURNING *`,
+  );
   // COALESCE: an omitted field (bound as NULL by updatePaymentAttempt) keeps
   // its stored value. A status-only update must not erase external_reference,
   // which holds the tx hash of a settlement-uncertain attempt: the record that
@@ -185,26 +194,35 @@ export function createSqliteReceiptStore(options: SqliteReceiptStoreOptions): Re
 
     async reservePaymentAttempt(reservation: PaymentAttemptReservation): Promise<PaymentAttempt> {
       const now = clock.nowIso();
-      const id = ids.next('attempt');
+      const params = {
+        id: ids.next('attempt'),
+        request_id: reservation.requestId,
+        resource_id: reservation.resourceId,
+        provider: reservation.provider,
+        replay_key: reservation.replayKey,
+        amount: reservation.amount,
+        currency: reservation.currency,
+        payer: reservation.payer ?? null,
+        payee: reservation.payee ?? null,
+        created_at: now,
+        updated_at: now,
+      };
       let row: PaymentAttemptRow;
       try {
-        // RETURNING on a successful insert always yields the inserted row
-        row = insertPaymentAttemptStmt.get({
-          id,
-          request_id: reservation.requestId,
-          resource_id: reservation.resourceId,
-          provider: reservation.provider,
-          replay_key: reservation.replayKey,
-          status: 'reserved' satisfies PaymentAttempt['status'],
-          amount: reservation.amount,
-          currency: reservation.currency,
-          payer: reservation.payer ?? null,
-          payee: reservation.payee ?? null,
-          external_reference: null,
-          rejection_reason: null,
-          created_at: now,
-          updated_at: now,
-        }) as PaymentAttemptRow;
+        // Reclaim only if the rail permits reusing an authorization whose
+        // attempt was rejected. NEAR client retries reuse the access key's
+        // next nonce and therefore the replay key.
+        row =
+          (reservation.reclaimRejected === true
+            ? reclaimPaymentAttemptStmt.get(params)
+            : undefined) ??
+          // RETURNING on a successful insert always yields the inserted row
+          (insertPaymentAttemptStmt.get({
+            ...params,
+            status: 'reserved' satisfies PaymentAttempt['status'],
+            external_reference: null,
+            rejection_reason: null,
+          }) as PaymentAttemptRow);
       } catch (err) {
         if (isUniqueConstraintOn(err, 'payment_attempts.replay_key')) {
           // Report the existing status so the pipeline can choose a replay response

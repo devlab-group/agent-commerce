@@ -63,6 +63,9 @@ This table is for navigation, not enumeration.
    `true` has `settle` run after a successful backend call instead of before
    it; the `authorization` flow of x402 and MPP does. A backend failure then
    settles nothing. A rejected or unconfirmed settlement withholds the response.
+   `metadata.reuseRejectedAuthorization: true` lets the pipeline reserve a
+   rejected attempt's authorization again with `reclaimRejected`. x402 sets
+   it; MPP's single-use credentials cannot be reused.
 5. `EventSink.emit` and event persistence must not fail a commerce flow.
 6. `HttpBackendExecutor` is the only built-in outbound HTTP path to merchant
    backends and always applies a timeout. A custom `GatewayOptions.backend`
@@ -106,6 +109,11 @@ persistence must not fail the commerce flow.
   original error as the non-serialized `cause`.
 - `PaymentAttempt.status` gained `settlement-uncertain`, recorded whenever
   `settle()` throws, with or without a transaction hash.
+- Optional `PaymentAttemptReservation.reclaimRejected` lets
+  `reservePaymentAttempt` reclaim an attempt the same provider rejected (see
+  [Receipt store](#receipt-store)). This permits x402 retries after a backend
+  failure or a refused settlement, which previously returned 402. A custom
+  `ReceiptStore` that ignores the field still refuses these retries.
 - `GATEWAY_BUSY` is a retryable 503 used for transient load shedding.
 - `ReceiptStore` gained `countReceipts` and `countUndeliveredReceipts`; list
   results are capped and cannot provide reliable totals.
@@ -318,6 +326,12 @@ status in `details.attemptStatus` if the store can read it. The pipeline
 returns 402 and a fresh challenge if that status is `settled` or `rejected`.
 It returns 409 for any other status or when the status is unavailable. That
 includes the legacy `failed`, which may hide a settlement with no verdict.
+
+A `rejected` attempt settled nothing: its backend failed first, or the provider
+returned a verdict that no transfer occurred. With `reclaimRejected: true`, the
+same provider can replace it with a new reservation; only one concurrent claim
+wins. This lets the NEAR reference client retry using the access key's next
+nonce.
 
 ## x402
 

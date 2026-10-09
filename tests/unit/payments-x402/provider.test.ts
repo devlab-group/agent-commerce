@@ -107,8 +107,11 @@ describe('createRequirement', () => {
       version: '2',
       assetTransferMethod: 'eip3009',
     });
-    // This marker asks the pipeline to settle after the backend.
-    expect(requirement.metadata).toEqual({ settleAfterBackend: true });
+    // Settle after the backend, and allow retries of a payload that settled nothing
+    expect(requirement.metadata).toEqual({
+      settleAfterBackend: true,
+      reuseRejectedAuthorization: true,
+    });
   });
 
   it('declares upfront and requests settlement before the backend', async () => {
@@ -118,7 +121,10 @@ describe('createRequirement', () => {
 
     const accepted = requirement.challenge.accepts[0] as { extra: Record<string, unknown> };
     expect(accepted.extra['paymentFlow']).toBe('upfront');
-    expect(requirement.metadata).toEqual({ settleAfterBackend: false });
+    expect(requirement.metadata).toEqual({
+      settleAfterBackend: false,
+      reuseRejectedAuthorization: true,
+    });
   });
 
   it('lets one resource override the flow', async () => {
@@ -129,8 +135,8 @@ describe('createRequirement', () => {
       paymentContext({ resource: { ...paymentContext().resource, id: 'other.report' } }),
     );
 
-    expect(overridden.metadata).toEqual({ settleAfterBackend: false });
-    expect(other.metadata).toEqual({ settleAfterBackend: true });
+    expect(overridden.metadata).toMatchObject({ settleAfterBackend: false });
+    expect(other.metadata).toMatchObject({ settleAfterBackend: true });
   });
 
   it('carries the v2 PaymentRequired envelope, matching the accepts it lists', async () => {
