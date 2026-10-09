@@ -114,9 +114,9 @@ CanonicalRequest
 
 `verify` never moves money; only `settle` does. The replay reservation sits
 deliberately **between** them: a duplicate authorization is rejected before any
-funds move. The provider's requirement chooses the flow: x402 and MPP settle
-after a successful backend call by default, and before it under `upfront`.
-Under the default flow, a backend failure settles nothing.
+funds move. The provider's requirement chooses the flow: x402 settles after a
+successful backend call by default, and MPP before it. Under `authorization`,
+a backend failure settles nothing.
 
 Authorization is optional per resource. When required, its reservation sits
 between payment verification and settlement. It is consumed when the payment

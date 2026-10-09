@@ -48,6 +48,7 @@ import { isRecord } from '../core/is-record';
 import {
   isMppNetwork,
   MPP_DEFAULT_NETWORK,
+  MPP_DEFAULT_PAYMENT_FLOW,
   MPP_MIN_CHALLENGE_SECRET_LENGTH,
   MPP_NETWORKS,
   MPP_PROFILE,
@@ -413,7 +414,7 @@ const MppSchema = z
     realm: z.string().min(1),
     challengeSecret: z.string().min(1),
     challengeTtlSeconds: NumberOrString.optional(),
-    // Same values and default as `payments.x402.paymentFlow`
+    // Same values as `payments.x402.paymentFlow`; the default is `upfront`
     paymentFlow: z.enum(X402_PAYMENT_FLOWS).optional(),
     facilitator: FacilitatorSchema,
     // Real funds. Never defaulted; see src/payments/x402/guardrails.ts
@@ -1600,7 +1601,7 @@ function normalizeMpp(raw: RawConfig['payments']['mpp']): NormalizedMpp | undefi
           ),
         }
       : {}),
-    paymentFlow: raw.paymentFlow ?? X402_DEFAULT_PAYMENT_FLOW,
+    paymentFlow: raw.paymentFlow ?? MPP_DEFAULT_PAYMENT_FLOW,
     facilitator: normalizeFacilitator(raw.facilitator),
     ...(raw.allowMainnet !== undefined
       ? { allowMainnet: toBoolean(raw.allowMainnet, 'payments.mpp.allowMainnet') }

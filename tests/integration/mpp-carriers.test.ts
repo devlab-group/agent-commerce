@@ -374,7 +374,7 @@ describe('MPP over HTTP', () => {
         return { status: 200, body: REPORT, headers: {}, durationMs: 1 };
       },
     };
-    const gw = await startGateway(createFakeStore(), counting);
+    const gw = await startGateway(createFakeStore(), counting, { paymentFlow: 'authorization' });
     const first = (await invokeHttp(gw)).headers['www-authenticate'];
     facilitator.settle.mockResolvedValueOnce({
       success: false,
@@ -405,7 +405,7 @@ describe('MPP over HTTP', () => {
   it('does not settle or reuse a credential after backend failure', async () => {
     const store = createSqliteReceiptStore({ path: ':memory:' });
     await store.init();
-    const gw = await startGateway(store, failingBackend);
+    const gw = await startGateway(store, failingBackend, { paymentFlow: 'authorization' });
     const credential = await credentialFor((await invokeHttp(gw)).headers['www-authenticate']);
 
     const failed = await invokeHttp(gw, { authorization: credential });

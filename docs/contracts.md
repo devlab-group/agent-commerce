@@ -283,8 +283,11 @@ persistence must not fail the commerce flow.
   then verifies and settles through the x402 facilitator named in its options,
   using x402-compatible replay keys.
 - `MppProviderOptions` and `GatewayConfig.payments.mpp` accept optional
-  `paymentFlow` and `resourcePaymentFlows`. They use the x402 flow values and
-  default to `authorization`, which settles after a successful backend call.
+  `paymentFlow` and `resourcePaymentFlows` with the x402 flow values.
+- MPP's default `paymentFlow` is `upfront`; it was `authorization`. The
+  `charge` intent counts a backend call made before verification completes as
+  partial access, and EVM charge verification includes the transfer. A
+  deployment that wants the old order must set `paymentFlow: authorization`.
 
 ## Published entry points
 
@@ -445,7 +448,7 @@ export interface MppProviderOptions {
   readonly challengeTtlSeconds?: number; // default 300
   /** CAIP-2 network: 'eip155:31337' (local), 'eip155:84532' (default) or 'eip155:8453' */
   readonly network?: string;
-  /** 'authorization' (default) settles after a successful backend call; 'upfront' first */
+  /** 'upfront' (default) settles before the backend; 'authorization' after it */
   readonly paymentFlow?: X402PaymentFlow;
   /** Per-resource overrides of `paymentFlow`, keyed by resource id */
   readonly resourcePaymentFlows?: Readonly<Record<string, X402PaymentFlow>>;
@@ -710,7 +713,7 @@ export interface GatewayConfig {
       readonly realm: string;
       readonly challengeSecret: string;
       readonly challengeTtlSeconds?: number;
-      readonly paymentFlow?: X402PaymentFlow; // default 'authorization'
+      readonly paymentFlow?: X402PaymentFlow; // default 'upfront'
       readonly resourcePaymentFlows?: Readonly<Record<string, X402PaymentFlow>>;
       readonly facilitator: X402FacilitatorConfig;
       readonly allowMainnet?: boolean;

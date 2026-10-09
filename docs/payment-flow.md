@@ -80,9 +80,9 @@ MPP uses the same verification and replay checks, with these differences:
   replay key, and neither broadcasts the payment.
 - Settlement uses an x402 facilitator. MPP derives the same replay key as x402,
   so one receipt store cannot reserve the authorization through both rails.
-- MPP uses the same flow values and default as x402. Under `authorization`,
-  the backend must respond before the challenge expires; see
-  [MPP](protocols.md#mpp).
+- MPP uses the same flow values as x402 but defaults to `upfront`, as its
+  `charge` intent requires. Under `authorization`, the backend must respond
+  before the challenge expires; see [MPP](protocols.md#mpp).
 
 Over HTTP, MPP uses `WWW-Authenticate`, `Authorization: Payment ...` and
 `Payment-Receipt`. See the complete [HTTP header table](protocols.md#http-surface).

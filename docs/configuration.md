@@ -327,11 +327,13 @@ payments:
 ```
 
 `paymentFlow` sets the order of a payment and the backend call, with the same
-values under `payments.x402` and `payments.mpp`. The default, `authorization`,
-settles only after the backend succeeds. If the backend fails, no payment
-settles. `upfront` settles first; a later backend failure leaves the payment
-settled. A resource with fixed pricing that lists `x402` or `mpp` can set its
-own `paymentFlow`, which applies to whichever rail serves it. Configuration
+values under `payments.x402` and `payments.mpp`. `authorization`, the x402
+default, settles only after the backend succeeds. If the backend fails, no
+payment settles. `upfront`, the MPP default, settles first; a later backend
+failure leaves the payment settled. MPP defaults to `upfront` because its
+`charge` intent forbids running the backend before the payment is verified.
+A resource with fixed pricing that lists `x402` or `mpp` can set its own
+`paymentFlow`, which applies to whichever rail serves it. Configuration
 rejects the field on other resources. See [protocols.md](protocols.md#x402) for
 the flow details.
 

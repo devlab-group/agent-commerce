@@ -455,8 +455,8 @@ describe('MPP settlement - real local chain', () => {
     expect(uncertain.body['code']).toBe('PAYMENT_SETTLEMENT_FAILED');
     const details = uncertain.body['details'] as Record<string, unknown>;
     expect(details['settlementUncertain']).toBe(true);
-    // The default flow runs the backend first; its response is not delivered
-    expect(backendCalls).toBe(callsBefore + 1);
+    // The default upfront flow settles first, so the backend never ran
+    expect(backendCalls).toBe(callsBefore);
     expect(uncertain.body).not.toHaveProperty('report');
     expect(uncertain.headers['payment-receipt']).toBeUndefined();
     // Not "failed": the broadcast was pending, with nothing moved yet
@@ -488,7 +488,7 @@ describe('MPP settlement - real local chain', () => {
       expect(uncertain.body['code']).toBe('PAYMENT_SETTLEMENT_FAILED');
       const details = uncertain.body['details'] as Record<string, unknown>;
       expect(details['settlementUncertain']).toBe(true);
-      expect(backendCalls).toBe(callsBefore + 1);
+      expect(backendCalls).toBe(callsBefore);
       expect(uncertain.body).not.toHaveProperty('report');
       const [attempt] = await store.listPaymentAttempts();
       expect(attempt?.status).toBe('settlement-uncertain');
@@ -502,7 +502,10 @@ describe('MPP settlement - real local chain', () => {
   });
 
   it('9. backend failure under authorization leaves funds untouched and bars replay', async () => {
-    const { gateway, store } = await startGateway({ backend: failingBackend });
+    const { gateway, store } = await startGateway({
+      mpp: { paymentFlow: 'authorization' },
+      backend: failingBackend,
+    });
     const credential = await mppCredential(gateway);
     const before = await balances();
     const callsBefore = backendCalls;

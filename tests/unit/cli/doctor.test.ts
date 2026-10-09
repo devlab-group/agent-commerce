@@ -448,6 +448,9 @@ describe('runDoctor: degraded scenarios report the failure', () => {
       // Both rails were described, so their settings reached the output path
       expect(printed).toContain('x402 v2 (scheme=exact) enabled');
       expect(printed).toContain('MPP charge/evm/authorization enabled');
+      // Neither rail sets a flow: x402 defaults to authorization, MPP to upfront
+      expect(printed).toMatch(/x402 v2 \(scheme=exact\) enabled - [^\n]*paymentFlow=authorization/);
+      expect(printed).toMatch(/MPP charge\/evm\/authorization enabled - [^\n]*paymentFlow=upfront/);
       for (const secret of [
         'ADMIN-TOKEN',
         'RPC-KEY',

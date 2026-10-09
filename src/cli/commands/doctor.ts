@@ -12,6 +12,7 @@ import { AP2_UNSUPPORTED } from '../../authorization/ap2/descriptor';
 import { type CommerceResource, isCommerceError, type ReceiptStore } from '../../core';
 import { extractPathParameterNames } from '../../core/execution';
 import {
+  MPP_DEFAULT_PAYMENT_FLOW,
   MPP_PROFILE,
   MPP_SPEC_COMMIT,
   MPP_SPEC_DRAFTS,
@@ -25,6 +26,7 @@ import {
   findX402Network,
   resolveDeploymentMode,
 } from '../../payments/x402/networks';
+import { X402_DEFAULT_PAYMENT_FLOW } from '../../payments/x402/payment-flow';
 // Narrow modules, not the protocol barrels: the CLI must pull in no protocol SDK
 import {
   A2A_AGENT_CARD_PATH,
@@ -111,14 +113,17 @@ function substitutePathParams(url: string): string {
 }
 
 // The rail's settlement order and how many resources override it
-function describePaymentFlow(rail: {
-  readonly paymentFlow?: string | undefined;
-  readonly resourcePaymentFlows?: Readonly<Record<string, string>> | undefined;
-}): string {
+function describePaymentFlow(
+  rail: {
+    readonly paymentFlow?: string | undefined;
+    readonly resourcePaymentFlows?: Readonly<Record<string, string>> | undefined;
+  },
+  defaultFlow: string,
+): string {
   const overrides = Object.keys(rail.resourcePaymentFlows ?? {}).length;
   const overrideCount =
     overrides > 0 ? ` (${overrides} resource ${overrides === 1 ? 'override' : 'overrides'})` : '';
-  return `paymentFlow=${rail.paymentFlow ?? 'authorization'}${overrideCount}`;
+  return `paymentFlow=${rail.paymentFlow ?? defaultFlow}${overrideCount}`;
 }
 
 // Shared settlement fields; `payTo` holds x402 `payTo` or MPP `recipient`
@@ -572,7 +577,7 @@ export async function runDoctor(
     checks.push({ name: 'Payments', status: 'INFO', detail: 'x402 not configured' });
   } else {
     const { mode, where, via } = describeSettlement(x402.network, x402.facilitator, x402.networks);
-    const flow = describePaymentFlow(x402);
+    const flow = describePaymentFlow(x402, X402_DEFAULT_PAYMENT_FLOW);
     const summary = `x402 v2 (scheme=exact) enabled - ${where}, destination=${maskMiddle(x402.payTo)}, facilitator=${via}, ${flow}`;
     const live = wellKnown?.ok ? extractWellKnownX402(wellKnown.body) : undefined;
     if (sameAddress(x402.asset, PLACEHOLDER_ASSET_ADDRESS)) {
@@ -621,7 +626,7 @@ export async function runDoctor(
       `MPP ${MPP_PROFILE.intent}/${MPP_PROFILE.method}/${MPP_PROFILE.credentialType} enabled - ` +
       `${where}, asset=${MPP_PROFILE.assetSymbol} ${maskMiddle(mpp.asset)}, ` +
       `recipient=${maskMiddle(mpp.recipient)}, facilitator=${via}, ` +
-      `${describePaymentFlow(mpp)}, ` +
+      `${describePaymentFlow(mpp, MPP_DEFAULT_PAYMENT_FLOW)}, ` +
       `spec ${MPP_SPEC_DRAFTS.core}@${MPP_SPEC_COMMIT.slice(0, 7)}, mppx ${MPPX_VERSION}`;
     const configured = { asset: mpp.asset, network: mpp.network, payTo: mpp.recipient };
     const live = wellKnown?.ok ? extractWellKnownX402(wellKnown.body, 'mpp') : undefined;

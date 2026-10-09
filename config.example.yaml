@@ -177,10 +177,11 @@ payments:
   #   recipient: ${MERCHANT_WALLET}
   #   realm: localhost
   #   challengeSecret: ${MPP_CHALLENGE_SECRET} # at least 32 characters
-  #   # Same values and default as x402 above. Under authorization, the
-  #   # backend must answer before the challenge expires, by default 300 s
-  #   # after it was issued (challengeTtlSeconds).
-  #   paymentFlow: authorization
+  #   # Same values as x402 above, but the default is upfront: MPP's charge
+  #   # intent forbids running the backend before the payment is verified.
+  #   # Under authorization, the backend must answer before the challenge
+  #   # expires, by default 300 s after it was issued (challengeTtlSeconds).
+  #   paymentFlow: upfront
   #   facilitator:
   #     mode: local
   #     signerPrivateKey: ${X402_FACILITATOR_PRIVATE_KEY}

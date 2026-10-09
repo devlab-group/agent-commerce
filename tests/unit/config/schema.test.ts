@@ -2287,13 +2287,13 @@ describe('payments.mpp', () => {
   });
 
   describe('paymentFlow', () => {
-    it('defaults to authorization, as the x402 rail does', () => {
-      expect(parseConfig(mppConfig(), {}).payments.mpp?.paymentFlow).toBe('authorization');
+    it('defaults to upfront, unlike the x402 rail', () => {
+      expect(parseConfig(mppConfig(), {}).payments.mpp?.paymentFlow).toBe('upfront');
     });
 
-    it('accepts upfront for the rail', () => {
-      const config = parseConfig(mppConfig({ paymentFlow: 'upfront' }), {});
-      expect(config.payments.mpp?.paymentFlow).toBe('upfront');
+    it('accepts authorization for the rail', () => {
+      const config = parseConfig(mppConfig({ paymentFlow: 'authorization' }), {});
+      expect(config.payments.mpp?.paymentFlow).toBe('authorization');
       expect(config.payments.mpp?.resourcePaymentFlows).toBeUndefined();
     });
 

@@ -367,23 +367,28 @@ describe('MPP createRequirement', () => {
   });
 
   it.each([
-    ['authorization by default', {}, true],
-    ['upfront for the rail', { paymentFlow: 'upfront' }, false],
+    ['upfront by default', {}, false],
+    ['authorization for the rail', { paymentFlow: 'authorization' }, true],
     [
-      'a per-resource upfront override',
-      { resourcePaymentFlows: { market_report: 'upfront' } },
+      'a per-resource authorization override',
+      { resourcePaymentFlows: { market_report: 'authorization' } },
+      true,
+    ],
+    [
+      'a per-resource upfront override of an authorization rail',
+      { paymentFlow: 'authorization', resourcePaymentFlows: { market_report: 'upfront' } },
       false,
     ],
     [
-      'a per-resource authorization override of an upfront rail',
-      { paymentFlow: 'upfront', resourcePaymentFlows: { market_report: 'authorization' } },
-      true,
+      "another resource's override",
+      { resourcePaymentFlows: { other_report: 'authorization' } },
+      false,
     ],
-    ["another resource's override", { resourcePaymentFlows: { other_report: 'upfront' } }, true],
   ] as const)(
     'asks the pipeline to settle after the backend under %s',
     async (_label, flow, expected) => {
       const requirement = await requirementFor(makeProvider(flow));
+      // No reuse marker: a challenge's credential is single-use, even unsettled
       expect(requirement.metadata).toEqual({ settleAfterBackend: expected });
     },
   );
@@ -1007,32 +1012,32 @@ describe('MPP through the execution pipeline', () => {
     expect(facilitator.settle).toHaveBeenCalledTimes(1);
   });
 
-  it('settles after the backend by default and issues a receipt', async () => {
+  it('settles before the backend by default and issues a receipt', async () => {
     const provider = makeProvider();
     const { pipeline, calls } = pipelineFor(provider);
     const credential = await clientCredential(await requirementFor(provider));
 
     const outcome = await pipeline.execute(paidRequest(credential));
 
-    expect(calls).toEqual(['backend', 'settle']);
+    expect(calls).toEqual(['settle', 'backend']);
     expect(outcome).toMatchObject({
       kind: 'delivered',
       payment: { provider: 'mpp', status: 'settled', metadata: { receipt: expect.any(String) } },
     });
   });
 
-  it('settles before the backend under upfront', async () => {
-    const provider = makeProvider({ paymentFlow: 'upfront' });
+  it('settles after the backend under authorization', async () => {
+    const provider = makeProvider({ paymentFlow: 'authorization' });
     const { pipeline, calls } = pipelineFor(provider);
     const credential = await clientCredential(await requirementFor(provider));
 
     await pipeline.execute(paidRequest(credential));
 
-    expect(calls).toEqual(['settle', 'backend']);
+    expect(calls).toEqual(['backend', 'settle']);
   });
 
-  it('settles nothing when the backend fails, and refuses the credential afterwards', async () => {
-    const provider = makeProvider();
+  it('settles nothing when the backend fails under authorization, and refuses the credential afterwards', async () => {
+    const provider = makeProvider({ paymentFlow: 'authorization' });
     const { pipeline, store, calls } = pipelineFor(provider, { backendFails: true });
     const credential = await clientCredential(await requirementFor(provider));
 
@@ -1068,7 +1073,7 @@ describe('MPP through the execution pipeline', () => {
   });
 
   it('withholds the response when settlement is not confirmed after the backend ran', async () => {
-    const provider = makeProvider();
+    const provider = makeProvider({ paymentFlow: 'authorization' });
     const { pipeline, store, calls } = pipelineFor(provider);
     facilitator.settle.mockRejectedValueOnce(new Error('The operation timed out'));
     const credential = await clientCredential(await requirementFor(provider));

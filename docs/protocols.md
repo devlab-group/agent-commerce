@@ -630,12 +630,12 @@ v1 `X-PAYMENT` header gets the 402 challenge with
 `payments.mpp.paymentFlow` does the same for MPP. A resource's `paymentFlow`
 overrides the setting of whichever rail serves it:
 
-| Flow                      | Order                                 | Backend fails                                          | Settlement refused after backend |
-| ------------------------- | ------------------------------------- | ------------------------------------------------------ | -------------------------------- |
-| `authorization` (default) | verify, reserve, call backend, settle | no settlement; attempt recorded as rejected            | response withheld; 402           |
-| `upfront`                 | verify, reserve, settle, call backend | payment stays settled; receipt records failed delivery | not applicable                   |
+| Flow                           | Order                                 | Backend fails                                          | Settlement refused after backend |
+| ------------------------------ | ------------------------------------- | ------------------------------------------------------ | -------------------------------- |
+| `authorization` (x402 default) | verify, reserve, call backend, settle | no settlement; attempt recorded as rejected            | response withheld; 402           |
+| `upfront` (MPP default)        | verify, reserve, settle, call backend | payment stays settled; receipt records failed delivery | not applicable                   |
 
-The gateway omits `extra.paymentFlow` for the default `authorization` flow.
+The gateway omits `extra.paymentFlow` for the `authorization` flow.
 It sets `extra.paymentFlow: "upfront"` for the other flow, as required by
 [x402 v2](https://github.com/x402-foundation/x402/blob/main/specs/x402-specification-v2.md#61-asset-transfer-methods-and-payment-flow-models).
 The gateway verifies the proof before calling the backend in either flow.
@@ -696,13 +696,15 @@ payment proof travels in the request body.
 MPP and x402 derive the same replay identity for the same EIP-3009
 authorization, so reuse across rails collides in one receipt store.
 
-`payments.mpp.paymentFlow` takes the [x402 flow values](#x402), with the same
-`authorization` default. Under `authorization`, backend time counts toward the
-challenge lifetime, `challengeTtlSeconds` (default 300), because `mppx` signs
-`validBefore` equal to the challenge's `expires`. If the backend outlasts the
-remaining window, settlement is refused and the response withheld, leaving the
-backend's work unpaid as with x402. Use `upfront` for a backend with side
-effects.
+`payments.mpp.paymentFlow` takes the [x402 flow values](#x402), but defaults to
+`upfront`: the payment settles before the backend runs. The `charge` intent
+forbids partial access before payment verification, which for the EVM method
+includes the transfer, and counts a backend call as partial access. Choosing
+`authorization` departs from that rule: the backend runs first, and a refused
+or unconfirmed settlement withholds its response but leaves its work unpaid.
+Under `authorization`, backend time also counts toward the challenge lifetime,
+`challengeTtlSeconds` (default 300), because `mppx` signs `validBefore` equal
+to the challenge's `expires`.
 
 Over HTTP, the unpaid 402 and MPP verification, replay, settlement, and
 provider errors use `application/problem+json` and the core draft's problem

@@ -33,12 +33,13 @@ import {
 import { SETTLE_AFTER_BACKEND_METADATA_KEY } from '../../core/execution/settlement-order';
 import { parseCanonicalAmount } from '../x402/amount';
 import type { X402FacilitatorConfig } from '../x402/guardrails';
-import { X402_DEFAULT_PAYMENT_FLOW, type X402PaymentFlow } from '../x402/payment-flow';
+import type { X402PaymentFlow } from '../x402/payment-flow';
 import { createX402PaymentProvider, DEFAULT_IDS } from '../x402/provider';
 import { computeReplayKey } from '../x402/replay-key';
 import {
   isMppNetwork,
   MPP_DEFAULT_NETWORK,
+  MPP_DEFAULT_PAYMENT_FLOW,
   MPP_MIN_CHALLENGE_SECRET_LENGTH,
   MPP_NETWORKS,
   MPP_PROFILE,
@@ -92,7 +93,10 @@ export interface MppProviderOptions {
    * Sepolia, the default) or `eip155:8453` (Base)
    */
   readonly network?: string;
-  /** Same flow values as x402; `authorization` settles after the backend */
+  /**
+   * Same flow values as x402. The default, `upfront`, settles before the
+   * backend; `authorization` settles after it
+   */
   readonly paymentFlow?: X402PaymentFlow;
   /** Per-resource overrides of `paymentFlow`, keyed by resource id */
   readonly resourcePaymentFlows?: Readonly<Record<string, X402PaymentFlow>>;
@@ -263,7 +267,7 @@ export function createMppProviderWithSettlement(
     const paymentFlow =
       options.resourcePaymentFlows?.[context.resource.id] ??
       options.paymentFlow ??
-      X402_DEFAULT_PAYMENT_FLOW;
+      MPP_DEFAULT_PAYMENT_FLOW;
     // mppx signs `validBefore` at this expiry. Under `authorization`, the
     // backend must finish before then for settlement to proceed.
     const expires = new Date(clock.now().getTime() + ttlSeconds * 1000);

@@ -98,9 +98,9 @@ describe('createConfiguredPaymentProviders', () => {
   });
 
   it.each([
-    ['the rail', { paymentFlow: 'upfront' as const }],
-    ['the resource', { resourcePaymentFlows: { market_report: 'upfront' as const } }],
-  ])('passes an MPP upfront flow set on %s to the provider', async (_label, flow) => {
+    ['the rail', { paymentFlow: 'authorization' as const }],
+    ['the resource', { resourcePaymentFlows: { market_report: 'authorization' as const } }],
+  ])('passes an MPP authorization flow set on %s to the provider', async (_label, flow) => {
     const resource = makeGatewayConfig().resources.find((r) => r.id === 'market_report');
     if (resource === undefined) throw new Error('fixture missing');
     const settleAfterBackend = async (mpp: Mpp): Promise<unknown> => {
@@ -116,7 +116,7 @@ describe('createConfiguredPaymentProviders', () => {
       return requirement.metadata?.['settleAfterBackend'];
     };
 
-    expect(await settleAfterBackend(MAINNET_MPP)).toBe(true);
-    expect(await settleAfterBackend({ ...MAINNET_MPP, ...flow })).toBe(false);
+    expect(await settleAfterBackend(MAINNET_MPP)).toBe(false);
+    expect(await settleAfterBackend({ ...MAINNET_MPP, ...flow })).toBe(true);
   });
 });
