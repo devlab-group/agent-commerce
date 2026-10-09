@@ -202,15 +202,10 @@ describe('a Solana offer', () => {
     ).toThrow(message);
   });
 
-  it('refuses the in-process facilitator and a TON offer', () => {
+  it('refuses the in-process facilitator', () => {
     expect(() =>
       makeProvider({ facilitator: { mode: 'local', signerPrivateKey: `0x${'11'.repeat(32)}` } }),
     ).toThrow(/serves the local Anvil chain/);
-    expect(() =>
-      makeProvider({
-        offers: [{ network: 'tvm:-3', rpcUrl: RPC_URL, asset: USDC, assetDecimals: 6, payTo }],
-      }),
-    ).toThrow(/TON settlement is not available yet/);
   });
 });
 

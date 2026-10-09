@@ -68,7 +68,6 @@ describe('descriptor', () => {
     expect(provider.descriptor.capabilities).toContain('exact-evm');
     expect(provider.descriptor.capabilities).toContain('eip-3009');
     // What the provider does not implement must be listed
-    expect(provider.descriptor.unsupported).toContain('tvm');
     expect(provider.descriptor.capabilities).not.toContain('permit2');
     expect(provider.descriptor.unsupported).toContain('permit2 gas sponsoring extensions');
     expect(provider.descriptor.unsupported).toContain('batch-settlement scheme');

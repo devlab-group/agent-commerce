@@ -14,19 +14,23 @@ import {
 } from '@x402/evm';
 import { ExactEvmScheme } from '@x402/evm/exact/server';
 import {
+  decodeSignedDelegateB64,
+  getDefaultAsset as nearDefaultAsset,
+  parseFtTransferArgs,
+} from '@x402/near';
+import { ExactNearScheme } from '@x402/near/exact/server';
+import {
   decodeTransactionFromPayload,
   getDefaultAsset as svmDefaultAsset,
   transactionMessageHash,
 } from '@x402/svm';
 import { ExactSvmScheme } from '@x402/svm/exact/server';
-import { normalizeTonAddress, getDefaultAsset as tvmDefaultAsset } from '@x402/tvm';
-import { ExactTvmScheme } from '@x402/tvm/exact/server';
 import { describe, expect, it } from 'vitest';
 import { BUILT_IN_NETWORKS } from '../../../src/payments/x402/networks';
 
 const BASE = 'eip155:8453';
 const SOLANA_DEVNET = 'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1';
-const TON_TESTNET = 'tvm:-3';
+const NEAR_TESTNET = 'near:testnet';
 
 describe('pinned x402 SDK entry points', () => {
   it('builds and matches offers through the resource server', () => {
@@ -42,12 +46,32 @@ describe('pinned x402 SDK entry points', () => {
     expect(x402ExactPermit2ProxyAddress).toBe('0x402085c248EeA27D92E8b30b2C58ed07f9E20001');
   });
 
-  it('exports what the Solana and TON replay identities read', () => {
+  it('exports what the Solana and NEAR replay identities read', () => {
     expect(typeof decodeTransactionFromPayload).toBe('function');
     expect(typeof transactionMessageHash).toBe('function');
-    expect(normalizeTonAddress('EQCxE6mUtQJKFnGfaROTKOt1lZbDiiX1kCixRv7Nw2Id_sDs')).toBe(
-      '0:b113a994b5024a16719f69139328eb759596c38a25f59028b146fecdc3621dfe',
-    );
+    expect(typeof decodeSignedDelegateB64).toBe('function');
+    expect(
+      parseFtTransferArgs(new TextEncoder().encode('{"receiver_id":"m.near","amount":"1"}')),
+    ).toEqual({
+      receiver_id: 'm.near',
+      amount: '1',
+    });
+  });
+
+  it('adds nothing to a NEAR offer: the facilitator picks its relayer', async () => {
+    const offer = {
+      scheme: 'exact',
+      network: NEAR_TESTNET,
+      asset: 'usdc.testnet',
+      amount: '1',
+      payTo: 'm.testnet',
+      maxTimeoutSeconds: 60,
+      extra: {},
+    } as const;
+    const kind = { x402Version: 2, scheme: 'exact', network: NEAR_TESTNET } as const;
+    expect(
+      await new ExactNearScheme().enhancePaymentRequirements(offer as never, kind as never, []),
+    ).toEqual(offer);
   });
 
   it('marks only the Solana blockhash hints as dynamic for offer matching', () => {
@@ -55,7 +79,7 @@ describe('pinned x402 SDK entry points', () => {
     const dynamic = (scheme: SchemeNetworkServer) => scheme.dynamicExtraFields;
     expect(dynamic(new ExactSvmScheme())).toEqual(['recentBlockhash', 'lastValidBlockHeight']);
     expect(dynamic(new ExactEvmScheme())).toBeUndefined();
-    expect(dynamic(new ExactTvmScheme())).toBeUndefined();
+    expect(dynamic(new ExactNearScheme())).toBeUndefined();
   });
 
   it('resolves a dollar price to each network default stablecoin', async () => {
@@ -68,9 +92,9 @@ describe('pinned x402 SDK entry points', () => {
       amount: '10000',
       asset: '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU',
     });
-    expect(await new ExactTvmScheme().parsePrice('$0.01', TON_TESTNET)).toMatchObject({
+    expect(await new ExactNearScheme().parsePrice('$0.01', NEAR_TESTNET)).toMatchObject({
       amount: '10000',
-      asset: '0:f418a04cf196ebc959366844a6cdf53a6fd6fff1eadafc892f05210bba31593e',
+      asset: '3e2210e1184b45b64c8a434c0a7e7b23cc04ea7eb7a6c3c32520d03d4afcb8af',
     });
   });
 
@@ -88,7 +112,7 @@ describe('pinned x402 SDK entry points', () => {
         expect(sdk.assetTransferMethod ?? 'eip3009').toBe('eip3009');
         return;
       }
-      const sdk = network.family === 'svm' ? svmDefaultAsset(id) : tvmDefaultAsset(id);
+      const sdk = network.family === 'svm' ? svmDefaultAsset(id) : nearDefaultAsset(id);
       expect(network.canonicalAsset).toEqual({
         symbol: sdk.symbol,
         address: sdk.asset,

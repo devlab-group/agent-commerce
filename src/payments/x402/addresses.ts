@@ -1,6 +1,6 @@
 /**
- * SDK-free address checks for config load and the CLI. Preserve EVM and
- * case-sensitive Solana addresses; normalize TON to raw `workchain:hex`.
+ * SDK-free address checks for config load and the CLI. EVM addresses compare
+ * without case; Solana keys and NEAR account IDs compare exactly.
  */
 import type { X402Network } from './networks';
 
@@ -16,17 +16,15 @@ const EVM_TRANSACTION_HASH = /^0x[0-9a-fA-F]{64}$/;
 // A 64-byte Ed25519 signature is at most 88 base58 characters
 const SOLANA_SIGNATURE = /^[1-9A-HJ-NP-Za-km-z]{64,88}$/;
 
-const TON_RAW = /^(0|-1):[0-9a-fA-F]{64}$/;
-const TON_FRIENDLY = /^[A-Za-z0-9+/_-]{48}$/;
-const TON_TAG_BOUNCEABLE = 0x11;
-const TON_TAG_NON_BOUNCEABLE = 0x51;
-const TON_TAG_TESTNET_ONLY = 0x80;
-const TON_ZERO_HASH = /^-?\d+:0{64}$/;
+// nearcore's account ID rule: 2 to 64 characters, lowercase alphanumeric runs
+// joined by single "-", "_" or "."; implicit accounts are 64 hex characters
+const NEAR_ACCOUNT_ID = /^(([a-z\d]+[-_])*[a-z\d]+\.)*([a-z\d]+[-_])*[a-z\d]+$/;
+// A transaction hash: 32 bytes in base58
+const NEAR_TRANSACTION_HASH = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 
 /**
- * The address in wire form, or `undefined` when the value is not an address of
- * the network's family. A TON address flagged testnet-only is refused on a
- * mainnet network.
+ * Returns the family's wire address or `undefined`. NEAR uses named or
+ * implicit account IDs; a `.near` suffix does not identify the network.
  */
 export function normalizeAddress(network: X402Network, value: string): string | undefined {
   switch (network.family) {
@@ -34,31 +32,36 @@ export function normalizeAddress(network: X402Network, value: string): string | 
       return EVM_ADDRESS.test(value) ? value : undefined;
     case 'svm':
       return SOLANA_ADDRESS.test(value) && base58ByteLength(value) === 32 ? value : undefined;
-    case 'tvm':
-      return normalizeTonAddress(value, network.kind);
+    case 'near':
+      return value.length >= 2 && value.length <= 64 && NEAR_ACCOUNT_ID.test(value)
+        ? value
+        : undefined;
   }
 }
 
-/** An address funds cannot be recovered from: the zero address of its family */
+/**
+ * An address funds cannot be recovered from: the zero address of its family.
+ * NEAR has no zero account.
+ */
 export function isBurnAddress(network: X402Network, wireAddress: string): boolean {
   switch (network.family) {
     case 'evm':
       return EVM_ZERO.test(wireAddress);
     case 'svm':
       return wireAddress === SOLANA_ZERO;
-    case 'tvm':
-      return TON_ZERO_HASH.test(wireAddress);
+    case 'near':
+      return false;
   }
 }
 
-/** Compare EVM addresses case-insensitively and base58/raw TON addresses exactly */
+/** Compare EVM addresses case-insensitively, Solana keys and NEAR account IDs exactly */
 export function sameAddress(network: X402Network, a: string, b: string): boolean {
   return network.family === 'evm' ? a.toLowerCase() === b.toLowerCase() : a === b;
 }
 
 /**
- * A settlement reference in its family's form: an EVM transaction hash or a
- * Solana transaction signature. TON settlement is not built, so none passes.
+ * A settlement reference in its family's form: an EVM transaction hash, a
+ * Solana transaction signature or a NEAR transaction hash
  */
 export function isTransactionReference(network: X402Network, value: string): boolean {
   switch (network.family) {
@@ -66,8 +69,8 @@ export function isTransactionReference(network: X402Network, value: string): boo
       return EVM_TRANSACTION_HASH.test(value);
     case 'svm':
       return SOLANA_SIGNATURE.test(value) && base58ByteLength(value) === 64;
-    case 'tvm':
-      return false;
+    case 'near':
+      return NEAR_TRANSACTION_HASH.test(value) && base58ByteLength(value) === 32;
   }
 }
 
@@ -77,37 +80,4 @@ function base58ByteLength(value: string): number {
   // Each leading '1' encodes one leading zero byte
   const leadingZeros = value.length - value.replace(/^1+/, '').length;
   return leadingZeros + (n === 0n ? 0 : Math.ceil(n.toString(16).length / 2));
-}
-
-function normalizeTonAddress(value: string, kind: X402Network['kind']): string | undefined {
-  if (TON_RAW.test(value)) return value.toLowerCase();
-  if (!TON_FRIENDLY.test(value)) return undefined;
-
-  // Node's base64 decoder reads the URL-safe alphabet too
-  const bytes = Buffer.from(value, 'base64');
-  if (bytes.length !== 36) return undefined;
-  const crc = (bytes[34] as number) * 256 + (bytes[35] as number);
-  if (crc16(bytes.subarray(0, 34)) !== crc) return undefined;
-
-  const tag = bytes[0] as number;
-  const testnetOnly = (tag & TON_TAG_TESTNET_ONLY) !== 0;
-  const base = tag & ~TON_TAG_TESTNET_ONLY;
-  if (base !== TON_TAG_BOUNCEABLE && base !== TON_TAG_NON_BOUNCEABLE) return undefined;
-  if (testnetOnly && kind === 'mainnet') return undefined;
-
-  const workchain = (bytes[1] as number) === 0xff ? -1 : (bytes[1] as number);
-  if (workchain !== 0 && workchain !== -1) return undefined;
-  return `${workchain}:${bytes.subarray(2, 34).toString('hex')}`;
-}
-
-// CRC-16/XMODEM, the checksum of a user-friendly TON address
-function crc16(bytes: Uint8Array): number {
-  let crc = 0;
-  for (const byte of bytes) {
-    crc ^= byte << 8;
-    for (let bit = 0; bit < 8; bit++) {
-      crc = crc & 0x8000 ? ((crc << 1) ^ 0x1021) & 0xffff : (crc << 1) & 0xffff;
-    }
-  }
-  return crc;
 }

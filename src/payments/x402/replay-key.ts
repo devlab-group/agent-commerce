@@ -71,3 +71,22 @@ export function computeSvmReplayKey(input: {
     .digest('hex');
   return `0x${digest}`;
 }
+
+/**
+ * Identifies a NEAR `exact` payment by network, sender, curve-prefixed public
+ * key (`ed25519:...`) and delegate nonce. Nonces are scoped per access key,
+ * excluding token, recipient, relayer and signature; another key of the same
+ * sender has an independent nonce scope.
+ */
+export function computeNearReplayKey(input: {
+  readonly network: string;
+  readonly senderId: string;
+  readonly publicKey: string;
+  readonly nonce: bigint;
+}): string {
+  const digest = createHash('sha256')
+    .update('x402/exact/near/v1\0')
+    .update(`${input.network}\0${input.senderId}\0${input.publicKey}\0${input.nonce.toString(10)}`)
+    .digest('hex');
+  return `0x${digest}`;
+}

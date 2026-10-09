@@ -25,7 +25,6 @@ export interface X402OptionInput {
 export interface ResolvedX402Option {
   readonly scheme: 'exact';
   readonly network: X402Network;
-  /** Wire form: raw `workchain:hex` on TON */
   readonly payTo: string;
   readonly asset: string;
   /** EIP-712 domain; EVM only */
@@ -54,7 +53,7 @@ const FIELD_MEANINGS = {
 const ADDRESS_SHAPES = {
   evm: '"0x" followed by 40 hex characters',
   svm: 'a base58 public key of 32 bytes',
-  tvm: 'a raw "0:<64 hex>" or user-friendly address',
+  near: 'a NEAR account ID: 2 to 64 lowercase characters, digits and single "-", "_" or "." separators',
 } as const;
 
 function invalid(message: string, path: string): CommerceError {

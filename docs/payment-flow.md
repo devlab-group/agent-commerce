@@ -133,12 +133,14 @@ rollback. The gateway records a `settled` payment attempt and a
    `transferWithAuthorization` with the same nonce reverts. Permit2 marks the
    owner's nonce used in its own bitmap, across every token. A Solana cluster
    refuses a transaction it has already processed, and one whose blockhash
-   has expired. This prevents a double *spend*.
+   has expired. NEAR refuses a delegate whose nonce is at or below its access
+   key's nonce. This prevents a double *spend*.
 2. **In the gateway.** Concurrent submissions could unlock a second delivery
    before the first settles. The pipeline reserves `replayKey`, derived from
    `(chainId, asset, payer, nonce)` for EIP-3009, `(chainId, Permit2, owner, nonce)`
-   for Permit2, or the network and SHA-256 of the transaction message for Solana,
-   under a `UNIQUE` constraint **before** calling `settle`. A duplicate returns
+   for Permit2, the network and SHA-256 of the transaction message for Solana,
+   or `(network, sender, public key, nonce)` for NEAR, under a `UNIQUE`
+   constraint **before** calling `settle`. A duplicate returns
    `PAYMENT_REPLAYED`: 409 while the first attempt is unfinished or its status is
    unavailable; 402 with a fresh challenge when its stored status is treated as finished.
 

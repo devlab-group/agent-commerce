@@ -27,6 +27,10 @@ env:
   # version and by the SHA-256 GitHub records for the Linux archive.
   AGAVE_VERSION: 'v4.1.1'
   AGAVE_SHA256: 'a5c8e74b8ffa9ce906872b812849057c7fb21cf036ba08f219eb335e20fa4fb3'
+  # NEAR E2E tests use nearcore's sandbox. No archive digest is published;
+  # this SHA-256 was recorded when the version was pinned.
+  NEAR_SANDBOX_VERSION: '2.13.4'
+  NEAR_SANDBOX_SHA256: '5690a4635172263cf026683f75965cac09dd916912584f12709974fed620163f'
 
 jobs:
   quality:
@@ -108,10 +112,17 @@ jobs:
           echo "${AGAVE_SHA256}  $archive" | sha256sum -c -
           tar -xjf "$archive" -C "$RUNNER_TEMP"
           echo "$RUNNER_TEMP/solana-release/bin" >> "$GITHUB_PATH"
+      - name: Install the NEAR sandbox
+        run: |
+          archive="$RUNNER_TEMP/near-sandbox.tar.gz"
+          curl -sSfL -o "$archive" \
+            "https://s3-us-west-1.amazonaws.com/build.nearprotocol.com/nearcore/Linux-x86_64/${NEAR_SANDBOX_VERSION}/near-sandbox.tar.gz"
+          echo "${NEAR_SANDBOX_SHA256}  $archive" | sha256sum -c -
+          tar -xzf "$archive" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/Linux-x86_64" >> "$GITHUB_PATH"
       - run: npm ci
-      # These tests start local Anvil and solana-test-validator, deploy or
-      # preload their tokens and run local services; they do not need a
-      # public RPC or hosted facilitator.
+      # Tests run Anvil, solana-test-validator and the NEAR sandbox locally,
+      # with deployed or preloaded tokens and no public RPC or facilitator.
       - run: npm run test:e2e
 
   package:

@@ -1,15 +1,18 @@
 /**
- * Test-only SDK `x402Facilitator` over HTTP on 127.0.0.1, to exercise the
- * gateway's remote path: EVM through the local binding on Anvil chains with
- * custom ids, Solana through the SDK's own scheme on a local validator. One
- * Solana facilitator serves every request, so the SDK's duplicate-settlement
- * cache is shared as a deployed facilitator's is. LOCAL DEVELOPMENT ONLY.
+ * Test-only `x402Facilitator` on 127.0.0.1 exercises the gateway's remote path:
+ * EVM uses the local binding on custom-id Anvil chains; Solana and NEAR use
+ * SDK schemes on a local validator and sandbox. Each configured Solana or NEAR
+ * facilitator is reused across requests to share its duplicate-settlement
+ * cache, as in deployment. LOCAL DEVELOPMENT ONLY.
  */
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import type { KeyPairString } from '@near-js/crypto';
 import type { KeyPairSigner } from '@solana/kit';
 import { x402Facilitator } from '@x402/core/facilitator';
 import type { Network } from '@x402/core/types';
+import { createFacilitatorNearSigner } from '@x402/near';
+import { ExactNearScheme } from '@x402/near/exact/facilitator';
 import { toFacilitatorSvmSigner } from '@x402/svm';
 import { registerExactSvmScheme } from '@x402/svm/exact/facilitator';
 import { createLocalFacilitatorClient } from '../../../src/payments/x402/chain';
@@ -39,12 +42,20 @@ export interface LoopbackSolana {
   readonly feePayer: KeyPairSigner;
 }
 
+export interface LoopbackNear {
+  readonly network: string;
+  readonly rpcUrl: string;
+  /** Submits delegate actions and pays their gas; LOCAL DEVELOPMENT ONLY */
+  readonly relayer: { readonly accountId: string; readonly secretKey: KeyPairString };
+}
+
 export async function startLoopbackFacilitator(options: {
   readonly evm?: {
     readonly chains: readonly LoopbackChain[];
     readonly signerPrivateKey: `0x${string}`;
   };
   readonly svm?: LoopbackSolana;
+  readonly near?: LoopbackNear;
 }): Promise<LoopbackFacilitator> {
   const chains = options.evm?.chains ?? [];
   const bindings = new Map<string, FacilitatorBinding>(
@@ -57,13 +68,29 @@ export async function startLoopbackFacilitator(options: {
       return [network, createLocalFacilitatorBinding(client, network, () => false)];
     }),
   );
-  const solana = options.svm;
-  const svmFacilitator = solana
-    ? registerExactSvmScheme(new x402Facilitator(), {
-        signer: toFacilitatorSvmSigner(solana.feePayer, { defaultRpcUrl: solana.rpcUrl }),
-        networks: solana.network as Network,
-      })
-    : undefined;
+  // The SDK's own facilitators, by the network each serves
+  const sdkFacilitators = new Map<string, x402Facilitator>();
+  if (options.svm) {
+    const { network, rpcUrl, feePayer } = options.svm;
+    sdkFacilitators.set(
+      network,
+      registerExactSvmScheme(new x402Facilitator(), {
+        signer: toFacilitatorSvmSigner(feePayer, { defaultRpcUrl: rpcUrl }),
+        networks: network as Network,
+      }),
+    );
+  }
+  if (options.near) {
+    const { network, rpcUrl, relayer } = options.near;
+    const signer = createFacilitatorNearSigner({
+      relayers: [relayer],
+      rpcUrls: { [network]: rpcUrl },
+    });
+    sdkFacilitators.set(
+      network,
+      new x402Facilitator().register(network as Network, new ExactNearScheme(signer)),
+    );
+  }
 
   const server: Server = createServer((req, res) => {
     const reply = (status: number, body: unknown) => {
@@ -72,15 +99,15 @@ export async function startLoopbackFacilitator(options: {
       res.end(JSON.stringify(body));
     };
     if (req.method === 'GET' && req.url === '/supported') {
-      // The Solana kinds carry the fee payer, as the SDK reports them
-      const svmSupported = svmFacilitator?.getSupported();
+      // As the SDK reports them: Solana kinds carry the fee payer
+      const sdk = [...sdkFacilitators.values()].map((facilitator) => facilitator.getSupported());
       reply(200, {
         kinds: [
           ...chains.map(({ network }) => ({ x402Version: 2, scheme: 'exact', network })),
-          ...(svmSupported?.kinds.filter((kind) => kind.x402Version === 2) ?? []),
+          ...sdk.flatMap((supported) => supported.kinds.filter((kind) => kind.x402Version === 2)),
         ],
         extensions: [],
-        signers: svmSupported?.signers ?? {},
+        signers: Object.assign({}, ...sdk.map((supported) => supported.signers)),
       });
       return;
     }
@@ -94,12 +121,13 @@ export async function startLoopbackFacilitator(options: {
       .then(async (body) => {
         const requirements = body['paymentRequirements'] as { network: string };
         const payload = body['paymentPayload'] as never;
-        if (svmFacilitator && requirements.network === solana?.network) {
+        const sdkFacilitator = sdkFacilitators.get(requirements.network);
+        if (sdkFacilitator) {
           reply(
             200,
             operation === 'verify'
-              ? await svmFacilitator.verify(payload, requirements as never)
-              : await svmFacilitator.settle(payload, requirements as never),
+              ? await sdkFacilitator.verify(payload, requirements as never)
+              : await sdkFacilitator.settle(payload, requirements as never),
           );
           return;
         }

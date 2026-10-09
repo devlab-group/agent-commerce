@@ -17,7 +17,7 @@ import { CommerceError } from '../../core';
 /** Chain id of the local Anvil dev chain, Anvil's default */
 export const LOCAL_CHAIN_ID = 31337;
 
-export type X402NetworkFamily = 'evm' | 'svm' | 'tvm';
+export type X402NetworkFamily = 'evm' | 'svm' | 'near';
 
 export type NetworkKind = 'testnet' | 'mainnet';
 
@@ -52,7 +52,7 @@ interface NonEvmNetwork<F extends X402NetworkFamily> {
   readonly id: string;
   readonly displayName: string;
   readonly kind: NetworkKind;
-  /** Solana mint or TON jetton master in wire form, with no EIP-712 domain */
+  /** Solana mint or NEAR NEP-141 contract account, with no EIP-712 domain */
   readonly canonicalAsset: {
     readonly symbol: string;
     readonly address: string;
@@ -63,7 +63,7 @@ interface NonEvmNetwork<F extends X402NetworkFamily> {
 export type X402Network =
   | (NetworkProfile & { readonly family: 'evm' })
   | NonEvmNetwork<'svm'>
-  | NonEvmNetwork<'tvm'>;
+  | NonEvmNetwork<'near'>;
 
 /** A merchant-declared EVM network, from `payments.x402.networks` */
 export interface CustomNetworkDeclaration {
@@ -163,25 +163,26 @@ const PROFILES: readonly X402Network[] = [
       decimals: 6,
     },
   },
+  // NEAR's USDC contracts are implicit accounts: 64 lowercase hex characters
   {
-    family: 'tvm',
-    id: 'tvm:-239',
-    displayName: 'TON',
+    family: 'near',
+    id: 'near:mainnet',
+    displayName: 'NEAR',
     kind: 'mainnet',
     canonicalAsset: {
-      symbol: 'USDT',
-      address: '0:b113a994b5024a16719f69139328eb759596c38a25f59028b146fecdc3621dfe',
+      symbol: 'USDC',
+      address: '17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1',
       decimals: 6,
     },
   },
   {
-    family: 'tvm',
-    id: 'tvm:-3',
-    displayName: 'TON Testnet',
+    family: 'near',
+    id: 'near:testnet',
+    displayName: 'NEAR Testnet',
     kind: 'testnet',
     canonicalAsset: {
-      symbol: 'USDT',
-      address: '0:f418a04cf196ebc959366844a6cdf53a6fd6fff1eadafc892f05210bba31593e',
+      symbol: 'USDC',
+      address: '3e2210e1184b45b64c8a434c0a7e7b23cc04ea7eb7a6c3c32520d03d4afcb8af',
       decimals: 6,
     },
   },
@@ -239,9 +240,8 @@ export function requireX402Network(id: string, path: string, custom?: CustomNetw
 }
 
 /**
- * Checks `payments.x402.networks`. A declaration may add an `eip155` network
- * only: redeclaring a built-in one could relabel a mainnet as a testnet, and
- * the Solana and TON networks are fixed by their SDKs.
+ * Allows only new `eip155` networks in `payments.x402.networks`. Redeclaring
+ * built-ins could relabel mainnet as testnet; Solana and NEAR IDs are SDK-fixed.
  */
 export function validateCustomNetworks(custom: CustomNetworks, path: string): void {
   for (const id of Object.keys(custom)) {

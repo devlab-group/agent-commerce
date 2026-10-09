@@ -1,16 +1,16 @@
-// Address checks per family, with @ton/core and the x402 SDK as oracles for TON
-import { Address } from '@ton/core';
-import { normalizeTonAddress } from '@x402/tvm';
+// Address checks per family
 import { describe, expect, it } from 'vitest';
-import { isBurnAddress, normalizeAddress, sameAddress } from '../../../src/payments/x402/addresses';
+import {
+  isBurnAddress,
+  isTransactionReference,
+  normalizeAddress,
+  sameAddress,
+} from '../../../src/payments/x402/addresses';
 import { requireX402Network } from '../../../src/payments/x402/networks';
 
 const BASE = requireX402Network('eip155:8453', 'test');
 const SOLANA = requireX402Network('solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp', 'test');
-const TON = requireX402Network('tvm:-239', 'test');
-const TON_TESTNET = requireX402Network('tvm:-3', 'test');
-
-const USDT_RAW = '0:b113a994b5024a16719f69139328eb759596c38a25f59028b146fecdc3621dfe';
+const NEAR = requireX402Network('near:mainnet', 'test');
 
 describe('EVM addresses', () => {
   it('accepts 20 hex bytes in any letter case and keeps them as given', () => {
@@ -55,34 +55,75 @@ describe('Solana addresses', () => {
   });
 });
 
-describe('TON addresses', () => {
-  const parsed = Address.parse(USDT_RAW);
-
-  it('reads every user-friendly form as the raw address the SDK uses', () => {
-    for (const bounceable of [true, false]) {
-      for (const urlSafe of [true, false]) {
-        const friendly = parsed.toString({ bounceable, urlSafe });
-        expect(normalizeAddress(TON, friendly)).toBe(USDT_RAW);
-        expect(normalizeTonAddress(friendly)).toBe(USDT_RAW);
-      }
+describe('NEAR account IDs', () => {
+  // Examples from the NEAR protocol specification's account ID rules
+  it('accepts named accounts, subaccounts and implicit accounts', () => {
+    for (const id of [
+      'ok',
+      'bowen',
+      'ek-2',
+      'ek.near',
+      'com',
+      'google.com',
+      'bowen.google.com',
+      'near',
+      'illia.cheap-accounts.near',
+      'max_99.near',
+      '100',
+      'near2019',
+      'over.9000',
+      'a.bro',
+      'bro.a',
+      // An implicit account and an Ethereum-implicit account
+      '17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1',
+      '0x06012c8cf97bead5deae237070f9587f8e7a266d',
+      'a'.repeat(64),
+    ]) {
+      expect(normalizeAddress(NEAR, id), id).toBe(id);
     }
-    expect(normalizeAddress(TON, USDT_RAW.toUpperCase())).toBe(USDT_RAW);
   });
 
-  it('refuses a broken checksum', () => {
-    const friendly = parsed.toString();
-    const flipped = `${friendly.slice(0, 10)}${friendly[10] === 'A' ? 'B' : 'A'}${friendly.slice(11)}`;
-    expect(normalizeAddress(TON, flipped)).toBeUndefined();
+  it('refuses IDs that break the rule, whatever their suffix', () => {
+    for (const id of [
+      'a',
+      'A',
+      'Abc',
+      '-near',
+      'near-',
+      '-near-',
+      'near.',
+      '.near',
+      'near..near',
+      'near_-near',
+      'near-_near',
+      'near__near',
+      'a b',
+      'alice.near!',
+      'a'.repeat(65),
+    ]) {
+      expect(normalizeAddress(NEAR, id), id).toBeUndefined();
+    }
   });
 
-  it('refuses a testnet-only address on mainnet and accepts it on testnet', () => {
-    const testOnly = parsed.toString({ testOnly: true });
-    expect(normalizeAddress(TON, testOnly)).toBeUndefined();
-    expect(normalizeAddress(TON_TESTNET, testOnly)).toBe(USDT_RAW);
+  it('compares account IDs exactly and has no zero account', () => {
+    expect(sameAddress(NEAR, 'alice.near', 'alice.near')).toBe(true);
+    expect(isBurnAddress(NEAR, 'system')).toBe(false);
   });
+});
 
-  it('treats a zero account hash as a burn address', () => {
-    expect(isBurnAddress(TON, `0:${'0'.repeat(64)}`)).toBe(true);
-    expect(isBurnAddress(TON, USDT_RAW)).toBe(false);
+describe('transaction references', () => {
+  it('reads each family in its own form', () => {
+    const near = 'FGgDFXFA3UCj533aWRMtV6iL3kVzLmgJKNt22HK9A7Z5';
+    expect(isTransactionReference(NEAR, near)).toBe(true);
+    // A Solana signature is 64 bytes, not a 32-byte NEAR hash
+    expect(
+      isTransactionReference(
+        NEAR,
+        '61HQAvrUL3kcNhYW9nYLGYvVbY7fREZaNvpvTyoMEpEHXcMS2i4pF8ThAGH8QNHHvhUMor8GEffUdHLSp4qQJd83',
+      ),
+    ).toBe(false);
+    expect(isTransactionReference(NEAR, '')).toBe(false);
+    expect(isTransactionReference(BASE, `0x${'ab'.repeat(32)}`)).toBe(true);
+    expect(isTransactionReference(BASE, near)).toBe(false);
   });
 });

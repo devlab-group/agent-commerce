@@ -184,11 +184,26 @@ persistence must not fail the commerce flow.
     `string` to carry a Solana mint and wallet. Code reading either field as
     `0x${string}` must narrow it.
   - The descriptor's `supportedSpec` names `family=eip155`, `family=solana`
-    or both; capabilities gain `exact-svm`, and `unsupported` lists `tvm`
-    instead of `svm`.
+    or both; capabilities gain `exact-svm`, and `unsupported` no longer
+    lists `svm`.
   - A settlement success must name the offer's network and a transaction in
     its family's form, for EVM offers too. Anything else unlocks nothing, and
     the pipeline records the attempt `settlement-uncertain`.
+- The x402 provider serves NEAR offers (`near:mainnet`, `near:testnet`)
+  through a remote facilitator.
+  - `X402OfferOptions.asset` and `payTo` carry NEAR account IDs for a NEAR
+    offer. The descriptor's `supportedSpec` can name `family=near`,
+    capabilities gain `exact-near`, and `unsupported` no longer lists a
+    chain family.
+  - `@x402/near` is the optional peer for NEAR offers, loaded only when one
+    is configured.
+  - Verification reasons that name the facilitator's failure to read the
+    chain or its configuration, such as
+    `invalid_exact_near_access_key_lookup_failed`, are no verdict:
+    `PAYMENT_PROVIDER_UNAVAILABLE` at verify, `settlement-uncertain` at settle.
+  - `createX402PaymentProvider` refuses a `maxTimeoutSeconds` that is not a
+    positive integer with `CONFIG_INVALID`, as config load already did: the
+    NEAR facilitator refuses every payment under such a value.
 
 - `ProtocolName` gained `a2a` and `acp`; `PROTOCOL_NAMES` is the runtime list
   used by validation. It is derived from a record keyed by the union, so a
@@ -313,13 +328,13 @@ Published as `@devlab.group/agent-commerce/x402`.
 export interface X402OfferOptions {
   readonly network: string; // CAIP-2, for example 'eip155:84532'
   readonly rpcUrl: string;
-  readonly asset: string; // ERC-20 contract or Solana mint
+  readonly asset: string; // ERC-20 contract, Solana mint or NEAR token account
   /** The token's EIP-712 domain; an EIP-3009 offer needs both */
   readonly assetName?: string;
   readonly assetVersion?: string;
   readonly assetDecimals: number;
   /** Merchant-controlled settlement destination. */
-  readonly payTo: string; // on Solana, the wallet
+  readonly payTo: string; // on Solana the wallet, on NEAR the account
   /** EVM only. Default 'eip3009'. A Permit2 buyer approves Permit2 for the token first */
   readonly assetTransferMethod?: X402AssetTransferMethod;
 }

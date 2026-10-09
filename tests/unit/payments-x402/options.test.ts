@@ -1,12 +1,11 @@
-// Solana and TON options resolve here, although config load refuses them until their providers exist
-import { Address } from '@ton/core';
+// Options of every family resolve here, before config load applies its guardrails
 import { describe, expect, it } from 'vitest';
 import { resolveX402Option } from '../../../src/payments/x402/options';
 
 const SOLANA_DEVNET = 'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1';
 const SOLANA_PAYEE = '9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM';
-const TON_TESTNET = 'tvm:-3';
-const TON_PAYEE_RAW = `0:${'ab'.repeat(32)}`;
+const NEAR_TESTNET = 'near:testnet';
+const NEAR_PAYEE = 'merchant.testnet';
 
 describe('resolveX402Option', () => {
   it('fills a Solana option from the network USDC mint, with no EIP-712 domain', () => {
@@ -28,22 +27,29 @@ describe('resolveX402Option', () => {
     ).toThrow(/EVM tokens only/);
   });
 
-  it('carries a TON payee in raw form, whichever form it was given in', () => {
-    const friendly = Address.parse(TON_PAYEE_RAW).toString({ testOnly: true });
-    const option = resolveX402Option({ network: TON_TESTNET, payTo: friendly }, 'opt');
+  it('fills a NEAR option from the network USDC contract, an implicit account', () => {
+    const option = resolveX402Option({ network: NEAR_TESTNET, payTo: NEAR_PAYEE }, 'opt');
     expect(option).toMatchObject({
-      payTo: TON_PAYEE_RAW,
+      payTo: NEAR_PAYEE,
+      asset: '3e2210e1184b45b64c8a434c0a7e7b23cc04ea7eb7a6c3c32520d03d4afcb8af',
       assetDecimals: 6,
-      defaultAssetSymbol: 'USDT',
+      defaultAssetSymbol: 'USDC',
     });
+    expect(option.network.family).toBe('near');
   });
 
-  it('needs decimals for a jetton other than the default', () => {
+  it('refuses a payee that is not a NEAR account ID, and an EIP-712 domain', () => {
     expect(() =>
-      resolveX402Option(
-        { network: TON_TESTNET, payTo: TON_PAYEE_RAW, asset: `0:${'cd'.repeat(32)}` },
-        'opt',
-      ),
+      resolveX402Option({ network: NEAR_TESTNET, payTo: 'Merchant.testnet' }, 'opt'),
+    ).toThrow(/NEAR account ID/);
+    expect(() =>
+      resolveX402Option({ network: NEAR_TESTNET, payTo: NEAR_PAYEE, assetVersion: '1' }, 'opt'),
+    ).toThrow(/EVM tokens only/);
+  });
+
+  it('needs decimals for a token other than the default', () => {
+    expect(() =>
+      resolveX402Option({ network: NEAR_TESTNET, payTo: NEAR_PAYEE, asset: 'usdt.testnet' }, 'opt'),
     ).toThrow(/needs assetDecimals/);
   });
 

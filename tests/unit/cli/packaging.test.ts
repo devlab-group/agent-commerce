@@ -208,11 +208,10 @@ describe('published package metadata', () => {
       '@modelcontextprotocol/server',
       '@sd-jwt/core',
       '@solana/kit',
-      '@ton/core',
       '@x402/core',
       '@x402/evm',
+      '@x402/near',
       '@x402/svm',
-      '@x402/tvm',
       'canonicalize',
       'jose',
       'mppx',
@@ -416,11 +415,13 @@ describe.skipIf(!existsSync(libEntry))('optional-peer subpaths', () => {
   it('imports only its own peer, in each subpath', () => {
     expect(bareImportsOf(mcpEntry)).toEqual(['@modelcontextprotocol/server']);
     // Dynamic imports: `@coinbase/x402` loads only for facilitator auth.type
-    // `cdp`, `@x402/svm` only for a Solana offer
+    // `cdp`, `@x402/svm` only for a Solana offer, `@x402/near` only for a
+    // NEAR offer
     expect(bareImportsOf(x402Entry).sort()).toEqual([
       '@coinbase/x402',
       '@x402/core',
       '@x402/evm',
+      '@x402/near',
       '@x402/svm',
       'viem',
     ]);
@@ -429,6 +430,7 @@ describe.skipIf(!existsSync(libEntry))('optional-peer subpaths', () => {
       '@coinbase/x402',
       '@x402/core',
       '@x402/evm',
+      '@x402/near',
       '@x402/svm',
       'mppx',
       'viem',

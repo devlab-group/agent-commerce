@@ -1465,18 +1465,6 @@ function normalizeX402(raw: RawX402): NormalizedX402 {
     resolveX402Option(x402OptionInput(entry, path), path, networks),
   );
 
-  // Reject resolved options the provider cannot serve so `validate` reports
-  // them before startup
-  resolved.forEach((option, i) => {
-    if (option.network.family === 'tvm') {
-      const path = `${entries[i]?.[0]}.network`;
-      throw x402Invalid(
-        `${path}: x402 settlement on ${option.network.displayName} (${option.network.id}) is not available yet; EVM and Solana networks are`,
-        path,
-      );
-    }
-  });
-
   const facilitator = normalizeFacilitator(raw.facilitator);
   const allowMainnet =
     raw.allowMainnet !== undefined ? toBoolean(raw.allowMainnet, `${at}.allowMainnet`) : undefined;

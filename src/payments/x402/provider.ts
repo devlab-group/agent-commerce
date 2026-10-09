@@ -1,7 +1,9 @@
 /**
  * x402 payment provider: protocol v2, `exact` scheme. On EVM the buyer signs an
  * EIP-3009 `transferWithAuthorization` or a Permit2 transfer through the x402
- * exact proxy; on Solana, a token transfer whose fee the facilitator pays.
+ * exact proxy; on Solana, a token transfer whose fee the facilitator pays; on
+ * NEAR, a delegated NEP-141 `ft_transfer` that the facilitator's relayer
+ * submits.
  *
  * `verify()` never moves funds. `settle()` does, and throws unless it is handed
  * a successful verification. Both run through a facilitator (see
@@ -91,11 +93,12 @@ const SETTLEMENT_PENDING_REASON = 'settlement_pending';
  * for a transaction that failed on chain. Only the second carries a
  * transaction reference. A failure the SDK recognizes before the broadcast gets
  * its own reason instead. The EVM Permit2 path appends the thrown message as
- * `: <message>`.
+ * `: <message>`. On NEAR the second is a failed inner `ft_transfer` receipt.
  */
 const TRANSACTION_FAILED_REASONS = [
   'invalid_exact_evm_transaction_failed',
   'invalid_exact_svm_transaction_failed',
+  'settlement_failed',
 ];
 const isTransactionFailedReason = (reason: string | undefined): boolean =>
   reason !== undefined &&
@@ -109,6 +112,39 @@ const UNKNOWN_OUTCOME_REASONS: ReadonlySet<string> = new Set([
   'duplicate_settlement',
   'post_settlement_transfer_not_confirmed',
 ]);
+/**
+ * Facilitator configuration and chain-read failures yield no payment verdict.
+ * The NEAR SDK returns these reasons before submission; classify them as
+ * provider failures rather than buyer refusals.
+ */
+const NO_VERDICT_REASONS: ReadonlySet<string> = new Set([
+  'unexpected_verify_error',
+  'invalid_exact_near_no_relayer_configured',
+  'invalid_exact_near_current_block_height_unavailable',
+  'invalid_exact_near_access_key_lookup_failed',
+  'invalid_exact_near_account_lookup_failed',
+  'invalid_exact_near_token_account_lookup_failed',
+  'invalid_exact_near_balance_check_failed',
+  'invalid_exact_near_storage_check_failed',
+]);
+/**
+ * NEAR settle failures that are verdicts. The NEAR specification leaves the
+ * reason implementation-specific and the transaction empty, even after a
+ * submission, so only the SDK's verification reasons, returned before it
+ * submits, and a failed inner `ft_transfer` with its hash prove nothing moved.
+ */
+const NEAR_PRE_SUBMISSION_REASONS: ReadonlySet<string> = new Set([
+  'invalid_x402_version',
+  'unsupported_scheme',
+  'invalid_network',
+  'insufficient_funds',
+  'verification_failed',
+]);
+const isNearVerdict = (reason: string | undefined): boolean =>
+  reason !== undefined &&
+  (reason === 'settlement_failed' ||
+    reason.startsWith('invalid_exact_near_') ||
+    NEAR_PRE_SUBMISSION_REASONS.has(reason));
 // How long a `/supported` snapshot names the Solana fee payer of new offers
 const SUPPORTED_TTL_MS = 60_000;
 /**
@@ -234,7 +270,15 @@ interface SvmOffer extends OfferBase {
   readonly payTo: string;
 }
 
-type Offer = EvmOffer | SvmOffer;
+// Always a remote facilitator, like Solana
+interface NearOffer extends OfferBase {
+  readonly family: 'near';
+  readonly profile: Extract<X402Network, { family: 'near' }>;
+  readonly asset: string;
+  readonly payTo: string;
+}
+
+type Offer = EvmOffer | SvmOffer | NearOffer;
 
 export function createX402PaymentProvider(
   options: X402ProviderOptions | X402MultiOfferProviderOptions,
@@ -242,6 +286,16 @@ export function createX402PaymentProvider(
   const inputs: readonly X402OfferOptions[] = 'offers' in options ? options.offers : [options];
   if (inputs.length === 0) {
     throw new CommerceError('CONFIG_INVALID', 'x402 provider: "offers" is empty');
+  }
+  // The NEAR facilitator refuses every payment under any other value
+  if (
+    options.maxTimeoutSeconds !== undefined &&
+    (!Number.isInteger(options.maxTimeoutSeconds) || options.maxTimeoutSeconds <= 0)
+  ) {
+    throw new CommerceError(
+      'CONFIG_INVALID',
+      `x402 provider: maxTimeoutSeconds must be a positive integer (got ${options.maxTimeoutSeconds})`,
+    );
   }
   // Share one remote binding, created after the first offer passes validation
   let remoteBinding: FacilitatorBinding | undefined;
@@ -255,17 +309,13 @@ export function createX402PaymentProvider(
     // fails in `resolveX402Deployment` below.
     const known = findX402Network(input.network, options.customNetworks);
     if (known !== undefined && known.family !== 'evm') {
-      if (known.family !== 'svm') {
-        throw new CommerceError(
-          'CONFIG_INVALID',
-          `x402 provider: ${field('network')} "${input.network}" (${known.displayName}): TON settlement is not available yet`,
-        );
-      }
+      const shape =
+        known.family === 'svm' ? 'a Solana address (base58, 32 bytes)' : 'a NEAR account ID';
       for (const name of ['asset', 'payTo'] as const) {
         if (normalizeAddress(known, input[name]) === undefined) {
           throw new CommerceError(
             'CONFIG_INVALID',
-            `x402 provider: ${field(name)} is not a Solana address (base58, 32 bytes)`,
+            `x402 provider: ${field(name)} is not ${shape}`,
           );
         }
       }
@@ -386,8 +436,8 @@ export function createX402PaymentProvider(
     if (profile.family === 'svm') {
       return { ...base, family: 'svm', profile, asset: input.asset, payTo: input.payTo };
     }
-    if (profile.family !== 'evm') {
-      throw new CommerceError('CONFIG_INVALID', `x402 provider: ${field('network')} is not served`);
+    if (profile.family === 'near') {
+      return { ...base, family: 'near', profile, asset: input.asset, payTo: input.payTo };
     }
     return {
       ...base,
@@ -410,6 +460,7 @@ export function createX402PaymentProvider(
 
   const evmOffers = offers.filter((offer): offer is EvmOffer => offer.family === 'evm');
   const hasSvm = offers.some((offer) => offer.family === 'svm');
+  const hasNear = offers.some((offer) => offer.family === 'near');
   const descriptor: AdapterDescriptor = {
     name: 'x402',
     kind: 'payment',
@@ -417,10 +468,12 @@ export function createX402PaymentProvider(
     supportedSpec: `x402/v${X402_VERSION} scheme=exact family=${[
       ...(evmOffers.length > 0 ? ['eip155'] : []),
       ...(hasSvm ? ['solana'] : []),
+      ...(hasNear ? ['near'] : []),
     ].join(',')}`,
     capabilities: [
       ...(evmOffers.length > 0 ? ['exact-evm'] : []),
       ...(hasSvm ? ['exact-svm'] : []),
+      ...(hasNear ? ['exact-near'] : []),
       `${options.facilitator.mode}-facilitator`,
       ...(evmOffers.some((offer) => offer.method === 'eip3009') ? ['eip-3009'] : []),
       ...(evmOffers.some((offer) => offer.method === 'permit2') ? ['permit2'] : []),
@@ -432,7 +485,6 @@ export function createX402PaymentProvider(
     ],
     status: 'stable',
     unsupported: [
-      'tvm',
       'permit2 gas sponsoring extensions',
       'upto scheme',
       'batch-settlement scheme',
@@ -440,11 +492,21 @@ export function createX402PaymentProvider(
     ],
   };
 
-  // Loaded only with a Solana offer, so EVM-only deployments need no Solana peer
-  const svmModule = hasSvm ? loadSvmModule() : undefined;
+  // Loaded only with an offer of their family, so no deployment needs the
+  // peers of a family it does not offer
+  const svmModule = hasSvm
+    ? loadOptionalModule(() => import('./svm'), 'Solana offers need @x402/svm and @solana/kit')
+    : undefined;
+  const nearModule = hasNear
+    ? loadOptionalModule(() => import('./near'), 'NEAR offers need @x402/near')
+    : undefined;
   const svm = async () => {
     if (!svmModule) throw new Error('x402 provider: no Solana offer is configured');
     return svmModule;
+  };
+  const near = async () => {
+    if (!nearModule) throw new Error('x402 provider: no NEAR offer is configured');
+    return nearModule;
   };
 
   // A Solana offer carries the fee payer the facilitator names in `/supported`.
@@ -529,21 +591,22 @@ export function createX402PaymentProvider(
         amount: parseCanonicalAmount(context.amount, offer.assetDecimals).toString(),
         payTo: offer.payTo,
         maxTimeoutSeconds,
-        // EVM: `name`/`version` let the buyer and the facilitator build the
-        // same EIP-712 domain without calling `version()` on the token. They
-        // are required for EIP-3009; a Permit2 offer signs Permit2's own
-        // domain. `assetTransferMethod` names the method the client must sign
-        // with. Solana: the buyer's transaction names the facilitator's fee
-        // payer, as the SDK's server scheme adds it.
+        // EIP-3009 needs `name`/`version` for a shared EIP-712 domain without
+        // a token `version()` call; Permit2 uses its own domain. EVM clients
+        // sign the named `assetTransferMethod`. Solana needs the facilitator's
+        // fee payer; NEAR needs no scheme-specific extra because the
+        // facilitator chooses its relayer.
         extra:
           offer.family === 'svm'
             ? { feePayer: await svmFeePayer(offer), ...flow }
-            : {
-                ...(offer.assetName !== undefined ? { name: offer.assetName } : {}),
-                ...(offer.assetVersion !== undefined ? { version: offer.assetVersion } : {}),
-                assetTransferMethod: offer.method,
-                ...flow,
-              },
+            : offer.family === 'near'
+              ? { ...flow }
+              : {
+                  ...(offer.assetName !== undefined ? { name: offer.assetName } : {}),
+                  ...(offer.assetVersion !== undefined ? { version: offer.assetVersion } : {}),
+                  assetTransferMethod: offer.method,
+                  ...flow,
+                },
       })),
     );
     const single = offers.length === 1 ? offers[0] : undefined;
@@ -688,20 +751,33 @@ export function createX402PaymentProvider(
     }
     // EVM: the authorization names payer, payee and amount. Solana: the
     // facilitator reads the transaction, and the gateway takes its identity.
+    // NEAR: the delegate names the transfer, checked here against the offer.
     let transfer: Transfer | undefined;
     let replayKey: string;
+    let derivedPayer: string | undefined;
     if (offer.family === 'svm') {
       const identity = (await svm()).svmReplayKey(payload.payload, offer.network);
       if (typeof identity === 'string') return rejected(identity);
       replayKey = identity.replayKey;
+    } else if (offer.family === 'near') {
+      const inspected = (await near()).inspectNearPayload(payload.payload, {
+        network: offer.network,
+        asset: offer.asset,
+        payTo: offer.payTo,
+        amount: requirements.amount,
+      });
+      if (typeof inspected === 'string') return rejected(inspected);
+      replayKey = inspected.replayKey;
+      derivedPayer = inspected.payer;
     } else {
       const read = readTransfer(payload, offer);
       if (typeof read === 'string') return rejected(read);
       transfer = read;
       replayKey = read.replayKey;
+      derivedPayer = read.from;
     }
-    // `accepted.network` names the chain the buyer signed for, so a mismatch
-    // means a signature bound to a chain we do not settle on
+    // Reject a different network before calling the facilitator. NEAR's
+    // delegate signature itself does not bind the chain.
     if (payload.accepted.network !== offer.network) {
       return rejected('invalid_network');
     }
@@ -755,7 +831,7 @@ export function createX402PaymentProvider(
 
     if (!sdkResult.isValid) {
       // An RPC that never answered is not a payment that failed a check
-      if (scope.transportFailed()) {
+      if (scope.transportFailed() || NO_VERDICT_REASONS.has(sdkResult.invalidReason ?? '')) {
         if (sdkResult.invalidReason !== undefined) {
           logger.debug(
             { reportedReason: redactedErrorText(sdkResult.invalidReason) },
@@ -780,7 +856,7 @@ export function createX402PaymentProvider(
 
     // The Solana payer is the facilitator's reading of the transaction
     const payer =
-      transfer?.from ??
+      derivedPayer ??
       (sdkResult.payer !== undefined && normalizeAddress(offer.profile, sdkResult.payer)
         ? sdkResult.payer
         : undefined);
@@ -906,6 +982,7 @@ export function createX402PaymentProvider(
         sdkResult.errorReason === SETTLEMENT_PENDING_REASON ||
         sdkResult.errorMessage?.startsWith(SETTLEMENT_PENDING_REASON) === true ||
         UNKNOWN_OUTCOME_REASONS.has(sdkResult.errorReason ?? '') ||
+        NO_VERDICT_REASONS.has(sdkResult.errorReason ?? '') ||
         scope.transportFailed()
       ) {
         throw new CommerceError(
@@ -916,6 +993,17 @@ export function createX402PaymentProvider(
               ? { details: { transactionHash: sdkResult.transaction } }
               : {}),
           },
+        );
+      }
+      // A `settlement_failed` that reaches here carries its hash
+      if (offer.family === 'near' && !isNearVerdict(sdkResult.errorReason)) {
+        logger.warn(
+          { reportedReason: redactedErrorText(sdkResult.errorReason ?? '') },
+          'x402 settle(): NEAR facilitator failure reason is not a verdict; outcome unknown',
+        );
+        throw new CommerceError(
+          'PAYMENT_PROVIDER_UNAVAILABLE',
+          'x402 provider: settlement failed with an unclassified error; outcome unknown',
         );
       }
       if (sdkResult.errorReason !== undefined) {
@@ -969,6 +1057,7 @@ export function createX402PaymentProvider(
     kinds: () => Promise<readonly SupportedKind[]>,
   ): Promise<{ readonly status: 'pass' | 'fail'; readonly detail: string }> {
     if (offer.family === 'svm') return svmOfferHealth(offer, kinds);
+    if (offer.family === 'near') return nearOfferHealth(offer, kinds);
     const { profile, rpcOrigin, healthClient, binding } = offer;
     const chainId = await healthClient.getChainId();
     if (chainId !== profile.chainId) {
@@ -1056,7 +1145,7 @@ export function createX402PaymentProvider(
     const { profile, rpcOrigin, binding } = offer;
     // A missing Solana peer fails readiness, not the first paid request
     await svm();
-    const genesis = await solanaRpc(offer.rpcUrl, 'getGenesisHash', []);
+    const genesis = await jsonRpc(offer.rpcUrl, 'getGenesisHash', []);
     const cluster = typeof genesis === 'string' ? `solana:${genesis.slice(0, 32)}` : undefined;
     if (cluster !== offer.network) {
       return {
@@ -1064,7 +1153,7 @@ export function createX402PaymentProvider(
         detail: `RPC at ${rpcOrigin} serves ${cluster ?? 'an unknown cluster'}, expected ${offer.network} (${profile.displayName})`,
       };
     }
-    const mint = await solanaRpc(offer.rpcUrl, 'getAccountInfo', [
+    const mint = await jsonRpc(offer.rpcUrl, 'getAccountInfo', [
       offer.asset,
       { encoding: 'base64' },
     ]);
@@ -1101,6 +1190,84 @@ export function createX402PaymentProvider(
         `${describeDeploymentMode(deploymentMode)}: RPC ${rpcOrigin} serves ${profile.displayName}, ` +
         `mint ${offer.asset} has ${decimals} decimals, facilitator ${binding.describe} supports ` +
         `exact/${offer.network} with fee payer ${feePayer}`,
+    };
+  }
+
+  // A NEAR offer's chain, token and merchant registration. The RPC's `status`
+  // names the chain it serves; an account suffix such as `.testnet` proves
+  // nothing.
+  async function nearOfferHealth(
+    offer: NearOffer,
+    kinds: () => Promise<readonly SupportedKind[]>,
+  ): Promise<{ readonly status: 'pass' | 'fail'; readonly detail: string }> {
+    const { profile, rpcOrigin, binding, rpcUrl } = offer;
+    // A missing NEAR peer fails readiness, not the first paid request
+    await near();
+    const status = await jsonRpc(rpcUrl, 'status', []);
+    const chainId = isRecord(status) ? status['chain_id'] : undefined;
+    const expected = offer.network.slice('near:'.length);
+    if (chainId !== expected) {
+      return {
+        status: 'fail',
+        detail: `RPC at ${rpcOrigin} serves chain ${String(chainId ?? 'unknown')}, expected ${expected} (${profile.displayName})`,
+      };
+    }
+    const token = await jsonRpc(rpcUrl, 'query', {
+      request_type: 'view_account',
+      finality: 'final',
+      account_id: offer.asset,
+    });
+    if (!isRecord(token) || token['code_hash'] === NEAR_EMPTY_CODE_HASH) {
+      return {
+        status: 'fail',
+        detail: `No contract code found at configured asset account ${offer.asset}`,
+      };
+    }
+    const metadata = await nearView(rpcUrl, offer.asset, 'ft_metadata', {});
+    const decimals = isRecord(metadata) ? metadata['decimals'] : undefined;
+    if (decimals !== offer.assetDecimals) {
+      return {
+        status: 'fail',
+        detail: `Token ${offer.asset} has ${String(decimals)} decimals, configured ${offer.assetDecimals}`,
+      };
+    }
+    // An unregistered recipient makes every transfer fail after the relayer
+    // paid for it. A token without NEP-145 storage management needs none.
+    let registered = true;
+    try {
+      registered =
+        (await nearView(rpcUrl, offer.asset, 'storage_balance_of', {
+          account_id: offer.payTo,
+        })) !== null;
+    } catch (err) {
+      if (!/MethodNotFound|MethodResolveError/i.test(redactedErrorText(err))) throw err;
+    }
+    if (!registered) {
+      return {
+        status: 'fail',
+        detail: `payTo ${offer.payTo} has no storage registered with token ${offer.asset}; register it (NEP-145 storage_deposit) before taking payments`,
+      };
+    }
+    const listed = (await kinds()).some(
+      (kind) =>
+        kind.x402Version === X402_VERSION &&
+        kind.scheme === 'exact' &&
+        kind.network === offer.network,
+    );
+    if (!listed) {
+      return {
+        status: 'fail',
+        detail:
+          `Facilitator ${binding.describe} does not advertise x402 v${X402_VERSION} scheme=exact ` +
+          `on ${offer.network} (${profile.displayName}); no payment on this deployment can settle`,
+      };
+    }
+    return {
+      status: 'pass',
+      detail:
+        `${describeDeploymentMode(deploymentMode)}: RPC ${rpcOrigin} serves ${expected}, ` +
+        `token ${offer.asset} has ${decimals} decimals and storage for ${offer.payTo}, ` +
+        `facilitator ${binding.describe} supports exact/${offer.network}`,
     };
   }
 
@@ -1194,16 +1361,14 @@ const PERMIT2_CONTRACTS = [
 ] as const;
 
 /**
- * Loads the Solana inspection module, refusing with a clear error when its
+ * Loads a family's inspection module, refusing with a clear error when its
  * optional peers are missing
  */
-function loadSvmModule(): Promise<typeof import('./svm')> {
-  const loading = import('./svm').catch((cause: unknown) => {
-    throw new CommerceError(
-      'PAYMENT_PROVIDER_UNAVAILABLE',
-      'x402 provider: Solana offers need the optional peers @x402/svm and @solana/kit',
-      { cause },
-    );
+function loadOptionalModule<T>(load: () => Promise<T>, missing: string): Promise<T> {
+  const loading = load().catch((cause: unknown) => {
+    throw new CommerceError('PAYMENT_PROVIDER_UNAVAILABLE', `x402 provider: ${missing}`, {
+      cause,
+    });
   });
   // verify() and health() report the failure; nothing else awaits it
   loading.catch(() => {});
@@ -1226,8 +1391,8 @@ function mintDecimals(result: unknown): number | undefined {
   return bytes.length >= 82 && bytes[45] === 1 ? bytes[44] : undefined;
 }
 
-// One Solana JSON-RPC call for health(), bounded like the EVM client's
-async function solanaRpc(rpcUrl: string, method: string, params: unknown[]): Promise<unknown> {
+// One JSON-RPC call for health(), bounded like the EVM client's
+async function jsonRpc(rpcUrl: string, method: string, params: unknown): Promise<unknown> {
   const response = await fetch(rpcUrl, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -1236,10 +1401,32 @@ async function solanaRpc(rpcUrl: string, method: string, params: unknown[]): Pro
   });
   const body = (await response.json()) as { result?: unknown; error?: unknown };
   if (body.error !== undefined) {
-    throw new Error(`Solana RPC ${method} failed: ${JSON.stringify(body.error)}`);
+    throw new Error(`RPC ${method} failed: ${JSON.stringify(body.error)}`);
   }
   return body.result;
 }
+
+// A NEAR contract view call at final finality, its result parsed as JSON
+async function nearView(
+  rpcUrl: string,
+  accountId: string,
+  method: string,
+  args: Record<string, unknown>,
+): Promise<unknown> {
+  const result = await jsonRpc(rpcUrl, 'query', {
+    request_type: 'call_function',
+    finality: 'final',
+    account_id: accountId,
+    method_name: method,
+    args_base64: Buffer.from(JSON.stringify(args)).toString('base64'),
+  });
+  const bytes = isRecord(result) ? result['result'] : undefined;
+  if (!Array.isArray(bytes)) throw new Error(`NEAR view ${method} returned no result`);
+  return JSON.parse(Buffer.from(bytes as number[]).toString('utf8'));
+}
+
+// The code hash of an account without a contract
+const NEAR_EMPTY_CODE_HASH = '11111111111111111111111111111111';
 
 // What a payload authorizes, read the way the offer's method settles it
 interface Transfer {

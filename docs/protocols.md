@@ -4,16 +4,16 @@ This page records the implemented subset and pinned revision for each protocol.
 
 ## Support matrix
 
-| Protocol | Status       | Revision                                                                       | Implemented subset                                                                                                                     |
-| -------- | ------------ | ------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
-| **HTTP** | Supported    | native                                                                         | resource routes and rail-specific payment headers                                                                                      |
-| **MCP**  | Supported    | MCP `2026-07-28` and `2025-11-25` through `@modelcontextprotocol/server@2.3.0` | tool discovery, invocation, payment-required and error mapping                                                                         |
-| **x402** | Supported    | x402 v2, `@x402/core@2.25.0`, `@x402/evm@2.25.0`, `@x402/svm@2.25.0`           | `exact` on EVM through EIP-3009, or Permit2 (partial), and on Solana (partial): challenge, verification, settlement and replay binding |
-| **A2A**  | Experimental | v1.0.1; negotiation `1.0`; `JSONRPC` binding                                   | Agent Card, `SendMessage`, paid flow and the x402 extension                                                                            |
-| **ACP**  | Experimental | stable snapshot `2026-04-17`; REST binding                                     | discovery and the five checkout operations                                                                                             |
-| **AP2**  | Experimental | v0.2.0, tag 2026-04-28, commit `b4587ac`; Direct mode                          | closed Checkout Mandate verification before settlement                                                                                 |
-| **MPP**  | Experimental | drafts at `tempoxyz/mpp-specs@806fdb8`; `mppx@0.13.1`                          | `charge`/`evm`/EIP-3009 over HTTP, MCP and A2A                                                                                         |
-| UCP      | Planned      | -                                                                              | no implementation                                                                                                                      |
+| Protocol | Status       | Revision                                                                                  | Implemented subset                                                                                                                                       |
+| -------- | ------------ | ----------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **HTTP** | Supported    | native                                                                                    | resource routes and rail-specific payment headers                                                                                                        |
+| **MCP**  | Supported    | MCP `2026-07-28` and `2025-11-25` through `@modelcontextprotocol/server@2.3.0`            | tool discovery, invocation, payment-required and error mapping                                                                                           |
+| **x402** | Supported    | x402 v2, `@x402/core@2.25.0`, `@x402/evm@2.25.0`, `@x402/svm@2.25.0`, `@x402/near@2.25.0` | `exact` on EVM through EIP-3009, or Permit2 (partial), on Solana (partial) and on NEAR (partial): challenge, verification, settlement and replay binding |
+| **A2A**  | Experimental | v1.0.1; negotiation `1.0`; `JSONRPC` binding                                              | Agent Card, `SendMessage`, paid flow and the x402 extension                                                                                              |
+| **ACP**  | Experimental | stable snapshot `2026-04-17`; REST binding                                                | discovery and the five checkout operations                                                                                                               |
+| **AP2**  | Experimental | v0.2.0, tag 2026-04-28, commit `b4587ac`; Direct mode                                     | closed Checkout Mandate verification before settlement                                                                                                   |
+| **MPP**  | Experimental | drafts at `tempoxyz/mpp-specs@806fdb8`; `mppx@0.13.1`                                     | `charge`/`evm`/EIP-3009 over HTTP, MCP and A2A                                                                                                           |
+| UCP      | Planned      | -                                                                                         | no implementation                                                                                                                                        |
 
 Experimental components are disabled unless configured and support only the
 subsets below. Planned means there is no adapter or endpoint.
@@ -550,12 +550,12 @@ No ACP SDK ships. Conformance tests use the vendored official schema and example
 ## x402
 
 The x402 provider supports v2 `exact` on EVM through EIP-3009
-`transferWithAuthorization` or, per option, Permit2, and on Solana. Permit2
-and Solana support are partial: settlement has run against deployed Permit2
-and proxy code on Anvil and on a local Solana validator, respectively, with
-no public-network settlement demonstrated for either. EVM requirements name
-the method in `extra.assetTransferMethod`; EIP-3009 also includes the token's
-EIP-712 domain name and version.
+`transferWithAuthorization` or, per option, Permit2, on Solana and on NEAR.
+Permit2, Solana and NEAR support are partial, tested only locally: Permit2
+and proxy bytecode on Anvil, Solana on a validator, and NEAR in a sandbox.
+No public-network settlement has been demonstrated for these paths. EVM
+requirements name the method in `extra.assetTransferMethod`; EIP-3009 also
+includes the token's EIP-712 domain name and version.
 
 Verification checks the scheme, signature, recipient, amount, validity window,
 payer balance, network and asset. Local refusals use x402 error codes where
@@ -586,10 +586,30 @@ visible leave the outcome unknown. The payer recorded is the one verification
 reported: the Solana scheme's settlement example names the fee payer as `payer`,
 where x402 v2 defines the payer's wallet.
 
+On NEAR, the buyer signs a NEP-366 delegate containing one `ft_transfer` of
+the offered amount to `payTo`, with one attached yoctoNEAR. The facilitator's
+relayer submits it and pays gas. NEAR adds no scheme-specific `extra`; an
+`upfront` offer still carries `extra.paymentFlow`. Before calling
+the facilitator, the gateway rejects mismatched tokens, recipients, amounts,
+methods or deposits, extra actions, and non-canonical base64 Borsh. The
+facilitator checks the signature, full-access key, nonce, delegate block
+window and chain state. The replay key uses the network, sender, public key
+including its curve, and nonce. Different delegate bytes under the same key
+and nonce still collide. The signature names no chain: network binding relies
+on the offer and facilitator's RPC. Settlement requires a successful inner
+`ft_transfer` receipt. `settlement_failed` without a hash leaves the outcome
+unknown because submission may have preceded the SDK exception; with a hash,
+it reports a failed inner transfer. Chain-read failures also leave no verdict.
+The NEAR specification leaves failure reasons to the facilitator, with an
+empty `transaction` even after a submission, so any other failure is a
+rejection only when its reason is one the SDK returns before submitting:
+`invalid_exact_near_*`, `insufficient_funds` or a version, scheme or network
+refusal. Any other reason leaves the outcome unknown.
+
 The signature covers neither the flow nor the resource, so the proof's
 `accepted` must match the offer: amount, asset, `payTo` (case-insensitive on
-EVM, case-sensitive on Solana), and every `extra` key the gateway sent, where
-an absent `extra.paymentFlow` means `authorization`. A `resource.url` in the
+EVM, case-sensitive on Solana and NEAR), and every `extra` key the gateway
+sent. An absent `extra.paymentFlow` means `authorization`. A `resource.url` in the
 proof must equal the challenge's. A mismatch is `invalid_payment_requirements`,
 refused before the facilitator is called. `maxTimeoutSeconds` and `extra` keys
 added by the client are not compared. The facilitator receives the payload
@@ -632,7 +652,7 @@ this gateway, although its nonce stays unused on chain. Presenting the same
 proof again returns 402 with `invalid_exact_evm_nonce_already_used`; the client
 signs a fresh authorization.
 
-Unsupported: TON, the Permit2 gas-sponsoring extensions
+Unsupported: the Permit2 gas-sponsoring extensions
 (`eip2612GasSponsoring`, `erc20ApprovalGasSponsoring`), the `upto`,
 `batch-settlement` and `auth-capture` schemes, multi-asset routing and
 dynamic pricing.

@@ -410,6 +410,46 @@ payments:
   buyer signs. The default `authorization` flow settles after the backend, so
   use `upfront` for a handler that can take longer.
 
+### NEAR
+
+NEAR options settle the network's NEP-141 USDC through a remote facilitator.
+The buyer signs a NEP-366 delegate action containing one `ft_transfer`; the
+facilitator's relayer submits it and pays gas, so the buyer needs no NEAR.
+The optional peer `@x402/near` loads only for NEAR options.
+
+```yaml
+payments:
+  x402:
+    network: near:testnet # built-in NEAR Testnet
+    rpcUrl: ${NEAR_TESTNET_RPC_URL}
+    payTo: ${NEAR_MERCHANT_ACCOUNT} # no asset fields: the network's USDC
+    facilitator:
+      mode: remote
+      url: ${X402_FACILITATOR_URL}
+```
+
+- `payTo` and `asset` are NEAR account IDs: named (`merchant.near`),
+  subaccounts and implicit 64-hex accounts. The suffix does not select the
+  network.
+- `payTo` must be registered with the token for storage (NEP-145
+  `storage_deposit`), or every transfer to it fails. Health fails until it is.
+- The buyer signs with a full-access key, `ed25519` or `secp256k1`:
+  `ft_transfer` needs one attached yoctoNEAR, which a function-call key cannot
+  attach.
+- Health checks that the RPC's `status` names the network's chain, that the
+  token has code and the configured decimals, and that the facilitator lists
+  the network.
+- The signed delegate names no chain. The offer's network and the RPC the
+  facilitator uses keep a proof on one network; use separate buyer keys for
+  mainnet and testnet.
+- The gateway reserves the access key's nonce. If an attempt settles nothing,
+  because the backend failed under `authorization` or the settlement was
+  refused before submission, for example after the delegate's block window
+  passed during a slow backend, that nonce stays reserved although the chain
+  never used it. The buyer must then sign with a higher nonce or another key,
+  but the SDK's reference client always signs the key's next nonce. Use
+  `upfront` for handlers that can outlast `maxTimeoutSeconds`.
+
 ### Several options
 
 Use `options` to offer x402 resources on several networks or in several
@@ -501,10 +541,13 @@ development address, and either a facilitator credential or
 | `eip155:43114`                            | Avalanche C-Chain | mainnet |                                            |
 | `solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp` | Solana            | mainnet | [remote facilitator only](#solana)         |
 | `solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1` | Solana Devnet     | testnet | [remote facilitator only](#solana)         |
+| `near:mainnet`                            | NEAR              | mainnet | [remote facilitator only](#near)           |
+| `near:testnet`                            | NEAR Testnet      | testnet | [remote facilitator only](#near)           |
 
-Settlement has been demonstrated on Base Sepolia and Base; Solana has been
-tested only on a local validator. Other listed networks require a remote
-facilitator advertising them and have no demonstrated settlement.
+Settlement has been demonstrated on Base Sepolia and Base. Solana has been
+tested only on a local validator, and NEAR only on a local sandbox. Other
+listed networks require a remote facilitator advertising them and have no
+demonstrated settlement.
 
 Declare another EVM network with its `kind` to select the mainnet guardrails.
 Custom networks have no default asset: set all four asset fields. Built-in
