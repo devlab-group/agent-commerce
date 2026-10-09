@@ -122,7 +122,7 @@ Authorization is optional per resource. When required, its reservation sits
 between payment verification and settlement. It is consumed when the payment
 settles, marked when the outcome is unknown, and released when no money moved:
 a rejected settlement, a failed replay reservation, or a backend failure before
-settlement. See [ap2.md](ap2.md#pipeline-position).
+settlement. See [AP2](protocols/ap2.md#pipeline-position).
 
 ## Correlation
 

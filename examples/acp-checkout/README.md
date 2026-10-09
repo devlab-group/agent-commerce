@@ -70,4 +70,4 @@ Carts, feed, standalone orders, delegated payment, delegated authentication,
 webhooks, the ACP MCP transport binding, request `Signature` verification, and
 any ACP version other than `2026-04-17`. `/.well-known/acp.json` advertises
 `services: ["checkout"]` and nothing else, and `agent-commerce doctor` prints
-the full unsupported list. See [docs/protocols.md](../../docs/protocols.md#acp).
+the full unsupported list. See [docs/protocols/acp.md](../../docs/protocols/acp.md).

@@ -67,7 +67,7 @@ Each `backend.headers` entry must be a legal HTTP header name and value. Config
 load refuses one that fetch would reject, such as a value with an embedded
 newline, and the error names the header but never prints its value. A
 configured header wins over the same header that ACP forwards from the agent;
-see [Headers sent to the merchant](protocols.md#headers-sent-to-the-merchant).
+see [Headers sent to the merchant](protocols/acp.md#headers-sent-to-the-merchant).
 
 `payments` orders the rails a paid resource accepts. The gateway selects the
 first enabled rail in that order; it does not let each request choose a rail or
@@ -186,7 +186,7 @@ is refused.
 
 Each operation sends a fixed canonical envelope built from `path`, carrying
 `{ checkout_session_id }`, and `body`, carrying the ACP document; the
-[operation table](protocols.md#checkout-operations) shows which of the two each
+[operation table](protocols/acp.md#checkout-operations) shows which of the two each
 one sends. A cancel carries `body` only when the caller sends one, such as an
 `intent_trace`. Bind it explicitly:
 
@@ -231,19 +231,19 @@ Set `merchantIdempotent: true` only if the merchant stores and replays results
 under the `Idempotency-Key` the gateway derives for each checkout POST. With
 this setting, the gateway releases a claim after a 5xx so the same key can be
 retried, as ACP requires. Without merchant deduplication, that retry could
-repeat the side effect. See [ACP idempotency](protocols.md#idempotency).
+repeat the side effect. See [ACP idempotency](protocols/acp.md#idempotency).
 
 The gateway forwards an `Idempotency-Key` header to the merchant on every
 side-effecting checkout call, derived so that it is stable across retries, a
-restart and a token rotation. See [protocols.md](protocols.md#idempotency) for
+restart and a token rotation. See [ACP](protocols/acp.md#idempotency) for
 what the merchant should do with it.
 
-See [protocols.md](protocols.md#acp) for the wire contract.
+See [ACP](protocols/acp.md) for the wire contract.
 
 ## `authorization.ap2`
 
 Experimental, off by default, and absent from a config that predates it. Full
-reference, including the checkout profile and the trust model: [ap2.md](ap2.md).
+reference, including the checkout profile and the trust model: [AP2](protocols/ap2.md).
 
 ```yaml
 authorization:
@@ -334,7 +334,7 @@ failure leaves the payment settled. MPP defaults to `upfront` because its
 `charge` intent forbids running the backend before the payment is verified.
 A resource with fixed pricing that lists `x402` or `mpp` can set its own
 `paymentFlow`, which applies to whichever rail serves it. Configuration
-rejects the field on other resources. See [protocols.md](protocols.md#x402) for
+rejects the field on other resources. See [x402](protocols/x402.md) for
 the flow details.
 
 Startup rejects a `payTo` that is not a plausible address or is the zero
@@ -376,7 +376,7 @@ payments:
 Before paying, the buyer approves the Permit2 contract,
 `0x000000000022D473030F116dDEE9F6B43aC78BA3`, to spend the token. The gateway
 sends no approval and accepts no gas-sponsoring extension. Without that
-allowance it answers [412 Precondition Failed](protocols.md#http-surface).
+allowance it answers [412 Precondition Failed](protocols/http.md).
 
 Other tokens require the local chain or a declared network, as above.
 Health checks require code at Permit2 and the proxy,

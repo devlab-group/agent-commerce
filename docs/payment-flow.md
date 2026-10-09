@@ -21,7 +21,7 @@ The diagram shows the default `authorization` flow: the backend answers before
 the payment settles, so a backend failure settles nothing, and a refused
 settlement withholds the backend's response. Under the `upfront` flow,
 configured per rail or per resource, `settle` moves above the backend call; see
-[protocols.md](protocols.md#x402).
+[x402](protocols/x402.md).
 
 ```text
  buyer                           gateway                         chain / backend
@@ -64,9 +64,9 @@ Over HTTP, x402 sends the challenge in the `402` body and base64
 `PAYMENT-REQUIRED` header, accepts the proof in `PAYMENT-SIGNATURE`, and returns
 the settlement result in `PAYMENT-RESPONSE`. MCP and A2A carry the same proof in
 the reserved `_payment` input field. MCP also accepts the selected rail's
-`_meta` carrier; see [Payment over MCP](protocols.md#payment-over-mcp). A2A
+`_meta` carrier; see [Payment over MCP](protocols/mcp.md#payment-over-mcp). A2A
 also accepts the x402 extension's task metadata; see
-[x402 extension](protocols.md#x402-extension).
+[x402 extension](protocols/a2a.md#x402-extension).
 
 ### MPP
 
@@ -82,10 +82,10 @@ MPP uses the same verification and replay checks, with these differences:
   so one receipt store cannot reserve the authorization through both rails.
 - MPP uses the same flow values as x402 but defaults to `upfront`, as its
   `charge` intent requires. Under `authorization`, the backend must respond
-  before the challenge expires; see [MPP](protocols.md#mpp).
+  before the challenge expires; see [MPP](protocols/mpp.md).
 
 Over HTTP, MPP uses `WWW-Authenticate`, `Authorization: Payment ...` and
-`Payment-Receipt`. See the complete [HTTP header table](protocols.md#http-surface).
+`Payment-Receipt`. See the complete [HTTP header table](protocols/http.md).
 
 ## Why the money cannot be redirected
 
@@ -153,7 +153,7 @@ it against another request still collides.
 A resource that also requires an AP2 mandate gets a third, independent
 reservation, in its own database and on its own key. It is claimed before the
 payment replay key and released only by a failure that provably moved no money.
-See [ap2.md](ap2.md#replay-states).
+See [AP2](protocols/ap2.md#replay-states).
 
 ## Amounts
 

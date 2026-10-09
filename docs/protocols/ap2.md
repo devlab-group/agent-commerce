@@ -323,11 +323,11 @@ adapters preserve `payload` byte for byte. Reserved fields are removed before
 resource validation, hashing and backend execution.
 
 With the A2A x402 extension, a payment message can carry the mandate when the
-first message did not; see [x402 extension](protocols.md#x402-extension).
+first message did not; see [x402 extension](a2a.md#x402-extension).
 
 ## Configuration and lifecycle
 
-See [configuration.md](configuration.md#authorizationap2) for the YAML schema
+See [configuration.md](../configuration.md#authorizationap2) for the YAML schema
 and validation rules. A free resource cannot require AP2 because authorization
 gates settlement.
 

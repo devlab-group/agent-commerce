@@ -257,14 +257,14 @@ See [docs/configuration.md](docs/configuration.md).
 | **AP2**  | Experimental | AP2 `v0.2.0`, Direct Checkout Mandate verification                                                           |
 | UCP      | Planned      | no implementation                                                                                            |
 
-[AP2](docs/ap2.md) is an authorization method, not a transport. It verifies a
+[AP2](docs/protocols/ap2.md) is an authorization method, not a transport. It verifies a
 mandate before a paid resource settles; the gateway does not issue the mandate
 or its Checkout Receipt.
 
 The experimental entries above ship off by default with documented subsets:
-[A2A](docs/protocols.md#a2a), [ACP](docs/protocols.md#acp),
-[AP2](docs/ap2.md#not-implemented) and [MPP](docs/protocols.md#mpp). Supported
-[MCP](docs/protocols.md#mcp) and [x402](docs/protocols.md#x402) are also scoped.
+[A2A](docs/protocols/a2a.md), [ACP](docs/protocols/acp.md),
+[AP2](docs/protocols/ap2.md#not-implemented) and [MPP](docs/protocols/mpp.md). Supported
+[MCP](docs/protocols/mcp.md) and [x402](docs/protocols/x402.md) are also scoped.
 ACP exposes only its five checkout operations; merchant `payment_data` is never
 converted into a gateway payment proof.
 
@@ -479,7 +479,7 @@ they are added to a release.
 | [Architecture](docs/architecture.md)           | how the pieces fit                          |
 | [Payment flow](docs/payment-flow.md)           | the paid round trip and failure paths       |
 | [Protocols](docs/protocols.md)                 | supported and unsupported protocol features |
-| [AP2](docs/ap2.md)                             | mandate verification and the trust model    |
+| [AP2](docs/protocols/ap2.md)                   | mandate verification and the trust model    |
 | [Configuration](docs/configuration.md)         | `config.yaml` reference                     |
 | [OpenAPI import](docs/openapi-import.md)       | generate resources from an existing API     |
 | [Security model](docs/security.md)             | trust boundaries, and what we do not defend |

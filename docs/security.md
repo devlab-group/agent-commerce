@@ -51,7 +51,7 @@ such as URLs, so keep secrets in fields designated for credentials.
 
 AP2 uses operator-configured public keys; it performs no JWKS, issuer metadata,
 revocation, `jku`, or `x5u` lookup. Removing a key from configuration and
-restarting the process revokes it. See [AP2 trust and rotation](ap2.md#trust).
+restarting the process revokes it. See [AP2 trust and rotation](protocols/ap2.md#trust).
 
 Local policy fixes verification to ES256 over P-256. The presented `iss` and
 `kid` select one configured key. If `iss` is absent, `kid` selects the issuer;
@@ -177,7 +177,7 @@ the token does not release outstanding claims.
 `Signature` and `Timestamp` verification are not implemented or advertised,
 and `Signature` cannot replace the bearer token. The adapter forwards both to
 the merchant unverified, among the
-[headers sent to the merchant](protocols.md#headers-sent-to-the-merchant). It
+[headers sent to the merchant](protocols/acp.md#headers-sent-to-the-merchant). It
 never forwards the bearer token, and a configured backend header wins over a
 caller header of the same name. Use TLS because the bearer token is otherwise
 sent in clear text.

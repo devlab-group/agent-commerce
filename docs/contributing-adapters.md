@@ -31,8 +31,8 @@ A new name crosses the public contract and runtime wiring. After approval:
    entry, package export, optional peer and the real-package check in
    `tests/unit/cli/packaging.test.ts`.
 6. Add its descriptor, discovery and `doctor` output. Update the frozen
-   contract, conformance coverage, and a dedicated section in
-   [protocols.md](protocols.md).
+   contract and conformance coverage, and add a page under `docs/protocols/`
+   that [protocols.md](protocols.md) lists.
 
 ## Protocol adapters
 
@@ -178,5 +178,6 @@ const provider: PaymentProvider = {
       success
 - [ ] no buyer or merchant production key is held by the gateway
 - [ ] the descriptor lists supported and unsupported behavior accurately
-- [ ] [protocols.md](protocols.md) and [payment-flow.md](payment-flow.md) are
+- [ ] the rail's page under `docs/protocols/`, the support matrix in
+      [protocols.md](protocols.md), and [payment-flow.md](payment-flow.md) are
       updated

@@ -47,7 +47,7 @@ protocols:
   # Serves JSON-RPC `SendMessage` at mountPath and the Agent Card at
   # /.well-known/agent-card.json. Enable at least one resource with
   # `expose: [a2a]`. Clients send `A2A-Version: 1.0`.
-  # See docs/protocols.md#a2a for supported features.
+  # See docs/protocols/a2a.md for supported features.
   a2a:
     enabled: false
     mountPath: /a2a
@@ -60,7 +60,7 @@ protocols:
   # and the ACP MCP binding are not implemented.
   #
   # Enabling it needs the five mapped resources too - a complete, validating
-  # config is in examples/acp-checkout/. See docs/protocols.md#acp.
+  # config is in examples/acp-checkout/. See docs/protocols/acp.md.
   acp:
     enabled: false
     mountPath: /acp
@@ -199,7 +199,7 @@ payments:
 # beside the old one, moving the signer to the new `kid`, then removing the old.
 #
 # Needs the optional peers:  npm install jose @sd-jwt/core canonicalize
-# Full reference: docs/ap2.md
+# Full reference: docs/protocols/ap2.md
 # ---------------------------------------------------------------------------
 # authorization:
 #   ap2:
