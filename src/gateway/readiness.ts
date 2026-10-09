@@ -132,6 +132,13 @@ async function probe(
 interface Evaluation {
   readonly result: ReadinessResult;
   readonly adapters: readonly ProbedAdapter[];
+  readonly paymentProviders: readonly ProbedProvider[];
+}
+
+/** A payment provider's health, detail and components included */
+export interface ProbedProvider {
+  readonly name: string;
+  readonly health: AdapterHealth;
 }
 
 async function evaluate(options: CheckReadinessOptions): Promise<Evaluation> {
@@ -183,6 +190,10 @@ async function evaluate(options: CheckReadinessOptions): Promise<Evaluation> {
       descriptor: runtime.adapter.descriptor,
       health: probed.health,
     })),
+    paymentProviders: paymentProviders.map((probed, index) => ({
+      name: (options.paymentProviders[index] as PaymentProvider).name,
+      health: probed.health,
+    })),
   };
 }
 
@@ -191,8 +202,10 @@ const READINESS_TTL_MS = 2_000;
 
 export interface ReadinessProbe {
   check(): Promise<ReadinessResult>;
-  /** Every adapter's health from the same memoized evaluation, detail included */
+  /** All adapter health results, including detail, from the cached evaluation */
   adapterHealth(): Promise<readonly ProbedAdapter[]>;
+  /** All payment provider health results from that evaluation */
+  paymentHealth(): Promise<readonly ProbedProvider[]>;
 }
 
 export function createReadinessProbe(
@@ -221,5 +234,6 @@ export function createReadinessProbe(
   return {
     check: async () => (await current()).result,
     adapterHealth: async () => (await current()).adapters,
+    paymentHealth: async () => (await current()).paymentProviders,
   };
 }

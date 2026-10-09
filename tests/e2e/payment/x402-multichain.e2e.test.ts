@@ -278,9 +278,11 @@ describe('x402 settlement on two EVM chains', () => {
     expect(await balancesOn(0)).toEqual(unchanged);
   });
 
-  it('checks the health of both chains', async () => {
+  it('checks the health of both chains, each offer once', async () => {
     const health = await provider.health();
     expect(health.status).toBe('pass');
     for (const { network } of CHAINS) expect(health.detail).toContain(network);
+    // The shared offer is health-checked once
+    expect(health.components?.map((component) => component.status)).toEqual(['pass', 'pass']);
   });
 });

@@ -87,6 +87,7 @@ export function registerRoutes(options: RegisterRoutesOptions): void {
       authorizationProviders: options.authorizationProviders,
       store: options.store,
       adapters: await readinessProbe.adapterHealth(),
+      paymentHealth: await readinessProbe.paymentHealth(),
     }),
   );
 

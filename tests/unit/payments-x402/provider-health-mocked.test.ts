@@ -209,6 +209,69 @@ describe('health() - mocked RPC client', () => {
   });
 });
 
+describe('health() - several offers', () => {
+  const OTHER_ASSET = '0x2222222222222222222222222222222222222222' as const;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getChainIdMock.mockResolvedValue(31337);
+    requestMock.mockResolvedValue({ clientVersion: 'anvil/v1.1.0' });
+    getCodeMock.mockResolvedValue('0x6080604052');
+  });
+
+  async function makeTwoOfferProvider() {
+    const { createX402PaymentProvider } = await import('../../../src/payments/x402/provider');
+    const offer = (asset: string) => ({
+      network: 'eip155:31337',
+      rpcUrl: 'http://127.0.0.1:19322',
+      asset,
+      assetName: 'MockUSDC',
+      assetVersion: '2',
+      assetDecimals: 6,
+      payTo: PAY_TO,
+    });
+    return createX402PaymentProvider({
+      offers: [offer(ASSET), offer(OTHER_ASSET)],
+      facilitator: { mode: 'local', signerPrivateKey: BUYER_PRIVATE_KEY },
+    });
+  }
+
+  it('checks every offer and reports each as a component', async () => {
+    getCodeMock.mockImplementation(async ({ address }: { address: string }) =>
+      address === OTHER_ASSET ? '0x' : '0x6080604052',
+    );
+    const health = await (await makeTwoOfferProvider()).health();
+
+    expect(health.status).toBe('fail');
+    // Case variants of EVM addresses share a component name
+    const payTo = PAY_TO.toLowerCase();
+    expect(health.components).toEqual([
+      { name: `eip155:31337 ${ASSET.toLowerCase()} ${payTo}`, status: 'pass' },
+      { name: `eip155:31337 ${OTHER_ASSET} ${payTo}`, status: 'fail' },
+    ]);
+    // Detail includes only the failing offer
+    expect(health.detail).toMatch(new RegExp(`^eip155:31337 ${OTHER_ASSET} ${payTo}: No contract`));
+    expect(health.detail).not.toContain(ASSET.toLowerCase());
+  });
+
+  it('fails only the offer whose check threw', async () => {
+    getChainIdMock.mockRejectedValueOnce(new Error('boom'));
+    const health = await (await makeTwoOfferProvider()).health();
+
+    expect(health.status).toBe('fail');
+    expect(health.components?.map((component) => component.status)).toEqual(['fail', 'pass']);
+    expect(health.detail).toContain('boom');
+  });
+
+  it('passes with every offer named in the detail', async () => {
+    const health = await (await makeTwoOfferProvider()).health();
+
+    expect(health.status).toBe('pass');
+    expect(health.components?.map((component) => component.status)).toEqual(['pass', 'pass']);
+    expect(health.detail).toContain(OTHER_ASSET);
+  });
+});
+
 describe('health() - caching / single-flight', () => {
   beforeEach(() => {
     vi.clearAllMocks();

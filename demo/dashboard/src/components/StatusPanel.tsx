@@ -138,6 +138,7 @@ export function StatusPanel({ wellKnown, error }: StatusPanelProps) {
                 <th>Network</th>
                 <th>Asset</th>
                 <th>Pays to</th>
+                <th>Health</th>
               </tr>
             </thead>
             <tbody>
@@ -149,6 +150,11 @@ export function StatusPanel({ wellKnown, error }: StatusPanelProps) {
                   <td>
                     <strong>{offer.payTo}</strong>
                   </td>
+                  {'status' in offer && offer.status !== undefined ? (
+                    <td className={statusClass(offer.status)}>{offer.status}</td>
+                  ) : (
+                    <td>-</td>
+                  )}
                 </tr>
               ))}
             </tbody>

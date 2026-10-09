@@ -45,6 +45,8 @@ interface RailOffer {
   readonly assetDecimals?: number;
   /** Absent for EIP-3009 and for every non-EVM offer */
   readonly assetTransferMethod?: string;
+  /** The live offer's health status, when the gateway publishes it */
+  readonly status?: string;
 }
 
 // A rail's terms, as configured or as the running gateway publishes them
@@ -61,7 +63,7 @@ interface RailTerms {
 type LiveRailResult = RailTerms | 'disabled' | undefined;
 
 function readOffer(rec: Record<string, unknown>, rail: 'x402' | 'mpp'): RailOffer | undefined {
-  const { asset, network, assetDecimals, assetTransferMethod } = rec;
+  const { asset, network, assetDecimals, assetTransferMethod, status } = rec;
   const payTo = rec[rail === 'mpp' ? 'recipient' : 'payTo'];
   if (typeof asset !== 'string' || typeof network !== 'string' || typeof payTo !== 'string') {
     return undefined;
@@ -72,6 +74,7 @@ function readOffer(rec: Record<string, unknown>, rail: 'x402' | 'mpp'): RailOffe
     payTo,
     ...(typeof assetDecimals === 'number' ? { assetDecimals } : {}),
     ...(typeof assetTransferMethod === 'string' ? { assetTransferMethod } : {}),
+    ...(typeof status === 'string' ? { status } : {}),
   };
 }
 
@@ -280,6 +283,46 @@ function railOffer(option: {
   };
 }
 
+// Discovery exposes offer statuses; reasons stay in gateway debug logs
+function offerHealthCheck(
+  live: RailTerms,
+  named: (network: string) => string,
+): DoctorCheck | undefined {
+  const all = [...live.offers, ...Object.values(live.resourceOffers ?? {}).flat()];
+  const offers = [
+    ...new Map(
+      all.map((offer) => [`${offer.network} ${offer.asset} ${offer.payTo}`, offer]),
+    ).values(),
+  ];
+  const reported = offers.filter((offer) => offer.status !== undefined);
+  if (reported.length === 0) return undefined;
+  const failing = reported.filter((offer) => offer.status === 'fail');
+  const degraded = reported.filter((offer) => offer.status === 'warn');
+  const describe = (list: readonly RailOffer[]) =>
+    list
+      .map(
+        (offer) =>
+          `${named(offer.network)} ${maskMiddle(offer.asset)} to ${maskMiddle(offer.payTo)}`,
+      )
+      .join('; ');
+  if (failing.length === 0 && degraded.length === 0) {
+    return {
+      name: 'Payments (offers)',
+      status: 'PASS',
+      detail: `${reported.length} offer(s) pass their health checks`,
+    };
+  }
+  const problems = [
+    ...(failing.length > 0 ? [`failing: ${describe(failing)}`] : []),
+    ...(degraded.length > 0 ? [`degraded: ${describe(degraded)}`] : []),
+  ];
+  return {
+    name: 'Payments (offers)',
+    status: failing.length > 0 ? 'FAIL' : 'WARN',
+    detail: `${problems.join('; ')}. The gateway logs each reason at debug level`,
+  };
+}
+
 // x402 and MPP, each compared with what the running gateway reports
 export function paymentChecks(
   config: GatewayConfig | undefined,
@@ -359,6 +402,8 @@ export function paymentChecks(
           ? { name: 'Payments', status: 'PASS', detail: summary }
           : { name: 'Payments', status: 'FAIL', detail: mismatch },
       );
+      const offerHealth = offerHealthCheck(live, named);
+      if (offerHealth !== undefined) checks.push(offerHealth);
     }
     if (mode === 'mainnet') {
       checks.push(

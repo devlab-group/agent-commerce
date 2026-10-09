@@ -388,25 +388,57 @@ describe('createGateway HTTP surface', () => {
     expect(res.payload).not.toContain('OPTION-RPC-KEY');
   });
 
-  it("publishes each resource's own offers, never their RPC URL", async () => {
+  it("publishes each resource's own offers, and every offer's health without its detail", async () => {
     const base = makeGatewayConfig();
     const x402 = base.payments.x402 as NonNullable<typeof base.payments.x402>;
     const rpcUrl = 'https://rpc.example/v2/OPTION-RPC-KEY';
-    const own = {
+    const option = (asset: string) => ({
       network: x402.network,
       payTo: x402.payTo,
-      asset: '0x3333333333333333333333333333333333333333',
+      asset,
       assetName: 'MockUSDC',
       assetVersion: '2',
       assetDecimals: 6,
-    };
-    const config = makeGatewayConfig({
-      payments: { x402: { ...x402, resourceOptions: { market_report: [{ ...own, rpcUrl }] } } },
     });
-    const gateway = await buildGateway({ config });
+    const first = option(x402.asset);
+    const second = option('0x2222222222222222222222222222222222222222');
+    const own = option('0x3333333333333333333333333333333333333333');
+    const config = makeGatewayConfig({
+      payments: {
+        x402: {
+          ...x402,
+          options: [first, second].map((o) => ({ ...o, rpcUrl })),
+          resourceOptions: { market_report: [{ ...own, rpcUrl }] },
+        },
+      },
+    });
+    // The provider names EVM offers in lowercase; the config spells them mixed
+    const name = (o: typeof first) =>
+      `${o.network} ${o.asset.toLowerCase()} ${o.payTo.toLowerCase()}`;
+    const provider = {
+      ...createFakePaymentProvider(),
+      health: async () => ({
+        status: 'fail' as const,
+        detail: 'SECRET-DETAIL',
+        checkedAt: 'x',
+        components: [
+          { name: name(first), status: 'pass' as const },
+          { name: name(second), status: 'fail' as const },
+          { name: name(own), status: 'pass' as const },
+        ],
+      }),
+    };
+    const gateway = await buildGateway({ config, paymentProviders: [provider] });
     const res = await gateway.server.inject({ method: 'GET', url: '/.well-known/agent-commerce' });
-    expect(res.json().payments.x402.resourceOptions).toEqual({ market_report: [own] });
+    expect(res.json().payments.x402).toMatchObject({
+      options: [
+        { ...first, status: 'pass' },
+        { ...second, status: 'fail' },
+      ],
+      resourceOptions: { market_report: [{ ...own, status: 'pass' }] },
+    });
     expect(res.payload).not.toContain('OPTION-RPC-KEY');
+    expect(res.payload).not.toContain('SECRET-DETAIL');
   });
 
   it('GET /api/resources lists resources without leaking backend header secrets', async () => {

@@ -154,6 +154,9 @@ persistence must not fail the commerce flow.
   metadata while preserving `id` and the full `challenge`. Verification,
   authorization, replay reservation and settlement use this requirement.
   Providers without the hook keep their existing path.
+- Optional `AdapterHealth.components` lists `AdapterHealthComponent` results
+  with a `name` and `status`, such as one per x402 offer. Discovery may publish
+  these fields; they contain no detail. Omission preserves existing reporting.
 - `PaymentRequirement.destination` and `PaymentRequiredEnvelope.payment.destination`
   are optional. Multi-offer x402 challenges omit destination, network and
   asset; single-offer and selected x402 requirements include all three. The
@@ -232,6 +235,10 @@ persistence must not fail the commerce flow.
   - `GatewayConfig.payments.x402.resourceOptions` holds the resolved lists, and
     `/.well-known` publishes them as `payments.x402.resourceOptions`.
     `WellKnownX402Offer` names the offer shape both lists share.
+- x402 health checks all offers, reporting `components` named
+  `<network> <asset> <payTo>` with lowercase EVM addresses. Any failing offer
+  fails the provider. `/.well-known` copies statuses into `options` and
+  `resourceOptions`; `/ready` is unchanged.
 
 - `ProtocolName` gained `a2a` and `acp`; `PROTOCOL_NAMES` is the runtime list
   used by validation. It is derived from a record keyed by the union, so a

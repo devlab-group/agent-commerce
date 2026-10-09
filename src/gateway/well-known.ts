@@ -26,9 +26,10 @@ import {
   requireX402Network,
   resolveDeploymentMode,
 } from '../payments/x402/networks';
+import { x402OfferName } from '../payments/x402/options';
 import { X402_DEFAULT_PAYMENT_FLOW, type X402PaymentFlow } from '../payments/x402/payment-flow';
 import { PACKAGE_VERSION } from '../version';
-import type { ProbedAdapter } from './readiness';
+import type { ProbedAdapter, ProbedProvider } from './readiness';
 
 // Not derived from `PACKAGE_VERSION`: it names the wire contract a client
 // negotiates against, which changes only when that contract does
@@ -116,6 +117,8 @@ export interface WellKnownX402Offer {
   readonly assetDecimals: number;
   readonly payTo: string;
   readonly assetTransferMethod?: 'permit2';
+  /** Last reported health status, excluding diagnostic detail */
+  readonly status?: AdapterHealth['status'];
 }
 
 export interface BuildWellKnownOptions {
@@ -125,6 +128,8 @@ export interface BuildWellKnownOptions {
   readonly store: ReceiptStore;
   /** From the readiness cache, sharing `/ready`'s `health()` calls */
   readonly adapters: readonly ProbedAdapter[];
+  /** From the same probe; the x402 provider's components give each offer's status */
+  readonly paymentHealth?: readonly ProbedProvider[];
 }
 
 /**
@@ -149,9 +154,13 @@ function publicProtocols(protocols: GatewayConfig['protocols']): WellKnownProtoc
 }
 
 // Allowlist public offer fields: RPC URLs can contain API keys
-function publicOffer(option: X402OptionConfig): WellKnownX402Offer {
+function publicOffer(
+  option: X402OptionConfig,
+  statuses: ReadonlyMap<string, AdapterHealth['status']>,
+): WellKnownX402Offer {
   const { network, asset, assetName, assetVersion, assetDecimals, payTo, assetTransferMethod } =
     option;
+  const status = statuses.get(x402OfferName(option));
   return {
     network,
     asset,
@@ -160,6 +169,7 @@ function publicOffer(option: X402OptionConfig): WellKnownX402Offer {
     assetDecimals,
     payTo,
     ...(assetTransferMethod !== undefined ? { assetTransferMethod } : {}),
+    ...(status !== undefined ? { status } : {}),
   };
 }
 
@@ -179,6 +189,10 @@ export function buildWellKnownDocument(options: BuildWellKnownOptions): WellKnow
   }));
 
   const { x402, mpp } = options.config.payments;
+  const x402Health = options.paymentHealth?.find((probed) => probed.name === 'x402')?.health;
+  const offerStatuses = new Map(
+    (x402Health?.components ?? []).map((component) => [component.name, component.status]),
+  );
 
   return {
     gateway: {
@@ -215,14 +229,14 @@ export function buildWellKnownDocument(options: BuildWellKnownOptions): WellKnow
               paymentFlow: x402.paymentFlow ?? X402_DEFAULT_PAYMENT_FLOW,
               ...flowOverrides(x402.resourcePaymentFlows),
               ...(x402.options !== undefined && x402.options.length > 1
-                ? { options: x402.options.map(publicOffer) }
+                ? { options: x402.options.map((option) => publicOffer(option, offerStatuses)) }
                 : {}),
               ...(x402.resourceOptions !== undefined
                 ? {
                     resourceOptions: Object.fromEntries(
                       Object.entries(x402.resourceOptions).map(([id, list]) => [
                         id,
-                        list.map(publicOffer),
+                        list.map((option) => publicOffer(option, offerStatuses)),
                       ]),
                     ),
                   }

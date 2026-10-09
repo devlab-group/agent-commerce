@@ -9,6 +9,7 @@ import { normalizeAddress } from '../addresses';
 import type { createLocalPublicClient } from '../chain';
 import type { FacilitatorBinding } from '../facilitator';
 import { describeDeploymentMode } from '../networks';
+import { x402OfferName } from '../options';
 import { HEALTH_TIMEOUT_MS, X402_VERSION } from './constants';
 import type { NearOffer, Offer, ProviderContext, SvmOffer } from './types';
 
@@ -236,7 +237,8 @@ export function createHealthCheck(ctx: ProviderContext): () => Promise<AdapterHe
     };
   }
 
-  // Unhealthy offers fail readiness; challenges retain the complete offer list
+  // Check all offers and report each status; any failure fails readiness.
+  // Challenges retain the complete offer list.
   async function computeHealth(): Promise<AdapterHealth> {
     const startedAt = clock.monotonicMs();
     const checkedAt = clock.nowIso();
@@ -247,37 +249,31 @@ export function createHealthCheck(ctx: ProviderContext): () => Promise<AdapterHe
         .then((response) => response.kinds);
       return supported;
     };
-    const label = (offer: Offer, index: number, detail: string) =>
-      offers.length === 1 ? detail : `offer ${index} (${offer.network}): ${detail}`;
 
-    try {
-      const details: string[] = [];
-      for (const [index, offer] of offers.entries()) {
-        const result = await offerHealth(offer, kinds);
-        if (result.status === 'fail') {
-          return {
-            status: 'fail',
-            detail: label(offer, index, result.detail),
-            checkedAt,
-            durationMs: clock.monotonicMs() - startedAt,
-          };
-        }
-        details.push(label(offer, index, result.detail));
-      }
-      return {
-        status: 'pass',
-        detail: details.join('; '),
-        checkedAt,
-        durationMs: clock.monotonicMs() - startedAt,
-      };
-    } catch (err) {
-      return {
-        status: 'fail',
-        detail: `x402 health check failed: ${redactedErrorText(err)}`,
-        checkedAt,
-        durationMs: clock.monotonicMs() - startedAt,
-      };
-    }
+    const results = await Promise.all(
+      offers.map((offer) =>
+        offerHealth(offer, kinds).catch((err: unknown) => ({
+          status: 'fail' as const,
+          detail: `x402 health check failed: ${redactedErrorText(err)}`,
+        })),
+      ),
+    );
+    const failed = results.some((result) => result.status === 'fail');
+    const details = offers.flatMap((offer, index) => {
+      const result = results[index] as (typeof results)[number];
+      if (failed && result.status !== 'fail') return [];
+      return [offers.length === 1 ? result.detail : `${x402OfferName(offer)}: ${result.detail}`];
+    });
+    return {
+      status: failed ? 'fail' : 'pass',
+      detail: details.join('; '),
+      components: offers.map((offer, index) => ({
+        name: x402OfferName(offer),
+        status: (results[index] as (typeof results)[number]).status,
+      })),
+      checkedAt,
+      durationMs: clock.monotonicMs() - startedAt,
+    };
   }
 
   // A probe makes several upstream calls, and `/ready` is unauthenticated.

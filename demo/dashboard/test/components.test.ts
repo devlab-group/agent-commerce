@@ -190,7 +190,7 @@ describe('StatusPanel', () => {
     expect(html).not.toContain('undefined');
   });
 
-  it("shows a resource's own offers beside the rail's", () => {
+  it("shows a resource's own offers and each offer's health", () => {
     const offer = {
       network: 'eip155:84532',
       asset: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
@@ -212,13 +212,15 @@ describe('StatusPanel', () => {
             facilitator: { mode: 'remote' },
             mode: 'testnet',
             paymentFlow: 'authorization',
-            resourceOptions: { market_report: [own] },
+            resourceOptions: { market_report: [{ ...own, status: 'fail' }] },
           },
         },
       },
     });
     expect(html).toMatch(/<td>default<\/td><td>eip155:84532<\/td>/);
-    expect(html).toMatch(/<td>market_report<\/td>.*0x1111111111111111111111111111111111111111/);
+    expect(html).toMatch(
+      /<td>market_report<\/td>.*0x1111111111111111111111111111111111111111.*class="status-fail">fail</,
+    );
   });
 
   it('lists authorization providers with the other descriptors', () => {

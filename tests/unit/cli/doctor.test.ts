@@ -893,6 +893,37 @@ describe('runDoctor: several x402 options', () => {
     );
     expect(other?.detail).toMatch(/^resources\.report\.x402\.accepts\[0\] network/);
   });
+
+  it('reports each published offer health, once per offer', async () => {
+    const offersCheck = async (statuses: readonly (string | undefined)[]) => {
+      const terms = publicTerms.map((t, index) =>
+        statuses[index] !== undefined ? { ...t, status: statuses[index] } : t,
+      );
+      const report = await runDoctor(
+        { gatewayUrl: GATEWAY },
+        {
+          fetchImpl: healthyFetch({
+            [`${GATEWAY}/.well-known/agent-commerce`]: () =>
+              jsonResponse(live(terms, { resourceOptions: { report: [terms[2]] } })),
+          }),
+          loadConfig: async () => config({ resourceOptions: OWN }),
+          createStore: () => makeFakeReceiptStore(),
+        },
+      );
+      return report.checks.find((c) => c.name === 'Payments (offers)');
+    };
+
+    expect(await offersCheck([undefined, undefined, undefined])).toBeUndefined();
+    expect(await offersCheck(['pass', 'pass', 'pass'])).toMatchObject({
+      status: 'PASS',
+      detail: '3 offer(s) pass their health checks',
+    });
+    const failing = await offersCheck(['pass', 'fail', 'warn']);
+    expect(failing?.status).toBe('FAIL');
+    expect(failing?.detail).toMatch(
+      /^failing: Solana Devnet \(solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1\) .+; degraded: NEAR Testnet \(near:testnet\) [^;]+\. The gateway logs/,
+    );
+  });
 });
 
 describe('printDoctorReport', () => {

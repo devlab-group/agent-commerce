@@ -40,6 +40,20 @@ export interface ResolvedX402Option {
   readonly assetTransferMethod: X402AssetTransferMethod;
 }
 
+/**
+ * Names health components by network, asset and payee for discovery matching.
+ * Lowercase EVM addresses so case variants identify the same offer.
+ */
+export function x402OfferName(offer: {
+  readonly network: string;
+  readonly asset: string;
+  readonly payTo: string;
+}): string {
+  const evm = offer.network.startsWith('eip155:');
+  const address = (value: string) => (evm ? value.toLowerCase() : value);
+  return `${offer.network} ${address(offer.asset)} ${address(offer.payTo)}`;
+}
+
 /** EIP-3009 `transferWithAuthorization`, or Permit2 with a prior token allowance */
 export type X402AssetTransferMethod = 'eip3009' | 'permit2';
 
