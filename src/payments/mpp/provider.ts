@@ -7,45 +7,50 @@
  * the same signed authorization to that facilitator through an internal x402
  * provider built from these options. The MPP layer adds no signing key.
  *
- * Settlement follows a successful backend call unless the payment flow is
- * `upfront`. The drafts require a confirmed transaction before a
- * `Payment-Receipt`, not before the backend runs.
+ * Under the default `upfront` flow settlement precedes the backend call; under
+ * `authorization` it follows a successful one. The drafts require a confirmed
+ * transaction before a `Payment-Receipt`.
  */
-import { Challenge, Credential, Errors, Method, PaymentRequest, Receipt } from 'mppx';
+import { Challenge, type Credential, Method, Receipt } from 'mppx';
 import { Methods, type Types } from 'mppx/evm';
 import { charge } from 'mppx/evm/server';
-import { createPublicClient, getAddress, http, isAddress, parseAbi } from 'viem';
+import { createPublicClient, getAddress, http, parseAbi } from 'viem';
 import {
   type AdapterHealth,
-  type Clock,
   CommerceError,
-  type IdGenerator,
-  type Logger,
   type PaymentContext,
   type PaymentProvider,
   type PaymentRequirement,
   type PaymentResult,
   type PaymentSettlementContext,
-  type PaymentSubmission,
   type PaymentVerificationContext,
   systemClock,
 } from '../../core';
 import { SETTLE_AFTER_BACKEND_METADATA_KEY } from '../../core/execution/settlement-order';
 import { parseCanonicalAmount } from '../x402/amount';
-import type { X402FacilitatorConfig } from '../x402/guardrails';
-import type { X402PaymentFlow } from '../x402/payment-flow';
 import { createX402PaymentProvider, DEFAULT_IDS } from '../x402/provider';
 import { computeReplayKey } from '../x402/replay-key';
 import {
-  isMppNetwork,
   MPP_DEFAULT_NETWORK,
   MPP_DEFAULT_PAYMENT_FLOW,
-  MPP_MIN_CHALLENGE_SECRET_LENGTH,
-  MPP_NETWORKS,
   MPP_PROFILE,
   MPP_SPEC_DRAFTS,
 } from './constants';
+import {
+  bindingMismatch,
+  decodeCredential,
+  sameAddress,
+  toX402Submission,
+  verificationReason,
+} from './credential';
 import { MPP_DESCRIPTOR } from './descriptor';
+import {
+  configInvalid,
+  type MppChallengeOptions,
+  type MppProviderOptions,
+  type NonceUsedReader,
+  validateOptions,
+} from './options';
 import { CONTENT_DIGEST_METADATA_KEY } from './transport';
 
 const DEFAULT_CHALLENGE_TTL_SECONDS = 300;
@@ -56,111 +61,8 @@ const NONCE_ALREADY_USED = 'invalid_exact_evm_nonce_already_used';
 const AUTHORIZATION_STATE_ABI = parseAbi([
   'function authorizationState(address authorizer, bytes32 nonce) view returns (bool)',
 ]);
+
 const NONCE_READ_TIMEOUT_MS = 5_000;
-
-/** Whether the token contract has recorded `nonce` as used by `payer` */
-export type NonceUsedReader = (payer: `0x${string}`, nonce: `0x${string}`) => Promise<boolean>;
-
-export interface MppProviderOptions {
-  /** Merchant-controlled settlement destination. Never gateway-owned */
-  readonly recipient: `0x${string}`;
-  /** EIP-3009 token the charge is paid in */
-  readonly asset: `0x${string}`;
-  /** EIP-712 domain name of the asset, e.g. 'USDC' or 'MockUSDC' */
-  readonly assetName: string;
-  /** EIP-712 domain version of the asset, e.g. '2' */
-  readonly assetVersion: string;
-  /** Value of each challenge's `realm`, such as the gateway's host */
-  readonly realm: string;
-  /** Key that binds each challenge to this gateway. Never logged or published */
-  readonly challengeSecret: string;
-  /** RPC endpoint of the settlement chain */
-  readonly rpcUrl: string;
-  /** The x402 facilitator that verifies and broadcasts the authorization */
-  readonly facilitator: X402FacilitatorConfig;
-  /** Must be `true` before anything settles on a mainnet. Never a default */
-  readonly allowMainnet?: boolean;
-  /** Required on mainnet when facilitator auth is `none` */
-  readonly allowUnauthenticatedFacilitator?: boolean;
-  readonly logger?: Logger;
-  /**
-   * Seconds a challenge stays valid, 300 by default. The mppx client signs its
-   * authorization to expire at the same moment.
-   */
-  readonly challengeTtlSeconds?: number;
-  /**
-   * CAIP-2 network: `eip155:31337` (local Anvil), `eip155:84532` (Base
-   * Sepolia, the default) or `eip155:8453` (Base)
-   */
-  readonly network?: string;
-  /**
-   * Same flow values as x402. The default, `upfront`, settles before the
-   * backend; `authorization` settles after it
-   */
-  readonly paymentFlow?: X402PaymentFlow;
-  /** Per-resource overrides of `paymentFlow`, keyed by resource id */
-  readonly resourcePaymentFlows?: Readonly<Record<string, X402PaymentFlow>>;
-  readonly clock?: Clock;
-  readonly ids?: IdGenerator;
-}
-
-// mppx reports a verification failure only as message text. The pinned
-// release's wording maps to stable reasons, and the tests cover every entry;
-// unmapped text becomes `authorization_invalid`.
-const VERIFICATION_REASONS: readonly (readonly [string, string])[] = [
-  ['EVM authorization challenge hash mismatch', 'wrong_nonce'],
-  ['EVM authorization signature mismatch', 'invalid_signature'],
-  ['EVM authorization is not valid yet', 'authorization_not_yet_valid'],
-  ['EVM authorization has expired', 'authorization_expired'],
-  ['EVM authorization source mismatch', 'source_mismatch'],
-  ['EVM authorization amount mismatch', 'wrong_amount'],
-  ['EVM authorization recipient mismatch', 'wrong_recipient'],
-];
-
-function configInvalid(message: string): CommerceError {
-  return new CommerceError('CONFIG_INVALID', message);
-}
-
-type MppChallengeOptions = Omit<
-  MppProviderOptions,
-  'rpcUrl' | 'facilitator' | 'allowMainnet' | 'allowUnauthenticatedFacilitator' | 'logger'
->;
-
-function validateOptions(options: MppChallengeOptions): void {
-  if (!isAddress(options.recipient)) throw configInvalid('MPP recipient is not an EVM address');
-  if (!isAddress(options.asset)) throw configInvalid('MPP asset is not an EVM address');
-  if (options.assetName.length === 0 || options.assetVersion.length === 0) {
-    throw configInvalid('MPP asset needs its EIP-712 domain name and version');
-  }
-  // mppx refuses CR or LF in the quoted realm parameter, so checking here fails
-  // at construction instead of on every challenge
-  if (options.realm.length === 0 || /[\r\n]/.test(options.realm)) {
-    throw configInvalid('MPP realm must be a non-empty single-line string');
-  }
-  if (options.challengeSecret.length < MPP_MIN_CHALLENGE_SECRET_LENGTH) {
-    throw configInvalid(
-      `MPP challenge secret must have length at least ${MPP_MIN_CHALLENGE_SECRET_LENGTH}`,
-    );
-  }
-  const ttl = options.challengeTtlSeconds;
-  if (ttl !== undefined && (!Number.isInteger(ttl) || ttl <= 0)) {
-    throw configInvalid('MPP challenge TTL must be a positive whole number of seconds');
-  }
-  if (options.network !== undefined && !isMppNetwork(options.network)) {
-    throw configInvalid(`MPP network must be one of ${MPP_NETWORKS.join(', ')}`);
-  }
-}
-
-function verificationReason(error: unknown): string {
-  if (error instanceof Errors.PaymentExpiredError) return 'challenge_expired';
-  if (error instanceof Errors.InvalidPayloadError) return 'invalid_payload';
-  if (error instanceof Errors.InvalidChallengeError) return 'invalid_challenge';
-  if (error instanceof Errors.VerificationFailedError) {
-    const match = VERIFICATION_REASONS.find(([text]) => error.message.includes(text));
-    if (match) return match[1];
-  }
-  return 'authorization_invalid';
-}
 
 export function createMppPaymentProvider(options: MppProviderOptions): PaymentProvider {
   const { rpcUrl, facilitator, allowMainnet, allowUnauthenticatedFacilitator, logger, ...rest } =
@@ -483,81 +385,4 @@ export function createMppProviderWithSettlement(
   return { name: 'mpp', descriptor: MPP_DESCRIPTOR, createRequirement, verify, settle, health };
 }
 
-// Accept the HTTP `Authorization: Payment ...` value or a JSON credential
-// from MCP `_meta`. Serialize the object for mppx deserialization
-function decodeCredential(payload: string): Credential.Credential {
-  const serialized = payload.trimStart().startsWith('{')
-    ? Credential.serialize(JSON.parse(payload) as Credential.Credential)
-    : payload;
-  return Credential.deserialize(serialized);
-}
-
-// Compares the echoed challenge with the one issued for this request. Both
-// carry a valid HMAC by now, so any difference means the credential answers a
-// challenge issued for other terms. The final comparison catches a difference
-// in any request field the named checks do not cover.
-function bindingMismatch(
-  echoed: Challenge.Challenge,
-  issued: Challenge.Challenge,
-  resourceId: string,
-): string | undefined {
-  if (echoed.realm !== issued.realm) return 'wrong_realm';
-  if (echoed.method !== issued.method || echoed.intent !== issued.intent) {
-    return 'unsupported_method';
-  }
-  // Only the encoded `opaque` survives the credential round trip, not `meta`,
-  // so compare it with the encoding of this resource's binding
-  if (echoed.opaque !== PaymentRequest.serialize({ resource: resourceId })) {
-    return 'wrong_resource';
-  }
-  // `issued` was built for the request carrying this credential, so a
-  // different body, or none, fails here. A challenge without a digest binds
-  // no body, as the core draft reads it.
-  if (echoed.digest !== undefined && echoed.digest !== issued.digest) {
-    return 'body_digest_mismatch';
-  }
-  const got = echoed.request as ChargeRequest;
-  const want = issued.request as ChargeRequest;
-  if (got.amount !== want.amount) return 'wrong_amount';
-  if (!sameAddress(got.recipient, want.recipient)) return 'wrong_recipient';
-  if (got.methodDetails?.chainId !== want.methodDetails?.chainId) return 'wrong_network';
-  if (!sameAddress(got.currency, want.currency)) return 'wrong_asset';
-  if (canonical(got.methodDetails) !== canonical(want.methodDetails)) {
-    return 'unsupported_credential';
-  }
-  if (canonical(got) !== canonical(want)) return 'wrong_terms';
-  return undefined;
-}
-
-// Rewrap the MPP authorization as the x402 `exact` payload expected by settlement
-function toX402Submission(
-  x402Requirement: PaymentRequirement,
-  authorization: Types.AuthorizationPayload,
-): PaymentSubmission {
-  const { signature, from, to, value, validAfter, validBefore, nonce } = authorization;
-  const payment = {
-    x402Version: 2,
-    accepted: x402Requirement.challenge.accepts[0],
-    payload: { signature, authorization: { from, to, value, validAfter, validBefore, nonce } },
-  };
-  return { method: 'x402', payload: Buffer.from(JSON.stringify(payment)).toString('base64') };
-}
-
-interface ChargeRequest {
-  readonly amount?: string;
-  readonly currency?: string;
-  readonly recipient?: string;
-  readonly methodDetails?: { readonly chainId?: number };
-}
-
-// The encoding mppx binds into the challenge HMAC, so key order cannot
-// produce a false mismatch
-function canonical(value: object | undefined): string {
-  return value === undefined ? '' : PaymentRequest.serialize(value as PaymentRequest.Request);
-}
-
-function sameAddress(a: string | undefined, b: string | undefined): boolean {
-  return a !== undefined && b !== undefined && isAddress(a) && isAddress(b)
-    ? getAddress(a) === getAddress(b)
-    : false;
-}
+export type { MppProviderOptions, NonceUsedReader } from './options';

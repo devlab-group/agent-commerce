@@ -1,5 +1,5 @@
 /**
- * The branches of provider.ts that depend on what the SDK facilitator returns
+ * The x402 provider's branches that depend on what the SDK facilitator returns
  * or throws: success, rejection with and without a reason, and thrown errors of
  * several shapes. Mocked at the SDK boundary; tests/e2e/payment covers real
  * on-chain settlement.

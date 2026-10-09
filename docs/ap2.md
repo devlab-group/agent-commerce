@@ -372,6 +372,6 @@ Open mandates are refused because their spending constraints are not evaluated.
 | ------------------------------------------------ | -------------------------------------------------- |
 | `src/authorization/ap2/`                         | verifier, trust, purchase binding and replay store |
 | `src/core/domain/authorization.ts`               | generic authorization contract                     |
-| `src/core/execution/pipeline.ts`                 | verification and reservation ordering              |
+| `src/core/execution/pipeline/admission.ts`       | verification and reservation ordering              |
 | `tests/integration/ap2-x402-conformance.test.ts` | end-to-end refusal cases                           |
 | `tests/e2e/authorization/`                       | on-chain gated settlement                          |

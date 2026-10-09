@@ -164,7 +164,7 @@ describe('runDoctor: degraded scenarios report the failure', () => {
 
   it('WARNs when the configured asset is still the init placeholder', async () => {
     // The live cross-check alone would pass the placeholder (see the
-    // placeholder branch of the Payments check in doctor.ts)
+    // placeholder branch of the Payments check in doctor/payments.ts)
     const report = await runDoctor(
       { gatewayUrl: GATEWAY },
       {
@@ -225,7 +225,7 @@ describe('runDoctor: degraded scenarios report the failure', () => {
 
   it('probes an illegal {param} at the URL the runtime builds, not the one the operator meant', async () => {
     // Doctor must leave `{report id}` literal, as the runtime does (see
-    // substitutePathParams in doctor.ts)
+    // substitutePathParams in doctor/index.ts)
     const probed: string[] = [];
     const report = await runDoctor(
       { gatewayUrl: GATEWAY },

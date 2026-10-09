@@ -1,10 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { BackendHandler } from '../../../../src/core/domain/resource';
 import { isCommerceError } from '../../../../src/core/errors';
-import {
-  HttpBackendExecutor,
-  validateBackendRequestShape,
-} from '../../../../src/core/execution/backend-http';
+import { HttpBackendExecutor } from '../../../../src/core/execution/backend-http';
+import { validateBackendRequestShape } from '../../../../src/core/execution/backend-request';
 import { NOOP_LOGGER } from '../../../../src/core/interfaces/logger';
 
 function jsonResponse(

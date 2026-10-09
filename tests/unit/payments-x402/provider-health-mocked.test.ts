@@ -261,7 +261,7 @@ describe('health() - caching / single-flight', () => {
     expect(second.status).toBe('fail');
   });
 
-  it('caches a fail result for the same TTL as a pass - symmetric on purpose (see the health cache comment in provider.ts)', async () => {
+  it('caches a fail result for the same TTL as a pass - symmetric on purpose (see the health cache comment in provider/health.ts)', async () => {
     getChainIdMock.mockRejectedValueOnce(new Error('connection refused'));
     const { clock, advance } = makeFakeClock();
     const provider = await makeProvider('local', clock);

@@ -16,7 +16,9 @@ A new name crosses the public contract and runtime wiring. After approval:
 1. Add the name to `ProtocolName` and `PROTOCOL_NAME_KEYS`, or
    `PaymentMethodName` and `PAYMENT_METHOD_NAME_KEYS`, in
    `src/core/domain/common.ts`. The runtime lists derive from those records.
-2. Add its strict config block and normalization in `src/config/schema.ts`.
+2. Add its strict config block to `src/config/schema/raw.ts`, and its
+   normalization to a module under `src/config/schema/` that `normalize.ts`
+   calls.
 3. Wire a protocol adapter in `src/gateway/main.ts`, or build a payment rail in
    `src/gateway/payment-providers.ts`.
 4. For a rail, add its incoming proof and payment-challenge branches in

@@ -6,12 +6,12 @@
  */
 
 export type { HttpBackendExecutorOptions } from './backend-http';
+export { HttpBackendExecutor } from './backend-http';
 export {
   extractPathParameterNames,
   findUnparsedBraceToken,
-  HttpBackendExecutor,
   validateBackendRequestShape,
-} from './backend-http';
+} from './backend-request';
 export type { CreateExecutionPipelineOptions } from './pipeline';
 export { createExecutionPipeline } from './pipeline';
 export { createResourceRegistry } from './registry';
