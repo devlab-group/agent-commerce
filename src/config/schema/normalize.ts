@@ -41,18 +41,21 @@ export function normalize(raw: RawConfig): GatewayConfig {
   const resources = Object.entries(raw.resources).map(([id, entry]) =>
     normalizeResource(id, entry, protocols, x402Settings, mpp, ap2),
   );
-  // CommerceResource has no payment-flow field, so the overrides travel with
-  // each rail, and the one selected for a request applies them
-  const resourcePaymentFlows = Object.fromEntries(
-    Object.entries(raw.resources).flatMap(([id, entry]) =>
-      entry.paymentFlow !== undefined ? [[id, entry.paymentFlow]] : [],
-    ),
-  );
-  const hasFlowOverrides = Object.keys(resourcePaymentFlows).length > 0;
-  const x402WithFlows =
-    x402 !== undefined && hasFlowOverrides ? { ...x402, resourcePaymentFlows } : x402;
-  const mppWithFlows =
-    mpp !== undefined && hasFlowOverrides ? { ...mpp, resourcePaymentFlows } : mpp;
+  // CommerceResource has no payment-flow field. Each listed rail carries the
+  // overrides; the selected rail applies them.
+  const flowOverrides = (rail: 'x402' | 'mpp') => {
+    const flows = Object.fromEntries(
+      resources.flatMap((resource) => {
+        const flow = raw.resources[resource.id]?.paymentFlow;
+        return flow !== undefined && resource.paymentMethods.includes(rail)
+          ? [[resource.id, flow]]
+          : [];
+      }),
+    );
+    return Object.keys(flows).length > 0 ? { resourcePaymentFlows: flows } : {};
+  };
+  const x402WithFlows = x402 !== undefined ? { ...x402, ...flowOverrides('x402') } : x402;
+  const mppWithFlows = mpp !== undefined ? { ...mpp, ...flowOverrides('mpp') } : mpp;
   if (protocols.acp.enabled) validateAcpCheckoutMapping(protocols.acp, resources);
   // Require an exposed resource so the enabled adapter publishes a skill
   if (protocols.a2a.enabled && !resources.some((r) => r.exposedVia.includes('a2a'))) {

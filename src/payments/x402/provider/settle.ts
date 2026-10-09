@@ -62,7 +62,7 @@ export function createSettle(
       status: 'rejected',
       provider: 'x402',
       amount: verification.amount,
-      currency: requirement.currency,
+      currency: verification.currency,
       ...(verification.network !== undefined ? { network: verification.network } : {}),
       ...(verification.asset !== undefined ? { asset: verification.asset } : {}),
       ...(verification.replayKey !== undefined ? { replayKey: verification.replayKey } : {}),
@@ -191,14 +191,20 @@ export function createSettle(
       ...(payer !== undefined ? { payer } : {}),
       payee: requirements.payTo,
       amount: verification.amount,
-      currency: requirement.currency,
+      currency: verification.currency,
       network: sdkResult.network,
       ...(verification.asset !== undefined ? { asset: verification.asset } : {}),
       ...(verification.replayKey !== undefined ? { replayKey: verification.replayKey } : {}),
       settledAt: clock.nowIso(),
       // `amount` is the display value; x402's settlement response reports base
       // units. verify() matched an EVM authorization's value to the offer.
-      metadata: { amountBaseUnits: transfer?.value ?? requirements.amount },
+      metadata: {
+        amountBaseUnits: transfer?.value ?? requirements.amount,
+        // The resource's own price, when it names a currency other than the token
+        ...(verification.currency !== requirement.currency
+          ? { quote: { amount: requirement.amount, currency: requirement.currency } }
+          : {}),
+      },
     };
   }
 

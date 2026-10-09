@@ -109,7 +109,7 @@ export interface GatewayConfig {
       readonly realm: string;
       readonly challengeSecret: string;
       readonly challengeTtlSeconds?: number;
-      /** Defaults to `authorization`: settle after a successful backend call */
+      /** Defaults to `upfront`: settle before the backend call */
       readonly paymentFlow?: X402PaymentFlow;
       /** Resources whose `paymentFlow` overrides the rail's, by resource id */
       readonly resourcePaymentFlows?: Readonly<Record<string, X402PaymentFlow>>;

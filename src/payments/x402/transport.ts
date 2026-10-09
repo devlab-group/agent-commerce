@@ -26,12 +26,26 @@ export function x402McpPaymentSubmission(value: unknown): string | undefined {
 /** MCP `_meta` key of a tool result's settlement response (x402 MCP transport) */
 export const X402_MCP_PAYMENT_RESPONSE_META_KEY = 'x402/payment-response';
 
+// The code an SDK facilitator gives a spent authorization, by CAIP-2 namespace.
+// The Solana scheme has none; its specification refuses a payload being
+// settled again as `duplicate_settlement`.
+const REPLAY_CODES: Readonly<Record<string, string>> = {
+  near: 'invalid_exact_near_payload_delegate_action_nonce_already_used',
+  solana: 'duplicate_settlement',
+};
+
 /**
- * Return the provider's x402 refusal reason when available. For a replay,
- * use the spent-nonce code returned by x402 facilitators.
+ * Returns the provider's refusal reason, or the paid network family's replay
+ * code. Unknown networks use EVM's replay code.
  */
-export function x402ErrorCode(code: string, reason: unknown): string {
-  if (code === 'PAYMENT_REPLAYED') return 'invalid_exact_evm_nonce_already_used';
+export function x402ErrorCode(code: string, reason: unknown, network?: unknown): string {
+  if (code === 'PAYMENT_REPLAYED') {
+    const namespace = typeof network === 'string' ? network.split(':')[0] : undefined;
+    return (
+      (namespace !== undefined ? REPLAY_CODES[namespace] : undefined) ??
+      'invalid_exact_evm_nonce_already_used'
+    );
+  }
   return typeof reason === 'string' ? reason : 'unexpected_verify_error';
 }
 

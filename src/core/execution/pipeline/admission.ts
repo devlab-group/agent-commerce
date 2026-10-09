@@ -7,7 +7,7 @@ import type { CommerceResource, Pricing } from '../../domain/resource';
 import { CommerceError, isCommerceError, toCommerceError } from '../../errors';
 import { REUSE_REJECTED_AUTHORIZATION_METADATA_KEY } from '../settlement-order';
 import { type AuthorizeAndReserve, resolveAuthorizationProviders } from './authorization';
-import { finishedReplay, retryChallenge } from './challenge';
+import { replayError, retryChallenge } from './challenge';
 import type { PipelineContext, SettleArgs } from './context';
 
 /** A verified payment whose authorization and replay identity are reserved */
@@ -229,7 +229,7 @@ export function createPaymentAdmission(
           data: { reason: mapped.code },
         }),
       );
-      throw finishedReplay(mapped, requirement);
+      throw replayError(mapped, requirement);
     }
 
     await safeEmit(

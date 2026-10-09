@@ -95,6 +95,7 @@ describe('payments.mpp wiring', () => {
       recipient: MPP.recipient,
       facilitator: { mode: 'remote' },
       mode: 'testnet',
+      paymentFlow: 'upfront',
     });
     for (const secret of [SECRET, RPC_KEY, FACILITATOR_TENANT]) {
       expect(wellKnown.body).not.toContain(secret);

@@ -203,6 +203,13 @@ strings. It cannot compare its inputs with the gateway's eventual payment
 requirement. Take price data from the merchant catalog and settlement
 coordinates from the payment challenge.
 
+For a challenge with several x402 offers, choose one before creating the JWT.
+Pass its `payTo`, `network` and `asset` as `destination`, `network` and
+`asset`. The mandate must match the proof's selected offer: Base USDC approval
+does not authorize Solana or NEAR USDC. Copy Solana and NEAR addresses exactly;
+only EVM addresses compare case-insensitively. Keep `amount` and `currency`
+as the resource's price, even when payment records use the settled token.
+
 The buyer's agent or credential provider creates the mandate around this JWT.
 This package does not mint mandates.
 

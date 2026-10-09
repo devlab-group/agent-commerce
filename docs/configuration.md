@@ -346,7 +346,8 @@ presenter can confirm where money goes.
 Omit the four asset fields to use the [built-in network's](#network-and-facilitator)
 USDC address, EIP-712 domain and decimals. Resources using this default must
 be priced in `USDC` or `USD`. `USD` treats USDC at face value, without an
-exchange-rate lookup.
+exchange-rate lookup, and the payment records `USDC` (see
+[payment-flow.md](payment-flow.md#amounts)).
 
 Public built-in networks, testnet or mainnet, settle only in their USDC. On the
 local chain or a declared EVM network, set `asset`, `assetName`,

@@ -123,6 +123,18 @@ describe('payment messages', () => {
     });
   });
 
+  it('reports a replay with the code of the network it paid', () => {
+    const replay = new CommerceError('PAYMENT_REPLAYED', 'Already used', {
+      httpStatus: 402,
+      details: { attemptStatus: 'settled', network: 'near:testnet' },
+    });
+
+    expect(paymentFailureMetadata(replay)).toMatchObject({
+      'x402.payment.error': 'invalid_exact_near_payload_delegate_action_nonce_already_used',
+      'x402.payment.receipts': [{ success: false, network: 'near:testnet' }],
+    });
+  });
+
   it('fills an empty receipt network from the requirement and keeps one the error names', () => {
     const refused = new CommerceError('PAYMENT_INVALID', 'Refused', {
       details: { reason: 'insufficient_funds' },

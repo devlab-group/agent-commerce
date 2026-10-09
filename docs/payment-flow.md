@@ -162,6 +162,10 @@ floats. Conversion to base units (6 decimals for USDC) happens inside the
 payment provider. An amount with more precision than the
 asset supports is a configuration error, not a rounding opportunity.
 
+An x402 payment in the network's default USDC records `currency: USDC`,
+keeping a resource's `USD` price as `metadata.quote` on settlement. Other
+configured tokens use the resource's currency label.
+
 ## Local deterministic settlement
 
 The demo and CI settle for real, on a chain they own:

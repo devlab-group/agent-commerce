@@ -125,6 +125,7 @@ describe('StatusPanel', () => {
             maxTimeoutSeconds: 120,
             facilitator: { mode: 'local' },
             mode: 'local',
+            paymentFlow: 'authorization',
           },
         },
       },
@@ -135,6 +136,58 @@ describe('StatusPanel', () => {
     // says where it runs, not which chain it is on
     expect(html).toContain('in-process');
     expect(html).not.toContain('dev chain');
+  });
+
+  it('lists every x402 offer, naming a token without an EIP-712 domain by its address', () => {
+    const evm = {
+      network: 'eip155:84532',
+      asset: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+      assetName: 'USDC',
+      assetVersion: '2',
+      assetDecimals: 6,
+      payTo: '0x70997970C51812dc3A010C7d01b50e0d17dc79C8',
+    };
+    const html = render(StatusPanel, {
+      wellKnown: {
+        ...baseDoc,
+        adapters: [],
+        payments: {
+          x402: {
+            enabled: true,
+            ...evm,
+            maxTimeoutSeconds: 60,
+            facilitator: { mode: 'remote' },
+            mode: 'testnet',
+            paymentFlow: 'authorization',
+            options: [
+              evm,
+              {
+                network: 'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1',
+                asset: '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU',
+                assetDecimals: 6,
+                payTo: '9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM',
+              },
+              {
+                network: 'near:testnet',
+                asset: '3e2210e1184b45b64c8a434c0a7e7b23cc04ea7eb7a6c3c32520d03d4afcb8af',
+                assetDecimals: 6,
+                payTo: 'merchant.testnet',
+              },
+            ],
+          },
+        },
+      },
+    });
+    for (const text of [
+      'eip155:84532',
+      'USDC v2',
+      '9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM',
+      'merchant.testnet',
+      '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU',
+    ]) {
+      expect(html).toContain(text);
+    }
+    expect(html).not.toContain('undefined');
   });
 
   it('lists authorization providers with the other descriptors', () => {

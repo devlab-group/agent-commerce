@@ -257,6 +257,8 @@ describe('createGateway HTTP surface', () => {
     expect(body.merchant.id).toBe('demo-store');
     expect(body.payments.x402.payTo).toBe('0x70997970C51812dc3A010C7d01b50e0d17dc79C8');
     expect(body.payments.x402.network).toBe('eip155:31337');
+    expect(body.payments.x402.paymentFlow).toBe('authorization');
+    expect(body.payments.x402).not.toHaveProperty('resourcePaymentFlows');
     expect(body.adapters).toHaveLength(1);
     expect(body.paymentProviders).toHaveLength(1);
     expect(body.store.name).toBe('fake-store');
@@ -264,6 +266,31 @@ describe('createGateway HTTP surface', () => {
     const raw = res.payload;
     expect(raw).not.toContain('TOTALLY_SECRET_KEY');
     expect(raw).not.toContain('signerPrivateKey');
+  });
+
+  it("publishes each rail's payment flow and its per-resource overrides", async () => {
+    const base = makeGatewayConfig();
+    const x402 = base.payments.x402;
+    if (x402 === undefined) throw new Error('fixture has no x402');
+    const gateway = await buildGateway({
+      config: {
+        ...base,
+        payments: {
+          x402: {
+            ...x402,
+            paymentFlow: 'upfront',
+            resourcePaymentFlows: { market_report: 'authorization' },
+          },
+        },
+      },
+    });
+    const body = (
+      await gateway.server.inject({ method: 'GET', url: '/.well-known/agent-commerce' })
+    ).json();
+    expect(body.payments.x402).toMatchObject({
+      paymentFlow: 'upfront',
+      resourcePaymentFlows: { market_report: 'authorization' },
+    });
   });
 
   // These wire identifiers are in deployed clients, so a rename breaks them.
@@ -855,6 +882,64 @@ describe('createGateway HTTP surface', () => {
     });
   });
 
+  it.each([
+    ['eip155:31337', 'invalid_exact_evm_nonce_already_used'],
+    ['solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1', 'duplicate_settlement'],
+    ['near:testnet', 'invalid_exact_near_payload_delegate_action_nonce_already_used'],
+  ])('names the replay code of the paid network %s', async (network, code) => {
+    const provider = x402Provider({
+      createRequirement: async (ctx) => ({
+        id: 'requirement-1',
+        requestId: ctx.requestId,
+        resourceId: ctx.resource.id,
+        provider: 'x402',
+        amount: ctx.amount,
+        currency: ctx.currency,
+        network,
+        challenge: {
+          provider: 'x402',
+          version: '2',
+          accepts: [{ scheme: 'exact', network }],
+          envelope: { x402Version: 2, accepts: [{ scheme: 'exact', network }] },
+        },
+      }),
+    });
+    const gateway = await buildGateway({ paymentProviders: [provider] });
+    expect((await invokePaid(gateway)).statusCode).toBe(200);
+
+    const replay = await invokePaid(gateway);
+    expect(replay.statusCode).toBe(402);
+    expect(replay.json().details).toMatchObject({ network });
+    expect(decodeHeader(replay.headers[PAYMENT_REQUIRED_HEADER])).toMatchObject({ error: code });
+  });
+
+  it('keeps the EVM replay code when the challenge names no network', async () => {
+    const provider = x402Provider({
+      createRequirement: async (ctx) => ({
+        id: 'requirement-1',
+        requestId: ctx.requestId,
+        resourceId: ctx.resource.id,
+        provider: 'x402',
+        amount: ctx.amount,
+        currency: ctx.currency,
+        challenge: {
+          provider: 'x402',
+          version: '2',
+          accepts: [{ scheme: 'exact' }],
+          envelope: { x402Version: 2, accepts: [{ scheme: 'exact' }] },
+        },
+      }),
+    });
+    const gateway = await buildGateway({ paymentProviders: [provider] });
+    expect((await invokePaid(gateway)).statusCode).toBe(200);
+
+    const replay = await invokePaid(gateway);
+    expect(replay.json().details).not.toHaveProperty('network');
+    expect(decodeHeader(replay.headers[PAYMENT_REQUIRED_HEADER])).toMatchObject({
+      error: 'invalid_exact_evm_nonce_already_used',
+    });
+  });
+
   it('returns 409 when the first payment attempt is unfinished', async () => {
     const store = createFakeStore();
     store.attempts.set('replay-key-1', {
@@ -875,6 +960,7 @@ describe('createGateway HTTP surface', () => {
     // No new challenge: the first payment may still settle
     expect(replay.statusCode).toBe(409);
     expect(replay.json().code).toBe('PAYMENT_REPLAYED');
+    expect(replay.json().details).toMatchObject({ network: 'eip155:31337' });
     expect(replay.headers[PAYMENT_REQUIRED_HEADER]).toBeUndefined();
   });
 

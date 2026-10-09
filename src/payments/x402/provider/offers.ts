@@ -2,7 +2,7 @@
 import type { Network } from '@x402/core/types';
 import { isAddress } from 'viem';
 import { CommerceError } from '../../../core';
-import { normalizeAddress } from '../addresses';
+import { normalizeAddress, sameAddress } from '../addresses';
 import {
   createLocalFacilitatorClient,
   createLocalPublicClient,
@@ -189,4 +189,15 @@ export function resolveOffers(
     };
   });
   return { offers, deploymentMode: mode as DeploymentMode, remoteBinding };
+}
+
+/**
+ * Uses the network's default token symbol when paying that asset; otherwise
+ * uses the resource's currency, the gateway's only label for another token.
+ */
+export function offerCurrency(offer: Offer, quoted: string): string {
+  const canonical = offer.profile.canonicalAsset;
+  return canonical !== undefined && sameAddress(offer.profile, offer.asset, canonical.address)
+    ? canonical.symbol
+    : quoted;
 }

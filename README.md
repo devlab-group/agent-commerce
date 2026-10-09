@@ -412,8 +412,9 @@ PASS  Protocol versions    reported by gateway /.well-known/agent-commerce
 Score: 7/7 checks passed
 ```
 
-`doctor` cross-checks the gateway's live settlement configuration against the
-resolved local config and fails if they differ.
+`doctor` compares live settlement terms with local config for each rail:
+offer order, network, token, payee and transfer method, plus decimals and
+payment flows when published. Mismatches fail the check.
 
 Exits non-zero if anything fails. `--json` for machines.
 

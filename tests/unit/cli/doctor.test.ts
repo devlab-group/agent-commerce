@@ -731,6 +731,147 @@ describe('runDoctor: degraded scenarios report the failure', () => {
   });
 });
 
+describe('runDoctor: several x402 options', () => {
+  const OPTIONS = [
+    {
+      network: 'eip155:84532',
+      rpcUrl: 'https://sepolia.example',
+      asset: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+      assetName: 'USDC',
+      assetVersion: '2',
+      assetDecimals: 6,
+      payTo: '0x1111111111111111111111111111111111111111',
+    },
+    {
+      network: 'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1',
+      rpcUrl: 'https://devnet.example',
+      asset: '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU',
+      assetDecimals: 6,
+      payTo: '9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM',
+    },
+    {
+      network: 'near:testnet',
+      rpcUrl: 'https://near.example',
+      asset: '3e2210e1184b45b64c8a434c0a7e7b23cc04ea7eb7a6c3c32520d03d4afcb8af',
+      assetDecimals: 6,
+      payTo: 'merchant.testnet',
+    },
+  ];
+  const config = (x402: Record<string, unknown> = {}) =>
+    makeGatewayConfig({
+      payments: {
+        x402: {
+          ...X402_CONFIG,
+          ...(OPTIONS[0] as (typeof OPTIONS)[0]),
+          facilitator: {
+            mode: 'remote',
+            url: 'https://facilitator.example',
+            auth: { type: 'none' },
+          },
+          paymentFlow: 'authorization',
+          options: OPTIONS,
+          ...x402,
+        },
+      },
+    } as Partial<GatewayConfig>);
+  // The live document as the gateway publishes it: the first offer, then all of them
+  const live = (
+    options: readonly Record<string, unknown>[],
+    x402: Record<string, unknown> = {},
+  ) => ({
+    merchant: { id: 'demo-merchant' },
+    payments: {
+      x402: {
+        enabled: true,
+        ...(options[0] ?? {}),
+        paymentFlow: 'authorization',
+        options,
+        ...x402,
+      },
+    },
+  });
+  const publicTerms = OPTIONS.map(({ rpcUrl: _rpcUrl, ...terms }) => terms);
+  const paymentsCheck = async (body: unknown, gatewayConfig = config()) => {
+    const report = await runDoctor(
+      { gatewayUrl: GATEWAY },
+      {
+        fetchImpl: healthyFetch({
+          [`${GATEWAY}/.well-known/agent-commerce`]: () => jsonResponse(body),
+        }),
+        loadConfig: async () => gatewayConfig,
+        createStore: () => makeFakeReceiptStore(),
+      },
+    );
+    return report.checks.find((c) => c.name === 'Payments');
+  };
+
+  it('passes when every live option matches, naming each network', async () => {
+    const check = await paymentsCheck(live(publicTerms));
+    expect(check?.status).toBe('PASS');
+    expect(check?.detail).toContain('3 options');
+    expect(check?.detail).toContain('Base Sepolia (eip155:84532)');
+    expect(check?.detail).toContain('Solana Devnet (solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1)');
+    expect(check?.detail).toContain('NEAR Testnet (near:testnet)');
+  });
+
+  it('compares Solana addresses exactly, unlike EVM ones', async () => {
+    const changed = publicTerms.map((terms, index) =>
+      index === 1 ? { ...terms, payTo: terms.payTo.toLowerCase() } : terms,
+    );
+    const check = await paymentsCheck(live(changed));
+    expect(check?.status).toBe('FAIL');
+    expect(check?.detail).toMatch(/^option 1 payTo: gateway is using 9wzdx/);
+
+    const evmCase = publicTerms.map((terms, index) =>
+      index === 0 ? { ...terms, asset: terms.asset.toLowerCase() } : terms,
+    );
+    expect((await paymentsCheck(live(evmCase)))?.status).toBe('PASS');
+  });
+
+  it('fails when the gateway offers a different set of options', async () => {
+    const check = await paymentsCheck(live(publicTerms.slice(0, 2)));
+    expect(check?.status).toBe('FAIL');
+    expect(check?.detail).toMatch(
+      /^options: gateway is using 2 offer\(s\) but local config resolves to 3/,
+    );
+  });
+
+  it('fails on a different payment flow or per-resource override', async () => {
+    const flow = await paymentsCheck(live(publicTerms, { paymentFlow: 'upfront' }));
+    expect(flow?.detail).toMatch(/^paymentFlow: gateway is using upfront/);
+
+    const override = await paymentsCheck(
+      live(publicTerms, { resourcePaymentFlows: { report: 'upfront' } }),
+    );
+    expect(override?.status).toBe('FAIL');
+    expect(override?.detail).toMatch(
+      /^resourcePaymentFlows: gateway is using report=upfront but local config resolves to none/,
+    );
+  });
+
+  it('names every network in the mainnet safety check', async () => {
+    const report = await runDoctor(
+      { gatewayUrl: GATEWAY },
+      {
+        fetchImpl: healthyFetch(),
+        loadConfig: async () =>
+          config({
+            network: 'eip155:8453',
+            allowMainnet: true,
+            options: [
+              { ...OPTIONS[0], network: 'eip155:8453' },
+              { ...OPTIONS[1], network: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp' },
+            ],
+          }),
+        createStore: () => makeFakeReceiptStore(),
+      },
+    );
+    const safety = report.checks.find((c) => c.name === 'Mainnet safety');
+    expect(safety?.detail).toContain('Base (eip155:8453)');
+    expect(safety?.detail).toContain('Solana (solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp)');
+  });
+});
+
 describe('printDoctorReport', () => {
   it('emits machine-readable JSON with --json', async () => {
     const report = await runDoctor(

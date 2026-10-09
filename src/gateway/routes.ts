@@ -303,7 +303,7 @@ function sendInvokeError(
         PAYMENT_REQUIRED_HEADER,
         encodeHeaderDocument({
           ...challenge,
-          error: x402ErrorCode(error.code, details?.['reason']),
+          error: x402ErrorCode(error.code, details?.['reason'], details?.['network']),
         }),
       );
     }

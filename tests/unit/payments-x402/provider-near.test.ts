@@ -49,11 +49,11 @@ const RESOURCE: CommerceResource = {
   paymentMethods: ['x402'],
 };
 
-const paymentContext = (): PaymentContext => ({
+const paymentContext = (currency = 'USD'): PaymentContext => ({
   requestId: 'req-1',
   resource: RESOURCE,
   amount: '0.01',
-  currency: 'USD',
+  currency,
   requestedAt: new Date().toISOString(),
 });
 
@@ -74,8 +74,9 @@ function makeProvider(overrides: Partial<X402MultiOfferProviderOptions> = {}) {
 async function paidRequest(
   provider: ReturnType<typeof makeProvider>,
   delegate: Parameters<typeof buildSignedDelegate>[0] = {},
+  currency?: string,
 ) {
-  const requirement = await provider.createRequirement(paymentContext());
+  const requirement = await provider.createRequirement(paymentContext(currency));
   const accepted = requirement.challenge.accepts[0] as Record<string, unknown>;
   const keyPair = delegate.keyPair ?? KeyPair.fromRandom('ed25519');
   const { signedDelegateAction } = await buildSignedDelegate({
@@ -222,9 +223,9 @@ describe('verify()', () => {
 });
 
 describe('settle()', () => {
-  async function settleWith(response: Record<string, unknown>) {
+  async function settleWith(response: Record<string, unknown>, currency?: string) {
     const provider = makeProvider();
-    const { context } = await paidRequest(provider);
+    const { context } = await paidRequest(provider, {}, currency);
     verifyMock.mockResolvedValueOnce({ isValid: true, payer: BUYER });
     const verification = await provider.verify(context);
     settleMock.mockResolvedValueOnce({ network: NETWORK, ...response });
@@ -240,6 +241,19 @@ describe('settle()', () => {
       payer: BUYER,
       metadata: { amountBaseUnits: '10000' },
     });
+  });
+
+  // A USD price settles in the network's USDC; the receipt names the token
+  it('records the token it settles, and the price in another currency as the quote', async () => {
+    const settled = await settleWith({ success: true, transaction: TX_HASH, payer: BUYER });
+    expect(settled).toMatchObject({
+      currency: 'USDC',
+      metadata: { quote: { amount: '0.01', currency: 'USD' } },
+    });
+
+    const inToken = await settleWith({ success: true, transaction: TX_HASH, payer: BUYER }, 'USDC');
+    expect(inToken.currency).toBe('USDC');
+    expect(inToken.metadata).not.toHaveProperty('quote');
   });
 
   it.each<[string, Record<string, unknown>]>([

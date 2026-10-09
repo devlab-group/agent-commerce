@@ -186,7 +186,7 @@ export function paymentFailureMetadata(
   }
   // A backend failure before settlement keeps its own commerce error code.
   const code = error.code.startsWith('PAYMENT_')
-    ? x402ErrorCode(error.code, error.details?.['reason'])
+    ? x402ErrorCode(error.code, error.details?.['reason'], error.details?.['network'])
     : error.code.toLowerCase();
   const failure = settlementFailure(error.details);
   const receipt =

@@ -1,4 +1,6 @@
 // Payment checks: where each rail settles, and whether the running gateway agrees
+
+import { isRecord } from '../../../core/is-record';
 import {
   MPP_DEFAULT_PAYMENT_FLOW,
   MPP_PROFILE,
@@ -6,6 +8,7 @@ import {
   MPP_SPEC_DRAFTS,
   MPPX_VERSION,
 } from '../../../payments/mpp/constants';
+import { sameAddress } from '../../../payments/x402/addresses';
 import type { X402FacilitatorConfig } from '../../../payments/x402/guardrails';
 import {
   type CustomNetworks,
@@ -34,69 +37,139 @@ function describePaymentFlow(
   return `paymentFlow=${rail.paymentFlow ?? defaultFlow}${overrideCount}`;
 }
 
-// Shared settlement fields; `payTo` holds x402 `payTo` or MPP `recipient`
-interface LiveX402 {
-  readonly asset: string;
+// One offer's public settlement terms; `payTo` holds x402 `payTo` or MPP `recipient`
+interface RailOffer {
   readonly network: string;
+  readonly asset: string;
   readonly payTo: string;
+  readonly assetDecimals?: number;
+  /** Absent for EIP-3009 and for every non-EVM offer */
+  readonly assetTransferMethod?: string;
 }
 
-// Result of reading a live x402 or MPP settlement block
-type LiveX402Result = LiveX402 | 'disabled' | undefined;
+// A rail's terms, as configured or as the running gateway publishes them
+interface RailTerms {
+  readonly offers: readonly RailOffer[];
+  /** Absent from a gateway that does not publish its flows */
+  readonly paymentFlow?: string;
+  readonly resourcePaymentFlows?: Readonly<Record<string, string>>;
+}
 
-/**
- * Extracts the effective settlement fields from the well-known document.
- * Explicit `enabled: false` is a mismatch; absent, malformed, or incomplete
- * data leaves the comparison inconclusive.
- */
-function extractWellKnownX402(
-  body: Record<string, unknown> | undefined,
-  rail: 'x402' | 'mpp' = 'x402',
-): LiveX402Result {
-  const payments = body?.['payments'];
-  if (typeof payments !== 'object' || payments === null) return undefined;
-  const block = (payments as Record<string, unknown>)[rail];
-  if (typeof block !== 'object' || block === null) return undefined;
-  const rec = block as Record<string, unknown>;
-  if (rec['enabled'] === false) return 'disabled';
-  if (rec['enabled'] !== true) return undefined;
-  const { asset, network } = rec;
+// Result of reading a live x402 or MPP block
+type LiveRailResult = RailTerms | 'disabled' | undefined;
+
+function readOffer(rec: Record<string, unknown>, rail: 'x402' | 'mpp'): RailOffer | undefined {
+  const { asset, network, assetDecimals, assetTransferMethod } = rec;
   const payTo = rec[rail === 'mpp' ? 'recipient' : 'payTo'];
   if (typeof asset !== 'string' || typeof network !== 'string' || typeof payTo !== 'string') {
     return undefined;
   }
-  return { asset, network, payTo };
-}
-
-// Checksum-insensitive, as config validation treats addresses
-function sameAddress(a: string, b: string): boolean {
-  return a.toLowerCase() === b.toLowerCase();
+  return {
+    network,
+    asset,
+    payTo,
+    ...(typeof assetDecimals === 'number' ? { assetDecimals } : {}),
+    ...(typeof assetTransferMethod === 'string' ? { assetTransferMethod } : {}),
+  };
 }
 
 /**
- * Compares live settlement fields with local config. A mismatch names both
- * values so the operator knows what to fix.
+ * Reads offers and flows from discovery. Explicit `enabled: false` signals
+ * a mismatch; missing or invalid offer data leaves comparison inconclusive.
  */
-function findX402Mismatch(
-  configured: LiveX402,
-  live: LiveX402,
+function extractLiveRail(
+  body: Record<string, unknown> | undefined,
+  rail: 'x402' | 'mpp' = 'x402',
+): LiveRailResult {
+  const block = isRecord(body?.['payments']) ? body['payments'][rail] : undefined;
+  if (!isRecord(block)) return undefined;
+  if (block['enabled'] === false) return 'disabled';
+  if (block['enabled'] !== true) return undefined;
+  const first = readOffer(block, rail);
+  if (first === undefined) return undefined;
+  // The block's own fields repeat the first offer; `options` lists them all
+  let offers: readonly RailOffer[] = [first];
+  const listed = block['options'];
+  if (Array.isArray(listed)) {
+    const read = listed.map((entry) => (isRecord(entry) ? readOffer(entry, rail) : undefined));
+    if (read.some((offer) => offer === undefined)) return undefined;
+    offers = read as RailOffer[];
+  }
+  const { paymentFlow, resourcePaymentFlows } = block;
+  return {
+    offers,
+    ...(typeof paymentFlow === 'string' ? { paymentFlow } : {}),
+    ...(isRecord(resourcePaymentFlows)
+      ? {
+          resourcePaymentFlows: Object.fromEntries(
+            Object.entries(resourcePaymentFlows).map(([id, flow]) => [id, String(flow)]),
+          ),
+        }
+      : {}),
+  };
+}
+
+function describeOverrides(flows: Readonly<Record<string, string>> | undefined): string {
+  const entries = Object.entries(flows ?? {}).sort(([a], [b]) => a.localeCompare(b));
+  return entries.length > 0 ? entries.map(([id, flow]) => `${id}=${flow}`).join(', ') : 'none';
+}
+
+/**
+ * Compares offers in challenge order, then published flows, with local config.
+ * Mismatches name both values for the operator.
+ */
+function findRailMismatch(
+  configured: RailTerms,
+  live: RailTerms,
   payToField = 'payTo',
+  customNetworks?: CustomNetworks,
 ): string | undefined {
   const diffs: string[] = [];
-  if (!sameAddress(configured.asset, live.asset)) {
+  const differ = (field: string, liveValue: unknown, localValue: unknown) =>
     diffs.push(
-      `asset: gateway is using ${live.asset} but local config resolves to ${configured.asset}`,
+      `${field}: gateway is using ${liveValue} but local config resolves to ${localValue}`,
     );
+  if (live.offers.length !== configured.offers.length) {
+    differ('options', `${live.offers.length} offer(s)`, configured.offers.length);
+  } else {
+    configured.offers.forEach((local, index) => {
+      const remote = live.offers[index] as RailOffer;
+      const prefix = configured.offers.length > 1 ? `option ${index} ` : '';
+      // EVM addresses compare without case; Solana's and NEAR's compare exactly
+      const profile = findX402Network(local.network, customNetworks);
+      const same = (a: string, b: string) => (profile ? sameAddress(profile, a, b) : a === b);
+      if (local.network !== remote.network) {
+        differ(`${prefix}network`, `"${remote.network}"`, `"${local.network}"`);
+      }
+      if (!same(local.asset, remote.asset)) differ(`${prefix}asset`, remote.asset, local.asset);
+      if (!same(local.payTo, remote.payTo)) {
+        differ(`${prefix}${payToField}`, remote.payTo, local.payTo);
+      }
+      if (
+        local.assetDecimals !== undefined &&
+        remote.assetDecimals !== undefined &&
+        local.assetDecimals !== remote.assetDecimals
+      ) {
+        differ(`${prefix}assetDecimals`, remote.assetDecimals, local.assetDecimals);
+      }
+      if (local.assetTransferMethod !== remote.assetTransferMethod) {
+        differ(
+          `${prefix}assetTransferMethod`,
+          remote.assetTransferMethod ?? 'eip3009',
+          local.assetTransferMethod ?? 'eip3009',
+        );
+      }
+    });
   }
-  if (configured.network !== live.network) {
-    diffs.push(
-      `network: gateway is using "${live.network}" but local config resolves to "${configured.network}"`,
-    );
-  }
-  if (!sameAddress(configured.payTo, live.payTo)) {
-    diffs.push(
-      `${payToField}: gateway is using ${live.payTo} but local config resolves to ${configured.payTo}`,
-    );
+  // A gateway that publishes no flows cannot be compared on them
+  if (live.paymentFlow !== undefined) {
+    if (live.paymentFlow !== configured.paymentFlow) {
+      differ('paymentFlow', live.paymentFlow, configured.paymentFlow);
+    }
+    const liveOverrides = describeOverrides(live.resourcePaymentFlows);
+    const localOverrides = describeOverrides(configured.resourcePaymentFlows);
+    if (liveOverrides !== localOverrides)
+      differ('resourcePaymentFlows', liveOverrides, localOverrides);
   }
   if (diffs.length === 0) return undefined;
   return `${diffs.join('; ')}; the gateway may be running against an older deployment - restart it or re-run chain:deploy`;
@@ -134,20 +207,22 @@ function mainnetSafetyCheck(
   name: string,
   payToField: 'payTo' | 'recipient',
   facilitator: X402FacilitatorConfig,
+  networks: readonly string[],
 ): DoctorCheck {
   const unauthenticated = facilitator.mode === 'remote' && facilitator.auth.type === 'none';
+  const where = `${describeDeploymentMode('mainnet')} on ${networks.join(', ')}`;
   return {
     name,
     status: unauthenticated ? 'WARN' : 'INFO',
     detail: unauthenticated
-      ? `${describeDeploymentMode('mainnet')}: no credential is sent to the remote facilitator ` +
+      ? `${where}: no credential is sent to the remote facilitator ` +
         '(accepted via allowUnauthenticatedFacilitator); its anonymous-access ' +
         'limits apply. Config load also requires ' +
         `allowMainnet, HTTPS, a non-development ${payToField} and the canonical asset. ` +
         'Payments fail closed.'
-      : `${describeDeploymentMode('mainnet')}. Enforced at config load: explicit allowMainnet ` +
+      : `${where}. Enforced at config load: explicit allowMainnet ` +
         `opt-in, remote facilitator over HTTPS with a credential, non-development ${payToField}, ` +
-        'and the canonical asset for this network. Payments fail closed.',
+        'and the canonical asset of each network. Payments fail closed.',
   };
 }
 
@@ -163,15 +238,24 @@ export function paymentChecks(
   if (x402 === undefined || !x402.enabled) {
     checks.push({ name: 'Payments', status: 'INFO', detail: 'x402 not configured' });
   } else {
+    const options = x402.options ?? [x402];
     const { mode, where, via } = describeSettlement(x402.network, x402.facilitator, x402.networks);
     const flow = describePaymentFlow(x402, X402_DEFAULT_PAYMENT_FLOW);
-    const summary = `x402 v2 (scheme=exact) enabled - ${where}, destination=${maskMiddle(x402.payTo)}, facilitator=${via}, ${flow}`;
-    const live = wellKnown?.ok ? extractWellKnownX402(wellKnown.body) : undefined;
-    if (sameAddress(x402.asset, PLACEHOLDER_ASSET_ADDRESS)) {
-      // `init` writes this placeholder, and the live cross-check below would
-      // pass it, since the gateway echoes the same config. No token contract
-      // exists there, so every paid call fails (closed, with no funds at
-      // risk).
+    const named = (network: string) =>
+      `${findX402Network(network, x402.networks)?.displayName ?? 'unknown network'} (${network})`;
+    const terms =
+      options.length === 1
+        ? `${where}, destination=${maskMiddle(x402.payTo)}`
+        : `${mode !== undefined ? describeDeploymentMode(mode) : 'unknown mode'}, ${options.length} options: ` +
+          options
+            .map((option) => `${named(option.network)} to ${maskMiddle(option.payTo)}`)
+            .join('; ');
+    const summary = `x402 v2 (scheme=exact) enabled - ${terms}, facilitator=${via}, ${flow}`;
+    const live = wellKnown?.ok ? extractLiveRail(wellKnown.body) : undefined;
+    const placeholder = PLACEHOLDER_ASSET_ADDRESS.toLowerCase();
+    if (options.some((option) => option.asset.toLowerCase() === placeholder)) {
+      // The gateway echoes init's placeholder, so matching configs alone
+      // cannot detect the missing token contract. Payment fails closed.
       checks.push({
         name: 'Payments',
         status: 'WARN',
@@ -193,7 +277,20 @@ export function paymentChecks(
         detail: `${summary} (gateway's live settlement config could not be verified)`,
       });
     } else {
-      const mismatch = findX402Mismatch(x402, live);
+      const configured: RailTerms = {
+        offers: options.map(({ network, asset, payTo, assetDecimals, assetTransferMethod }) => ({
+          network,
+          asset,
+          payTo,
+          assetDecimals,
+          ...(assetTransferMethod !== undefined ? { assetTransferMethod } : {}),
+        })),
+        paymentFlow: x402.paymentFlow ?? X402_DEFAULT_PAYMENT_FLOW,
+        ...(x402.resourcePaymentFlows !== undefined
+          ? { resourcePaymentFlows: x402.resourcePaymentFlows }
+          : {}),
+      };
+      const mismatch = findRailMismatch(configured, live, 'payTo', x402.networks);
       checks.push(
         mismatch === undefined
           ? { name: 'Payments', status: 'PASS', detail: summary }
@@ -201,7 +298,14 @@ export function paymentChecks(
       );
     }
     if (mode === 'mainnet') {
-      checks.push(mainnetSafetyCheck('Mainnet safety', 'payTo', x402.facilitator));
+      checks.push(
+        mainnetSafetyCheck(
+          'Mainnet safety',
+          'payTo',
+          x402.facilitator,
+          options.map((option) => named(option.network)),
+        ),
+      );
     }
   }
   const mpp = config?.payments.mpp;
@@ -215,8 +319,21 @@ export function paymentChecks(
       `recipient=${maskMiddle(mpp.recipient)}, facilitator=${via}, ` +
       `${describePaymentFlow(mpp, MPP_DEFAULT_PAYMENT_FLOW)}, ` +
       `spec ${MPP_SPEC_DRAFTS.core}@${MPP_SPEC_COMMIT.slice(0, 7)}, mppx ${MPPX_VERSION}`;
-    const configured = { asset: mpp.asset, network: mpp.network, payTo: mpp.recipient };
-    const live = wellKnown?.ok ? extractWellKnownX402(wellKnown.body, 'mpp') : undefined;
+    const configured: RailTerms = {
+      offers: [
+        {
+          network: mpp.network,
+          asset: mpp.asset,
+          payTo: mpp.recipient,
+          assetDecimals: MPP_PROFILE.assetDecimals,
+        },
+      ],
+      paymentFlow: mpp.paymentFlow ?? MPP_DEFAULT_PAYMENT_FLOW,
+      ...(mpp.resourcePaymentFlows !== undefined
+        ? { resourcePaymentFlows: mpp.resourcePaymentFlows }
+        : {}),
+    };
+    const live = wellKnown?.ok ? extractLiveRail(wellKnown.body, 'mpp') : undefined;
     if (live === 'disabled') {
       checks.push({
         name: 'Payments (MPP)',
@@ -230,7 +347,7 @@ export function paymentChecks(
         detail: `${summary} (live MPP settlement config unavailable for comparison)`,
       });
     } else {
-      const mismatch = findX402Mismatch(configured, live, 'recipient');
+      const mismatch = findRailMismatch(configured, live, 'recipient');
       checks.push(
         mismatch === undefined
           ? { name: 'Payments (MPP)', status: 'PASS', detail: summary }
@@ -238,7 +355,11 @@ export function paymentChecks(
       );
     }
     if (mode === 'mainnet') {
-      checks.push(mainnetSafetyCheck('Mainnet safety (MPP)', 'recipient', mpp.facilitator));
+      checks.push(
+        mainnetSafetyCheck('Mainnet safety (MPP)', 'recipient', mpp.facilitator, [
+          `${findX402Network(mpp.network)?.displayName ?? 'unknown network'} (${mpp.network})`,
+        ]),
+      );
     }
   }
   return checks;

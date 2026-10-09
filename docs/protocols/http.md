@@ -25,6 +25,11 @@ retry challenge. Other outcomes:
 - A replay returns 409 without a challenge if the first attempt is unfinished,
   has the legacy `failed` status, or its status is unavailable. Issuing another
   challenge could lead to a second payment for the same request.
+- Replay `details.network` identifies the paid offer's network. A fresh x402
+  challenge on 402 uses that family's replay `error`:
+  `invalid_exact_evm_nonce_already_used` on EVM,
+  `invalid_exact_near_payload_delegate_action_nonce_already_used` on NEAR, and
+  `duplicate_settlement` on Solana, whose SDK has no replay code of its own.
 - A missing Permit2 token allowance (`permit2_allowance_required`) returns
   412 Precondition Failed with a fresh `PAYMENT-REQUIRED`, per the `exact`
   EVM scheme. The buyer approves Permit2 and retries.

@@ -23,20 +23,23 @@ export function retryChallenge(
 // hide a transfer, like `settlement-uncertain`.
 const FINISHED_ATTEMPT_STATUSES: ReadonlySet<string> = new Set(['settled', 'rejected']);
 
-// Treat a finished attempt as eligible for a 402 with a new challenge. Keep
-// 409 when the first attempt is unfinished or its status is unavailable;
-// another challenge could lead to a second payment
-export function finishedReplay(
-  error: CommerceError,
-  requirement: PaymentRequirement,
-): CommerceError {
+// Include the paid offer's network for the rail's replay code. Finished
+// attempts get 402 with a fresh challenge; unfinished or unreadable attempts
+// keep 409 to avoid prompting a second payment.
+export function replayError(error: CommerceError, requirement: PaymentRequirement): CommerceError {
+  if (error.code !== 'PAYMENT_REPLAYED') return error;
   const status = error.details?.['attemptStatus'];
-  if (error.code !== 'PAYMENT_REPLAYED' || typeof status !== 'string') return error;
-  if (!FINISHED_ATTEMPT_STATUSES.has(status)) return error;
+  const finished = typeof status === 'string' && FINISHED_ATTEMPT_STATUSES.has(status);
+  const network = requirement.network;
+  if (!finished && network === undefined) return error;
   return new CommerceError('PAYMENT_REPLAYED', error.message, {
     ...(error.requestId !== undefined ? { requestId: error.requestId } : {}),
     ...(error.resourceId !== undefined ? { resourceId: error.resourceId } : {}),
-    httpStatus: 402,
-    details: { ...error.details, ...retryChallenge(requirement).details },
+    ...(finished ? { httpStatus: 402 } : {}),
+    details: {
+      ...error.details,
+      ...(network !== undefined ? { network } : {}),
+      ...(finished ? retryChallenge(requirement).details : {}),
+    },
   });
 }

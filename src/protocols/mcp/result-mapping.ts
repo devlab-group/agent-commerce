@@ -113,7 +113,10 @@ export function errorResult(error: CommerceError, rail?: PaymentMethodName): Cal
   const refused = error.httpStatus === 402 && isRecord(challenge);
   const x402Required =
     rail === 'x402' && refused
-      ? { ...challenge, error: x402ErrorCode(error.code, details?.['reason']) }
+      ? {
+          ...challenge,
+          error: x402ErrorCode(error.code, details?.['reason'], details?.['network']),
+        }
       : undefined;
   const structured =
     x402Required !== undefined

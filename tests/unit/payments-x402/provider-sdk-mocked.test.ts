@@ -418,6 +418,9 @@ describe('provider - SDK-boundary branches (mocked x402/facilitator)', () => {
     expect(result.network).toBe('eip155:31337');
     expect(result.asset).toBe(ASSET);
     expect(result.replayKey).toBe('0xabc');
+    // The local chain's token has no symbol, so the resource's currency names it
+    expect(result.currency).toBe('USD');
+    expect(result.metadata).not.toHaveProperty('quote');
     expect(result.settledAt).toBeDefined();
   });
 

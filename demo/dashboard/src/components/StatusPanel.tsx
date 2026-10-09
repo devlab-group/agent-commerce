@@ -46,6 +46,19 @@ function DescriptorRow({ descriptor }: { readonly descriptor: AdapterDescriptor 
   );
 }
 
+// EIP-3009 offers require token domain metadata; other offers may omit it
+function describeAsset(offer: {
+  readonly asset: string;
+  readonly assetName?: string;
+  readonly assetVersion?: string;
+  readonly assetTransferMethod?: string;
+}): string {
+  const method = offer.assetTransferMethod === 'permit2' ? ', Permit2' : '';
+  return offer.assetName !== undefined
+    ? `${offer.assetName} v${offer.assetVersion ?? '?'} (${offer.asset}${method})`
+    : `${offer.asset}${method === '' ? '' : ` (Permit2)`}`;
+}
+
 /**
  * Shows gateway components and their reported capabilities and limits from
  * `GET /.well-known/agent-commerce`
@@ -107,34 +120,44 @@ export function StatusPanel({ wellKnown, error }: StatusPanelProps) {
       {x402 === undefined || !x402.enabled ? (
         <p className="empty">x402 is not enabled.</p>
       ) : (
-        <table>
-          <tbody>
-            <tr>
-              <th>Network</th>
-              <td>{x402.network}</td>
-            </tr>
-            <tr>
-              <th>Asset</th>
-              <td>
-                {x402.assetName} v{x402.assetVersion} ({x402.asset})
-              </td>
-            </tr>
-            <tr>
-              <th>Pays to</th>
-              <td>
-                <strong>{x402.payTo}</strong>
-              </td>
-            </tr>
-            <tr>
-              <th>Facilitator</th>
-              <td>{x402.facilitator.mode === 'local' ? 'local (in-process)' : 'remote'}</td>
-            </tr>
-            <tr>
-              <th>Deployment</th>
-              <td>{x402.mode}</td>
-            </tr>
-          </tbody>
-        </table>
+        <>
+          <table>
+            <thead>
+              <tr>
+                <th>Network</th>
+                <th>Asset</th>
+                <th>Pays to</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(x402.options ?? [x402]).map((offer) => (
+                <tr key={`${offer.network}|${offer.asset}|${offer.payTo}`}>
+                  <td>{offer.network}</td>
+                  <td>{describeAsset(offer)}</td>
+                  <td>
+                    <strong>{offer.payTo}</strong>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <table>
+            <tbody>
+              <tr>
+                <th>Facilitator</th>
+                <td>{x402.facilitator.mode === 'local' ? 'local (in-process)' : 'remote'}</td>
+              </tr>
+              <tr>
+                <th>Deployment</th>
+                <td>{x402.mode}</td>
+              </tr>
+              <tr>
+                <th>Payment flow</th>
+                <td>{x402.paymentFlow}</td>
+              </tr>
+            </tbody>
+          </table>
+        </>
       )}
     </section>
   );

@@ -2328,6 +2328,20 @@ describe('payments.mpp', () => {
       expect(payments.x402?.resourcePaymentFlows).toEqual({ market_report: 'upfront' });
       expect(payments.mpp?.resourcePaymentFlows).toEqual({ market_report: 'upfront' });
     });
+
+    it('keeps an override off a rail the resource does not name', () => {
+      const raw = mppConfig();
+      const mpp = (raw['payments'] as Record<string, unknown>)['mpp'];
+      raw['payments'] = { ...(validRawConfig()['payments'] as Record<string, unknown>), mpp };
+      (raw['resources'] as Record<string, Record<string, unknown>>)['market_report'] = {
+        ...(raw['resources'] as Record<string, Record<string, unknown>>)['market_report'],
+        payments: ['x402'],
+        paymentFlow: 'upfront',
+      };
+      const { payments } = parseConfig(raw, {});
+      expect(payments.x402?.resourcePaymentFlows).toEqual({ market_report: 'upfront' });
+      expect(payments.mpp).not.toHaveProperty('resourcePaymentFlows');
+    });
   });
 });
 

@@ -19,12 +19,13 @@ import type {
   PaymentProvider,
   ReceiptStore,
 } from '../core';
-import { MPP_PROFILE } from '../payments/mpp/constants';
+import { MPP_DEFAULT_PAYMENT_FLOW, MPP_PROFILE } from '../payments/mpp/constants';
 import {
   type DeploymentMode,
   requireX402Network,
   resolveDeploymentMode,
 } from '../payments/x402/networks';
+import { X402_DEFAULT_PAYMENT_FLOW, type X402PaymentFlow } from '../payments/x402/payment-flow';
 import { PACKAGE_VERSION } from '../version';
 import type { ProbedAdapter } from './readiness';
 
@@ -77,6 +78,10 @@ export interface WellKnownDocument {
       readonly facilitator: { readonly mode: 'local' | 'remote' };
       /** `local`, `testnet` or `mainnet`, from the network */
       readonly mode: DeploymentMode;
+      /** `authorization` settles after the backend; `upfront` before it */
+      readonly paymentFlow: X402PaymentFlow;
+      /** Resources that set their own flow, by id; absent when none does */
+      readonly resourcePaymentFlows?: Readonly<Record<string, X402PaymentFlow>>;
       /** Every offer, present only when there are several; the fields above repeat the first */
       readonly options?: readonly {
         readonly network: string;
@@ -99,6 +104,10 @@ export interface WellKnownDocument {
       readonly recipient: string;
       readonly facilitator: { readonly mode: 'local' | 'remote' };
       readonly mode: DeploymentMode;
+      /** `upfront` settles before the backend; `authorization` after it */
+      readonly paymentFlow: X402PaymentFlow;
+      /** Resources that set their own flow, by id; absent when none does */
+      readonly resourcePaymentFlows?: Readonly<Record<string, X402PaymentFlow>>;
     };
   };
 }
@@ -108,7 +117,7 @@ export interface BuildWellKnownOptions {
   readonly paymentProviders: readonly PaymentProvider[];
   readonly authorizationProviders: readonly AuthorizationProvider[];
   readonly store: ReceiptStore;
-  /** From the memoized readiness probe, so this route shares `/ready`'s `health()` calls */
+  /** From the readiness cache, sharing `/ready`'s `health()` calls */
   readonly adapters: readonly ProbedAdapter[];
 }
 
@@ -131,6 +140,15 @@ function publicProtocols(protocols: GatewayConfig['protocols']): WellKnownProtoc
     a2a: { enabled: protocols.a2a.enabled, mountPath: protocols.a2a.mountPath },
     acp: { enabled: protocols.acp.enabled, mountPath: protocols.acp.mountPath },
   };
+}
+
+// A rail's per-resource flows, or nothing when no resource overrides the rail
+function flowOverrides(flows: Readonly<Record<string, X402PaymentFlow>> | undefined): {
+  readonly resourcePaymentFlows?: Readonly<Record<string, X402PaymentFlow>>;
+} {
+  return flows !== undefined && Object.keys(flows).length > 0
+    ? { resourcePaymentFlows: flows }
+    : {};
 }
 
 export function buildWellKnownDocument(options: BuildWellKnownOptions): WellKnownDocument {
@@ -173,6 +191,8 @@ export function buildWellKnownDocument(options: BuildWellKnownOptions): WellKnow
               mode: resolveDeploymentMode(
                 requireX402Network(x402.network, 'payments.x402.network', x402.networks),
               ),
+              paymentFlow: x402.paymentFlow ?? X402_DEFAULT_PAYMENT_FLOW,
+              ...flowOverrides(x402.resourcePaymentFlows),
               // Public offer terms only: an option's RPC URL can carry an API key
               ...(x402.options !== undefined && x402.options.length > 1
                 ? {
@@ -212,6 +232,8 @@ export function buildWellKnownDocument(options: BuildWellKnownOptions): WellKnow
               recipient: mpp.recipient,
               facilitator: { mode: mpp.facilitator.mode },
               mode: resolveDeploymentMode(requireX402Network(mpp.network, 'payments.mpp.network')),
+              paymentFlow: mpp.paymentFlow ?? MPP_DEFAULT_PAYMENT_FLOW,
+              ...flowOverrides(mpp.resourcePaymentFlows),
             },
           }
         : {}),

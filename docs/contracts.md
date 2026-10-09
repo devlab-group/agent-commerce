@@ -212,6 +212,17 @@ persistence must not fail the commerce flow.
   - `createX402PaymentProvider` refuses a `maxTimeoutSeconds` that is not a
     positive integer with `CONFIG_INVALID`, as config load already did: the
     NEAR facilitator refuses every payment under such a value.
+- x402 verification and settlement `currency` uses the network's default
+  token symbol when paying that asset, otherwise the resource's currency.
+  Settlement preserves a differently labeled price, such as `USD`, in
+  `metadata.quote` (`amount`, `currency`). Payment attempts, receipts and
+  `PAYMENT-RESPONSE` now record `USDC` instead of repeating a `USD` quote.
+- A replay error's `details.network` names the network of the offer it paid.
+- `/.well-known` publishes each rail's `paymentFlow`, and
+  `resourcePaymentFlows` when a resource that lists the rail sets its own;
+  `WellKnownDocument` gains both fields for x402 and MPP. A rail's
+  `resourcePaymentFlows` in `GatewayConfig` no longer includes resources that
+  do not list that rail.
 
 - `ProtocolName` gained `a2a` and `acp`; `PROTOCOL_NAMES` is the runtime list
   used by validation. It is derived from a record keyed by the union, so a

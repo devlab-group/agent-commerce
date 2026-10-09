@@ -7,6 +7,7 @@ import { redactedErrorText } from '../../../core/errors';
 import { normalizeAddress, sameAddress } from '../addresses';
 import { declaredX402Version, decodePaymentSubmission, forFacilitator } from '../payload';
 import { X402_VERSION } from './constants';
+import { offerCurrency } from './offers';
 import { isProviderUnavailableError, NO_VERDICT_REASONS, sanitizeReason } from './reasons';
 import { acceptedMatchesOffer, offerIndexOf } from './requirement';
 import { readTransfer, type Transfer } from './transfer';
@@ -201,7 +202,7 @@ export function createVerify(
       ...(payer !== undefined ? { payer } : {}),
       payee: transfer?.to ?? offer.payTo,
       amount: formatUnits(required, offer.assetDecimals),
-      currency: requirement.currency,
+      currency: offerCurrency(offer, requirement.currency),
       network: payload.accepted.network,
       asset: offer.family === 'evm' ? getAddress(requirements.asset) : offer.asset,
       replayKey,
