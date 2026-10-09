@@ -125,32 +125,37 @@ describe('schema lifecycle', () => {
     await store.close();
   });
 
-  it('reports a fixed-vocabulary detail (never the raw error message) when the store is unwritable, and logs the raw message', async () => {
-    const path = join(dir, 'readonly.db');
-    const logger = createCapturingLogger();
-    const store = createSqliteReceiptStore({ path, logger });
-    await store.init();
+  // chmod does not stop root (or Windows) from writing, so the store stays
+  // writable there; the startup checks below skip under the same condition
+  it.runIf(process.platform !== 'win32' && process.getuid?.() !== 0)(
+    'reports a fixed-vocabulary detail (never the raw error message) when the store is unwritable, and logs the raw message',
+    async () => {
+      const path = join(dir, 'readonly.db');
+      const logger = createCapturingLogger();
+      const store = createSqliteReceiptStore({ path, logger });
+      await store.init();
 
-    // Permissions change under a live connection (a host mount going
-    // read-only, say). Re-opening would not reach health(): opening a store
-    // over an unwritable file already throws in openSqliteDatabase.
-    chmodSync(path, 0o444);
+      // Permissions change under a live connection (a host mount going
+      // read-only, say). Re-opening would not reach health(): opening a store
+      // over an unwritable file already throws in openSqliteDatabase.
+      chmodSync(path, 0o444);
 
-    const health = await store.health();
+      const health = await store.health();
 
-    expect(health.status).toBe('fail');
-    expect(health.detail).toBe('store-unwritable');
-    // Neither the absolute path nor the raw OS error reaches the detail
-    expect(health.detail).not.toContain(path);
-    expect(health.detail).not.toMatch(/EACCES|permission denied/i);
-    // The raw error goes to the logger instead
-    expect(logger.warnings.length).toBeGreaterThan(0);
-    expect(String(logger.warnings[0]?.obj['err'])).toMatch(/EACCES|permission denied/i);
+      expect(health.status).toBe('fail');
+      expect(health.detail).toBe('store-unwritable');
+      // Neither the absolute path nor the raw OS error reaches the detail
+      expect(health.detail).not.toContain(path);
+      expect(health.detail).not.toMatch(/EACCES|permission denied/i);
+      // The raw error goes to the logger instead
+      expect(logger.warnings.length).toBeGreaterThan(0);
+      expect(String(logger.warnings[0]?.obj['err'])).toMatch(/EACCES|permission denied/i);
 
-    // The WAL checkpoint on close needs write access
-    chmodSync(path, 0o644);
-    await store.close();
-  });
+      // The WAL checkpoint on close needs write access
+      chmodSync(path, 0o644);
+      await store.close();
+    },
+  );
 
   it('close() is idempotent', async () => {
     const store = createSqliteReceiptStore({ path: ':memory:' });
