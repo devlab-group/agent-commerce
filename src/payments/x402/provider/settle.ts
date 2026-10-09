@@ -23,7 +23,7 @@ import type { ProviderContext } from './types';
 export function createSettle(
   ctx: ProviderContext,
 ): (context: PaymentSettlementContext) => Promise<PaymentResult> {
-  const { offers, clock, logger } = ctx;
+  const { offersFor, clock, logger } = ctx;
 
   async function settle(context: PaymentSettlementContext): Promise<PaymentResult> {
     const { requirement, submission, verification } = context;
@@ -36,7 +36,7 @@ export function createSettle(
     }
 
     const index = offerIndexOf(requirement);
-    const offer = index === undefined ? undefined : offers[index];
+    const offer = index === undefined ? undefined : offersFor(requirement.resourceId)[index];
     const requirements =
       index === undefined
         ? undefined

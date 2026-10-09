@@ -97,6 +97,11 @@ export interface GatewayConfig {
        * Omit for manually built single-option configs that skip `parseConfig`
        */
       readonly options?: readonly X402OptionConfig[];
+      /**
+       * Resource `x402.accepts` overrides by id, replacing `options`.
+       * Absent when no resource overrides its offers.
+       */
+      readonly resourceOptions?: Readonly<Record<string, readonly X402OptionConfig[]>>;
     };
     readonly mpp?: {
       readonly enabled: boolean;

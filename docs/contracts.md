@@ -223,6 +223,15 @@ persistence must not fail the commerce flow.
   `WellKnownDocument` gains both fields for x402 and MPP. A rail's
   `resourcePaymentFlows` in `GatewayConfig` no longer includes resources that
   do not list that rail.
+- A resource's `x402.accepts` overrides its offers, matching the SDK's
+  route-level `accepts`.
+  - `X402ProviderOptions.resourceOffers`, keyed by resource id, replaces the
+    provider's offers for those resources, under the same facilitator and
+    settings. An offer that several lists repeat is built and health-checked
+    once.
+  - `GatewayConfig.payments.x402.resourceOptions` holds the resolved lists, and
+    `/.well-known` publishes them as `payments.x402.resourceOptions`.
+    `WellKnownX402Offer` names the offer shape both lists share.
 
 - `ProtocolName` gained `a2a` and `acp`; `PROTOCOL_NAMES` is the runtime list
   used by validation. It is derived from a record keyed by the union, so a
@@ -376,6 +385,8 @@ export interface X402ProviderOptions extends X402OfferOptions {
   readonly paymentFlow?: X402PaymentFlow;
   /** Per-resource overrides of `paymentFlow`, keyed by resource id */
   readonly resourcePaymentFlows?: Readonly<Record<string, X402PaymentFlow>>;
+  /** Offers that replace the provider's for a resource, keyed by resource id */
+  readonly resourceOffers?: Readonly<Record<string, readonly X402OfferOptions[]>>;
   readonly facilitator: X402FacilitatorConfig;
   /** Must be true before mainnet settlement. */
   readonly allowMainnet?: boolean;
@@ -672,6 +683,18 @@ export type AcpProtocolConfig =
       readonly discovery?: AcpDiscoveryConfig;
     };
 
+/** One resolved x402 option */
+export interface X402OptionConfig {
+  readonly network: string;
+  readonly rpcUrl: string; // networks.<id>.rpcUrl, else the shared rpcUrl
+  readonly asset: string;
+  readonly assetName?: string; // always present for EIP-3009
+  readonly assetVersion?: string;
+  readonly assetDecimals: number;
+  readonly payTo: string;
+  readonly assetTransferMethod?: 'permit2'; // absent for EIP-3009
+}
+
 export interface GatewayConfig {
   readonly version: 1;
   readonly merchant: {
@@ -712,6 +735,10 @@ export interface GatewayConfig {
       readonly facilitator: X402FacilitatorConfig;
       readonly allowMainnet?: boolean;
       readonly allowUnauthenticatedFacilitator?: boolean;
+      readonly networks?: X402ProviderOptions['customNetworks']; // declared EVM networks
+      readonly options?: readonly X402OptionConfig[]; // the fields above mirror the first
+      // Each resource's own offers, replacing `options` for it
+      readonly resourceOptions?: Readonly<Record<string, readonly X402OptionConfig[]>>;
     };
     readonly mpp?: {
       readonly enabled: boolean;

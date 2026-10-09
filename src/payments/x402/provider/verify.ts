@@ -17,7 +17,7 @@ import type { ProviderContext } from './types';
 export function createVerify(
   ctx: ProviderContext,
 ): (context: PaymentVerificationContext) => Promise<PaymentResult> {
-  const { offers, clock, logger, svm, near } = ctx;
+  const { offersFor, clock, logger, svm, near } = ctx;
 
   /**
    * Checks a submission against the requirement this provider built, never
@@ -50,7 +50,7 @@ export function createVerify(
     if (index === undefined) {
       return rejected('invalid_payment_requirements');
     }
-    const offer = offers[index];
+    const offer = offersFor(requirement.resourceId)[index];
     const requirements = requirement.challenge.accepts[index] as PaymentRequirements | undefined;
     if (!offer || !requirements) {
       return rejected('missing_payment_requirements');

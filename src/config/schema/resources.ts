@@ -120,13 +120,33 @@ export function normalizeResource(
     );
   }
 
+  const paymentMethods = entry.payments ?? [];
+
+  if (entry.x402 !== undefined) {
+    const at = `resources.${id}.x402`;
+    if (x402 === undefined) {
+      throw new CommerceError(
+        'CONFIG_INVALID',
+        `Resource "${id}" sets x402.accepts, but payments.x402 is not configured`,
+        { details: { path: at, resourceId: id } },
+      );
+    }
+    if (entry.pricing.type !== 'fixed' || !paymentMethods.includes('x402')) {
+      throw new CommerceError(
+        'CONFIG_INVALID',
+        `Resource "${id}" sets x402.accepts, which requires fixed pricing and "x402" in payments`,
+        { details: { path: at, resourceId: id } },
+      );
+    }
+  }
+  // The resource's own offers, or the rail's
+  const offers = x402 !== undefined ? (x402.resources[id] ?? x402) : undefined;
+
   if (entry.pricing.type === 'fixed') {
     // The price is charged in every option's token, so the coarsest one bounds it
-    const decimals = x402?.options.map((option) => option.assetDecimals);
+    const decimals = offers?.options.map((option) => option.assetDecimals);
     validatePricingAmount(id, entry.pricing.amount, decimals && Math.min(...decimals));
   }
-
-  const paymentMethods = entry.payments ?? [];
 
   if (entry.pricing.type === 'fixed') {
     if (paymentMethods.length === 0) {
@@ -160,7 +180,7 @@ export function normalizeResource(
     }
     // With no asset configured, the x402 offer settles in the network's default
     // stablecoin, so the price must name that token or USD
-    const symbols = x402?.defaultAssetSymbols ?? [];
+    const symbols = offers?.defaultAssetSymbols ?? [];
     const currency = entry.pricing.currency;
     if (
       x402?.config.enabled &&

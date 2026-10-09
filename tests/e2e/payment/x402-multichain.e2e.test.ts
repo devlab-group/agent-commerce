@@ -1,7 +1,8 @@
 /**
  * EIP-3009 settlement through one gateway on Anvil chains 31338 and 31339,
  * each with MockUSDC. A loopback facilitator serves both declared testnets,
- * exercising the remote path used for non-local EVM networks.
+ * exercising the remote path used for non-local EVM networks. A second
+ * resource offers only the second chain, through its own `x402.accepts`.
  */
 import { x402Client, x402HTTPClient } from '@x402/core/client';
 import type { PaymentRequired } from '@x402/core/types';
@@ -22,6 +23,8 @@ import {
 import { expectRealSettlement, readBalances } from '../../fixtures/x402/settlement';
 
 const RESOURCE_ID = 'market_report';
+// Offers only the second chain
+const OWN_RESOURCE_ID = 'chain_b_report';
 const CHAINS = [
   { network: 'eip155:31338', chainId: 31338, port: 18781 },
   { network: 'eip155:31339', chainId: 31339, port: 18782 },
@@ -55,17 +58,17 @@ function balancesOn(index: number) {
   });
 }
 
-async function invoke(headers: Record<string, string> = {}) {
+async function invoke(headers: Record<string, string> = {}, resourceId = RESOURCE_ID) {
   return gateway.server.inject({
     method: 'POST',
-    url: `/api/resources/${RESOURCE_ID}/invoke`,
+    url: `/api/resources/${resourceId}/invoke`,
     headers: { 'content-type': 'application/json', ...headers },
     payload: {},
   });
 }
 
-async function challenge(): Promise<PaymentRequired> {
-  const unpaid = await invoke();
+async function challenge(resourceId = RESOURCE_ID): Promise<PaymentRequired> {
+  const unpaid = await invoke({}, resourceId);
   expect(unpaid.statusCode).toBe(402);
   return new x402HTTPClient(new x402Client()).getPaymentRequiredResponse(
     (name) => unpaid.headers[name.toLowerCase()] as string | undefined,
@@ -92,6 +95,23 @@ beforeAll(async () => {
     },
   });
 
+  const optionFor = (index: number) => {
+    const deployment = deploymentOf(index);
+    return {
+      network: CHAINS[index]?.network,
+      payTo: MERCHANT,
+      asset: deployment.asset,
+      assetName: deployment.assetName,
+      assetVersion: deployment.assetVersion,
+      assetDecimals: deployment.assetDecimals,
+    };
+  };
+  const report = {
+    backend: { type: 'http', method: 'GET', url: 'http://merchant.invalid/api/report' },
+    pricing: { type: 'fixed', amount: '1.00', currency: 'USDC' },
+    expose: ['http'],
+    payments: ['x402'],
+  };
   const config = parseConfig(
     {
       version: 1,
@@ -100,12 +120,11 @@ beforeAll(async () => {
       storage: { receipts: { driver: 'sqlite', path: ':memory:' } },
       protocols: { http: { enabled: true }, mcp: { enabled: false, mountPath: '/mcp' } },
       resources: {
-        [RESOURCE_ID]: {
-          name: 'Market report',
-          backend: { type: 'http', method: 'GET', url: 'http://merchant.invalid/api/report' },
-          pricing: { type: 'fixed', amount: '1.00', currency: 'USDC' },
-          expose: ['http'],
-          payments: ['x402'],
+        [RESOURCE_ID]: { name: 'Market report', ...report },
+        [OWN_RESOURCE_ID]: {
+          name: 'Chain B report',
+          ...report,
+          x402: { accepts: [optionFor(1)] },
         },
       },
       payments: {
@@ -117,17 +136,7 @@ beforeAll(async () => {
               { kind: 'testnet', displayName: `Anvil ${chainId}`, rpcUrl: anvilOf(index).rpcUrl },
             ]),
           ),
-          options: CHAINS.map(({ network }, index) => {
-            const deployment = deploymentOf(index);
-            return {
-              network,
-              payTo: MERCHANT,
-              asset: deployment.asset,
-              assetName: deployment.assetName,
-              assetVersion: deployment.assetVersion,
-              assetDecimals: deployment.assetDecimals,
-            };
-          }),
+          options: CHAINS.map((_chain, index) => optionFor(index)),
           maxTimeoutSeconds: 120,
           facilitator: { mode: 'remote', url: facilitator.url, auth: { type: 'none' } },
         },
@@ -223,6 +232,50 @@ describe('x402 settlement on two EVM chains', () => {
       const paid = await invoke({ 'payment-signature': proof });
       expect(paid.statusCode).toBe(200);
     }
+  });
+
+  it('serves a resource its own offer only, and settles it on that chain', async () => {
+    const offered = await challenge(OWN_RESOURCE_ID);
+    expect(offered.accepts.map((accepts) => accepts.network)).toEqual([CHAINS[1].network]);
+    const client = new x402Client((_version, accepts) => accepts[0] as never);
+    registerExactEvmScheme(client, {
+      signer: privateKeyToAccount(deploymentOf(1).buyer.privateKey),
+      networks: CHAINS.map((c) => c.network),
+    });
+    client.setSpendControls(false);
+    const payload = await client.createPaymentPayload(offered);
+
+    const before = await balancesOn(1);
+    const otherBefore = await balancesOn(0);
+    const paid = await invoke(header(payload), OWN_RESOURCE_ID);
+    expect(paid.statusCode).toBe(200);
+    const settlement = new x402HTTPClient(new x402Client()).getPaymentSettleResponse(
+      (name) => paid.headers[name.toLowerCase()] as string | undefined,
+    );
+    await expectRealSettlement({
+      rpcUrl: anvilOf(1).rpcUrl,
+      asset: deploymentOf(1).asset,
+      buyer: deploymentOf(1).buyer.address,
+      merchant: MERCHANT,
+      before,
+      after: await balancesOn(1),
+      amountBaseUnits: 1_000_000n,
+      txHash: settlement.transaction,
+    });
+    expect(await balancesOn(0)).toEqual(otherBefore);
+
+    // This resource does not accept the first chain's offer
+    const proof = await createPaymentProof({
+      buyerPrivateKey: deploymentOf(0).buyer.privateKey,
+      accepts: (await challenge()).accepts[0] as unknown as Record<string, unknown>,
+    });
+    const unchanged = await balancesOn(0);
+    const refused = await invoke({ 'payment-signature': proof }, OWN_RESOURCE_ID);
+    expect(refused.statusCode).toBe(402);
+    expect(refused.json().code).toBe('PAYMENT_INVALID');
+    // The offer is on another network, which verify checks before the facilitator
+    expect(refused.json().message).toBe('invalid_network');
+    expect(await balancesOn(0)).toEqual(unchanged);
   });
 
   it('checks the health of both chains', async () => {

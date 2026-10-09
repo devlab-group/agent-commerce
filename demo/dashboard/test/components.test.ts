@@ -190,6 +190,37 @@ describe('StatusPanel', () => {
     expect(html).not.toContain('undefined');
   });
 
+  it("shows a resource's own offers beside the rail's", () => {
+    const offer = {
+      network: 'eip155:84532',
+      asset: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+      assetName: 'USDC',
+      assetVersion: '2',
+      assetDecimals: 6,
+      payTo: '0x70997970C51812dc3A010C7d01b50e0d17dc79C8',
+    };
+    const own = { ...offer, payTo: '0x1111111111111111111111111111111111111111' };
+    const html = render(StatusPanel, {
+      wellKnown: {
+        ...baseDoc,
+        adapters: [],
+        payments: {
+          x402: {
+            enabled: true,
+            ...offer,
+            maxTimeoutSeconds: 60,
+            facilitator: { mode: 'remote' },
+            mode: 'testnet',
+            paymentFlow: 'authorization',
+            resourceOptions: { market_report: [own] },
+          },
+        },
+      },
+    });
+    expect(html).toMatch(/<td>default<\/td><td>eip155:84532<\/td>/);
+    expect(html).toMatch(/<td>market_report<\/td>.*0x1111111111111111111111111111111111111111/);
+  });
+
   it('lists authorization providers with the other descriptors', () => {
     const html = render(StatusPanel, {
       wellKnown: {

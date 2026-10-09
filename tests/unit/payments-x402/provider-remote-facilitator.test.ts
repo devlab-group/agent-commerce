@@ -676,6 +676,119 @@ describe('provider - several offers', () => {
   });
 });
 
+describe('provider - resource offers', () => {
+  const offer = (asset: string, payTo: string) => ({
+    asset,
+    payTo,
+    network: 'eip155:31337',
+    rpcUrl: RPC_URL,
+    assetName: 'MockUSDC',
+    assetVersion: '2',
+    assetDecimals: 6,
+  });
+  const DEFAULT = offer(ASSET, PAY_TO);
+  // The report's own offers, in an order that differs from every other list:
+  // the second repeats the default
+  const OWN = [
+    offer(
+      '0x2222222222222222222222222222222222222222',
+      '0x3333333333333333333333333333333333333333',
+    ),
+    DEFAULT,
+  ];
+  const OTHER: CommerceResource = { ...RESOURCE, id: 'demo.other' };
+
+  const makeProvider = (resourceOffers: Record<string, readonly (typeof DEFAULT)[]>) =>
+    createX402PaymentProvider({
+      offers: [DEFAULT],
+      resourceOffers,
+      facilitator: { mode: 'remote', url: FACILITATOR_URL, auth: { type: 'none' } },
+    });
+
+  const contextFor = (resource: CommerceResource): PaymentContext => ({
+    ...paymentContext(),
+    resource,
+  });
+
+  async function sdkProof(envelope: unknown, pick: number) {
+    const client = new x402Client((_version, accepts) => accepts[pick] as never);
+    registerExactEvmScheme(client, {
+      signer: privateKeyToAccount(BUYER_PRIVATE_KEY),
+      networks: ['eip155:31337'],
+    });
+    client.setSpendControls(false);
+    const payload = await client.createPaymentPayload(envelope as PaymentRequired);
+    return {
+      method: 'x402' as const,
+      payload: Buffer.from(JSON.stringify(payload)).toString('base64'),
+    };
+  }
+
+  beforeEach(() => {
+    verifyMock.mockReset();
+    settleMock.mockReset();
+  });
+
+  it('challenges each resource with its own list, and others with the default', async () => {
+    const provider = makeProvider({ 'demo.report': OWN });
+    expect(provider.selectRequirement).toBeDefined();
+    expect(provider.descriptor.capabilities).toContain('multiple-offers');
+
+    const own = await provider.createRequirement(paymentContext());
+    expect(own.challenge.accepts.map((a) => a['payTo'])).toEqual(OWN.map((o) => o.payTo));
+    expect(own.destination).toBeUndefined();
+
+    const other = await provider.createRequirement(contextFor(OTHER));
+    expect(other.challenge.accepts.map((a) => a['payTo'])).toEqual([PAY_TO]);
+    expect(other.destination).toBe(PAY_TO);
+  });
+
+  it('verifies and settles the resource offer the buyer chose', async () => {
+    const provider = makeProvider({ 'demo.report': OWN });
+    const requirement = await provider.createRequirement(paymentContext());
+    const submission = await sdkProof(requirement.challenge.envelope, 0);
+    const context = { requestId: 'req-1', resource: RESOURCE, requirement, submission };
+
+    const selected = await provider.selectRequirement?.(context);
+    expect(selected?.destination).toBe(OWN[0]?.payTo);
+    if (!selected) throw new Error('a resource with several offers selects one');
+
+    verifyMock.mockResolvedValueOnce({ isValid: true });
+    const verification = await provider.verify({ ...context, requirement: selected });
+    expect(verification).toMatchObject({ status: 'verified', asset: OWN[0]?.asset });
+
+    settleMock.mockResolvedValueOnce({
+      success: true,
+      transaction: `0x${'ab'.repeat(32)}`,
+      network: 'eip155:31337',
+    });
+    const settled = await provider.settle({ ...context, requirement: selected, verification });
+    expect(settled.status).toBe('settled');
+    expect(settleMock.mock.calls[0]?.[1]).toEqual(requirement.challenge.accepts[0]);
+  });
+
+  it('does not let a proof for another resource offer pay this one', async () => {
+    const provider = makeProvider({ 'demo.report': [OWN[0] as typeof DEFAULT] });
+    const other = await provider.createRequirement(contextFor(OTHER));
+    const submission = await sdkProof(other.challenge.envelope, 0);
+    const requirement = await provider.createRequirement(paymentContext());
+
+    const result = await provider.verify({
+      requestId: 'req-1',
+      resource: RESOURCE,
+      requirement,
+      submission,
+    });
+
+    expect(result.rejectionReason).toBe('invalid_payment_requirements');
+    expect(verifyMock).not.toHaveBeenCalled();
+  });
+
+  it('refuses an empty resource list at construction', () => {
+    expect(() => makeProvider({ 'demo.report': [] })).toThrow(/resourceOffers.demo.report/);
+  });
+});
+
 describe('provider - Permit2 offers', () => {
   type Permit2Proof = {
     payload: {

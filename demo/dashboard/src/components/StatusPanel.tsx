@@ -83,6 +83,16 @@ export function StatusPanel({ wellKnown, error }: StatusPanelProps) {
   }
 
   const x402 = wellKnown.payments.x402;
+  // The rail's offers serve every resource without its own list
+  const offerRows =
+    x402 === undefined
+      ? []
+      : [
+          ...(x402.options ?? [x402]).map((offer) => ({ offer, resource: 'default' })),
+          ...Object.entries(x402.resourceOptions ?? {}).flatMap(([resource, list]) =>
+            list.map((offer) => ({ offer, resource })),
+          ),
+        ];
 
   return (
     <section className="panel">
@@ -124,14 +134,16 @@ export function StatusPanel({ wellKnown, error }: StatusPanelProps) {
           <table>
             <thead>
               <tr>
+                <th>Resource</th>
                 <th>Network</th>
                 <th>Asset</th>
                 <th>Pays to</th>
               </tr>
             </thead>
             <tbody>
-              {(x402.options ?? [x402]).map((offer) => (
-                <tr key={`${offer.network}|${offer.asset}|${offer.payTo}`}>
+              {offerRows.map(({ offer, resource }) => (
+                <tr key={`${resource}|${offer.network}|${offer.asset}|${offer.payTo}`}>
+                  <td>{resource}</td>
                   <td>{offer.network}</td>
                   <td>{describeAsset(offer)}</td>
                   <td>

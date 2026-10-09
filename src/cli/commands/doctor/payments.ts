@@ -50,6 +50,8 @@ interface RailOffer {
 // A rail's terms, as configured or as the running gateway publishes them
 interface RailTerms {
   readonly offers: readonly RailOffer[];
+  /** Resources with their own offers, by id */
+  readonly resourceOffers?: Readonly<Record<string, readonly RailOffer[]>>;
   /** Absent from a gateway that does not publish its flows */
   readonly paymentFlow?: string;
   readonly resourcePaymentFlows?: Readonly<Record<string, string>>;
@@ -73,6 +75,13 @@ function readOffer(rec: Record<string, unknown>, rail: 'x402' | 'mpp'): RailOffe
   };
 }
 
+// A list of offers, or undefined when any entry is malformed
+function readOffers(value: unknown, rail: 'x402' | 'mpp'): RailOffer[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const read = value.map((entry) => (isRecord(entry) ? readOffer(entry, rail) : undefined));
+  return read.some((offer) => offer === undefined) ? undefined : (read as RailOffer[]);
+}
+
 /**
  * Reads offers and flows from discovery. Explicit `enabled: false` signals
  * a mismatch; missing or invalid offer data leaves comparison inconclusive.
@@ -89,15 +98,26 @@ function extractLiveRail(
   if (first === undefined) return undefined;
   // The block's own fields repeat the first offer; `options` lists them all
   let offers: readonly RailOffer[] = [first];
-  const listed = block['options'];
-  if (Array.isArray(listed)) {
-    const read = listed.map((entry) => (isRecord(entry) ? readOffer(entry, rail) : undefined));
-    if (read.some((offer) => offer === undefined)) return undefined;
-    offers = read as RailOffer[];
+  if (block['options'] !== undefined) {
+    const listed = readOffers(block['options'], rail);
+    if (listed === undefined) return undefined;
+    offers = listed;
+  }
+  let resourceOffers: Record<string, readonly RailOffer[]> | undefined;
+  const ownLists = block['resourceOptions'];
+  if (ownLists !== undefined) {
+    if (!isRecord(ownLists)) return undefined;
+    resourceOffers = {};
+    for (const [id, list] of Object.entries(ownLists)) {
+      const read = readOffers(list, rail);
+      if (read === undefined) return undefined;
+      resourceOffers[id] = read;
+    }
   }
   const { paymentFlow, resourcePaymentFlows } = block;
   return {
     offers,
+    ...(resourceOffers !== undefined ? { resourceOffers } : {}),
     ...(typeof paymentFlow === 'string' ? { paymentFlow } : {}),
     ...(isRecord(resourcePaymentFlows)
       ? {
@@ -129,12 +149,23 @@ function findRailMismatch(
     diffs.push(
       `${field}: gateway is using ${liveValue} but local config resolves to ${localValue}`,
     );
-  if (live.offers.length !== configured.offers.length) {
-    differ('options', `${live.offers.length} offer(s)`, configured.offers.length);
-  } else {
-    configured.offers.forEach((local, index) => {
-      const remote = live.offers[index] as RailOffer;
-      const prefix = configured.offers.length > 1 ? `option ${index} ` : '';
+  const compareOffers = (
+    label: string,
+    localOffers: readonly RailOffer[],
+    liveOffers: readonly RailOffer[],
+  ) => {
+    if (liveOffers.length !== localOffers.length) {
+      differ(label, `${liveOffers.length} offer(s)`, localOffers.length);
+      return;
+    }
+    localOffers.forEach((local, index) => {
+      const remote = liveOffers[index] as RailOffer;
+      const prefix =
+        label !== 'options'
+          ? `${label}[${index}] `
+          : localOffers.length > 1
+            ? `option ${index} `
+            : '';
       // EVM addresses compare without case; Solana's and NEAR's compare exactly
       const profile = findX402Network(local.network, customNetworks);
       const same = (a: string, b: string) => (profile ? sameAddress(profile, a, b) : a === b);
@@ -160,6 +191,12 @@ function findRailMismatch(
         );
       }
     });
+  };
+  compareOffers('options', configured.offers, live.offers);
+  const localLists = configured.resourceOffers ?? {};
+  const liveLists = live.resourceOffers ?? {};
+  for (const id of [...new Set([...Object.keys(localLists), ...Object.keys(liveLists)])].sort()) {
+    compareOffers(`resources.${id}.x402.accepts`, localLists[id] ?? [], liveLists[id] ?? []);
   }
   // A gateway that publishes no flows cannot be compared on them
   if (live.paymentFlow !== undefined) {
@@ -226,6 +263,23 @@ function mainnetSafetyCheck(
   };
 }
 
+function railOffer(option: {
+  readonly network: string;
+  readonly asset: string;
+  readonly payTo: string;
+  readonly assetDecimals: number;
+  readonly assetTransferMethod?: string;
+}): RailOffer {
+  const { network, asset, payTo, assetDecimals, assetTransferMethod } = option;
+  return {
+    network,
+    asset,
+    payTo,
+    assetDecimals,
+    ...(assetTransferMethod !== undefined ? { assetTransferMethod } : {}),
+  };
+}
+
 // x402 and MPP, each compared with what the running gateway reports
 export function paymentChecks(
   config: GatewayConfig | undefined,
@@ -239,6 +293,9 @@ export function paymentChecks(
     checks.push({ name: 'Payments', status: 'INFO', detail: 'x402 not configured' });
   } else {
     const options = x402.options ?? [x402];
+    const resourceOptions = x402.resourceOptions ?? {};
+    // Every configured offer, the rail's and each resource's
+    const everyOption = [...options, ...Object.values(resourceOptions).flat()];
     const { mode, where, via } = describeSettlement(x402.network, x402.facilitator, x402.networks);
     const flow = describePaymentFlow(x402, X402_DEFAULT_PAYMENT_FLOW);
     const named = (network: string) =>
@@ -250,10 +307,15 @@ export function paymentChecks(
           options
             .map((option) => `${named(option.network)} to ${maskMiddle(option.payTo)}`)
             .join('; ');
-    const summary = `x402 v2 (scheme=exact) enabled - ${terms}, facilitator=${via}, ${flow}`;
+    const ownCount = Object.keys(resourceOptions).length;
+    const own =
+      ownCount > 0
+        ? `, ${ownCount} resource${ownCount === 1 ? '' : 's'} with ${ownCount === 1 ? 'its' : 'their'} own offers`
+        : '';
+    const summary = `x402 v2 (scheme=exact) enabled - ${terms}${own}, facilitator=${via}, ${flow}`;
     const live = wellKnown?.ok ? extractLiveRail(wellKnown.body) : undefined;
     const placeholder = PLACEHOLDER_ASSET_ADDRESS.toLowerCase();
-    if (options.some((option) => option.asset.toLowerCase() === placeholder)) {
+    if (everyOption.some((option) => option.asset.toLowerCase() === placeholder)) {
       // The gateway echoes init's placeholder, so matching configs alone
       // cannot detect the missing token contract. Payment fails closed.
       checks.push({
@@ -278,13 +340,14 @@ export function paymentChecks(
       });
     } else {
       const configured: RailTerms = {
-        offers: options.map(({ network, asset, payTo, assetDecimals, assetTransferMethod }) => ({
-          network,
-          asset,
-          payTo,
-          assetDecimals,
-          ...(assetTransferMethod !== undefined ? { assetTransferMethod } : {}),
-        })),
+        offers: options.map(railOffer),
+        ...(ownCount > 0
+          ? {
+              resourceOffers: Object.fromEntries(
+                Object.entries(resourceOptions).map(([id, list]) => [id, list.map(railOffer)]),
+              ),
+            }
+          : {}),
         paymentFlow: x402.paymentFlow ?? X402_DEFAULT_PAYMENT_FLOW,
         ...(x402.resourcePaymentFlows !== undefined
           ? { resourcePaymentFlows: x402.resourcePaymentFlows }
@@ -299,12 +362,9 @@ export function paymentChecks(
     }
     if (mode === 'mainnet') {
       checks.push(
-        mainnetSafetyCheck(
-          'Mainnet safety',
-          'payTo',
-          x402.facilitator,
-          options.map((option) => named(option.network)),
-        ),
+        mainnetSafetyCheck('Mainnet safety', 'payTo', x402.facilitator, [
+          ...new Set(everyOption.map((option) => named(option.network))),
+        ]),
       );
     }
   }

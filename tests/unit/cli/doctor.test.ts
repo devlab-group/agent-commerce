@@ -870,6 +870,29 @@ describe('runDoctor: several x402 options', () => {
     expect(safety?.detail).toContain('Base (eip155:8453)');
     expect(safety?.detail).toContain('Solana (solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp)');
   });
+
+  // The report's own offers: the NEAR option alone
+  const OWN = { report: [OPTIONS[2]] };
+  const ownTerms = { report: [publicTerms[2]] };
+
+  it("compares each resource's own offers, and names the resource in a mismatch", async () => {
+    const withOwn = config({ resourceOptions: OWN });
+    const matching = await paymentsCheck(live(publicTerms, { resourceOptions: ownTerms }), withOwn);
+    expect(matching?.status).toBe('PASS');
+    expect(matching?.detail).toContain('1 resource with its own offers');
+
+    const missing = await paymentsCheck(live(publicTerms), withOwn);
+    expect(missing?.status).toBe('FAIL');
+    expect(missing?.detail).toMatch(
+      /^resources\.report\.x402\.accepts: gateway is using 0 offer\(s\) but local config resolves to 1/,
+    );
+
+    const other = await paymentsCheck(
+      live(publicTerms, { resourceOptions: { report: [publicTerms[1]] } }),
+      withOwn,
+    );
+    expect(other?.detail).toMatch(/^resources\.report\.x402\.accepts\[0\] network/);
+  });
 });
 
 describe('printDoctorReport', () => {

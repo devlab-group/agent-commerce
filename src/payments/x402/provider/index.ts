@@ -48,7 +48,15 @@ export function createX402PaymentProvider(
       `x402 provider: maxTimeoutSeconds must be a positive integer (got ${options.maxTimeoutSeconds})`,
     );
   }
-  const { offers, deploymentMode, remoteBinding } = resolveOffers(inputs, options);
+  const {
+    offers: defaultOffers,
+    resourceOffers,
+    pool: offers,
+    deploymentMode,
+    remoteBinding,
+  } = resolveOffers(inputs, options);
+  const offersFor = (resourceId: string) => resourceOffers.get(resourceId) ?? defaultOffers;
+  const severalOffers = [defaultOffers, ...resourceOffers.values()].some((list) => list.length > 1);
 
   const clock = options.clock ?? systemClock;
   const ids = options.ids ?? DEFAULT_IDS;
@@ -78,7 +86,7 @@ export function createX402PaymentProvider(
       `mode=${deploymentMode}`,
       'authorization-flow',
       'upfront-flow',
-      ...(offers.length > 1 ? ['multiple-offers'] : []),
+      ...(severalOffers ? ['multiple-offers'] : []),
     ],
     status: 'stable',
     unsupported: [
@@ -109,6 +117,7 @@ export function createX402PaymentProvider(
   const ctx: ProviderContext = {
     options,
     offers,
+    offersFor,
     deploymentMode,
     remoteBinding,
     clock,
@@ -130,8 +139,8 @@ export function createX402PaymentProvider(
     name: 'x402',
     descriptor,
     createRequirement,
-    // A single offer needs no selection, so its path stays exactly as it was
-    ...(offers.length > 1 ? { selectRequirement } : {}),
+    // A single offer needs no selection
+    ...(severalOffers ? { selectRequirement } : {}),
     verify,
     settle,
     health,

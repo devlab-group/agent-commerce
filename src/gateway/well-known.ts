@@ -12,6 +12,7 @@
  */
 
 import type { GatewayConfig } from '../config';
+import type { X402OptionConfig } from '../config/schema';
 import type {
   AdapterDescriptor,
   AdapterHealth,
@@ -82,16 +83,10 @@ export interface WellKnownDocument {
       readonly paymentFlow: X402PaymentFlow;
       /** Resources that set their own flow, by id; absent when none does */
       readonly resourcePaymentFlows?: Readonly<Record<string, X402PaymentFlow>>;
-      /** Every offer, present only when there are several; the fields above repeat the first */
-      readonly options?: readonly {
-        readonly network: string;
-        readonly asset: string;
-        readonly assetName?: string;
-        readonly assetVersion?: string;
-        readonly assetDecimals: number;
-        readonly payTo: string;
-        readonly assetTransferMethod?: 'permit2';
-      }[];
+      /** All rail offers when multiple exist; top-level fields mirror the first */
+      readonly options?: readonly WellKnownX402Offer[];
+      /** Resource offer overrides by id, replacing the rail's offers */
+      readonly resourceOptions?: Readonly<Record<string, readonly WellKnownX402Offer[]>>;
     };
     /** Public settlement fields; excludes the challenge secret and facilitator credentials */
     readonly mpp?: {
@@ -110,6 +105,17 @@ export interface WellKnownDocument {
       readonly resourcePaymentFlows?: Readonly<Record<string, X402PaymentFlow>>;
     };
   };
+}
+
+/** One x402 offer's public terms */
+export interface WellKnownX402Offer {
+  readonly network: string;
+  readonly asset: string;
+  readonly assetName?: string;
+  readonly assetVersion?: string;
+  readonly assetDecimals: number;
+  readonly payTo: string;
+  readonly assetTransferMethod?: 'permit2';
 }
 
 export interface BuildWellKnownOptions {
@@ -139,6 +145,21 @@ function publicProtocols(protocols: GatewayConfig['protocols']): WellKnownProtoc
     mcp: { enabled: protocols.mcp.enabled, mountPath: protocols.mcp.mountPath },
     a2a: { enabled: protocols.a2a.enabled, mountPath: protocols.a2a.mountPath },
     acp: { enabled: protocols.acp.enabled, mountPath: protocols.acp.mountPath },
+  };
+}
+
+// Allowlist public offer fields: RPC URLs can contain API keys
+function publicOffer(option: X402OptionConfig): WellKnownX402Offer {
+  const { network, asset, assetName, assetVersion, assetDecimals, payTo, assetTransferMethod } =
+    option;
+  return {
+    network,
+    asset,
+    ...(assetName !== undefined ? { assetName } : {}),
+    ...(assetVersion !== undefined ? { assetVersion } : {}),
+    assetDecimals,
+    payTo,
+    ...(assetTransferMethod !== undefined ? { assetTransferMethod } : {}),
   };
 }
 
@@ -193,27 +214,16 @@ export function buildWellKnownDocument(options: BuildWellKnownOptions): WellKnow
               ),
               paymentFlow: x402.paymentFlow ?? X402_DEFAULT_PAYMENT_FLOW,
               ...flowOverrides(x402.resourcePaymentFlows),
-              // Public offer terms only: an option's RPC URL can carry an API key
               ...(x402.options !== undefined && x402.options.length > 1
+                ? { options: x402.options.map(publicOffer) }
+                : {}),
+              ...(x402.resourceOptions !== undefined
                 ? {
-                    options: x402.options.map(
-                      ({
-                        network,
-                        asset,
-                        assetName,
-                        assetVersion,
-                        assetDecimals,
-                        payTo,
-                        assetTransferMethod,
-                      }) => ({
-                        network,
-                        asset,
-                        ...(assetName !== undefined ? { assetName } : {}),
-                        ...(assetVersion !== undefined ? { assetVersion } : {}),
-                        assetDecimals,
-                        payTo,
-                        ...(assetTransferMethod !== undefined ? { assetTransferMethod } : {}),
-                      }),
+                    resourceOptions: Object.fromEntries(
+                      Object.entries(x402.resourceOptions).map(([id, list]) => [
+                        id,
+                        list.map(publicOffer),
+                      ]),
                     ),
                   }
                 : {}),

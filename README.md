@@ -412,9 +412,9 @@ PASS  Protocol versions    reported by gateway /.well-known/agent-commerce
 Score: 7/7 checks passed
 ```
 
-`doctor` compares live settlement terms with local config for each rail:
-offer order, network, token, payee and transfer method, plus decimals and
-payment flows when published. Mismatches fail the check.
+`doctor` compares live settlement terms with local config for each rail and
+resource: offer order, network, token, payee and transfer method, plus decimals
+and payment flows when published. Mismatches fail the check.
 
 Exits non-zero if anything fails. `--json` for machines.
 

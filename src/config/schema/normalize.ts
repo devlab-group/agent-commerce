@@ -28,7 +28,7 @@ export function normalize(raw: RawConfig): GatewayConfig {
   validateMountPaths(protocols);
 
   const x402Settings =
-    raw.payments.x402 !== undefined ? normalizeX402(raw.payments.x402) : undefined;
+    raw.payments.x402 !== undefined ? normalizeX402(raw.payments.x402, raw.resources) : undefined;
   const x402 = x402Settings?.config;
 
   const mpp = normalizeMpp(raw.payments.mpp);

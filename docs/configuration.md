@@ -72,7 +72,8 @@ see [Headers sent to the merchant](protocols/acp.md#headers-sent-to-the-merchant
 `payments` orders the rails a paid resource accepts. The gateway selects the
 first enabled rail in that order; it does not let each request choose a rail or
 fall back after a failure. Config load rejects a paid resource with no enabled
-listed rail.
+listed rail. A resource can replace the x402 rail's offers with
+[its own](#a-resources-own-offers).
 
 `url` supports `{param}` templating from validated input; values are
 URL-encoded. Remaining input becomes query string for `GET`/`DELETE` and a JSON
@@ -485,6 +486,30 @@ The proof's `accepted` echo selects an offer before verification; zero or
 multiple matches are rejected. AP2 binds to the selected destination, network
 and asset, preventing a mandate for one offer from authorizing another.
 
+### A resource's own offers
+
+A paid resource's `x402.accepts` replaces the rail's offers for that resource,
+matching the x402 SDK's route-level `accepts`. Rail options remain required
+and serve resources without overrides. Entries use the `options` fields;
+each charges the resource's `pricing`.
+
+```yaml
+resources:
+  market_report:
+    # backend, pricing and expose as above
+    payments: [x402]
+    x402:
+      accepts:
+        - network: eip155:137
+          payTo: ${POLYGON_MERCHANT_WALLET}
+```
+
+Entries share the rail's `networks`, RPC endpoints, facilitator, mainnet
+acknowledgements and deployment mode. Price validation uses the resource's
+own tokens and decimals. Config load rejects empty lists, repeated entries,
+and `x402.accepts` on free resources, without `x402` in `payments`, or without
+`payments.x402`.
+
 ### `payments.mpp`
 
 MPP accepts the `USDC` currency label on the local chain `eip155:31337`, Base
@@ -664,7 +689,8 @@ protocol mounts that overlap · a mount that claims a route the gateway already
 serves, including the A2A Agent Card and ACP discovery paths · an ACP checkout
 mapping that is incomplete, names a missing or non-`acp` resource, reuses one
 resource for two operations, or maps a paid one · an ACP idempotency retention
-below 24 hours · an invalid or zero `payTo`/`asset`/`recipient` · an MPP
+below 24 hours · an invalid or zero `payTo`/`asset`/`recipient` · an
+`x402.accepts` list that is empty or on a resource that cannot use it · an MPP
 `challengeSecret` with length below 32 or a multi-line `realm`.
 
 It exits non-zero on any of them.

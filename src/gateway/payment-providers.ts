@@ -4,9 +4,25 @@
  * dependencies, so the peer-free main entry and CLI must not import it.
  */
 import type { GatewayConfig } from '../config';
+import type { X402OptionConfig } from '../config/schema';
 import type { Logger, PaymentProvider } from '../core';
 import { createMppPaymentProvider } from '../payments/mpp/provider';
-import { createX402PaymentProvider } from '../payments/x402';
+import { createX402PaymentProvider, type X402OfferOptions } from '../payments/x402';
+
+function offerOptions(option: X402OptionConfig): X402OfferOptions {
+  return {
+    network: option.network,
+    rpcUrl: option.rpcUrl,
+    asset: option.asset,
+    assetDecimals: option.assetDecimals,
+    payTo: option.payTo,
+    ...(option.assetName !== undefined ? { assetName: option.assetName } : {}),
+    ...(option.assetVersion !== undefined ? { assetVersion: option.assetVersion } : {}),
+    ...(option.assetTransferMethod !== undefined
+      ? { assetTransferMethod: option.assetTransferMethod }
+      : {}),
+  };
+}
 
 export function createConfiguredPaymentProviders(
   payments: GatewayConfig['payments'],
@@ -18,18 +34,17 @@ export function createConfiguredPaymentProviders(
     providers.push(
       createX402PaymentProvider({
         // Support manually built single-option configs without `options`
-        offers: (x402.options ?? [x402]).map((option) => ({
-          network: option.network,
-          rpcUrl: option.rpcUrl,
-          asset: option.asset,
-          assetDecimals: option.assetDecimals,
-          payTo: option.payTo,
-          ...(option.assetName !== undefined ? { assetName: option.assetName } : {}),
-          ...(option.assetVersion !== undefined ? { assetVersion: option.assetVersion } : {}),
-          ...(option.assetTransferMethod !== undefined
-            ? { assetTransferMethod: option.assetTransferMethod }
-            : {}),
-        })),
+        offers: (x402.options ?? [x402]).map(offerOptions),
+        ...(x402.resourceOptions !== undefined
+          ? {
+              resourceOffers: Object.fromEntries(
+                Object.entries(x402.resourceOptions).map(([id, list]) => [
+                  id,
+                  list.map(offerOptions),
+                ]),
+              ),
+            }
+          : {}),
         maxTimeoutSeconds: x402.maxTimeoutSeconds,
         ...(x402.paymentFlow !== undefined ? { paymentFlow: x402.paymentFlow } : {}),
         ...(x402.resourcePaymentFlows !== undefined

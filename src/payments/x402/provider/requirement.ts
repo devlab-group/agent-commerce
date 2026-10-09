@@ -60,9 +60,10 @@ export function createRequirementBuilders(
   readonly createRequirement: (context: PaymentContext) => Promise<PaymentRequirement>;
   readonly selectRequirement: (context: PaymentVerificationContext) => Promise<PaymentRequirement>;
 } {
-  const { options, offers, clock, ids, maxTimeoutSeconds } = ctx;
+  const { options, offersFor, clock, ids, maxTimeoutSeconds } = ctx;
 
   async function createRequirement(context: PaymentContext): Promise<PaymentRequirement> {
+    const offers = offersFor(context.resource.id);
     const paymentFlow =
       options.resourcePaymentFlows?.[context.resource.id] ??
       options.paymentFlow ??
@@ -159,6 +160,7 @@ export function createRequirementBuilders(
     const { requirement, submission } = context;
     const offered = requirement.challenge.accepts as unknown as PaymentRequirements[];
     if (offered.length < 2) return requirement;
+    const offers = offersFor(requirement.resourceId);
     const payload = decodePaymentSubmission(submission.payload);
     if (!payload) return requirement;
     const matches = offered.flatMap((offer, index) =>

@@ -31,6 +31,11 @@ export interface X402ProviderOptions extends X402OfferOptions {
   /** Required on mainnet when facilitator auth is `none` */
   readonly allowUnauthenticatedFacilitator?: boolean;
   /**
+   * Offer overrides by resource id, sharing the provider's facilitator and
+   * settings. Each list replaces the provider's offers for that resource.
+   */
+  readonly resourceOffers?: Readonly<Record<string, readonly X402OfferOptions[]>>;
+  /**
    * Custom EVM networks keyed by CAIP-2 ID; `network` may select one, and
    * its `kind` determines mainnet guardrails
    */
@@ -120,7 +125,10 @@ export type Offer = EvmOffer | SvmOffer | NearOffer;
 /** What the request-time modules share, resolved once when the provider is built */
 export interface ProviderContext {
   readonly options: X402ProviderOptions | X402MultiOfferProviderOptions;
+  /** Every distinct offer, the provider's and its resources', for health and the descriptor */
   readonly offers: readonly Offer[];
+  /** The offers a resource's challenge lists, in order */
+  readonly offersFor: (resourceId: string) => readonly Offer[];
   readonly deploymentMode: DeploymentMode;
   /** The shared remote binding, when the facilitator is remote */
   readonly remoteBinding: FacilitatorBinding | undefined;

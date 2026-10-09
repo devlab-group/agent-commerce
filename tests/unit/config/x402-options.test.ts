@@ -418,3 +418,138 @@ describe('several options', () => {
     expect(half.message).toContain('needs both kind and displayName');
   });
 });
+
+describe('resource offers (x402.accepts)', () => {
+  const ARBITRUM_SEPOLIA = { network: 'eip155:421614', payTo: MERCHANT };
+  const RPCS = {
+    'eip155:84532': { rpcUrl: 'https://base-sepolia.example' },
+    'eip155:421614': { rpcUrl: 'https://arbitrum-sepolia.example' },
+  };
+  const remote = () => {
+    const { rpcUrl: _shared, ...rest } = operational();
+    return { ...rest, facilitator: REMOTE, networks: RPCS };
+  };
+  // Sets a resource's own offers, and optionally its other fields
+  function withAccepts(
+    raw: Record<string, unknown>,
+    accepts: unknown,
+    id = 'market_report',
+    fields: Record<string, unknown> = {},
+  ): Record<string, unknown> {
+    const resources = raw['resources'] as Record<string, Record<string, unknown>>;
+    resources[id] = { ...resources[id], ...fields, x402: { accepts } };
+    return raw;
+  }
+
+  it('gives a resource its own offers and leaves the rail options to the others', () => {
+    const x402 = parseConfig(
+      withAccepts(withX402({ ...remote(), options: [MINIMAL] }), [ARBITRUM_SEPOLIA]),
+      {},
+    ).payments.x402;
+    expect(x402?.options?.map((o) => o.network)).toEqual(['eip155:84532']);
+    expect(x402?.resourceOptions?.['market_report']).toEqual([
+      {
+        network: 'eip155:421614',
+        rpcUrl: 'https://arbitrum-sepolia.example',
+        asset: '0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d',
+        assetName: 'USD Coin',
+        assetVersion: '2',
+        assetDecimals: 6,
+        payTo: MERCHANT,
+      },
+    ]);
+    expect(parseConfig(validRawConfig(), {}).payments.x402).not.toHaveProperty('resourceOptions');
+  });
+
+  it('refuses an empty list, a resource that cannot use it, and a missing rail', () => {
+    const rail = () => withX402({ ...remote(), options: [MINIMAL] });
+    const empty = refusal(withAccepts(rail(), []));
+    expect(empty.message).toContain('is empty');
+    expect(pathOf(empty)).toBe('resources.market_report.x402.accepts');
+    expect(pathOf(refusal(withAccepts(rail(), [MINIMAL], 'weather_basic')))).toBe(
+      'resources.weather_basic.x402',
+    );
+    const withoutRail = withAccepts(validRawConfig(), [MINIMAL]);
+    delete (withoutRail['payments'] as Record<string, unknown>)['x402'];
+    expect(refusal(withoutRail).message).toContain('payments.x402 is not configured');
+  });
+
+  it('resolves each list under the rail settings: RPC, repeats and one kind of network', () => {
+    const { networks: _rpcs, ...noRpc } = remote();
+    const missing = refusal(
+      withAccepts(
+        withX402({
+          ...noRpc,
+          networks: { 'eip155:84532': RPCS['eip155:84532'] },
+          options: [MINIMAL],
+        }),
+        [ARBITRUM_SEPOLIA],
+      ),
+    );
+    expect(missing.message).toContain('resources.market_report.x402.accepts[0].network');
+    expect(
+      refusal(withAccepts(withX402({ ...remote(), options: [MINIMAL] }), [MINIMAL, MINIMAL]))
+        .message,
+    ).toContain('repeats an earlier option');
+    const mixed = refusal(
+      withAccepts(
+        withX402({
+          ...remote(),
+          allowMainnet: true,
+          networks: { ...RPCS, 'eip155:8453': { rpcUrl: 'https://base.example' } },
+          options: [MINIMAL],
+        }),
+        [{ network: 'eip155:8453', payTo: MERCHANT }],
+      ),
+    );
+    expect(pathOf(mixed)).toBe('resources.market_report.x402.accepts[0].network');
+    // The rail's own option may repeat in a resource's list
+    expect(() =>
+      parseConfig(
+        withAccepts(withX402({ ...remote(), options: [MINIMAL] }), [MINIMAL, ARBITRUM_SEPOLIA]),
+        {},
+      ),
+    ).not.toThrow();
+  });
+
+  it('checks the price against the resource offers, not the rail options', () => {
+    const coarse = {
+      network: 'eip155:31337',
+      payTo: MERCHANT,
+      asset: OTHER_TOKEN,
+      assetName: 'Coarse',
+      assetVersion: '1',
+      assetDecimals: 2,
+    };
+    const mock = (validRawConfig()['payments'] as { x402: Record<string, unknown> }).x402;
+    const fine = { ...coarse, asset: mock['asset'], assetName: 'MockUSDC', assetDecimals: 6 };
+    const price = { amount: '0.001', currency: 'USDC' };
+    expect(
+      refusal(withAccepts(withX402({ ...operational(), options: [fine] }, price), [coarse]))
+        .message,
+    ).toContain('2 decimals');
+    expect(() =>
+      parseConfig(
+        withAccepts(withX402({ ...operational(), options: [coarse] }, price), [fine]),
+        {},
+      ),
+    ).not.toThrow();
+
+    // A declared network's token takes any label; a resource on default USDC does not
+    const opSepolia = {
+      'eip155:11155420': {
+        kind: 'testnet',
+        displayName: 'OP Sepolia',
+        rpcUrl: 'https://op-sepolia.example',
+      },
+    };
+    const custom = { ...coarse, network: 'eip155:11155420', assetDecimals: 6 };
+    const eur = { amount: '0.01', currency: 'EUR' };
+    const rail = () =>
+      withX402({ ...remote(), networks: { ...RPCS, ...opSepolia }, options: [custom] }, eur);
+    expect(() => parseConfig(rail(), {})).not.toThrow();
+    expect(pathOf(refusal(withAccepts(rail(), [MINIMAL])))).toBe(
+      'resources.market_report.pricing.currency',
+    );
+  });
+});

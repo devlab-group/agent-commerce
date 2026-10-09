@@ -204,6 +204,21 @@ const PricingSchema = z.discriminatedUnion('type', [
 
 const JsonSchemaValueSchema: ZodTypeAny = z.record(z.string(), z.unknown());
 
+// Settlement network, payee and token, resolved by x402/options.ts. Network
+// and payee fields follow the SDK's `PaymentOption`; asset fields override defaults
+const X402OptionSchema = z
+  .object({
+    scheme: z.string().min(1).optional(),
+    network: z.string().min(1),
+    payTo: z.string().min(1),
+    asset: z.string().min(1).optional(),
+    assetName: z.string().min(1).optional(),
+    assetVersion: z.string().min(1).optional(),
+    assetDecimals: NumberOrString.optional(),
+    assetTransferMethod: z.string().min(1).optional(),
+  })
+  .strict();
+
 const ResourceEntrySchema = z
   .object({
     name: z.string().min(1),
@@ -215,6 +230,11 @@ const ResourceEntrySchema = z
     expose: z.array(z.string().min(1)).min(1),
     payments: z.array(z.string().min(1)).optional(),
     paymentFlow: z.enum(X402_PAYMENT_FLOWS).optional(),
+    // This resource's own x402 offers, in place of `payments.x402` options
+    x402: z
+      .object({ accepts: z.array(X402OptionSchema) })
+      .strict()
+      .optional(),
     authorization: z
       .object({ required: z.array(z.string().min(1)).min(1) })
       .strict()
@@ -257,21 +277,6 @@ export const FacilitatorSchema = z.discriminatedUnion('mode', [
     })
     .strict(),
 ]);
-
-// Settlement network, payee and token, resolved by x402/options.ts. Network
-// and payee fields follow the SDK's `PaymentOption`; asset fields override defaults
-const X402OptionSchema = z
-  .object({
-    scheme: z.string().min(1).optional(),
-    network: z.string().min(1),
-    payTo: z.string().min(1),
-    asset: z.string().min(1).optional(),
-    assetName: z.string().min(1).optional(),
-    assetVersion: z.string().min(1).optional(),
-    assetDecimals: NumberOrString.optional(),
-    assetTransferMethod: z.string().min(1).optional(),
-  })
-  .strict();
 
 // Per-network settings: `kind` and `displayName` declare a network outside
 // the registry; `rpcUrl` is that network's endpoint, built in or declared
