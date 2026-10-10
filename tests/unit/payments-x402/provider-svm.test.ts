@@ -306,6 +306,22 @@ describe('verify()', () => {
     expect(verifyMock).not.toHaveBeenCalled();
   });
 
+  // These compare the gateway's own offer with the facilitator's fee payers, or
+  // with the buyer's echo, which the gateway already matched
+  it.each([
+    'invalid_exact_svm_fee_payer_not_managed_by_facilitator',
+    'invalid_exact_svm_payload_missing_fee_payer',
+    'invalid_exact_svm_unsupported_scheme',
+    'invalid_exact_svm_network_mismatch',
+  ])('treats %s as no verdict', async (invalidReason) => {
+    const provider = makeProvider();
+    const { context } = await paidRequest(provider);
+    verifyMock.mockResolvedValueOnce({ isValid: false, invalidReason });
+    await expect(provider.verify(context)).rejects.toSatisfy(
+      (err: unknown) => isCommerceError(err) && err.code === 'PAYMENT_PROVIDER_UNAVAILABLE',
+    );
+  });
+
   it('refuses a transaction that does not decode before the facilitator sees it', async () => {
     const provider = makeProvider();
     const { context } = await paidRequest(provider);

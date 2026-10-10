@@ -30,6 +30,18 @@ export const isTransactionFailedReason = (reason: string | undefined): boolean =
   reason !== undefined &&
   TRANSACTION_FAILED_REASONS.some((known) => reason === known || reason.startsWith(`${known}:`));
 /**
+ * The one failure reason per family that names a transaction and proves
+ * nothing moved: a reverted EVM receipt, a Solana transaction that failed on
+ * chain, or a failed inner NEAR `ft_transfer` receipt. Any other failure that
+ * names a transaction may have moved funds. The EVM SDK, for one, reports a
+ * mined transfer whose `Transfer` log it cannot match as a failure with the hash.
+ */
+export const ON_CHAIN_FAILURE_REASONS: Readonly<Record<'evm' | 'svm' | 'near', string>> = {
+  evm: 'invalid_exact_evm_transaction_failed',
+  svm: 'invalid_exact_svm_transaction_failed',
+  near: 'settlement_failed',
+};
+/**
  * Solana outcomes that leave the payment unknown: the facilitator is already
  * settling the same transaction for another request, or it confirmed the
  * transaction but could not yet see the transfer
@@ -39,9 +51,11 @@ export const UNKNOWN_OUTCOME_REASONS: ReadonlySet<string> = new Set([
   'post_settlement_transfer_not_confirmed',
 ]);
 /**
- * Facilitator configuration and chain-read failures yield no payment verdict.
- * The NEAR SDK returns these reasons before submission; classify them as
- * provider failures rather than buyer refusals.
+ * Facilitator configuration and chain-read failures yield no payment verdict,
+ * so they count as provider failures rather than buyer refusals. The NEAR SDK
+ * returns its reasons before submission. The Solana ones compare the offer the
+ * gateway sent with the facilitator's own fee payers, or with the buyer's
+ * echo, which the gateway already matched.
  */
 export const NO_VERDICT_REASONS: ReadonlySet<string> = new Set([
   'unexpected_verify_error',
@@ -52,6 +66,10 @@ export const NO_VERDICT_REASONS: ReadonlySet<string> = new Set([
   'invalid_exact_near_token_account_lookup_failed',
   'invalid_exact_near_balance_check_failed',
   'invalid_exact_near_storage_check_failed',
+  'invalid_exact_svm_payload_missing_fee_payer',
+  'invalid_exact_svm_fee_payer_not_managed_by_facilitator',
+  'invalid_exact_svm_unsupported_scheme',
+  'invalid_exact_svm_network_mismatch',
 ]);
 /**
  * NEAR settle failures that are verdicts. The NEAR specification leaves the
@@ -77,7 +95,8 @@ export const isNearVerdict = (reason: string | undefined): boolean =>
  * and the merchant's ledger. A remote facilitator controls these values, so
  * they are treated as untrusted input rather than diagnostic text.
  */
-const MAX_REASON_LENGTH = 64;
+// The SDKs' longest reason, a Solana compute-budget refusal, has 85 characters
+const MAX_REASON_LENGTH = 128;
 const REASON_SHAPE = /^[a-z0-9_.-]+$/i;
 
 export function sanitizeReason(reason: string | undefined, fallback: string): string {

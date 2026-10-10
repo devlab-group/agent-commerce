@@ -11,6 +11,7 @@ import {
   isProviderUnavailableError,
   isTransactionFailedReason,
   NO_VERDICT_REASONS,
+  ON_CHAIN_FAILURE_REASONS,
   SETTLEMENT_PENDING_REASON,
   sanitizeReason,
   UNKNOWN_OUTCOME_REASONS,
@@ -115,7 +116,7 @@ export function createSettle(
       // and the pipeline records the attempt `settlement-uncertain`, not
       // `rejected`. The SDK's catch-all without a hash is treated the same way,
       // because its throw may have followed a broadcast and viem reports an
-      // RPC error on the send as a revert. Everything else is a real rejection.
+      // RPC error on the send as a revert.
       if (isTransactionFailedReason(sdkResult.errorReason) && !reference(sdkResult.transaction)) {
         // The appended message can carry an RPC URL
         logger.warn(
@@ -125,6 +126,24 @@ export function createSettle(
         throw new CommerceError(
           'PAYMENT_PROVIDER_UNAVAILABLE',
           'x402 provider: settlement failed with an unclassified error; outcome unknown',
+        );
+      }
+      // These NEAR SDK checks fail before submission. Release the attempt so
+      // a retry using the same access-key nonce can reserve it again.
+      if (
+        offer.family === 'near' &&
+        NO_VERDICT_REASONS.has(sdkResult.errorReason ?? '') &&
+        !sdkResult.transaction
+      ) {
+        throw new CommerceError(
+          'PAYMENT_PROVIDER_UNAVAILABLE',
+          'x402 provider: the facilitator could not check the payment before submitting it',
+          {
+            details: {
+              settlementNotSubmitted: true,
+              reason: sanitizeReason(sdkResult.errorReason, 'facilitator_unavailable'),
+            },
+          },
         );
       }
       // A broadcast the SDK could not confirm nor record for a retry comes
@@ -145,6 +164,22 @@ export function createSettle(
               ? { details: { transactionHash: sdkResult.transaction } }
               : {}),
           },
+        );
+      }
+      // Only the family's on-chain failure proves a named transaction moved
+      // nothing. Any other reason may follow a transfer that landed.
+      if (
+        sdkResult.transaction &&
+        sdkResult.errorReason !== ON_CHAIN_FAILURE_REASONS[offer.family]
+      ) {
+        logger.warn(
+          { reportedReason: redactedErrorText(sdkResult.errorReason ?? '') },
+          'x402 settle(): the facilitator reported a failure with a transaction; outcome unknown',
+        );
+        throw new CommerceError(
+          'PAYMENT_PROVIDER_UNAVAILABLE',
+          'x402 provider: the facilitator reported a failed settlement with a transaction; outcome unknown',
+          { details: { transactionHash: sdkResult.transaction } },
         );
       }
       // A `settlement_failed` that reaches here carries its hash
@@ -168,6 +203,8 @@ export function createSettle(
         ...rejectedSettlement(sanitizeReason(sdkResult.errorReason, 'settlement_failed')),
         network: sdkResult.network,
         ...(payer !== undefined ? { payer } : {}),
+        // The failed transaction, which the facilitator paid for
+        ...(sdkResult.transaction ? { externalReference: sdkResult.transaction } : {}),
       };
     }
 

@@ -1601,6 +1601,99 @@ describe('createExecutionPipeline', () => {
     expect(attempt?.status).toBe('settlement-uncertain');
   });
 
+  // A provider that knows nothing was submitted leaves the authorization
+  // spendable, so the attempt is released for the buyer's retry
+  it('settle() throwing with settlementNotSubmitted records rejected and answers 503 without blame', async () => {
+    const resource = makeResource({
+      id: 'res-1',
+      pricing: { type: 'fixed', amount: '0.01', currency: 'USDC' },
+      paymentMethods: ['x402'],
+    });
+    const store = createFakeStore();
+    const { CommerceError } = await import('../../../../src/core/errors');
+    const provider = createFakePaymentProvider({
+      settle: async () => {
+        throw new CommerceError('PAYMENT_PROVIDER_UNAVAILABLE', 'chain read failed', {
+          details: {
+            settlementNotSubmitted: true,
+            reason: 'invalid_exact_near_access_key_lookup_failed',
+          },
+        });
+      },
+    });
+    const pipeline = createExecutionPipeline({
+      resources: createResourceRegistry([resource]),
+      paymentProviders: [provider],
+      store,
+      backend: createFakeBackendExecutor(),
+      events: store,
+      logger: createCapturingLogger(),
+      clock: createFakeClock(),
+      ids: createFakeIdGenerator(),
+    });
+
+    await expect(
+      pipeline.execute(makeRequest({ payment: { method: 'x402', payload: 'proof' } })),
+    ).rejects.toSatisfy(
+      (error: unknown) =>
+        isCommerceError(error) &&
+        error.code === 'PAYMENT_PROVIDER_UNAVAILABLE' &&
+        error.httpStatus === 503 &&
+        error.details === undefined,
+    );
+
+    const attempt = [...store.attempts.values()][0];
+    expect(attempt?.status).toBe('rejected');
+    expect(attempt?.rejectionReason).toBe('invalid_exact_near_access_key_lookup_failed');
+    expect(store.receipts).toHaveLength(0);
+    expect(store.events.at(-1)).toMatchObject({
+      type: 'payment.rejected',
+      data: {
+        reason: 'settlement-not-submitted',
+        providerReason: 'invalid_exact_near_access_key_lookup_failed',
+      },
+    });
+    expectOneRequestId(store);
+  });
+
+  it('records the transaction a rejected settlement names', async () => {
+    const resource = makeResource({
+      id: 'res-1',
+      pricing: { type: 'fixed', amount: '0.01', currency: 'USDC' },
+      paymentMethods: ['x402'],
+    });
+    const store = createFakeStore();
+    const provider = createFakePaymentProvider({
+      settle: async () => ({
+        status: 'rejected',
+        provider: 'x402',
+        amount: '0.01',
+        currency: 'USDC',
+        rejectionReason: 'invalid_exact_evm_transaction_failed',
+        externalReference: '0xreverted',
+      }),
+    });
+    const pipeline = createExecutionPipeline({
+      resources: createResourceRegistry([resource]),
+      paymentProviders: [provider],
+      store,
+      backend: createFakeBackendExecutor(),
+      events: store,
+      logger: createCapturingLogger(),
+      clock: createFakeClock(),
+      ids: createFakeIdGenerator(),
+    });
+
+    await expect(
+      pipeline.execute(makeRequest({ payment: { method: 'x402', payload: 'proof' } })),
+    ).rejects.toSatisfy(
+      (error: unknown) => isCommerceError(error) && error.code === 'PAYMENT_SETTLEMENT_FAILED',
+    );
+    const attempt = [...store.attempts.values()][0];
+    expect(attempt?.status).toBe('rejected');
+    expect(attempt?.externalReference).toBe('0xreverted');
+  });
+
   it('tolerates a non-Error thrown by a persistence call', async () => {
     const resource = makeResource({ id: 'res-1', pricing: { type: 'free' } });
     const store = createFakeStore({

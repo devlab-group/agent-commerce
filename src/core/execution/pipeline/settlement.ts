@@ -29,6 +29,38 @@ export function createSettlement(ctx: PipelineContext): Settlement {
         verification,
       });
     } catch (error) {
+      // Confirmed non-submission leaves the authorization spendable. Release
+      // it for retry and report the provider failure.
+      const notSubmitted = notSubmittedReason(error);
+      if (notSubmitted !== undefined) {
+        await hold?.finalize('release');
+        await safePersist(
+          () =>
+            options.store.updatePaymentAttempt({
+              replayKey,
+              status: 'rejected',
+              rejectionReason: notSubmitted,
+            }),
+          'updatePaymentAttempt(not-submitted)',
+          request.requestId,
+        );
+        await safeEmit(
+          buildEvent({
+            type: 'payment.rejected',
+            requestId: request.requestId,
+            resourceId: resource.id,
+            adapter: request.protocol,
+            paymentProvider: provider.name,
+            status: 'error',
+            data: { reason: 'settlement-not-submitted', providerReason: notSubmitted },
+          }),
+        );
+        throw new CommerceError(
+          'PAYMENT_PROVIDER_UNAVAILABLE',
+          'The payment provider could not settle the payment; nothing was charged',
+          { requestId: request.requestId, resourceId: resource.id, cause: error },
+        );
+      }
       // A throw gives no settlement verdict. The facilitator may have
       // broadcast before losing its response, even without a transaction
       // hash. Keep the authorization uncertain so it cannot be spent again.
@@ -82,6 +114,9 @@ export function createSettlement(ctx: PipelineContext): Settlement {
             status: 'rejected',
             ...(settlement.rejectionReason !== undefined
               ? { rejectionReason: settlement.rejectionReason }
+              : {}),
+            ...(settlement.externalReference !== undefined
+              ? { externalReference: settlement.externalReference }
               : {}),
           }),
         'updatePaymentAttempt(rejected)',
@@ -172,6 +207,15 @@ export function createSettlement(ctx: PipelineContext): Settlement {
   }
 
   return { settle, abandonSettlement };
+}
+
+// The reason a provider gave when it threw before submitting anything
+function notSubmittedReason(error: unknown): string | undefined {
+  if (!isCommerceError(error) || error.details?.['settlementNotSubmitted'] !== true) {
+    return undefined;
+  }
+  const reason = error.details['reason'];
+  return typeof reason === 'string' ? reason : 'settlement_not_submitted';
 }
 
 // The broadcast transaction hash a provider attached to a settlement throw,

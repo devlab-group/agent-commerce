@@ -143,9 +143,9 @@ rollback. The gateway records a `settled` payment attempt and a
    constraint **before** calling `settle`. A duplicate returns
    `PAYMENT_REPLAYED`: 409 while the first attempt is unfinished or its status is
    unavailable; 402 with a fresh challenge when its stored status is treated as finished.
-   A rejected x402 attempt, from a backend failure or a refused settlement,
-   settled nothing, so the same authorization reserves it again instead. MPP
-   keeps the 402: a credential is single-use per challenge.
+   A rejected x402 attempt settled nothing: the backend failed, settlement was
+   refused or the facilitator never submitted it. The same authorization can
+   reserve it again. MPP keeps the 402: a credential is single-use per challenge.
 
 Because the key comes from the authorization rather than the request, replaying
 it against another request still collides.

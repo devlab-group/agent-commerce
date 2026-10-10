@@ -317,8 +317,13 @@ describe('provider - SDK-boundary branches (mocked x402/facilitator)', () => {
 
   it.each([
     ['unsupported characters', 'do not expose: secret', 'invalid_payment'],
-    ['exactly 64 characters', 'x'.repeat(64), 'x'.repeat(64)],
-    ['more than 64 characters', 'x'.repeat(65), 'invalid_payment'],
+    ['exactly 128 characters', 'x'.repeat(128), 'x'.repeat(128)],
+    ['more than 128 characters', 'x'.repeat(129), 'invalid_payment'],
+    [
+      'the longest SDK reason',
+      'invalid_exact_svm_payload_transaction_instructions_compute_limit_instruction_too_high',
+      'invalid_exact_svm_payload_transaction_instructions_compute_limit_instruction_too_high',
+    ],
     ['an empty value', '', 'invalid_payment'],
     ['only whitespace', '   ', 'invalid_payment'],
     ['surrounding whitespace', '  insufficient_funds  ', 'insufficient_funds'],
@@ -496,8 +501,8 @@ describe('provider - SDK-boundary branches (mocked x402/facilitator)', () => {
 
   it.each([
     ['unsupported characters', 'do not expose: secret', 'settlement_failed'],
-    ['exactly 64 characters', 'x'.repeat(64), 'x'.repeat(64)],
-    ['more than 64 characters', 'x'.repeat(65), 'settlement_failed'],
+    ['exactly 128 characters', 'x'.repeat(128), 'x'.repeat(128)],
+    ['more than 128 characters', 'x'.repeat(129), 'settlement_failed'],
     ['an empty value', '', 'settlement_failed'],
     ['only whitespace', '   ', 'settlement_failed'],
     ['surrounding whitespace', '  insufficient_funds  ', 'insufficient_funds'],
@@ -668,6 +673,79 @@ describe('provider - SDK-boundary branches (mocked x402/facilitator)', () => {
           rejectionReason: 'invalid_exact_evm_transaction_failed',
         });
       }
+    },
+  );
+
+  it('settle() records a reverted transaction on its rejection', async () => {
+    const provider = makeProvider();
+    const requirement = await provider.createRequirement(paymentContext());
+    const proof = await createPaymentProof({
+      buyerPrivateKey: BUYER_PRIVATE_KEY,
+      accepts: requirement.challenge.accepts[0] as Record<string, unknown>,
+    });
+    const REVERTED_TX_HASH = `0x${'ef'.repeat(32)}`;
+    settleMock.mockResolvedValueOnce({
+      success: false,
+      errorReason: 'invalid_exact_evm_transaction_failed',
+      transaction: REVERTED_TX_HASH,
+      network: 'eip155:31337',
+    });
+
+    await expect(
+      provider.settle({
+        requestId: 'req-1',
+        resource: RESOURCE,
+        requirement,
+        submission: { method: 'x402', payload: proof },
+        verification: { status: 'verified', provider: 'x402', amount: '0.01', currency: 'USD' },
+      }),
+    ).resolves.toMatchObject({
+      status: 'rejected',
+      rejectionReason: 'invalid_exact_evm_transaction_failed',
+      externalReference: REVERTED_TX_HASH,
+    });
+  });
+
+  // Only a reverted receipt proves a named transaction moved nothing. The SDK
+  // reports a mined transfer whose Transfer log it cannot match as a failure.
+  it.each([
+    [
+      'a mined transfer whose Transfer log did not match',
+      'invalid_exact_evm_transfer_event_mismatch',
+    ],
+    ['a reason outside the SDK vocabulary', 'unexpected_settle_error'],
+    ['no reason', undefined],
+  ])(
+    'settle() treats a failure naming a transaction with %s as an unknown outcome',
+    async (_label, errorReason) => {
+      const provider = makeProvider();
+      const requirement = await provider.createRequirement(paymentContext());
+      const proof = await createPaymentProof({
+        buyerPrivateKey: BUYER_PRIVATE_KEY,
+        accepts: requirement.challenge.accepts[0] as Record<string, unknown>,
+      });
+      const MINED_TX_HASH = `0x${'12'.repeat(32)}`;
+      settleMock.mockResolvedValueOnce({
+        success: false,
+        ...(errorReason !== undefined ? { errorReason } : {}),
+        transaction: MINED_TX_HASH,
+        network: 'eip155:31337',
+      });
+
+      await expect(
+        provider.settle({
+          requestId: 'req-1',
+          resource: RESOURCE,
+          requirement,
+          submission: { method: 'x402', payload: proof },
+          verification: { status: 'verified', provider: 'x402', amount: '0.01', currency: 'USD' },
+        }),
+      ).rejects.toSatisfy(
+        (err: unknown) =>
+          isCommerceError(err) &&
+          err.code === 'PAYMENT_PROVIDER_UNAVAILABLE' &&
+          err.details?.['transactionHash'] === MINED_TX_HASH,
+      );
     },
   );
 

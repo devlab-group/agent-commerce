@@ -5,7 +5,7 @@
 import { KeyPair } from '@near-js/crypto';
 import type { SupportedResponse } from '@x402/core/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { CommerceResource, PaymentContext } from '../../../src/core';
+import type { CommerceError, CommerceResource, PaymentContext } from '../../../src/core';
 import { isCommerceError } from '../../../src/core';
 import {
   createX402PaymentProvider,
@@ -97,7 +97,7 @@ async function paidRequest(
   };
 }
 
-const unavailable = (err: unknown) =>
+const unavailable = (err: unknown): err is CommerceError =>
   isCommerceError(err) && err.code === 'PAYMENT_PROVIDER_UNAVAILABLE';
 
 beforeEach(() => {
@@ -266,8 +266,12 @@ describe('settle()', () => {
       { success: false, transaction: '', errorReason: 'duplicate_settlement' },
     ],
     [
-      'the facilitator failing to read the chain',
-      { success: false, transaction: '', errorReason: 'invalid_exact_near_balance_check_failed' },
+      'a failure naming a transaction with a reason other than a failed transfer',
+      {
+        success: false,
+        transaction: TX_HASH,
+        errorReason: 'invalid_exact_near_balance_check_failed',
+      },
     ],
     // The spec leaves a failure's reason to the facilitator, with an empty
     // transaction even after a submission
@@ -282,7 +286,24 @@ describe('settle()', () => {
       { success: true, transaction: TX_HASH, network: 'near:mainnet' },
     ],
   ])('leaves the outcome unknown for %s', async (_label, response) => {
-    await expect(settleWith(response)).rejects.toSatisfy(unavailable);
+    await expect(settleWith(response)).rejects.toSatisfy(
+      (err: unknown) => unavailable(err) && err.details?.['settlementNotSubmitted'] === undefined,
+    );
+  });
+
+  // The SDK returns these from its own checks before it submits, so the buyer's
+  // retry, which signs the same access-key nonce, must be able to pay again
+  it.each([
+    'invalid_exact_near_balance_check_failed',
+    'invalid_exact_near_access_key_lookup_failed',
+    'invalid_exact_near_no_relayer_configured',
+  ])('reports %s at settle as no verdict with nothing submitted', async (errorReason) => {
+    await expect(settleWith({ success: false, transaction: '', errorReason })).rejects.toSatisfy(
+      (err: unknown) =>
+        unavailable(err) &&
+        err.details?.['settlementNotSubmitted'] === true &&
+        err.details['reason'] === errorReason,
+    );
   });
 
   it.each<[string, Record<string, unknown>]>([
@@ -307,10 +328,13 @@ describe('settle()', () => {
       { success: false, transaction: '', errorReason: 'verification_failed' },
     ],
   ])('records a rejection for %s', async (_label, response) => {
-    await expect(settleWith(response)).resolves.toMatchObject({
+    const rejected = await settleWith(response);
+    expect(rejected).toMatchObject({
       status: 'rejected',
       rejectionReason: response['errorReason'],
     });
+    // The failed outer transaction, which the relayer paid for
+    expect(rejected.externalReference).toBe(response['transaction'] || undefined);
   });
 });
 

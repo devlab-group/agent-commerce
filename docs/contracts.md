@@ -107,8 +107,11 @@ persistence must not fail the commerce flow.
   protocol names are defined by `ProtocolName` and `PROTOCOL_NAMES`.
 - `toCommerceError` no longer exposes an arbitrary `Error.message`. It keeps the
   original error as the non-serialized `cause`.
-- `PaymentAttempt.status` gained `settlement-uncertain`, recorded whenever
-  `settle()` throws, with or without a transaction hash.
+- `PaymentAttempt.status` gained `settlement-uncertain`, recorded when
+  `settle()` throws, with or without a transaction hash. A throw whose
+  `details.settlementNotSubmitted` is `true` records `rejected` instead and
+  answers `PAYMENT_PROVIDER_UNAVAILABLE`: the provider knows nothing was
+  submitted, so the authorization can be reserved again.
 - Optional `PaymentAttemptReservation.reclaimRejected` lets
   `reservePaymentAttempt` reclaim an attempt the same provider rejected (see
   [Receipt store](#receipt-store)). This permits x402 retries after a backend
@@ -200,6 +203,11 @@ persistence must not fail the commerce flow.
   - A settlement success must name the offer's network and a transaction in
     its family's form, for EVM offers too. Anything else unlocks nothing, and
     the pipeline records the attempt `settlement-uncertain`.
+  - A settlement failure that names a transaction is a rejection only with
+    the family's on-chain failure reason: `invalid_exact_evm_transaction_failed`,
+    `invalid_exact_svm_transaction_failed` or NEAR's `settlement_failed`. Any
+    other reason leaves the outcome unknown. A rejection keeps its transaction
+    as the attempt's `externalReference`.
 - The x402 provider serves NEAR offers (`near:mainnet`, `near:testnet`)
   through a remote facilitator.
   - `X402OfferOptions.asset` and `payTo` carry NEAR account IDs for a NEAR
@@ -211,7 +219,9 @@ persistence must not fail the commerce flow.
   - Verification reasons that name the facilitator's failure to read the
     chain or its configuration, such as
     `invalid_exact_near_access_key_lookup_failed`, are no verdict:
-    `PAYMENT_PROVIDER_UNAVAILABLE` at verify, `settlement-uncertain` at settle.
+    `PAYMENT_PROVIDER_UNAVAILABLE`. At settle the SDK returns them before
+    submitting, so the provider throws with `details.settlementNotSubmitted`
+    and the attempt is recorded `rejected`.
   - `createX402PaymentProvider` refuses a `maxTimeoutSeconds` that is not a
     positive integer with `CONFIG_INVALID`, as config load already did: the
     NEAR facilitator refuses every payment under such a value.
