@@ -4,8 +4,18 @@
  */
 import type { X402Network } from './networks';
 
+// `0x` + 40 hex characters. Config load cannot check the EIP-55 checksum,
+// which needs keccak-256; the x402 and MPP providers refuse a mixed-case
+// address whose checksum is wrong when they start.
 const EVM_ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 const EVM_ZERO = /^0x0{40}$/i;
+
+/** `0x` followed by 40 hex characters, in any case */
+export const isEvmAddress = (value: unknown): value is `0x${string}` =>
+  typeof value === 'string' && EVM_ADDRESS.test(value);
+
+/** The EVM zero address, in any case */
+export const isEvmZeroAddress = (value: string): boolean => EVM_ZERO.test(value);
 
 const BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
 // A 32-byte key is 32 to 44 base58 characters
@@ -29,7 +39,7 @@ const NEAR_TRANSACTION_HASH = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 export function normalizeAddress(network: X402Network, value: string): string | undefined {
   switch (network.family) {
     case 'evm':
-      return EVM_ADDRESS.test(value) ? value : undefined;
+      return isEvmAddress(value) ? value : undefined;
     case 'svm':
       return SOLANA_ADDRESS.test(value) && base58ByteLength(value) === 32 ? value : undefined;
     case 'near':
@@ -46,7 +56,7 @@ export function normalizeAddress(network: X402Network, value: string): string | 
 export function isBurnAddress(network: X402Network, wireAddress: string): boolean {
   switch (network.family) {
     case 'evm':
-      return EVM_ZERO.test(wireAddress);
+      return isEvmZeroAddress(wireAddress);
     case 'svm':
       return wireAddress === SOLANA_ZERO;
     case 'near':

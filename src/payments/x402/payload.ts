@@ -10,6 +10,7 @@ import { PaymentPayloadV2Schema } from '@x402/core/schemas';
 import type { PaymentPayload } from '@x402/core/types';
 import type { ExactEIP3009Payload, ExactPermit2Payload } from '@x402/evm';
 import { isRecord } from '../../core/is-record';
+import { isEvmAddress } from './addresses';
 
 export function decodePaymentSubmission(payloadBase64: string): PaymentPayload | undefined {
   const json = decodeJson(payloadBase64);
@@ -69,15 +70,31 @@ export function isExactEvmPayload(
   );
 }
 
-const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 // A uint256 in decimal, the form the SDK client writes
 const UINT256 = /^(0|[1-9]\d{0,77})$/;
 const UINT256_MAX = 2n ** 256n - 1n;
+// An EIP-3009 nonce: 32 bytes in hex
+const BYTES32 = /^0x[0-9a-fA-F]{64}$/;
 
-const isAddressString = (value: unknown): value is `0x${string}` =>
-  typeof value === 'string' && ADDRESS.test(value);
 const isUint256 = (value: unknown): value is string =>
   typeof value === 'string' && UINT256.test(value) && BigInt(value) <= UINT256_MAX;
+
+/**
+ * Checks an EIP-3009 authorization's fields in the forms the SDK client and
+ * mppx write: addresses, decimal uint256 strings and a 32-byte hex nonce. A
+ * value such as `"0x2710"` would otherwise reach the receipt as written.
+ */
+export function hasEip3009Fields(authorization: Readonly<Record<string, unknown>>): boolean {
+  return (
+    isEvmAddress(authorization['from']) &&
+    isEvmAddress(authorization['to']) &&
+    isUint256(authorization['value']) &&
+    isUint256(authorization['validAfter']) &&
+    isUint256(authorization['validBefore']) &&
+    typeof authorization['nonce'] === 'string' &&
+    BYTES32.test(authorization['nonce'])
+  );
+}
 
 /**
  * Checks the Permit2 `exact`/EVM fields used to match the offer and derive
@@ -96,10 +113,10 @@ export function isExactPermit2Payload(
   return (
     isRecord(permitted) &&
     isRecord(witness) &&
-    isAddressString(auth['from']) &&
-    isAddressString(auth['spender']) &&
-    isAddressString(permitted['token']) &&
-    isAddressString(witness['to']) &&
+    isEvmAddress(auth['from']) &&
+    isEvmAddress(auth['spender']) &&
+    isEvmAddress(permitted['token']) &&
+    isEvmAddress(witness['to']) &&
     isUint256(permitted['amount']) &&
     isUint256(auth['nonce']) &&
     isUint256(auth['deadline']) &&

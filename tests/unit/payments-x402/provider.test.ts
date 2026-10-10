@@ -514,6 +514,40 @@ describe('verify - rejects before touching the network', () => {
       await expect(verifyOnce(garbage)).resolves.toMatchObject({ status: 'rejected' });
     }
   });
+
+  // The SDK client writes decimal uint256 strings and a 32-byte hex nonce; any
+  // other spelling is refused before it can reach the replay key or the receipt
+  it.each([
+    ['a short nonce', { nonce: '0x1234' }],
+    ['an uppercase 0X nonce', { nonce: `0X${'11'.repeat(32)}` }],
+    ['a 33-byte nonce', { nonce: `0x${'11'.repeat(33)}` }],
+    ['a numeric nonce', { nonce: 12345 }],
+    ['a hex value', { value: '0x2710' }],
+    ['a padded value', { value: '010000' }],
+    ['a value with whitespace', { value: ' 10000 ' }],
+    ['a signed validBefore', { validBefore: '+99999999999' }],
+  ])('refuses an EIP-3009 authorization with %s', async (_label, change) => {
+    const provider = makeProvider();
+    const requirement = await provider.createRequirement(paymentContext());
+    const proof = await createPaymentProof({
+      buyerPrivateKey: BUYER_PRIVATE_KEY,
+      accepts: requirement.challenge.accepts[0] as Record<string, unknown>,
+    });
+    const decoded = JSON.parse(Buffer.from(proof, 'base64').toString('utf8'));
+    decoded.payload.authorization = { ...decoded.payload.authorization, ...change };
+
+    await expect(
+      provider.verify({
+        requestId: 'req-1',
+        resource: RESOURCE,
+        requirement,
+        submission: {
+          method: 'x402',
+          payload: Buffer.from(JSON.stringify(decoded)).toString('base64'),
+        },
+      }),
+    ).resolves.toMatchObject({ status: 'rejected', rejectionReason: 'invalid_payload' });
+  });
 });
 
 describe('verify - provider unavailable', () => {
@@ -615,6 +649,26 @@ describe('createX402PaymentProvider - Anvil dev-key guards', () => {
       }),
     ).not.toThrow();
   });
+});
+
+describe('createX402PaymentProvider - address checks', () => {
+  // Config load checks the shape only; the provider also checks the EIP-55
+  // checksum, and a message never repeats the value, which could be a key
+  it.each(['payTo', 'asset'] as const)(
+    'refuses a %s with a bad checksum without echoing it',
+    (field) => {
+      const badChecksum = '0x111111111111111111111111111111111111ABcd';
+      let thrown: unknown;
+      try {
+        makeProvider({ [field]: badChecksum });
+      } catch (err) {
+        thrown = err;
+      }
+      expect(isCommerceError(thrown) && thrown.code).toBe('CONFIG_INVALID');
+      expect((thrown as Error).message).toContain(`"${field}" is not a valid EVM address`);
+      expect((thrown as Error).message).not.toContain(badChecksum);
+    },
+  );
 });
 
 describe('createX402PaymentProvider - deployment guardrails', () => {

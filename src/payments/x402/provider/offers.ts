@@ -68,16 +68,18 @@ export function resolveOffers(
           );
         }
       } else {
+        // Neither address is echoed: a swapped variable could contain a key.
+        // Check mixed-case EIP-55 checksums here; config load checks only shape.
         if (!isAddress(input.asset)) {
           throw new CommerceError(
             'CONFIG_INVALID',
-            `x402 provider: ${at('asset')} is not a valid EVM address: ${input.asset}`,
+            `x402 provider: ${at('asset')} is not a valid EVM address (0x and 40 hex characters; a mixed-case address needs a valid EIP-55 checksum)`,
           );
         }
         if (!isAddress(input.payTo)) {
           throw new CommerceError(
             'CONFIG_INVALID',
-            `x402 provider: ${at('payTo')} is not a valid EVM address: ${input.payTo}`,
+            `x402 provider: ${at('payTo')} is not a valid EVM address (0x and 40 hex characters; a mixed-case address needs a valid EIP-55 checksum)`,
           );
         }
         // In every facilitator mode. `resolveX402Deployment` below also refuses

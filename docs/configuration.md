@@ -340,7 +340,9 @@ the flow details.
 
 Startup rejects a `payTo` that is not a plausible address or is the zero
 address, and the effective destination is printed in a safe, visible form so a
-presenter can confirm where money goes.
+presenter can confirm where money goes. `validate` checks an EVM address's
+form (`0x` and 40 hex characters); gateway startup also checks the EIP-55
+checksum of mixed-case addresses.
 
 ### The settlement asset
 

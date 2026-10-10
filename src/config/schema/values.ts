@@ -1,10 +1,6 @@
 // Readers for leaves that env substitution may have turned into strings, and addresses
 import { CommerceError } from '../../core';
-
-// `0x` + 40 hex chars. Casing (the EIP-55 checksum) is not checked
-const ADDRESS_PATTERN = /^0x[0-9a-fA-F]{40}$/;
-
-const ZERO_ADDRESS_PATTERN = /^0x0{40}$/i;
+import { isEvmAddress, isEvmZeroAddress } from '../../payments/x402/addresses';
 
 export function toNumber(
   value: number | string,
@@ -65,14 +61,14 @@ export function toBoolean(value: boolean | string, path: string): boolean {
 }
 
 export function validateAddress(path: string, value: string): void {
-  if (!ADDRESS_PATTERN.test(value)) {
+  if (!isEvmAddress(value)) {
     throw new CommerceError(
       'CONFIG_INVALID',
       `Configuration value at "${path}" is not a plausible address (expected "0x" followed by 40 hex characters)`,
       { details: { path } },
     );
   }
-  if (ZERO_ADDRESS_PATTERN.test(value)) {
+  if (isEvmZeroAddress(value)) {
     throw new CommerceError(
       'CONFIG_INVALID',
       `Configuration value at "${path}" must not be the zero address`,

@@ -3,7 +3,7 @@
 import type { PaymentPayload } from '@x402/core/types';
 import { x402ExactPermit2ProxyAddress } from '@x402/evm';
 import { getAddress, isAddress } from 'viem';
-import { isExactEvmPayload, isExactPermit2Payload } from '../payload';
+import { hasEip3009Fields, isExactEvmPayload, isExactPermit2Payload } from '../payload';
 import { computePermit2ReplayKey, computeReplayKey } from '../replay-key';
 import type { EvmOffer } from './types';
 
@@ -28,8 +28,11 @@ export function readTransfer(payload: PaymentPayload, offer: EvmOffer): Transfer
   const { chainId } = offer.profile;
   if (offer.method === 'eip3009') {
     if (!isExactEvmPayload(payload)) return 'unsupported_scheme';
-    const { from, to, value, nonce } = payload.payload.authorization;
-    if (!isAddress(from) || !isAddress(to)) return 'invalid_payload';
+    const { authorization } = payload.payload;
+    const { from, to, value, nonce } = authorization;
+    if (!hasEip3009Fields(authorization) || !isAddress(from) || !isAddress(to)) {
+      return 'invalid_payload';
+    }
     return {
       from: getAddress(from),
       to: getAddress(to),

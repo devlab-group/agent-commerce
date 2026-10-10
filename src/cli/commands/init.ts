@@ -3,6 +3,7 @@ import { writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import * as clack from '@clack/prompts';
 import { DEFAULT_CONFIG_FILENAME } from '../../config/filename';
+import { isEvmAddress } from '../../payments/x402/addresses';
 import {
   type ConfigLoader,
   type ConfigParser,
@@ -106,7 +107,7 @@ export async function collectAnswersInteractive(): Promise<InitAnswers | undefin
         const trimmed = (value ?? '').trim();
         if (trimmed.length === 0) return 'Required';
         // The shape config enforces, checked here so a typo can be retyped
-        return /^0x[0-9a-fA-F]{40}$/.test(trimmed)
+        return isEvmAddress(trimmed)
           ? undefined
           : 'Must be a 0x-prefixed 20-byte EVM address (42 characters)';
       },
