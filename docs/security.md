@@ -131,6 +131,13 @@ Covered in detail in [payment-flow.md](payment-flow.md). The invariants:
 5. The effective settlement destination is visible in
    `/.well-known/agent-commerce` and in `doctor`, so misconfiguration is
    noticeable rather than silent.
+6. A remote facilitator, with the Solana fee payer or NEAR relayer that pays
+   for broadcasting, is trusted with liveness and with its settlement report,
+   not with the payment terms. The buyer's signature fixes the token, amount
+   and recipient, so the facilitator cannot redirect funds, but it can delay
+   or drop a broadcast until the authorization expires. The gateway accepts a
+   reported success once it names the offer's network and a transaction in
+   that family's form; it does not read the chain to confirm it.
 
 ## Authentication and exposure
 

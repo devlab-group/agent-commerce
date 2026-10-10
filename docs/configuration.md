@@ -460,8 +460,8 @@ payments:
 Use `options` to offer x402 resources on several networks or in several
 tokens; the buyer pays one offer. Entries use the fields above, and a one-entry
 list resolves like the direct form. Config load rejects mixed forms, empty
-lists, duplicate (network, asset, `payTo`) combinations, and mixed deployment
-modes (local, testnet, mainnet).
+lists, an object in place of the list, duplicate (network, asset, `payTo`)
+combinations, and mixed deployment modes (local, testnet, mainnet).
 
 ```yaml
 payments:

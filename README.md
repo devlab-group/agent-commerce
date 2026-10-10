@@ -98,17 +98,20 @@ const { url } = await gateway.listen();
 Components with extra dependencies use separate subpaths, so a gateway serving
 free HTTP resources does not install MCP, EVM, JOSE or SD-JWT packages.
 
-| You want                                | Install                            | Import                                     |
-| --------------------------------------- | ---------------------------------- | ------------------------------------------ |
-| gateway, config, receipts, A2A/ACP, CLI | `@devlab.group/agent-commerce`     | `from '@devlab.group/agent-commerce'`      |
-| expose resources as MCP tools           | `+ @modelcontextprotocol/server`   | `from '@devlab.group/agent-commerce/mcp'`  |
-| accept x402 payments                    | `+ @x402/core @x402/evm viem`      | `from '@devlab.group/agent-commerce/x402'` |
-| accept MPP payments                     | `+ mppx viem @x402/core @x402/evm` | `from '@devlab.group/agent-commerce/mpp'`  |
-| verify AP2 mandates, sign checkout JWTs | `+ jose @sd-jwt/core canonicalize` | `from '@devlab.group/agent-commerce/ap2'`  |
-| authenticate to a CDP facilitator       | `+ @coinbase/x402`                 | (no import - loaded on demand)             |
+| You want                                | Install                              | Import                                     |
+| --------------------------------------- | ------------------------------------ | ------------------------------------------ |
+| gateway, config, receipts, A2A/ACP, CLI | `@devlab.group/agent-commerce`       | `from '@devlab.group/agent-commerce'`      |
+| expose resources as MCP tools           | `+ @modelcontextprotocol/server`     | `from '@devlab.group/agent-commerce/mcp'`  |
+| accept x402 payments                    | `+ @x402/core @x402/evm viem`        | `from '@devlab.group/agent-commerce/x402'` |
+| accept x402 on Solana                   | x402 peers `+ @x402/svm @solana/kit` | (no import - loaded for a Solana offer)    |
+| accept x402 on NEAR                     | x402 peers `+ @x402/near`            | (no import - loaded for a NEAR offer)      |
+| accept MPP payments                     | `+ mppx viem @x402/core @x402/evm`   | `from '@devlab.group/agent-commerce/mpp'`  |
+| verify AP2 mandates, sign checkout JWTs | `+ jose @sd-jwt/core canonicalize`   | `from '@devlab.group/agent-commerce/ap2'`  |
+| authenticate to a CDP facilitator       | `+ @coinbase/x402`                   | (no import - loaded on demand)             |
 
-MPP settles through an x402 facilitator, so its entry also needs the x402
-peers.
+The x402 entry needs `@x402/core`, `@x402/evm` and `viem` even when every
+offer is on Solana or NEAR. MPP settles through an x402 facilitator, so its
+entry also needs the x402 peers.
 
 ```bash
 npm install @devlab.group/agent-commerce @modelcontextprotocol/server @x402/core @x402/evm viem
@@ -278,7 +281,8 @@ Minor releases may break experimental configurations, integrations or types.
 This applies to MPP, A2A, ACP, AP2 and `agent-commerce import openapi`.
 Runtime adapters and providers report `status: experimental` in
 `GET /.well-known/agent-commerce`. Pin an exact version and test upgrades
-before deploying them.
+before deploying them. 2.1 also changes some supported x402 behavior and
+types; see [Upgrading from 2.0](docs/migration-2.1.md).
 
 ## Payment model
 
@@ -501,6 +505,8 @@ they are added to a release.
 | [Protocols](docs/protocols.md)                 | supported and unsupported protocol features |
 | [AP2](docs/protocols/ap2.md)                   | mandate verification and the trust model    |
 | [Configuration](docs/configuration.md)         | `config.yaml` reference                     |
+| [Upgrading from 2.0](docs/migration-2.1.md)    | changes that can break a 2.0 setup          |
+| [Smoke tests](docs/smoke-tests.md)             | settling on public networks, by hand        |
 | [OpenAPI import](docs/openapi-import.md)       | generate resources from an existing API     |
 | [Security model](docs/security.md)             | trust boundaries, and what we do not defend |
 | [Contracts](docs/contracts.md)                 | the frozen cross-area contract              |
