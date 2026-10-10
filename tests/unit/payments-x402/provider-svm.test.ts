@@ -438,8 +438,8 @@ describe('health()', () => {
 
   beforeEach(() => {
     vi.stubGlobal('fetch', async (_url: string, init: { body: string }) => {
-      const { method } = JSON.parse(init.body) as { method: string };
-      return new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, result: rpc(method) }));
+      const { method, params } = JSON.parse(init.body) as { method: string; params: unknown[] };
+      return new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, result: rpc(method, params) }));
     });
   });
   afterEach(() => {
@@ -490,6 +490,16 @@ describe('health()', () => {
           m === 'getGenesisHash' ? DEVNET_GENESIS : { context: { slot: 1 }, value: null },
         ),
       /No initialized token mint/,
+    ],
+    [
+      // The payment's transaction cannot create the account it pays into
+      'a payee without a token account for the mint',
+      () =>
+        rpc.mockImplementation((m: string, params: unknown[]) => {
+          if (m === 'getGenesisHash') return DEVNET_GENESIS;
+          return params[0] === USDC ? mintResult(6) : { context: { slot: 1 }, value: null };
+        }),
+      /has no token account for mint .* create its associated token account/,
     ],
     [
       'a facilitator without a fee payer',

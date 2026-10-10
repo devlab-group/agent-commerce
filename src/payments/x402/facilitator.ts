@@ -56,8 +56,13 @@ export type FacilitatorBinding =
       supported(): Promise<SupportedResponse>;
     });
 
-/** Bounds each receipt wait of the in-process facilitator, and each request to a remote one */
+/** Bounds each receipt wait of the in-process facilitator, and each verify or settle request to a remote one */
 export const SETTLEMENT_CONFIRMATION_TIMEOUT_MS = 60_000;
+/**
+ * Bounds a remote `/supported` read, retries included. Readiness and every
+ * Solana challenge wait on it, and the SDK retries a 429 for up to 30 s a time.
+ */
+export const SUPPORTED_TIMEOUT_MS = 10_000;
 
 export interface RemoteFacilitatorOptions {
   readonly url: string;
@@ -177,6 +182,11 @@ export function createRemoteFacilitatorBinding(
     timeoutMs: SETTLEMENT_CONFIRMATION_TIMEOUT_MS,
     ...(createAuthHeaders ? { createAuthHeaders } : {}),
   });
+  const supportedClient = new HTTPFacilitatorClient({
+    url: options.url,
+    timeoutMs: SUPPORTED_TIMEOUT_MS,
+    ...(createAuthHeaders ? { createAuthHeaders } : {}),
+  });
 
   return {
     kind: 'remote',
@@ -206,6 +216,26 @@ export function createRemoteFacilitatorBinding(
         transportFailed: () => failed,
       };
     },
-    supported: () => client.getSupported(),
+    supported: () => withDeadline(supportedClient.getSupported(), SUPPORTED_TIMEOUT_MS),
   };
+}
+
+// The SDK bounds each attempt but not its retry waits. `Promise.race` keeps
+// a handler on the abandoned call, so its later rejection is not unhandled.
+function withDeadline<T>(call: Promise<T>, ms: number): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () =>
+        reject(
+          new CommerceError(
+            'PAYMENT_PROVIDER_UNAVAILABLE',
+            `x402 provider: facilitator /supported did not answer within ${ms / 1000} s`,
+          ),
+        ),
+      ms,
+    );
+    timer.unref();
+  });
+  return Promise.race([call, deadline]).finally(() => clearTimeout(timer));
 }

@@ -2,7 +2,7 @@ import { generateKeyPairSigner } from '@solana/kit';
 import { decodeTransactionFromPayload, transactionMessageHash } from '@x402/svm';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { computeSvmReplayKey } from '../../../src/payments/x402/replay-key';
-import { svmReplayKey } from '../../../src/payments/x402/svm';
+import { associatedTokenAccount, svmReplayKey } from '../../../src/payments/x402/svm';
 import { buildSvmPayment, withSignatureBytes } from '../../fixtures/x402/svm-transaction';
 
 const DEVNET = 'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1';
@@ -27,6 +27,19 @@ beforeAll(async () => {
 });
 
 const keyOf = (value: string, network = DEVNET) => svmReplayKey({ transaction: value }, network);
+
+// Expected values from `findAssociatedTokenPda` in @solana-program/token and
+// token-2022, the helper the SDK client uses to address the payee
+describe('associatedTokenAccount', () => {
+  it.each([
+    ['TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA', 'Ah4G934QoGavLuFxq3mEAqSK5WeWubrTQnoFqHKUznWW'],
+    ['TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb', '9tMS3soKEbZruwgPBFWq9T2yBgvNY48had8vxRtWiM7E'],
+  ])('derives the account the SDK client pays under %s', async (tokenProgram, expected) => {
+    await expect(
+      associatedTokenAccount('Dupg3J9doyGhLSgjKXp6BsqpqyGJtvSyBQwwVbkBr3Sf', USDC, tokenProgram),
+    ).resolves.toBe(expected);
+  });
+});
 
 describe('svmReplayKey', () => {
   it('hashes the message bytes the SDK hashes, under the network', () => {

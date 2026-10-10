@@ -4,7 +4,7 @@
  */
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 vi.mock('viem', () => {
   throw new Error('viem was loaded');
@@ -39,6 +39,13 @@ let url: string;
 
 beforeAll(async () => {
   server = createServer((req, res) => {
+    // A facilitator that rate-limits `/supported` and asks for a long wait
+    if (req.url === '/limited/supported') {
+      res.statusCode = 429;
+      res.setHeader('retry-after', '30');
+      res.end();
+      return;
+    }
     if (req.url === '/supported') {
       res.setHeader('content-type', 'application/json');
       res.end(JSON.stringify(SUPPORTED));
@@ -61,5 +68,31 @@ describe('remote facilitator binding', () => {
     const binding = createRemoteFacilitatorBinding({ url, auth: { type: 'none' } });
     if (binding.kind !== 'remote') throw new Error('expected a remote binding');
     expect(await binding.supported()).toEqual(SUPPORTED);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  // The SDK retries a 429 after its Retry-After; readiness and Solana
+  // challenges wait on `/supported`, so the binding bounds the whole read
+  it('gives up on /supported at its deadline, retry waits included', async () => {
+    const { createRemoteFacilitatorBinding, SUPPORTED_TIMEOUT_MS } = await import(
+      '../../../src/payments/x402/facilitator'
+    );
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const binding = createRemoteFacilitatorBinding({
+      url: `${url}/limited`,
+      auth: { type: 'none' },
+    });
+    if (binding.kind !== 'remote') throw new Error('expected a remote binding');
+
+    const read = binding.supported();
+    const outcome = expect(read).rejects.toMatchObject({
+      code: 'PAYMENT_PROVIDER_UNAVAILABLE',
+      message: expect.stringContaining('did not answer within 10 s'),
+    });
+    await vi.advanceTimersByTimeAsync(SUPPORTED_TIMEOUT_MS);
+    await outcome;
   });
 });

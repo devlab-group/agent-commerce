@@ -2,7 +2,7 @@
 
 import type { SupportedKind } from '@x402/core/types';
 import { PERMIT2_ADDRESS, x402ExactPermit2ProxyAddress } from '@x402/evm';
-import type { AdapterHealth } from '../../../core';
+import { type AdapterHealth, CommerceError } from '../../../core';
 import { redactedErrorText } from '../../../core/errors';
 import { isRecord } from '../../../core/is-record';
 import { normalizeAddress } from '../addresses';
@@ -111,7 +111,7 @@ export function createHealthCheck(ctx: ProviderContext): () => Promise<AdapterHe
   ): Promise<{ readonly status: 'pass' | 'fail'; readonly detail: string }> {
     const { profile, rpcOrigin, binding } = offer;
     // A missing Solana peer fails readiness, not the first paid request
-    await svm();
+    const svmModule = await svm();
     const genesis = await jsonRpc(offer.rpcUrl, 'getGenesisHash', []);
     const cluster = typeof genesis === 'string' ? `solana:${genesis.slice(0, 32)}` : undefined;
     if (cluster !== offer.network) {
@@ -124,17 +124,36 @@ export function createHealthCheck(ctx: ProviderContext): () => Promise<AdapterHe
       offer.asset,
       { encoding: 'base64' },
     ]);
-    const decimals = mintDecimals(mint);
-    if (decimals === undefined) {
+    const mintInfo = readMint(mint);
+    if (mintInfo === undefined) {
       return {
         status: 'fail',
         detail: `No initialized token mint found at configured asset address ${offer.asset}`,
       };
     }
+    const { decimals, tokenProgram } = mintInfo;
     if (decimals !== offer.assetDecimals) {
       return {
         status: 'fail',
         detail: `Mint ${offer.asset} has ${decimals} decimals, configured ${offer.assetDecimals}`,
+      };
+    }
+    // Without the payee's token account every payment fails the facilitator's
+    // simulation, after the buyer signed
+    const payeeAccount = await svmModule.associatedTokenAccount(
+      offer.payTo,
+      offer.asset,
+      tokenProgram,
+    );
+    const account = await jsonRpc(offer.rpcUrl, 'getAccountInfo', [
+      payeeAccount,
+      { encoding: 'base64' },
+    ]);
+    const accountValue = isRecord(account) ? account['value'] : undefined;
+    if (!isRecord(accountValue) || accountValue['owner'] !== tokenProgram) {
+      return {
+        status: 'fail',
+        detail: `payTo ${offer.payTo} has no token account for mint ${offer.asset}; create its associated token account (${payeeAccount}) before taking payments`,
       };
     }
     const feePayer = (await kinds()).find(
@@ -155,7 +174,8 @@ export function createHealthCheck(ctx: ProviderContext): () => Promise<AdapterHe
       status: 'pass',
       detail:
         `${describeDeploymentMode(deploymentMode)}: RPC ${rpcOrigin} serves ${profile.displayName}, ` +
-        `mint ${offer.asset} has ${decimals} decimals, facilitator ${binding.describe} supports ` +
+        `mint ${offer.asset} has ${decimals} decimals and a token account for ${offer.payTo}, ` +
+        `facilitator ${binding.describe} supports ` +
         `exact/${offer.network} with fee payer ${feePayer}`,
     };
   }
@@ -317,15 +337,23 @@ const TOKEN_PROGRAMS: ReadonlySet<string> = new Set([
   'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb',
 ]);
 
-// The decimals of an initialized SPL Token or Token-2022 mint, from a base64
-// `getAccountInfo` result: byte 44 holds them, byte 45 the initialized flag
-function mintDecimals(result: unknown): number | undefined {
+// The decimals and owning token program of an initialized SPL Token or
+// Token-2022 mint, from a base64 `getAccountInfo` result: byte 44 holds the
+// decimals, byte 45 the initialized flag
+function readMint(
+  result: unknown,
+): { readonly decimals: number; readonly tokenProgram: string } | undefined {
   const value = isRecord(result) ? result['value'] : undefined;
-  if (!isRecord(value) || !TOKEN_PROGRAMS.has(String(value['owner']))) return undefined;
+  if (!isRecord(value)) return undefined;
+  const owner = value['owner'];
+  if (typeof owner !== 'string' || !TOKEN_PROGRAMS.has(owner)) return undefined;
   const data = value['data'];
   if (!Array.isArray(data) || typeof data[0] !== 'string') return undefined;
   const bytes = Buffer.from(data[0], 'base64');
-  return bytes.length >= 82 && bytes[45] === 1 ? bytes[44] : undefined;
+  const decimals = bytes[44];
+  return bytes.length >= 82 && bytes[45] === 1 && decimals !== undefined
+    ? { decimals, tokenProgram: owner }
+    : undefined;
 }
 
 // One JSON-RPC call for health(), bounded like the EVM client's
@@ -338,7 +366,10 @@ async function jsonRpc(rpcUrl: string, method: string, params: unknown): Promise
   });
   const body = (await response.json()) as { result?: unknown; error?: unknown };
   if (body.error !== undefined) {
-    throw new Error(`RPC ${method} failed: ${JSON.stringify(body.error)}`);
+    throw new CommerceError(
+      'PAYMENT_PROVIDER_UNAVAILABLE',
+      `RPC ${method} failed: ${JSON.stringify(body.error)}`,
+    );
   }
   return body.result;
 }
@@ -358,7 +389,12 @@ async function nearView(
     args_base64: Buffer.from(JSON.stringify(args)).toString('base64'),
   });
   const bytes = isRecord(result) ? result['result'] : undefined;
-  if (!Array.isArray(bytes)) throw new Error(`NEAR view ${method} returned no result`);
+  if (!Array.isArray(bytes)) {
+    throw new CommerceError(
+      'PAYMENT_PROVIDER_UNAVAILABLE',
+      `NEAR view ${method} returned no result`,
+    );
+  }
   return JSON.parse(Buffer.from(bytes as number[]).toString('utf8'));
 }
 

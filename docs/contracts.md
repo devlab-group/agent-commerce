@@ -328,13 +328,13 @@ persistence must not fail the commerce flow.
 
 ## Published entry points
 
-| Entry                               | Surface                                                             | Imported optional peers                                                                 |
-| ----------------------------------- | ------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| `@devlab.group/agent-commerce`      | Core contract, config, gateway, receipt store, A2A and ACP adapters | None                                                                                    |
-| `@devlab.group/agent-commerce/ap2`  | AP2 verification and checkout signing                               | `jose`, `@sd-jwt/core`, `canonicalize`                                                  |
-| `@devlab.group/agent-commerce/mcp`  | MCP adapter                                                         | `@modelcontextprotocol/server`                                                          |
-| `@devlab.group/agent-commerce/mpp`  | MPP provider and profile metadata                                   | `@coinbase/x402` (only for `auth.type: cdp`), `@x402/core`, `@x402/evm`, `mppx`, `viem` |
-| `@devlab.group/agent-commerce/x402` | x402 provider and client proof helper                               | `@coinbase/x402` (only for `auth.type: cdp`), `@x402/core`, `@x402/evm`, `viem`         |
+| Entry                               | Surface                                                             | Imported optional peers                                                                                                                                                  |
+| ----------------------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `@devlab.group/agent-commerce`      | Core contract, config, gateway, receipt store, A2A and ACP adapters | None                                                                                                                                                                     |
+| `@devlab.group/agent-commerce/ap2`  | AP2 verification and checkout signing                               | `jose`, `@sd-jwt/core`, `canonicalize`                                                                                                                                   |
+| `@devlab.group/agent-commerce/mcp`  | MCP adapter                                                         | `@modelcontextprotocol/server`                                                                                                                                           |
+| `@devlab.group/agent-commerce/mpp`  | MPP provider and profile metadata                                   | `@coinbase/x402` (only for `auth.type: cdp`), `@x402/core`, `@x402/evm`, `mppx`, `viem`                                                                                  |
+| `@devlab.group/agent-commerce/x402` | x402 provider and client proof helper                               | `@x402/core`, `@x402/evm`, `viem`; `@coinbase/x402` only for `auth.type: cdp`; `@x402/svm` and `@solana/kit` only for a Solana offer; `@x402/near` only for a NEAR offer |
 
 The main entry and CLI must not import optional peers. `package.json` is the
 authoritative export and dependency map.

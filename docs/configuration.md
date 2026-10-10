@@ -407,7 +407,7 @@ payments:
 ```
 
 - `payTo` is the merchant's wallet; its USDC token account must already exist.
-  The SDK client does not create it.
+  The SDK client does not create it, and health fails without it.
 - Each offer names the facilitator's fee payer, read from its `/supported`
   response. Without one, readiness fails and no challenge is built.
 - Health checks that the RPC's genesis hash matches the network id, that the

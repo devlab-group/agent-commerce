@@ -106,11 +106,13 @@ export function createX402PaymentProvider(
     ? loadOptionalModule(() => import('../near'), 'NEAR offers need @x402/near')
     : undefined;
   const svm = async () => {
-    if (!svmModule) throw new Error('x402 provider: no Solana offer is configured');
+    if (!svmModule)
+      throw new CommerceError('INTERNAL_ERROR', 'x402 provider: no Solana offer is configured');
     return svmModule;
   };
   const near = async () => {
-    if (!nearModule) throw new Error('x402 provider: no NEAR offer is configured');
+    if (!nearModule)
+      throw new CommerceError('INTERNAL_ERROR', 'x402 provider: no NEAR offer is configured');
     return nearModule;
   };
 
