@@ -371,7 +371,9 @@ A `rejected` attempt settled nothing: its backend failed first, or the provider
 returned a verdict that no transfer occurred. With `reclaimRejected: true`, the
 same provider can replace it with a new reservation; only one concurrent claim
 wins. This lets the NEAR reference client retry using the access key's next
-nonce.
+nonce. The SQLite store first copies the replaced row into
+`payment_attempt_history`, so the earlier request and its rejection reason
+stay on record.
 
 ## x402
 

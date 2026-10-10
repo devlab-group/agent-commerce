@@ -122,7 +122,13 @@ export function createSqliteReceiptStore(options: SqliteReceiptStoreOptions): Re
      VALUES (@id, @request_id, @resource_id, @provider, @replay_key, @status, @amount, @currency, @payer, @payee, @external_reference, @rejection_reason, @created_at, @updated_at)
      RETURNING *`,
   );
-  // One statement, so two retries cannot both reclaim the attempt
+  // Keeps the rejected row a reclaim is about to overwrite
+  const archiveRejectedAttemptStmt = db.prepare(
+    `INSERT INTO payment_attempt_history (id, request_id, resource_id, provider, replay_key, status, amount, currency, payer, payee, external_reference, rejection_reason, created_at, updated_at, superseded_at)
+     SELECT id, request_id, resource_id, provider, replay_key, status, amount, currency, payer, payee, external_reference, rejection_reason, created_at, updated_at, @created_at
+     FROM payment_attempts
+     WHERE replay_key = @replay_key AND provider = @provider AND status = 'rejected'`,
+  );
   const reclaimPaymentAttemptStmt = db.prepare<Record<string, unknown>, PaymentAttemptRow>(
     `UPDATE payment_attempts SET id = @id, request_id = @request_id, resource_id = @resource_id,
        status = 'reserved', amount = @amount, currency = @currency,
@@ -151,6 +157,15 @@ export function createSqliteReceiptStore(options: SqliteReceiptStoreOptions): Re
   );
   const paymentAttemptStatusStmt = db.prepare<[string], Pick<PaymentAttemptRow, 'status'>>(
     'SELECT status FROM payment_attempts WHERE replay_key = ?',
+  );
+  // IMMEDIATE takes the write lock before the read, so of two retries on one
+  // file only one archives and reclaims. The other finds no rejected row, and
+  // its insert hits the unique replay key.
+  const reclaimRejectedAttempt = db.transaction(
+    (params: Record<string, unknown>): PaymentAttemptRow | undefined => {
+      archiveRejectedAttemptStmt.run(params);
+      return reclaimPaymentAttemptStmt.get(params);
+    },
   );
 
   let closed = false;
@@ -214,7 +229,7 @@ export function createSqliteReceiptStore(options: SqliteReceiptStoreOptions): Re
         // next nonce and therefore the replay key.
         row =
           (reservation.reclaimRejected === true
-            ? reclaimPaymentAttemptStmt.get(params)
+            ? reclaimRejectedAttempt.immediate(params)
             : undefined) ??
           // RETURNING on a successful insert always yields the inserted row
           (insertPaymentAttemptStmt.get({
