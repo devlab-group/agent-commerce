@@ -45,8 +45,12 @@ const RESOURCE_ID = 'market_report';
 const INPUT = { city: 'Berlin' };
 const MERCHANT = '0x70997970C51812dc3A010C7d01b50e0d17dc79C8';
 const ASSET = '0x1111111111111111111111111111111111111111';
-const NETWORK = 'eip155:84532';
+const NETWORK = 'eip155:31337';
 const PROOF = 'x402-proof-1';
+// A second offer in the same challenge, which this proof pays
+const SECOND_PROOF = 'x402-proof-second-offer';
+const SECOND_NETWORK = 'eip155:8453';
+const SECOND_ASSET = '0x2222222222222222222222222222222222222222';
 
 let parties: Party;
 let config: GatewayConfig;
@@ -79,8 +83,8 @@ interface RailOptions {
   readonly settle?: () => Promise<PaymentResult>;
 }
 
-// Counts what it was asked to do. Its requirement carries the chain
-// coordinates a real x402 challenge does, which the mandate must agree with.
+// Counts calls and selects the proof's offer from two networks, as x402 does.
+// The mandate must match the selected requirement's settlement coordinates.
 function countingRail(options: RailOptions = {}): PaymentProvider {
   const settled: PaymentResult = {
     status: 'settled',
@@ -106,8 +110,20 @@ function countingRail(options: RailOptions = {}): PaymentProvider {
         destination: MERCHANT,
         network: NETWORK,
         asset: ASSET,
-        challenge: { provider: 'x402', version: '2', accepts: [{ scheme: 'exact' }] },
+        challenge: {
+          provider: 'x402',
+          version: '2',
+          accepts: [
+            { scheme: 'exact', network: NETWORK },
+            { scheme: 'exact', network: SECOND_NETWORK },
+          ],
+        },
       };
+    },
+    async selectRequirement(ctx): Promise<PaymentRequirement> {
+      return ctx.submission.payload === SECOND_PROOF
+        ? { ...ctx.requirement, network: SECOND_NETWORK, asset: SECOND_ASSET }
+        : ctx.requirement;
     },
     async verify() {
       counts.verify += 1;
@@ -503,6 +519,22 @@ describe('AP2 over x402: mandates that must not settle', () => {
       await mandate({ profile: { asset: '0x2222222222222222222222222222222222222222' } }),
       'purchase_mismatch',
     );
+  });
+
+  it('binds a mandate to the offer it approved, not to every offer in the challenge', async () => {
+    const gw = await startGateway();
+    const second = await mandate({ profile: { network: SECOND_NETWORK, asset: SECOND_ASSET } });
+
+    const otherOffer = await purchase(second, gw);
+
+    expect(otherOffer.statusCode).toBe(403);
+    expect(otherOffer.body['details']).toEqual({ method: 'ap2', reason: 'purchase_mismatch' });
+    expect(counts.settle).toBe(0);
+
+    const approvedOffer = await invoke(gw, { proof: SECOND_PROOF, presentation: second });
+
+    expect(approvedOffer.statusCode).toBe(200);
+    expect(counts.settle).toBe(1);
   });
 
   it('refuses a mandate silent about the chain the requirement names', async () => {

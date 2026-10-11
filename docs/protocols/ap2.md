@@ -203,6 +203,13 @@ strings. It cannot compare its inputs with the gateway's eventual payment
 requirement. Take price data from the merchant catalog and settlement
 coordinates from the payment challenge.
 
+For a challenge with several x402 offers, choose one before creating the JWT.
+Pass its `payTo`, `network` and `asset` as `destination`, `network` and
+`asset`. The mandate must match the proof's selected offer: Base USDC approval
+does not authorize Solana or NEAR USDC. Copy Solana and NEAR addresses exactly;
+only EVM addresses compare case-insensitively. Keep `amount` and `currency`
+as the resource's price, even when payment records use the settled token.
+
 The buyer's agent or credential provider creates the mandate around this JWT.
 This package does not mint mandates.
 
@@ -323,11 +330,11 @@ adapters preserve `payload` byte for byte. Reserved fields are removed before
 resource validation, hashing and backend execution.
 
 With the A2A x402 extension, a payment message can carry the mandate when the
-first message did not; see [x402 extension](protocols.md#x402-extension).
+first message did not; see [x402 extension](a2a.md#x402-extension).
 
 ## Configuration and lifecycle
 
-See [configuration.md](configuration.md#authorizationap2) for the YAML schema
+See [configuration.md](../configuration.md#authorizationap2) for the YAML schema
 and validation rules. A free resource cannot require AP2 because authorization
 gates settlement.
 
@@ -372,6 +379,6 @@ Open mandates are refused because their spending constraints are not evaluated.
 | ------------------------------------------------ | -------------------------------------------------- |
 | `src/authorization/ap2/`                         | verifier, trust, purchase binding and replay store |
 | `src/core/domain/authorization.ts`               | generic authorization contract                     |
-| `src/core/execution/pipeline.ts`                 | verification and reservation ordering              |
+| `src/core/execution/pipeline/admission.ts`       | verification and reservation ordering              |
 | `tests/integration/ap2-x402-conformance.test.ts` | end-to-end refusal cases                           |
 | `tests/e2e/authorization/`                       | on-chain gated settlement                          |

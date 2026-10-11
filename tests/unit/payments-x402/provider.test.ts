@@ -24,7 +24,7 @@ const BUYER_PRIVATE_KEY =
 
 function makeProvider(overrides: Partial<X402ProviderOptions> = {}) {
   return createX402PaymentProvider({
-    network: 'eip155:84532',
+    network: 'eip155:31337',
     rpcUrl: UNREACHABLE_RPC_URL,
     asset: ASSET,
     assetName: 'MockUSDC',
@@ -68,8 +68,8 @@ describe('descriptor', () => {
     expect(provider.descriptor.capabilities).toContain('exact-evm');
     expect(provider.descriptor.capabilities).toContain('eip-3009');
     // What the provider does not implement must be listed
-    expect(provider.descriptor.unsupported).toContain('svm');
-    expect(provider.descriptor.unsupported).toContain('permit2');
+    expect(provider.descriptor.capabilities).not.toContain('permit2');
+    expect(provider.descriptor.unsupported).toContain('permit2 gas sponsoring extensions');
     expect(provider.descriptor.unsupported).toContain('batch-settlement scheme');
     // The descriptor names the deployment, because chain id 84532 alone cannot
     // tell local from Base Sepolia
@@ -88,14 +88,14 @@ describe('createRequirement', () => {
     expect(requirement.requestId).toBe('req-1');
     expect(requirement.amount).toBe('0.01');
     expect(requirement.destination).toBe(PAY_TO);
-    expect(requirement.network).toBe('eip155:84532');
+    expect(requirement.network).toBe('eip155:31337');
     expect(requirement.asset).toBe(ASSET);
     expect(requirement.challenge.provider).toBe('x402');
     expect(requirement.challenge.accepts).toHaveLength(1);
 
     const accepted = requirement.challenge.accepts[0] as Record<string, unknown>;
     expect(accepted['scheme']).toBe('exact');
-    expect(accepted['network']).toBe('eip155:84532');
+    expect(accepted['network']).toBe('eip155:31337');
     expect(accepted['amount']).toBe('10000'); // 0.01 * 10^6
     expect(accepted['payTo']).toBe(PAY_TO);
     expect(accepted['asset']).toBe(ASSET);
@@ -107,8 +107,11 @@ describe('createRequirement', () => {
       version: '2',
       assetTransferMethod: 'eip3009',
     });
-    // This marker asks the pipeline to settle after the backend.
-    expect(requirement.metadata).toEqual({ settleAfterBackend: true });
+    // Settle after the backend, and allow retries of a payload that settled nothing
+    expect(requirement.metadata).toEqual({
+      settleAfterBackend: true,
+      reuseRejectedAuthorization: true,
+    });
   });
 
   it('declares upfront and requests settlement before the backend', async () => {
@@ -118,7 +121,10 @@ describe('createRequirement', () => {
 
     const accepted = requirement.challenge.accepts[0] as { extra: Record<string, unknown> };
     expect(accepted.extra['paymentFlow']).toBe('upfront');
-    expect(requirement.metadata).toEqual({ settleAfterBackend: false });
+    expect(requirement.metadata).toEqual({
+      settleAfterBackend: false,
+      reuseRejectedAuthorization: true,
+    });
   });
 
   it('lets one resource override the flow', async () => {
@@ -129,8 +135,8 @@ describe('createRequirement', () => {
       paymentContext({ resource: { ...paymentContext().resource, id: 'other.report' } }),
     );
 
-    expect(overridden.metadata).toEqual({ settleAfterBackend: false });
-    expect(other.metadata).toEqual({ settleAfterBackend: true });
+    expect(overridden.metadata).toMatchObject({ settleAfterBackend: false });
+    expect(other.metadata).toMatchObject({ settleAfterBackend: true });
   });
 
   it('carries the v2 PaymentRequired envelope, matching the accepts it lists', async () => {
@@ -420,7 +426,7 @@ describe('verify - rejects before touching the network', () => {
     expect(result.rejectionReason).toBe('invalid_x402_version');
   });
 
-  it('rejects a Permit2 payload - the challenge asks for EIP-3009', async () => {
+  it('rejects a Permit2 payload for an EIP-3009 offer', async () => {
     const provider = makeProvider();
     const requirement = await provider.createRequirement(paymentContext());
     const permit2Payload = {
@@ -507,6 +513,40 @@ describe('verify - rejects before touching the network', () => {
     ]) {
       await expect(verifyOnce(garbage)).resolves.toMatchObject({ status: 'rejected' });
     }
+  });
+
+  // The SDK client writes decimal uint256 strings and a 32-byte hex nonce; any
+  // other spelling is refused before it can reach the replay key or the receipt
+  it.each([
+    ['a short nonce', { nonce: '0x1234' }],
+    ['an uppercase 0X nonce', { nonce: `0X${'11'.repeat(32)}` }],
+    ['a 33-byte nonce', { nonce: `0x${'11'.repeat(33)}` }],
+    ['a numeric nonce', { nonce: 12345 }],
+    ['a hex value', { value: '0x2710' }],
+    ['a padded value', { value: '010000' }],
+    ['a value with whitespace', { value: ' 10000 ' }],
+    ['a signed validBefore', { validBefore: '+99999999999' }],
+  ])('refuses an EIP-3009 authorization with %s', async (_label, change) => {
+    const provider = makeProvider();
+    const requirement = await provider.createRequirement(paymentContext());
+    const proof = await createPaymentProof({
+      buyerPrivateKey: BUYER_PRIVATE_KEY,
+      accepts: requirement.challenge.accepts[0] as Record<string, unknown>,
+    });
+    const decoded = JSON.parse(Buffer.from(proof, 'base64').toString('utf8'));
+    decoded.payload.authorization = { ...decoded.payload.authorization, ...change };
+
+    await expect(
+      provider.verify({
+        requestId: 'req-1',
+        resource: RESOURCE,
+        requirement,
+        submission: {
+          method: 'x402',
+          payload: Buffer.from(JSON.stringify(decoded)).toString('base64'),
+        },
+      }),
+    ).resolves.toMatchObject({ status: 'rejected', rejectionReason: 'invalid_payload' });
   });
 });
 
@@ -609,6 +649,26 @@ describe('createX402PaymentProvider - Anvil dev-key guards', () => {
       }),
     ).not.toThrow();
   });
+});
+
+describe('createX402PaymentProvider - address checks', () => {
+  // Config load checks the shape only; the provider also checks the EIP-55
+  // checksum, and a message never repeats the value, which could be a key
+  it.each(['payTo', 'asset'] as const)(
+    'refuses a %s with a bad checksum without echoing it',
+    (field) => {
+      const badChecksum = '0x111111111111111111111111111111111111ABcd';
+      let thrown: unknown;
+      try {
+        makeProvider({ [field]: badChecksum });
+      } catch (err) {
+        thrown = err;
+      }
+      expect(isCommerceError(thrown) && thrown.code).toBe('CONFIG_INVALID');
+      expect((thrown as Error).message).toContain(`"${field}" is not a valid EVM address`);
+      expect((thrown as Error).message).not.toContain(badChecksum);
+    },
+  );
 });
 
 describe('createX402PaymentProvider - deployment guardrails', () => {

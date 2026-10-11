@@ -60,7 +60,7 @@ function signOptions(overrides: Record<string, unknown> = {}) {
     currency: 'USDC',
     paymentMethod: 'x402',
     destination: '0xMERCHANT',
-    network: 'eip155:84532',
+    network: 'eip155:31337',
     asset: '0xASSET',
     now: NOW,
     ...overrides,
@@ -76,7 +76,7 @@ function requirement(): PaymentRequirement {
     amount: '0.01',
     currency: 'USDC',
     destination: '0xMERCHANT',
-    network: 'eip155:84532',
+    network: 'eip155:31337',
     asset: '0xASSET',
     challenge: { provider: 'x402', version: '2', accepts: [] },
   };

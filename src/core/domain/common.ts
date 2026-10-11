@@ -67,6 +67,17 @@ export interface AdapterHealth {
   readonly detail?: string;
   readonly checkedAt: IsoTimestamp;
   readonly durationMs?: number;
+  /**
+   * Results per checked part, such as each x402 offer. Names and statuses
+   * may be published; exclude diagnostic detail.
+   */
+  readonly components?: readonly AdapterHealthComponent[];
+}
+
+/** One part of an {@link AdapterHealth} result */
+export interface AdapterHealthComponent {
+  readonly name: string;
+  readonly status: 'pass' | 'warn' | 'fail';
 }
 
 /** Describes an adapter's supported surface for diagnostics */

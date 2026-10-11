@@ -43,6 +43,6 @@ export X402_FACILITATOR_PRIVATE_KEY="${X402_FACILITATOR_PRIVATE_KEY:-${v[5]}}"
 
 echo "[gateway] asset            ${X402_ASSET}"
 echo "[gateway] settlement payTo ${MERCHANT_WALLET}"
-echo "[gateway] network          ${X402_NETWORK:-eip155:84532} via ${X402_RPC_URL:-unset}"
+echo "[gateway] network          ${X402_NETWORK:-eip155:31337} via ${X402_RPC_URL:-unset}"
 
 exec "$@"

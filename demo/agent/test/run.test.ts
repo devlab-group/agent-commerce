@@ -26,7 +26,7 @@ const PAID_TOOL: Tool = {
 
 function makeManifest(overrides: Partial<LocalChainManifest> = {}): LocalChainManifest {
   return {
-    chainId: 84532,
+    chainId: 31337,
     rpcUrl: 'http://127.0.0.1:8545',
     asset: '0x5fbdb2315678afecb367f032d93f642f64180aa3',
     assetName: 'MockUSDC',
@@ -84,7 +84,7 @@ const PAYMENT_REQUIRED_ENVELOPE = {
       {
         scheme: 'exact',
         // Pinned by the buyer before signing: the EIP-712 chain id comes from it
-        network: 'eip155:84532',
+        network: 'eip155:31337',
         payTo: '0x70997970C51812dc3A010C7d01b50e0d17dc79C8',
         asset: '0x5fbdb2315678afecb367f032d93f642f64180aa3',
         amount: '10000',
@@ -435,7 +435,7 @@ describe('the buyer checks the 402 challenge before signing', () => {
     merchant: '0x70997970C51812dc3A010C7d01b50e0d17dc79C8',
     asset: '0x5FbDB2315678afecb367f032d93F642f64180aa3',
     maxValue: MAX_DEMO_PAYMENT_UNITS,
-    network: 'eip155:84532',
+    network: 'eip155:31337',
   };
   const good = {
     payTo: expected.merchant,

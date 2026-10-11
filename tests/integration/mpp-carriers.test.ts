@@ -25,6 +25,8 @@ import { createMcpAdapter } from '../../src/protocols/mcp';
 import { createSqliteReceiptStore } from '../../src/storage/receipts';
 import { createFakeStore } from '../unit/gateway/helpers';
 
+const SETTLED_TX = `0x${'ab'.repeat(32)}`;
+
 process.env['NODE_ENV'] = 'test';
 
 const facilitator = vi.hoisted(() => ({ verify: vi.fn(), settle: vi.fn() }));
@@ -54,7 +56,7 @@ beforeEach(() => {
   facilitator.verify.mockReset().mockResolvedValue({ isValid: true });
   facilitator.settle
     .mockReset()
-    .mockResolvedValue({ success: true, transaction: '0xabc', network: 'eip155:84532' });
+    .mockResolvedValue({ success: true, transaction: SETTLED_TX, network: 'eip155:31337' });
 });
 
 afterEach(async () => {
@@ -106,6 +108,7 @@ async function startGateway(
     store,
     paymentProviders: [
       createMppPaymentProvider({
+        network: 'eip155:31337',
         recipient,
         asset: ASSET,
         assetName: AUTHORIZATION.name,
@@ -273,10 +276,10 @@ describe('MPP over HTTP', () => {
     // Check the EVM receipt's challenge and chain identifiers
     expect(receipt).toMatchObject({
       method: 'evm',
-      reference: '0xabc',
+      reference: SETTLED_TX,
       status: 'success',
       challengeId: Challenge.deserialize(String(challenged.headers['www-authenticate'])).id,
-      chainId: 84532,
+      chainId: 31337,
     });
     expect(paid.headers['cache-control']).toBe('private');
   });
@@ -304,8 +307,8 @@ describe('MPP over HTTP', () => {
     expect(receipt?.payment).toMatchObject({
       provider: 'mpp',
       status: 'settled',
-      externalReference: '0xabc',
-      network: 'eip155:84532',
+      externalReference: SETTLED_TX,
+      network: 'eip155:31337',
     });
     expect(facilitator.settle).toHaveBeenCalledTimes(1);
     await store.close();
@@ -371,13 +374,13 @@ describe('MPP over HTTP', () => {
         return { status: 200, body: REPORT, headers: {}, durationMs: 1 };
       },
     };
-    const gw = await startGateway(createFakeStore(), counting);
+    const gw = await startGateway(createFakeStore(), counting, { paymentFlow: 'authorization' });
     const first = (await invokeHttp(gw)).headers['www-authenticate'];
     facilitator.settle.mockResolvedValueOnce({
       success: false,
       errorReason: 'insufficient_funds',
       transaction: '',
-      network: 'eip155:84532',
+      network: 'eip155:31337',
     });
 
     const refused = await invokeHttp(gw, { authorization: await credentialFor(first) });
@@ -402,7 +405,7 @@ describe('MPP over HTTP', () => {
   it('does not settle or reuse a credential after backend failure', async () => {
     const store = createSqliteReceiptStore({ path: ':memory:' });
     await store.init();
-    const gw = await startGateway(store, failingBackend);
+    const gw = await startGateway(store, failingBackend, { paymentFlow: 'authorization' });
     const credential = await credentialFor((await invokeHttp(gw)).headers['www-authenticate']);
 
     const failed = await invokeHttp(gw, { authorization: credential });
@@ -443,7 +446,7 @@ describe('MPP over HTTP', () => {
     expect(res.headers['payment-receipt']).toBeUndefined();
     expect(res.headers['payment-response']).toBeDefined();
     const receipt = Receipt.deserialize(String(res.json().details.payment.receipt));
-    expect(receipt).toMatchObject({ method: 'evm', reference: '0xabc', status: 'success' });
+    expect(receipt).toMatchObject({ method: 'evm', reference: SETTLED_TX, status: 'success' });
   });
 
   it('binds the digest of the request body bytes into the challenge', async () => {

@@ -1,9 +1,8 @@
 # ---------------------------------------------------------------------------
-# Deterministic local EVM: Anvil on chain id 84532, matching the demo
-# network `eip155:84532`.
+# Deterministic local EVM: Anvil on chain id 31337, its default, matching the
+# demo network `eip155:31337`.
 #
-# This is a private, disposable chain. It is NOT Base Sepolia and it holds no
-# real value. Its accounts are Anvil's well-known development keys:
+# This is a private, disposable chain that holds no real value. Its accounts are Anvil's well-known development keys:
 # LOCAL DEVELOPMENT ONLY - DO NOT FUND.
 # ---------------------------------------------------------------------------
 # Pinned by digest, not `:latest`: a mutable image would make the deterministic
@@ -14,11 +13,7 @@ FROM ghcr.io/foundry-rs/foundry@sha256:8347b728d5d393dac1c018691b36f506d23b9dcd7
 
 EXPOSE 8545
 
-# `--network ethereum` is required: anvil otherwise infers the `optimism`
-# network family from Base Sepolia's chain id 84532, and this image is built
-# without that family, so anvil refuses to start. Plain EVM execution is
-# enough; what matters is that the chain reports 84532, so the EIP-712 domain
-# MockUSDC builds from `block.chainid` matches the chain id x402 derives from
-# `eip155:84532`.
+# The chain id must be 31337: MockUSDC builds its EIP-712 domain from
+# `block.chainid`, and x402 derives the domain's chain id from `eip155:31337`.
 ENTRYPOINT ["anvil"]
-CMD ["--host", "0.0.0.0", "--port", "8545", "--chain-id", "84532", "--network", "ethereum", "--accounts", "10", "--balance", "10000", "--silent"]
+CMD ["--host", "0.0.0.0", "--port", "8545", "--chain-id", "31337", "--accounts", "10", "--balance", "10000", "--silent"]

@@ -67,12 +67,13 @@ Each `backend.headers` entry must be a legal HTTP header name and value. Config
 load refuses one that fetch would reject, such as a value with an embedded
 newline, and the error names the header but never prints its value. A
 configured header wins over the same header that ACP forwards from the agent;
-see [Headers sent to the merchant](protocols.md#headers-sent-to-the-merchant).
+see [Headers sent to the merchant](protocols/acp.md#headers-sent-to-the-merchant).
 
 `payments` orders the rails a paid resource accepts. The gateway selects the
 first enabled rail in that order; it does not let each request choose a rail or
 fall back after a failure. Config load rejects a paid resource with no enabled
-listed rail.
+listed rail. A resource can replace the x402 rail's offers with
+[its own](#a-resources-own-offers).
 
 `url` supports `{param}` templating from validated input; values are
 URL-encoded. Remaining input becomes query string for `GET`/`DELETE` and a JSON
@@ -186,7 +187,7 @@ is refused.
 
 Each operation sends a fixed canonical envelope built from `path`, carrying
 `{ checkout_session_id }`, and `body`, carrying the ACP document; the
-[operation table](protocols.md#checkout-operations) shows which of the two each
+[operation table](protocols/acp.md#checkout-operations) shows which of the two each
 one sends. A cancel carries `body` only when the caller sends one, such as an
 `intent_trace`. Bind it explicitly:
 
@@ -231,19 +232,19 @@ Set `merchantIdempotent: true` only if the merchant stores and replays results
 under the `Idempotency-Key` the gateway derives for each checkout POST. With
 this setting, the gateway releases a claim after a 5xx so the same key can be
 retried, as ACP requires. Without merchant deduplication, that retry could
-repeat the side effect. See [ACP idempotency](protocols.md#idempotency).
+repeat the side effect. See [ACP idempotency](protocols/acp.md#idempotency).
 
 The gateway forwards an `Idempotency-Key` header to the merchant on every
 side-effecting checkout call, derived so that it is stable across retries, a
-restart and a token rotation. See [protocols.md](protocols.md#idempotency) for
+restart and a token rotation. See [ACP](protocols/acp.md#idempotency) for
 what the merchant should do with it.
 
-See [protocols.md](protocols.md#acp) for the wire contract.
+See [ACP](protocols/acp.md) for the wire contract.
 
 ## `authorization.ap2`
 
 Experimental, off by default, and absent from a config that predates it. Full
-reference, including the checkout profile and the trust model: [ap2.md](ap2.md).
+reference, including the checkout profile and the trust model: [AP2](protocols/ap2.md).
 
 ```yaml
 authorization:
@@ -310,13 +311,15 @@ idempotency store; and a `clockSkewSeconds` above the ceiling.
 payments:
   x402:
     enabled: true
-    network: ${X402_NETWORK} # CAIP-2; eip155:84532 locally
+    network: ${X402_NETWORK} # CAIP-2; eip155:31337 locally
     rpcUrl: ${X402_RPC_URL}
-    asset: ${X402_ASSET} # ERC-20 with EIP-3009
+    payTo: ${MERCHANT_WALLET} # merchant-controlled. NEVER the gateway's.
+    # Optional on a built-in network, which settles in its USDC. Set all four
+    # for another token, such as the local MockUSDC.
+    asset: ${X402_ASSET} # ERC-20 with EIP-3009, unless the option uses Permit2
     assetName: ${X402_ASSET_NAME} # EIP-712 domain name
     assetVersion: ${X402_ASSET_VERSION}
     assetDecimals: ${X402_ASSET_DECIMALS}
-    payTo: ${MERCHANT_WALLET} # merchant-controlled. NEVER the gateway's.
     maxTimeoutSeconds: 120
     paymentFlow: authorization # default; or upfront
     facilitator:
@@ -325,23 +328,200 @@ payments:
 ```
 
 `paymentFlow` sets the order of a payment and the backend call, with the same
-values under `payments.x402` and `payments.mpp`. The default, `authorization`,
-settles only after the backend succeeds. If the backend fails, no payment
-settles. `upfront` settles first; a later backend failure leaves the payment
-settled. A resource with fixed pricing that lists `x402` or `mpp` can set its
-own `paymentFlow`, which applies to whichever rail serves it. Configuration
-rejects the field on other resources. See [protocols.md](protocols.md#x402) for
+values under `payments.x402` and `payments.mpp`. `authorization`, the x402
+default, settles only after the backend succeeds. If the backend fails, no
+payment settles. `upfront`, the MPP default, settles first; a later backend
+failure leaves the payment settled. MPP defaults to `upfront` because its
+`charge` intent forbids running the backend before the payment is verified.
+A resource with fixed pricing that lists `x402` or `mpp` can set its own
+`paymentFlow`, which applies to whichever rail serves it. Configuration
+rejects the field on other resources. See [x402](protocols/x402.md) for
 the flow details.
 
 Startup rejects a `payTo` that is not a plausible address or is the zero
 address, and the effective destination is printed in a safe, visible form so a
-presenter can confirm where money goes.
+presenter can confirm where money goes. `validate` checks an EVM address's
+form (`0x` and 40 hex characters); gateway startup also checks the EIP-55
+checksum of mixed-case addresses.
+
+### The settlement asset
+
+Omit the four asset fields to use the [built-in network's](#network-and-facilitator)
+USDC address, EIP-712 domain and decimals. Resources using this default must
+be priced in `USDC` or `USD`. `USD` treats USDC at face value, without an
+exchange-rate lookup, and the payment records `USDC` (see
+[payment-flow.md](payment-flow.md#amounts)).
+
+Public built-in networks, testnet or mainnet, settle only in their USDC. On the
+local chain or a declared EVM network, set `asset`, `assetName`,
+`assetVersion` and `assetDecimals` together; no fields are inherited from
+USDC. A [Permit2](#permit2) token needs only `asset` and `assetDecimals`.
+Overrides for the default token must match its metadata. Naming the default
+token's address is the same as omitting it, so those resources are priced in
+`USDC` or `USD` too. Payments in another token use the resource's label.
+
+### Permit2
+
+For an ERC-20 without `transferWithAuthorization`, set
+`assetTransferMethod: permit2` to use
+[Permit2](https://github.com/Uniswap/permit2) and the x402 exact Permit2 proxy.
+This EVM-only option defaults to `eip3009`. Permit2 uses its own EIP-712
+domain, so `assetName` and `assetVersion` are unnecessary.
+
+```yaml
+payments:
+  x402:
+    network: eip155:31337
+    payTo: ${MERCHANT_WALLET}
+    asset: ${TOKEN_ADDRESS}
+    assetDecimals: 18
+    assetTransferMethod: permit2
+```
+
+Before paying, the buyer approves the Permit2 contract,
+`0x000000000022D473030F116dDEE9F6B43aC78BA3`, to spend the token. The gateway
+sends no approval and accepts no gas-sponsoring extension. Without that
+allowance it answers [412 Precondition Failed](protocols/http.md).
+
+Other tokens require the local chain or a declared network, as above.
+Health checks require code at Permit2 and the proxy,
+`0x402085c248EeA27D92E8b30b2C58ed07f9E20001`. For a remote facilitator they
+check only that it advertises `exact` on the network, not that it settles
+Permit2.
+
+### Solana
+
+Solana options settle the network's USDC through a remote facilitator that
+pays transaction fees. They require the optional peers `@x402/svm` and
+`@solana/kit`, loaded only for Solana options.
+
+```yaml
+payments:
+  x402:
+    network: solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1 # built-in Solana Devnet
+    rpcUrl: ${SOLANA_DEVNET_RPC_URL}
+    payTo: ${SOLANA_MERCHANT_WALLET} # no asset fields: the network's USDC
+    facilitator:
+      mode: remote
+      url: ${X402_FACILITATOR_URL}
+```
+
+- `payTo` is the merchant's wallet; its USDC token account must already exist.
+  The SDK client does not create it, and health fails without it.
+- Each offer names the facilitator's fee payer, read from its `/supported`
+  response. Without one, readiness fails and no challenge is built.
+- Health checks that the RPC's genesis hash matches the network id, that the
+  mint has the configured decimals, and that the facilitator lists the network
+  with a fee payer.
+- A transaction expires with its blockhash, about 60 to 90 seconds after the
+  buyer signs. The default `authorization` flow settles after the backend, so
+  use `upfront` for a handler that can take longer.
+
+### NEAR
+
+NEAR options settle the network's NEP-141 USDC through a remote facilitator.
+The buyer signs a NEP-366 delegate action containing one `ft_transfer`; the
+facilitator's relayer submits it and pays gas. The buyer needs no NEAR for
+payment fees, but an implicit account must first receive NEAR to exist.
+The optional peer `@x402/near` loads only for NEAR options.
+
+```yaml
+payments:
+  x402:
+    network: near:testnet # built-in NEAR Testnet
+    rpcUrl: ${NEAR_TESTNET_RPC_URL}
+    payTo: ${NEAR_MERCHANT_ACCOUNT} # no asset fields: the network's USDC
+    facilitator:
+      mode: remote
+      url: ${X402_FACILITATOR_URL}
+```
+
+- `payTo` and `asset` are NEAR account IDs: named (`merchant.near`),
+  subaccounts and implicit 64-hex accounts. The suffix does not select the
+  network.
+- `payTo` must be registered with the token for storage (NEP-145
+  `storage_deposit`), or every transfer to it fails. Health fails until it is.
+- The buyer signs with a full-access key, `ed25519` or `secp256k1`:
+  `ft_transfer` needs one attached yoctoNEAR, which a function-call key cannot
+  attach.
+- Health checks that the RPC's `status` names the network's chain, that the
+  token has code and the configured decimals, and that the facilitator lists
+  the network.
+- The signed delegate names no chain. The offer's network and the RPC the
+  facilitator uses keep a proof on one network; use separate buyer keys for
+  mainnet and testnet.
+- The gateway reserves the access key's nonce. The SDK reference client
+  retries with the same nonce until a transaction uses it. A rejected attempt,
+  from a backend failure or a settlement refused before submission, settled
+  nothing, so the gateway permits that retry. A delegate that expires during a
+  slow backend call is refused at settlement, and the client signs again; use
+  `upfront` for handlers that can outlast `maxTimeoutSeconds`.
+
+### Several options
+
+Use `options` to offer x402 resources on several networks or in several
+tokens; the buyer pays one offer. Entries use the fields above, and a one-entry
+list resolves like the direct form. Config load rejects mixed forms, empty
+lists, an object in place of the list, duplicate (network, asset, `payTo`)
+combinations, and mixed deployment modes (local, testnet, mainnet).
+
+```yaml
+payments:
+  x402:
+    networks:
+      eip155:8453: { rpcUrl: ${BASE_RPC_URL} }
+      eip155:137: { rpcUrl: ${POLYGON_RPC_URL} }
+    options:
+      - network: eip155:8453
+        payTo: ${MERCHANT_WALLET}
+      - network: eip155:137
+        payTo: ${MERCHANT_WALLET}
+```
+
+Each network needs a distinct RPC endpoint for health checks. Set
+`payments.x402.networks.<id>.rpcUrl`, or use the shared `payments.x402.rpcUrl`
+as a fallback. RPC URLs must use `http://` or `https://`. Equivalent URLs,
+such as those with and without a trailing slash, count as one endpoint.
+All offers use the facilitator under `payments.x402`; it must advertise their
+networks and scheme.
+
+When options use default assets, price the resource in `USD` or their shared
+token symbol. Decimal precision cannot exceed the least precise option.
+
+The proof's `accepted` echo selects an offer before verification; zero or
+multiple matches are rejected. AP2 binds to the selected destination, network
+and asset, preventing a mandate for one offer from authorizing another.
+
+### A resource's own offers
+
+A paid resource's `x402.accepts` replaces the rail's offers for that resource,
+matching the x402 SDK's route-level `accepts`. Rail options remain required
+and serve resources without overrides. Entries use the `options` fields;
+each charges the resource's `pricing`.
+
+```yaml
+resources:
+  market_report:
+    # backend, pricing and expose as above
+    payments: [x402]
+    x402:
+      accepts:
+        - network: eip155:137
+          payTo: ${POLYGON_MERCHANT_WALLET}
+```
+
+Entries share the rail's `networks`, RPC endpoints, facilitator, mainnet
+acknowledgements and deployment mode. Price validation uses the resource's
+own tokens and decimals. Config load rejects empty lists, repeated entries,
+and `x402.accepts` on free resources, without `x402` in `payments`, or without
+`payments.x402`.
 
 ### `payments.mpp`
 
-MPP accepts the `USDC` currency label on `eip155:84532`, shared by Base Sepolia
-and the local development chain, and on Base mainnet `eip155:8453`. It defaults
-to `eip155:84532`; `asset` selects the token contract. The gateway builds its
+MPP accepts the `USDC` currency label on the local chain `eip155:31337`, Base
+Sepolia `eip155:84532` and Base mainnet `eip155:8453`. It defaults to Base
+Sepolia, so a local config names `eip155:31337`; `asset` selects the token
+contract. The gateway builds its
 settlement provider from this block, so `payments.x402` need not be enabled as a
 resource rail.
 
@@ -349,7 +529,7 @@ resource rail.
 payments:
   mpp:
     enabled: true
-    network: eip155:84532 # optional; eip155:8453 is Base mainnet
+    network: eip155:31337 # optional; defaults to eip155:84532 (Base Sepolia)
     rpcUrl: ${MPP_RPC_URL}
     asset: ${MPP_ASSET} # token contract on the selected RPC
     assetName: USDC # EIP-712 domain name
@@ -358,7 +538,7 @@ payments:
     realm: api.example.com # the challenge realm, single line
     challengeSecret: ${MPP_CHALLENGE_SECRET} # minimum length 32
     challengeTtlSeconds: 300 # optional
-    paymentFlow: authorization # default; or upfront
+    paymentFlow: upfront # default; or authorization
     facilitator:
       mode: remote
       url: ${MPP_FACILITATOR_URL}
@@ -380,23 +560,58 @@ development address, and either a facilitator credential or
 
 ## Network and facilitator
 
-`network` is a CAIP-2 identifier and must be one this build knows:
+`network` is a CAIP-2 identifier, either built in or declared:
 
-| `network`      |              | Notes                                      |
-| -------------- | ------------ | ------------------------------------------ |
-| `eip155:84532` | Base Sepolia | the chain id the local dev chain also uses |
-| `eip155:8453`  | Base         | mainnet; real funds                        |
+| `network`                                 | Network           | Kind    | Notes                                      |
+| ----------------------------------------- | ----------------- | ------- | ------------------------------------------ |
+| `eip155:31337`                            | Local Anvil       | local   | Anvil's default chain id; no default asset |
+| `eip155:84532`                            | Base Sepolia      | testnet |                                            |
+| `eip155:8453`                             | Base              | mainnet |                                            |
+| `eip155:1`                                | Ethereum          | mainnet |                                            |
+| `eip155:137`                              | Polygon           | mainnet |                                            |
+| `eip155:42161`                            | Arbitrum One      | mainnet |                                            |
+| `eip155:421614`                           | Arbitrum Sepolia  | testnet |                                            |
+| `eip155:43114`                            | Avalanche C-Chain | mainnet |                                            |
+| `solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp` | Solana            | mainnet | [remote facilitator only](#solana)         |
+| `solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1` | Solana Devnet     | testnet | [remote facilitator only](#solana)         |
+| `near:mainnet`                            | NEAR              | mainnet | [remote facilitator only](#near)           |
+| `near:testnet`                            | NEAR Testnet      | testnet | [remote facilitator only](#near)           |
 
-Anything else is `CONFIG_INVALID` at load. The chain id is signed into the
-buyer's EIP-712 domain, so an unrecognized network is never guessed at.
+Every built-in EVM network is supported: the signing code is the same on
+each, and on 2026-10-10 each network's USDC signing domain matched the chain
+and Permit2 and its x402 proxy were deployed. Settlement has been demonstrated
+on Base Sepolia and Base, through both EIP-3009 and Permit2, and on Solana
+devnet and mainnet. NEAR has settled on testnet and mainnet through the SDK
+facilitator run for the test. Every network also needs a facilitator that
+lists it; health fails otherwise.
+
+Declare another EVM network with its `kind` to select the mainnet guardrails.
+Custom networks have no default asset: set all four asset fields. Support for
+them is partial, since the gateway cannot check a chain and token you supply
+in advance. Built-in networks cannot be redeclared; their entry may set
+`rpcUrl` only.
+
+```yaml
+payments:
+  x402:
+    networks:
+      eip155:10: { kind: mainnet, displayName: OP Mainnet }
+```
+
+Unknown IDs raise `CONFIG_INVALID` at config load. The chain ID is part of
+the buyer's signed EIP-712 domain and must resolve explicitly.
 
 `facilitator` decides who verifies and broadcasts:
 
 ```yaml
 facilitator:
-  mode: local # in-process signer; refused on mainnet
+  mode: local # in-process signer; eip155:31337 only
   signerPrivateKey: ${X402_FACILITATOR_PRIVATE_KEY}
 ```
+
+Local mode requires Anvil on `eip155:31337`. Other networks require remote mode.
+A config that still pairs the local facilitator with `eip155:84532`, the id the
+local chain used before, is refused with a pointer to `eip155:31337`.
 
 ```yaml
 facilitator:
@@ -409,16 +624,19 @@ facilitator:
 Omitting `auth` is equivalent to `type: none`: the gateway sends no credential.
 Use it only with a facilitator that accepts anonymous requests. Supported types
 are `none`, `bearer` (a static token) and `cdp` (a fresh JWT per request).
-The `cdp` type requires the optional `@coinbase/x402` peer.
+The `cdp` type requires the optional `@coinbase/x402` peer. It signs each
+request for `https://api.cdp.coinbase.com/platform/v2/x402`, so config load
+refuses `cdp` with any other `url`.
 
-Deployment mode - `local`, `testnet` or `mainnet` - comes from the network and
-facilitator together. Chain id 84532 identifies both the local chain and public
-Base Sepolia. `doctor`, `health()` and `/.well-known/agent-commerce` report the
-resolved mode.
+Deployment mode - `local`, `testnet` or `mainnet` - comes from the network:
+`eip155:31337` is local, and every other network is the testnet or mainnet it
+names. `doctor`, `health()` and `/.well-known/agent-commerce` report it. In local
+mode `health()` also requires the RPC to answer Anvil's `anvil_nodeInfo`,
+because an RPC can report any chain id.
 
 ## Mainnet guardrails
 
-`eip155:8453` moves real money, so a config naming it must also say so. All of
+A mainnet moves real money, so a config naming one must also say so. All of
 these are refused at config load, before the gateway starts:
 
 | Refused                                                   | Because                                                    |
@@ -428,7 +646,7 @@ these are refused at config load, before the gateway starts:
 | `facilitator.auth.type: none` without explicit acceptance | an unauthenticated counterparty must be acknowledged       |
 | a non-HTTPS `facilitator.url`                             | authorizations and settlement results would be unencrypted |
 | a well-known Anvil `payTo` or MPP `recipient`             | its private key is public                                  |
-| an `asset` other than canonical USDC on Base              | it could settle an unintended token                        |
+| an `asset` other than USDC on a built-in mainnet          | it could settle an unintended token                        |
 | the wrong USDC `assetName` or `assetVersion`              | the buyer signs that EIP-712 domain                        |
 
 The same rules apply to any non-local deployment where they make sense: plain
@@ -443,17 +661,23 @@ reports the parsed configuration and, when reachable, the live provider health.
 
 Base Sepolia USDC reports `"USDC"`; Base mainnet reports `"USD Coin"`. The buyer
 signs this name in the EIP-712 domain, so a mismatch would reject every payment
-after signing. The network registry (`src/payments/x402/networks.ts`) pins both
-values, and config validation rejects a mainnet mismatch before startup.
+after signing. The network registry (`src/payments/x402/networks.ts`) pins the
+domain of each built-in network's USDC, and config validation rejects a
+mismatch before startup.
 
 ### Running against a public network
 
 Working configurations live in `examples/base-sepolia/` and
 `examples/base-mainnet/` (plus `examples/base-mainnet-payai/`, which uses an
-unauthenticated facilitator). `npm run test:testnet` and `npm run test:mainnet`
-drive the whole flow against the real chains and read balances and the transaction
-receipt back off them. The testnet suite spends test USDC and the mainnet suite
-real USDC; both skip themselves without credentials and never run in CI.
+unauthenticated facilitator). Additional examples cover Arbitrum Sepolia
+(`examples/arbitrum-sepolia/`, not yet run), Solana devnet
+(`examples/solana-devnet/`) and NEAR testnet (`examples/near-testnet/`).
+`examples/multi-network-mainnet/` combines Base and Solana, which have
+settled, with Polygon and Arbitrum One, which have not run.
+`npm run test:testnet` and `npm run test:mainnet` drive the whole flow against
+the real chains and read each settlement back from them. The testnet
+suite spends test USDC and the mainnet suite real USDC; both skip themselves
+without credentials and never run in CI. See [smoke tests](smoke-tests.md).
 
 ## Unsupported JSON Schema keywords have a cost
 
@@ -483,7 +707,8 @@ protocol mounts that overlap · a mount that claims a route the gateway already
 serves, including the A2A Agent Card and ACP discovery paths · an ACP checkout
 mapping that is incomplete, names a missing or non-`acp` resource, reuses one
 resource for two operations, or maps a paid one · an ACP idempotency retention
-below 24 hours · an invalid or zero `payTo`/`asset`/`recipient` · an MPP
+below 24 hours · an invalid or zero `payTo`/`asset`/`recipient` · an
+`x402.accepts` list that is empty or on a resource that cannot use it · an MPP
 `challengeSecret` with length below 32 or a multi-line `realm`.
 
 It exits non-zero on any of them.

@@ -1,0 +1,76 @@
+# ---------------------------------------------------------------------------
+# Example: arbitrum-sepolia
+#
+# The base-sepolia example on another EVM testnet. Leaving out the asset
+# fields settles in the network's USDC, with its EIP-712 domain and decimals
+# taken from the built-in profile.
+#
+# The gateway holds no signing key: the facilitator broadcasts and pays the gas.
+#
+#   MERCHANT_WALLET=0x... \
+#   npm run agent-commerce -- validate --config examples/arbitrum-sepolia/config.yaml
+# ---------------------------------------------------------------------------
+
+version: 1
+
+merchant:
+  id: arbitrum-sepolia-example
+  name: Arbitrum Sepolia Example
+  publicBaseUrl: ${GATEWAY_PUBLIC_BASE_URL:-http://localhost:8080}
+
+server:
+  port: ${GATEWAY_PORT:-8080}
+  host: 0.0.0.0
+  # Operator routes (receipts, events) 404 without this. Uncomment and set it
+  # before exposing the gateway anywhere.
+  # adminToken: ${ADMIN_TOKEN}
+
+storage:
+  receipts:
+    driver: sqlite
+    path: ${RECEIPT_STORE_PATH:-./data/receipts.sqlite}
+
+protocols:
+  http:
+    enabled: true
+  mcp:
+    enabled: true
+    mountPath: /mcp
+
+resources:
+  premium_report:
+    name: Premium Report
+    description: One paid endpoint, settled in USDC on Arbitrum Sepolia.
+    input:
+      type: object
+      properties: {}
+      additionalProperties: false
+    backend:
+      type: http
+      method: GET
+      url: ${MERCHANT_API_BASE_URL:-http://localhost:3000}/api/report
+      timeoutMs: 10000
+    pricing:
+      type: fixed
+      amount: "0.01"
+      currency: USDC
+    expose: [http, mcp]
+    payments: [x402]
+
+payments:
+  x402:
+    enabled: true
+    network: eip155:421614
+    # No asset fields: Circle's USDC on Arbitrum Sepolia, from the built-in profile
+    payTo: ${MERCHANT_WALLET}
+    networks:
+      # Only for health checks; the facilitator does the chain work
+      eip155:421614:
+        rpcUrl: ${X402_RPC_URL:-https://arbitrum-sepolia-rpc.publicnode.com}
+    maxTimeoutSeconds: 300
+    facilitator:
+      mode: remote
+      # Listed eip155:421614 in /supported on 2026-10-07; x402.org's did not
+      url: ${X402_FACILITATOR_URL:-https://facilitator.payai.network}
+      auth:
+        type: none

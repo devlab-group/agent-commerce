@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   isCommerceError,
@@ -22,6 +23,9 @@ function makeReservation(
     currency: overrides.currency ?? 'USDC',
     ...(overrides.payer !== undefined ? { payer: overrides.payer } : {}),
     ...(overrides.payee !== undefined ? { payee: overrides.payee } : {}),
+    ...(overrides.reclaimRejected !== undefined
+      ? { reclaimRejected: overrides.reclaimRejected }
+      : {}),
   };
 }
 
@@ -169,6 +173,189 @@ describe('reservePaymentAttempt', () => {
 
     const listed = await store.listPaymentAttempts();
     expect(listed.map((a) => a.replayKey)).toEqual(['c', 'b', 'a']);
+  });
+});
+
+// Rails that permit reusing an authorization can reclaim an attempt that was
+// rejected, after a backend failure or a refused settlement: it settled nothing
+describe('reclaiming a rejected attempt', () => {
+  const retry = { reclaimRejected: true } as const;
+  async function rejected(
+    target: ReceiptStore,
+    replayKey: string,
+    rejectionReason = 'backend_failed',
+  ): Promise<void> {
+    await target.reservePaymentAttempt(makeReservation({ replayKey }));
+    await target.updatePaymentAttempt({ replayKey, status: 'rejected', rejectionReason });
+  }
+
+  let store: ReceiptStore;
+
+  beforeEach(async () => {
+    store = createSqliteReceiptStore({
+      path: ':memory:',
+      clock: createFakeClock(),
+      ids: createFakeIds(),
+    });
+    await store.init();
+  });
+
+  afterEach(async () => {
+    await store.close();
+  });
+
+  it.each([
+    'backend_failed',
+    'invalid_exact_near_payload_delegate_action_expired',
+    'insufficient_funds',
+  ])('turns an attempt rejected with %s into the retry reservation', async (reason) => {
+    await rejected(store, 'retry', reason);
+
+    const reclaimed = await store.reservePaymentAttempt(
+      makeReservation({ replayKey: 'retry', requestId: 'req_2', payer: '0xb', ...retry }),
+    );
+
+    expect(reclaimed).toMatchObject({
+      id: 'attempt_2',
+      requestId: 'req_2',
+      replayKey: 'retry',
+      status: 'reserved',
+      payer: '0xb',
+    });
+    expect(reclaimed).not.toHaveProperty('rejectionReason');
+    expect(await store.listPaymentAttempts()).toEqual([reclaimed]);
+  });
+
+  it('refuses it to a reservation that does not ask, or to another provider', async () => {
+    await rejected(store, 'single-use');
+
+    for (const reservation of [
+      makeReservation({ replayKey: 'single-use', requestId: 'req_2' }),
+      makeReservation({ replayKey: 'single-use', requestId: 'req_2', provider: 'mpp', ...retry }),
+    ]) {
+      await expect(store.reservePaymentAttempt(reservation)).rejects.toMatchObject({
+        code: 'PAYMENT_REPLAYED',
+        details: { attemptStatus: 'rejected' },
+      });
+    }
+  });
+
+  it('still refuses an attempt that is not rejected', async () => {
+    const cases = [
+      { status: 'reserved' },
+      { status: 'verified' },
+      { status: 'settled' },
+      { status: 'settlement-uncertain' },
+      { status: 'failed' },
+      { status: 'settled', rejectionReason: 'backend_failed' },
+    ] as const;
+    for (const [index, update] of cases.entries()) {
+      const replayKey = `kept_${index}`;
+      await store.reservePaymentAttempt(makeReservation({ replayKey }));
+      if (update.status !== 'reserved') await store.updatePaymentAttempt({ replayKey, ...update });
+
+      await expect(
+        store.reservePaymentAttempt(makeReservation({ replayKey, requestId: 'req_2', ...retry })),
+        JSON.stringify(update),
+      ).rejects.toMatchObject({
+        code: 'PAYMENT_REPLAYED',
+        details: { attemptStatus: update.status },
+      });
+    }
+  });
+
+  // The reclaim overwrites the attempt's row, so the row it replaces is kept
+  it('keeps each attempt a reclaim replaces in payment_attempt_history', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'oac-history-'));
+    const path = join(dir, 'receipts.sqlite');
+    const file = createSqliteReceiptStore({ path, clock: createFakeClock(), ids: createFakeIds() });
+    try {
+      await rejected(file, 'twice', 'insufficient_funds');
+      await file.reservePaymentAttempt(
+        makeReservation({ replayKey: 'twice', requestId: 'req_2', ...retry }),
+      );
+      await file.updatePaymentAttempt({
+        replayKey: 'twice',
+        status: 'rejected',
+        rejectionReason: 'backend_failed',
+        externalReference: '0xfailed',
+      });
+      await file.reservePaymentAttempt(
+        makeReservation({ replayKey: 'twice', requestId: 'req_3', ...retry }),
+      );
+      // A refused reclaim archives nothing
+      await rejected(file, 'other');
+      await expect(
+        file.reservePaymentAttempt(
+          makeReservation({ replayKey: 'other', requestId: 'req_4', provider: 'mpp', ...retry }),
+        ),
+      ).rejects.toMatchObject({ code: 'PAYMENT_REPLAYED' });
+
+      const db = new Database(path, { readonly: true });
+      const history = db
+        .prepare(
+          'SELECT request_id, replay_key, status, rejection_reason, external_reference, superseded_at FROM payment_attempt_history ORDER BY seq',
+        )
+        .all();
+      db.close();
+      expect(history).toEqual([
+        expect.objectContaining({
+          request_id: 'req_1',
+          replay_key: 'twice',
+          status: 'rejected',
+          rejection_reason: 'insufficient_funds',
+          external_reference: null,
+        }),
+        expect.objectContaining({
+          request_id: 'req_2',
+          replay_key: 'twice',
+          status: 'rejected',
+          rejection_reason: 'backend_failed',
+          external_reference: '0xfailed',
+        }),
+      ]);
+      expect(
+        history.every(
+          (row) => typeof (row as { superseded_at: unknown }).superseded_at === 'string',
+        ),
+      ).toBe(true);
+      expect((await file.listPaymentAttempts()).find((a) => a.replayKey === 'twice')).toMatchObject(
+        { requestId: 'req_3', status: 'reserved' },
+      );
+    } finally {
+      await file.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('lets one of two stores on the same file reclaim it', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'oac-reclaim-'));
+    const path = join(dir, 'receipts.sqlite');
+    const first = createSqliteReceiptStore({ path });
+    const second = createSqliteReceiptStore({ path });
+    try {
+      await rejected(first, 'contested');
+
+      const results = await Promise.allSettled([
+        first.reservePaymentAttempt(
+          makeReservation({ replayKey: 'contested', requestId: 'a', ...retry }),
+        ),
+        second.reservePaymentAttempt(
+          makeReservation({ replayKey: 'contested', requestId: 'b', ...retry }),
+        ),
+      ]);
+
+      expect(results.map((r) => r.status).sort()).toEqual(['fulfilled', 'rejected']);
+      const lost = results.find((r) => r.status === 'rejected') as PromiseRejectedResult;
+      expect(lost.reason).toMatchObject({
+        code: 'PAYMENT_REPLAYED',
+        details: { attemptStatus: 'reserved' },
+      });
+    } finally {
+      await first.close();
+      await second.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

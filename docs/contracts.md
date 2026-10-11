@@ -63,6 +63,9 @@ This table is for navigation, not enumeration.
    `true` has `settle` run after a successful backend call instead of before
    it; the `authorization` flow of x402 and MPP does. A backend failure then
    settles nothing. A rejected or unconfirmed settlement withholds the response.
+   `metadata.reuseRejectedAuthorization: true` lets the pipeline reserve a
+   rejected attempt's authorization again with `reclaimRejected`. x402 sets
+   it; MPP's single-use credentials cannot be reused.
 5. `EventSink.emit` and event persistence must not fail a commerce flow.
 6. `HttpBackendExecutor` is the only built-in outbound HTTP path to merchant
    backends and always applies a timeout. A custom `GatewayOptions.backend`
@@ -104,8 +107,16 @@ persistence must not fail the commerce flow.
   protocol names are defined by `ProtocolName` and `PROTOCOL_NAMES`.
 - `toCommerceError` no longer exposes an arbitrary `Error.message`. It keeps the
   original error as the non-serialized `cause`.
-- `PaymentAttempt.status` gained `settlement-uncertain`, recorded whenever
-  `settle()` throws, with or without a transaction hash.
+- `PaymentAttempt.status` gained `settlement-uncertain`, recorded when
+  `settle()` throws, with or without a transaction hash. A throw whose
+  `details.settlementNotSubmitted` is `true` records `rejected` instead and
+  answers `PAYMENT_PROVIDER_UNAVAILABLE`: the provider knows nothing was
+  submitted, so the authorization can be reserved again.
+- Optional `PaymentAttemptReservation.reclaimRejected` lets
+  `reservePaymentAttempt` reclaim an attempt the same provider rejected (see
+  [Receipt store](#receipt-store)). This permits x402 retries after a backend
+  failure or a refused settlement, which previously returned 402. A custom
+  `ReceiptStore` that ignores the field still refuses these retries.
 - `GATEWAY_BUSY` is a retryable 503 used for transient load shedding.
 - `ReceiptStore` gained `countReceipts` and `countUndeliveredReceipts`; list
   results are capped and cannot provide reliable totals.
@@ -141,8 +152,103 @@ persistence must not fail the commerce flow.
   forwarded name or value is `INPUT_INVALID` before pricing. ACP is the only
   adapter that sets the field. A custom `BackendExecutor` that ignores it
   forwards nothing.
+- `PaymentProvider.selectRequirement` optionally selects a proof's offer
+  before `verify`. It returns the selected destination, network, asset and
+  metadata while preserving `id` and the full `challenge`. Verification,
+  authorization, replay reservation and settlement use this requirement.
+  Providers without the hook keep their existing path.
+- Optional `AdapterHealth.components` lists `AdapterHealthComponent` results
+  with a `name` and `status`, such as one per x402 offer. Discovery may publish
+  these fields; they contain no detail. Omission preserves existing reporting.
+- `PaymentRequirement.destination` and `PaymentRequiredEnvelope.payment.destination`
+  are optional. Multi-offer x402 challenges omit destination, network and
+  asset; single-offer and selected x402 requirements include all three. The
+  envelope fields are deprecated: read individual offers in `accepts`. With
+  `strictNullChecks`, callers passing either `destination` as a required
+  `string` must now handle `undefined`.
 
 ### Protocols and gateway
+
+- The x402 provider accepts `X402MultiOfferProviderOptions` with one shared
+  facilitator. Multi-offer challenges use the offer-independent URL
+  `resource://agent-commerce/resources/<id>`. `GatewayConfig.payments.x402.options`
+  holds resolved options; single-option fields mirror the first. `/.well-known`
+  includes `payments.x402.options` only for multiple offers and omits RPC URLs.
+- An x402 offer takes `assetTransferMethod` (`X402AssetTransferMethod`,
+  `eip3009` by default, or `permit2`). `X402ProviderOptions` now extends
+  `X402OfferOptions`.
+  - `assetName` and `assetVersion` became optional in both option types, in
+    `GatewayConfig.payments.x402` and its `options`, and in `/.well-known`.
+    EIP-3009 still requires both: config load supplies the default asset's
+    metadata or requires explicit values; provider construction rejects missing
+    values. Permit2 may omit them. With `strictNullChecks`, readers must
+    handle `undefined`.
+  - `/.well-known` publishes `assetTransferMethod: permit2` beside a Permit2
+    offer.
+  - The provider no longer forwards a payload's `extensions` to the
+    facilitator.
+  - `createPaymentProof` refuses an offer naming a method other than
+    `eip3009` with `INPUT_INVALID`.
+  - The invoke route returns 412 for a missing Permit2 allowance
+    (`permit2_allowance_required`), preserving `PAYMENT-REQUIRED` as specified
+    by the `exact` EVM scheme.
+- The x402 provider serves Solana offers (`solana:` networks) through a remote
+  facilitator.
+  - `X402OfferOptions.asset` and `payTo` widened from `0x${string}` to
+    `string` to carry a Solana mint and wallet. Code reading either field as
+    `0x${string}` must narrow it.
+  - The descriptor's `supportedSpec` names `family=eip155`, `family=solana`
+    or both; capabilities gain `exact-svm`, and `unsupported` no longer
+    lists `svm`.
+  - A settlement success must name the offer's network and a transaction in
+    its family's form, for EVM offers too. Anything else unlocks nothing, and
+    the pipeline records the attempt `settlement-uncertain`.
+  - A settlement failure that names a transaction is a rejection only with
+    the family's on-chain failure reason: `invalid_exact_evm_transaction_failed`,
+    `invalid_exact_svm_transaction_failed` or NEAR's `settlement_failed`. Any
+    other reason leaves the outcome unknown. A rejection keeps its transaction
+    as the attempt's `externalReference`.
+- The x402 provider serves NEAR offers (`near:mainnet`, `near:testnet`)
+  through a remote facilitator.
+  - `X402OfferOptions.asset` and `payTo` carry NEAR account IDs for a NEAR
+    offer. The descriptor's `supportedSpec` can name `family=near`,
+    capabilities gain `exact-near`, and `unsupported` no longer lists a
+    chain family.
+  - `@x402/near` is the optional peer for NEAR offers, loaded only when one
+    is configured.
+  - Verification reasons that name the facilitator's failure to read the
+    chain or its configuration, such as
+    `invalid_exact_near_access_key_lookup_failed`, are no verdict:
+    `PAYMENT_PROVIDER_UNAVAILABLE`. At settle the SDK returns them before
+    submitting, so the provider throws with `details.settlementNotSubmitted`
+    and the attempt is recorded `rejected`.
+  - `createX402PaymentProvider` refuses a `maxTimeoutSeconds` that is not a
+    positive integer with `CONFIG_INVALID`, as config load already did: the
+    NEAR facilitator refuses every payment under such a value.
+- x402 verification and settlement `currency` uses the network's default
+  token symbol when paying that asset, otherwise the resource's currency.
+  Settlement preserves a differently labeled price, such as `USD`, in
+  `metadata.quote` (`amount`, `currency`). Payment attempts, receipts and
+  `PAYMENT-RESPONSE` now record `USDC` instead of repeating a `USD` quote.
+- A replay error's `details.network` names the network of the offer it paid.
+- `/.well-known` publishes each rail's `paymentFlow`, and
+  `resourcePaymentFlows` when a resource that lists the rail sets its own;
+  `WellKnownDocument` gains both fields for x402 and MPP. A rail's
+  `resourcePaymentFlows` in `GatewayConfig` no longer includes resources that
+  do not list that rail.
+- A resource's `x402.accepts` overrides its offers, matching the SDK's
+  route-level `accepts`.
+  - `X402ProviderOptions.resourceOffers`, keyed by resource id, replaces the
+    provider's offers for those resources, under the same facilitator and
+    settings. An offer that several lists repeat is built and health-checked
+    once.
+  - `GatewayConfig.payments.x402.resourceOptions` holds the resolved lists, and
+    `/.well-known` publishes them as `payments.x402.resourceOptions`.
+    `WellKnownX402Offer` names the offer shape both lists share.
+- x402 health checks all offers, reporting `components` named
+  `<network> <asset> <payTo>` with lowercase EVM addresses. Any failing offer
+  fails the provider. `/.well-known` copies statuses into `options` and
+  `resourceOptions`; `/ready` is unchanged.
 
 - `ProtocolName` gained `a2a` and `acp`; `PROTOCOL_NAMES` is the runtime list
   used by validation. It is derived from a record keyed by the union, so a
@@ -214,18 +320,21 @@ persistence must not fail the commerce flow.
   then verifies and settles through the x402 facilitator named in its options,
   using x402-compatible replay keys.
 - `MppProviderOptions` and `GatewayConfig.payments.mpp` accept optional
-  `paymentFlow` and `resourcePaymentFlows`. They use the x402 flow values and
-  default to `authorization`, which settles after a successful backend call.
+  `paymentFlow` and `resourcePaymentFlows` with the x402 flow values.
+- MPP's default `paymentFlow` is `upfront`; it was `authorization`. The
+  `charge` intent counts a backend call made before verification completes as
+  partial access, and EVM charge verification includes the transfer. A
+  deployment that wants the old order must set `paymentFlow: authorization`.
 
 ## Published entry points
 
-| Entry                               | Surface                                                             | Imported optional peers                                                                 |
-| ----------------------------------- | ------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| `@devlab.group/agent-commerce`      | Core contract, config, gateway, receipt store, A2A and ACP adapters | None                                                                                    |
-| `@devlab.group/agent-commerce/ap2`  | AP2 verification and checkout signing                               | `jose`, `@sd-jwt/core`, `canonicalize`                                                  |
-| `@devlab.group/agent-commerce/mcp`  | MCP adapter                                                         | `@modelcontextprotocol/server`                                                          |
-| `@devlab.group/agent-commerce/mpp`  | MPP provider and profile metadata                                   | `@coinbase/x402` (only for `auth.type: cdp`), `@x402/core`, `@x402/evm`, `mppx`, `viem` |
-| `@devlab.group/agent-commerce/x402` | x402 provider and client proof helper                               | `@coinbase/x402` (only for `auth.type: cdp`), `@x402/core`, `@x402/evm`, `viem`         |
+| Entry                               | Surface                                                             | Imported optional peers                                                                                                                                                  |
+| ----------------------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `@devlab.group/agent-commerce`      | Core contract, config, gateway, receipt store, A2A and ACP adapters | None                                                                                                                                                                     |
+| `@devlab.group/agent-commerce/ap2`  | AP2 verification and checkout signing                               | `jose`, `@sd-jwt/core`, `canonicalize`                                                                                                                                   |
+| `@devlab.group/agent-commerce/mcp`  | MCP adapter                                                         | `@modelcontextprotocol/server`                                                                                                                                           |
+| `@devlab.group/agent-commerce/mpp`  | MPP provider and profile metadata                                   | `@coinbase/x402` (only for `auth.type: cdp`), `@x402/core`, `@x402/evm`, `mppx`, `viem`                                                                                  |
+| `@devlab.group/agent-commerce/x402` | x402 provider and client proof helper                               | `@x402/core`, `@x402/evm`, `viem`; `@coinbase/x402` only for `auth.type: cdp`; `@x402/svm` and `@solana/kit` only for a Solana offer; `@x402/near` only for a NEAR offer |
 
 The main entry and CLI must not import optional peers. `package.json` is the
 authoritative export and dependency map.
@@ -258,30 +367,54 @@ returns 402 and a fresh challenge if that status is `settled` or `rejected`.
 It returns 409 for any other status or when the status is unavailable. That
 includes the legacy `failed`, which may hide a settlement with no verdict.
 
+A `rejected` attempt settled nothing: its backend failed first, or the provider
+returned a verdict that no transfer occurred. With `reclaimRejected: true`, the
+same provider can replace it with a new reservation; only one concurrent claim
+wins. This lets the NEAR reference client retry using the access key's next
+nonce. The SQLite store first copies the replaced row into
+`payment_attempt_history`, so the earlier request and its rejection reason
+stay on record.
+
 ## x402
 
 Published as `@devlab.group/agent-commerce/x402`.
 
 ```ts
-export interface X402ProviderOptions {
+/** One settlement option: network, token and merchant payee */
+export interface X402OfferOptions {
   readonly network: string; // CAIP-2, for example 'eip155:84532'
   readonly rpcUrl: string;
-  readonly asset: `0x${string}`;
-  readonly assetName: string;
-  readonly assetVersion: string;
+  readonly asset: string; // ERC-20 contract, Solana mint or NEAR token account
+  /** The token's EIP-712 domain; an EIP-3009 offer needs both */
+  readonly assetName?: string;
+  readonly assetVersion?: string;
   readonly assetDecimals: number;
   /** Merchant-controlled settlement destination. */
-  readonly payTo: `0x${string}`;
+  readonly payTo: string; // on Solana the wallet, on NEAR the account
+  /** EVM only. Default 'eip3009'. A Permit2 buyer approves Permit2 for the token first */
+  readonly assetTransferMethod?: X402AssetTransferMethod;
+}
+
+export type X402AssetTransferMethod = 'eip3009' | 'permit2';
+
+/** A single offer and the settings every offer shares */
+export interface X402ProviderOptions extends X402OfferOptions {
   readonly maxTimeoutSeconds?: number;
   /** 'authorization' (default) settles after a successful backend call; 'upfront' first */
   readonly paymentFlow?: X402PaymentFlow;
   /** Per-resource overrides of `paymentFlow`, keyed by resource id */
   readonly resourcePaymentFlows?: Readonly<Record<string, X402PaymentFlow>>;
+  /** Offers that replace the provider's for a resource, keyed by resource id */
+  readonly resourceOffers?: Readonly<Record<string, readonly X402OfferOptions[]>>;
   readonly facilitator: X402FacilitatorConfig;
   /** Must be true before mainnet settlement. */
   readonly allowMainnet?: boolean;
   /** Must be true for an unauthenticated mainnet facilitator. */
   readonly allowUnauthenticatedFacilitator?: boolean;
+  /** EVM networks outside the built-in registry; `network` may name one */
+  readonly customNetworks?: Readonly<
+    Record<string, { readonly kind: 'testnet' | 'mainnet'; readonly displayName: string }>
+  >;
   readonly logger?: Logger;
   readonly clock?: Clock;
   readonly ids?: IdGenerator;
@@ -296,8 +429,14 @@ export type X402FacilitatorConfig =
   | { readonly mode: 'local'; readonly signerPrivateKey: string }
   | { readonly mode: 'remote'; readonly url: string; readonly auth: FacilitatorAuth };
 
+/** Several offers per paid resource, settled through one facilitator */
+export interface X402MultiOfferProviderOptions
+  extends Omit<X402ProviderOptions, keyof X402OfferOptions> {
+  readonly offers: readonly X402OfferOptions[];
+}
+
 export function createX402PaymentProvider(
-  options: X402ProviderOptions,
+  options: X402ProviderOptions | X402MultiOfferProviderOptions,
 ): PaymentProvider;
 
 export type DeploymentMode = 'local' | 'testnet' | 'mainnet';
@@ -308,12 +447,15 @@ export interface NetworkProfile {
   readonly chainId: number;
   readonly displayName: string;
   readonly kind: 'testnet' | 'mainnet';
-  /** Canonical USDC and its EIP-712 domain, enforced on mainnet only */
+  /** The local Anvil dev chain, where the in-process facilitator runs */
+  readonly local?: boolean;
+  /** The network's USDC and its EIP-712 domain; a public network settles only in it */
   readonly canonicalAsset?: {
     readonly symbol: string;
     readonly address: string;
     readonly name: string;
     readonly version: string;
+    readonly decimals: number;
   };
 }
 ```
@@ -345,9 +487,9 @@ export interface MppProviderOptions {
   readonly allowUnauthenticatedFacilitator?: boolean;
   readonly logger?: Logger;
   readonly challengeTtlSeconds?: number; // default 300
-  /** CAIP-2 network: 'eip155:84532' (default) or 'eip155:8453' */
+  /** CAIP-2 network: 'eip155:31337' (local), 'eip155:84532' (default) or 'eip155:8453' */
   readonly network?: string;
-  /** 'authorization' (default) settles after a successful backend call; 'upfront' first */
+  /** 'upfront' (default) settles before the backend; 'authorization' after it */
   readonly paymentFlow?: X402PaymentFlow;
   /** Per-resource overrides of `paymentFlow`, keyed by resource id */
   readonly resourcePaymentFlows?: Readonly<Record<string, X402PaymentFlow>>;
@@ -362,7 +504,7 @@ Construction fails with `CONFIG_INVALID` for a recipient or asset that is not
 an address, an empty EIP-712 domain name or version, an empty or multi-line
 realm, a challenge secret with length below 32, a TTL that is not a
 positive whole number, or an unsupported `network`. The supported networks are
-`eip155:84532` and `eip155:8453`. The provider then builds an internal x402
+`eip155:31337` (local), `eip155:84532` and `eip155:8453`. The provider then builds an internal x402
 provider from the same network, asset, recipient and facilitator options, so
 every x402 construction check applies, including the mainnet guardrails.
 `X402FacilitatorConfig` is the type exported by the `./x402` entry.
@@ -560,6 +702,18 @@ export type AcpProtocolConfig =
       readonly discovery?: AcpDiscoveryConfig;
     };
 
+/** One resolved x402 option */
+export interface X402OptionConfig {
+  readonly network: string;
+  readonly rpcUrl: string; // networks.<id>.rpcUrl, else the shared rpcUrl
+  readonly asset: string;
+  readonly assetName?: string; // always present for EIP-3009
+  readonly assetVersion?: string;
+  readonly assetDecimals: number;
+  readonly payTo: string;
+  readonly assetTransferMethod?: 'permit2'; // absent for EIP-3009
+}
+
 export interface GatewayConfig {
   readonly version: 1;
   readonly merchant: {
@@ -589,20 +743,25 @@ export interface GatewayConfig {
       readonly network: string;
       readonly rpcUrl: string;
       readonly asset: string;
-      readonly assetName: string;
-      readonly assetVersion: string;
+      readonly assetName?: string; // always present for EIP-3009
+      readonly assetVersion?: string;
       readonly assetDecimals: number;
       readonly payTo: string;
+      readonly assetTransferMethod?: 'permit2'; // absent for EIP-3009
       readonly maxTimeoutSeconds: number;
       readonly paymentFlow?: X402PaymentFlow; // default 'authorization'
       readonly resourcePaymentFlows?: Readonly<Record<string, X402PaymentFlow>>;
       readonly facilitator: X402FacilitatorConfig;
       readonly allowMainnet?: boolean;
       readonly allowUnauthenticatedFacilitator?: boolean;
+      readonly networks?: X402ProviderOptions['customNetworks']; // declared EVM networks
+      readonly options?: readonly X402OptionConfig[]; // the fields above mirror the first
+      // Each resource's own offers, replacing `options` for it
+      readonly resourceOptions?: Readonly<Record<string, readonly X402OptionConfig[]>>;
     };
     readonly mpp?: {
       readonly enabled: boolean;
-      readonly network: 'eip155:84532' | 'eip155:8453';
+      readonly network: 'eip155:31337' | 'eip155:84532' | 'eip155:8453';
       readonly rpcUrl: string;
       readonly asset: string;
       readonly assetName: string;
@@ -611,7 +770,7 @@ export interface GatewayConfig {
       readonly realm: string;
       readonly challengeSecret: string;
       readonly challengeTtlSeconds?: number;
-      readonly paymentFlow?: X402PaymentFlow; // default 'authorization'
+      readonly paymentFlow?: X402PaymentFlow; // default 'upfront'
       readonly resourcePaymentFlows?: Readonly<Record<string, X402PaymentFlow>>;
       readonly facilitator: X402FacilitatorConfig;
       readonly allowMainnet?: boolean;
@@ -651,7 +810,7 @@ accepted.
 
 ```json
 {
-  "chainId": 84532,
+  "chainId": 31337,
   "rpcUrl": "http://127.0.0.1:8545",
   "hostRpcUrl": "http://127.0.0.1:8545",
   "asset": "0x...",
@@ -693,7 +852,8 @@ the demo buyer; it is not a published package entry.
 `createPaymentProof` is the x402 client helper exported from the `./x402` entry.
 The demo buyer and the tests use it. Signing is offline: the chain id comes from
 the requirement's CAIP-2 network. The gateway does not call it or hold the buyer
-key.
+key. It signs only EIP-3009; another `extra.assetTransferMethod` yields
+`INPUT_INVALID`. Use the SDK's `x402Client` for Permit2.
 
 ```ts
 export interface CreatePaymentProofOptions {

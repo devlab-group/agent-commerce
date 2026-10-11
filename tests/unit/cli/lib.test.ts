@@ -86,6 +86,15 @@ describe('readVersionReport', () => {
       expect(pin.via.length).toBeGreaterThan(0);
     }
   });
+  // Each x402 chain family's SDK, so an operator can see what settles their offers
+  it('reports the x402 family packages with their manifest pins', () => {
+    const pins = Object.fromEntries(
+      readVersionReport().pinned.map((pin) => [pin.name, pin.version]),
+    );
+    for (const name of ['@x402/core', '@x402/evm', '@x402/svm', '@solana/kit', '@x402/near']) {
+      expect(pins[name], name).toMatch(/^\d+\.\d+\.\d+$/);
+    }
+  });
 });
 
 describe('io', () => {

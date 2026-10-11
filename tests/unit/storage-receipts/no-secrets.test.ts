@@ -231,7 +231,7 @@ describe('bearer-token-shaped keys', () => {
       payTo: '0xdef',
       requestId: 'req_1',
       resourceId: 'market_report',
-      network: 'eip155:84532',
+      network: 'eip155:31337',
       asset: '0x123',
       status: 'settled',
       txHash: '0xfeed',

@@ -632,3 +632,60 @@ describe('execution pipeline authorization', () => {
     expect(types(store)).not.toContain('authorization.verified');
   });
 });
+
+describe('execution pipeline offer selection', () => {
+  it('selects the offer first, then binds the mandate, the reservation and settlement to it', async () => {
+    const calls: string[] = [];
+    const seen: Record<string, unknown> = {};
+    const base = createFakePaymentProvider({
+      createRequirement: async (ctx) => ({
+        id: 'requirement-1',
+        requestId: ctx.requestId,
+        resourceId: ctx.resource.id,
+        provider: 'x402',
+        amount: ctx.amount,
+        currency: ctx.currency,
+        challenge: { provider: 'x402', version: '2', accepts: [{ offer: 0 }, { offer: 1 }] },
+      }),
+    });
+    const provider = {
+      ...base,
+      async selectRequirement(ctx: Parameters<NonNullable<typeof base.selectRequirement>>[0]) {
+        calls.push('select');
+        return {
+          ...ctx.requirement,
+          destination: '0xSECOND',
+          network: 'eip155:2',
+          asset: '0xTOKEN2',
+        };
+      },
+      async verify(ctx: Parameters<typeof base.verify>[0]) {
+        calls.push('verify');
+        seen['verify'] = ctx.requirement.destination;
+        return base.verify(ctx);
+      },
+      async settle(ctx: Parameters<typeof base.settle>[0]) {
+        calls.push('settle');
+        seen['settle'] = ctx.requirement.destination;
+        return base.settle(ctx);
+      },
+    };
+    const auth = createFakeAuthorizationProvider();
+    const { pipeline } = buildPipeline({
+      paymentProviders: [provider],
+      authorizationProviders: [auth],
+    });
+
+    const outcome = (await pipeline.execute(makeRequest())) as DeliveredOutcome;
+
+    expect(outcome.kind).toBe('delivered');
+    expect(calls).toEqual(['select', 'verify', 'settle']);
+    expect(seen).toEqual({ verify: '0xSECOND', settle: '0xSECOND' });
+    // The mandate is checked against the chosen offer, not the full challenge
+    expect(auth.contexts[0]?.requirement).toMatchObject({
+      destination: '0xSECOND',
+      network: 'eip155:2',
+      asset: '0xTOKEN2',
+    });
+  });
+});

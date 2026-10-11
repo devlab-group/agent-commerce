@@ -116,7 +116,7 @@ export const paymentRequired: ExecutionOutcome = {
     amount: '0.01',
     currency: 'USDC',
     destination: '0x1111111111111111111111111111111111111111',
-    network: 'eip155:84532',
+    network: 'eip155:31337',
     asset: '0x2222222222222222222222222222222222222222',
     expiresAt: '2026-01-01T00:05:00.000Z',
     challenge: { provider: 'x402', version: '2', accepts: [{ scheme: 'exact' }] },

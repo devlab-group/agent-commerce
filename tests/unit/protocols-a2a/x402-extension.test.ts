@@ -59,16 +59,27 @@ describe('pending x402 payments', () => {
     expect(pending.get('task-1')).toBeUndefined();
   });
 
-  it('evicts the oldest purchase when full', () => {
+  it('refuses a new purchase when full, keeping the live ones', () => {
     const pending = createPendingPayments(clockAt(0).clock, 2);
-    pending.put('task-1', PURCHASE);
-    pending.put('task-2', PURCHASE);
-    pending.put('task-3', PURCHASE);
+    expect(pending.put('task-1', PURCHASE)).toBe(true);
+    expect(pending.put('task-2', PURCHASE)).toBe(true);
+    expect(pending.put('task-3', PURCHASE)).toBe(false);
 
-    expect(pending.get('task-1')).toBeUndefined();
+    expect(pending.get('task-1')).toBeDefined();
     expect(pending.get('task-2')).toBeDefined();
-    expect(pending.get('task-3')).toBeDefined();
+    expect(pending.get('task-3')).toBeUndefined();
     expect(pending.size()).toBe(2);
+  });
+
+  it('takes a new purchase once an expired one frees its slot', () => {
+    const time = clockAt(Date.parse('2026-10-05T00:00:00Z'));
+    const pending = createPendingPayments(time.clock, 1);
+    expect(pending.put('task-1', PURCHASE, '2026-10-05T00:01:00Z')).toBe(true);
+    expect(pending.put('task-2', PURCHASE)).toBe(false);
+
+    time.advance(60_000);
+    expect(pending.put('task-2', PURCHASE)).toBe(true);
+    expect(pending.get('task-2')).toBeDefined();
   });
 });
 
@@ -90,7 +101,7 @@ describe('payment messages', () => {
           status: 'settled',
           provider: 'x402',
           currency: 'USDC',
-          network: 'eip155:84532',
+          network: 'eip155:31337',
           externalReference: '0xabc',
         },
       },
@@ -123,18 +134,30 @@ describe('payment messages', () => {
     });
   });
 
+  it('reports a replay with the code of the network it paid', () => {
+    const replay = new CommerceError('PAYMENT_REPLAYED', 'Already used', {
+      httpStatus: 402,
+      details: { attemptStatus: 'settled', network: 'near:testnet' },
+    });
+
+    expect(paymentFailureMetadata(replay)).toMatchObject({
+      'x402.payment.error': 'invalid_exact_near_payload_delegate_action_nonce_already_used',
+      'x402.payment.receipts': [{ success: false, network: 'near:testnet' }],
+    });
+  });
+
   it('fills an empty receipt network from the requirement and keeps one the error names', () => {
     const refused = new CommerceError('PAYMENT_INVALID', 'Refused', {
       details: { reason: 'insufficient_funds' },
     });
-    expect(paymentFailureMetadata(refused, 'eip155:84532')).toMatchObject({
-      'x402.payment.receipts': [{ success: false, network: 'eip155:84532' }],
+    expect(paymentFailureMetadata(refused, 'eip155:31337')).toMatchObject({
+      'x402.payment.receipts': [{ success: false, network: 'eip155:31337' }],
     });
 
     const named = new CommerceError('PAYMENT_SETTLEMENT_FAILED', 'Refused', {
       details: { reason: 'unexpected_settle_error', network: 'eip155:8453' },
     });
-    expect(paymentFailureMetadata(named, 'eip155:84532')).toMatchObject({
+    expect(paymentFailureMetadata(named, 'eip155:31337')).toMatchObject({
       'x402.payment.receipts': [{ network: 'eip155:8453' }],
     });
   });

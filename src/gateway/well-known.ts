@@ -12,6 +12,7 @@
  */
 
 import type { GatewayConfig } from '../config';
+import type { X402OptionConfig } from '../config/schema';
 import type {
   AdapterDescriptor,
   AdapterHealth,
@@ -19,14 +20,16 @@ import type {
   PaymentProvider,
   ReceiptStore,
 } from '../core';
-import { MPP_PROFILE } from '../payments/mpp/constants';
+import { MPP_DEFAULT_PAYMENT_FLOW, MPP_PROFILE } from '../payments/mpp/constants';
 import {
   type DeploymentMode,
-  requireNetworkProfile,
+  requireX402Network,
   resolveDeploymentMode,
 } from '../payments/x402/networks';
+import { x402OfferName } from '../payments/x402/options';
+import { X402_DEFAULT_PAYMENT_FLOW, type X402PaymentFlow } from '../payments/x402/payment-flow';
 import { PACKAGE_VERSION } from '../version';
-import type { ProbedAdapter } from './readiness';
+import type { ProbedAdapter, ProbedProvider } from './readiness';
 
 // Not derived from `PACKAGE_VERSION`: it names the wire contract a client
 // negotiates against, which changes only when that contract does
@@ -66,14 +69,25 @@ export interface WellKnownDocument {
       readonly enabled: boolean;
       readonly network: string;
       readonly asset: string;
-      readonly assetName: string;
-      readonly assetVersion: string;
+      /** Absent for a Permit2 token that has no EIP-712 domain */
+      readonly assetName?: string;
+      readonly assetVersion?: string;
       readonly assetDecimals: number;
       readonly payTo: string;
+      /** Absent for EIP-3009, the default */
+      readonly assetTransferMethod?: 'permit2';
       readonly maxTimeoutSeconds: number;
       readonly facilitator: { readonly mode: 'local' | 'remote' };
-      /** `local`, `testnet` or `mainnet`, from the network and facilitator together */
+      /** `local`, `testnet` or `mainnet`, from the network */
       readonly mode: DeploymentMode;
+      /** `authorization` settles after the backend; `upfront` before it */
+      readonly paymentFlow: X402PaymentFlow;
+      /** Resources that set their own flow, by id; absent when none does */
+      readonly resourcePaymentFlows?: Readonly<Record<string, X402PaymentFlow>>;
+      /** All rail offers when multiple exist; top-level fields mirror the first */
+      readonly options?: readonly WellKnownX402Offer[];
+      /** Resource offer overrides by id, replacing the rail's offers */
+      readonly resourceOptions?: Readonly<Record<string, readonly WellKnownX402Offer[]>>;
     };
     /** Public settlement fields; excludes the challenge secret and facilitator credentials */
     readonly mpp?: {
@@ -86,8 +100,25 @@ export interface WellKnownDocument {
       readonly recipient: string;
       readonly facilitator: { readonly mode: 'local' | 'remote' };
       readonly mode: DeploymentMode;
+      /** `upfront` settles before the backend; `authorization` after it */
+      readonly paymentFlow: X402PaymentFlow;
+      /** Resources that set their own flow, by id; absent when none does */
+      readonly resourcePaymentFlows?: Readonly<Record<string, X402PaymentFlow>>;
     };
   };
+}
+
+/** One x402 offer's public terms */
+export interface WellKnownX402Offer {
+  readonly network: string;
+  readonly asset: string;
+  readonly assetName?: string;
+  readonly assetVersion?: string;
+  readonly assetDecimals: number;
+  readonly payTo: string;
+  readonly assetTransferMethod?: 'permit2';
+  /** Last reported health status, excluding diagnostic detail */
+  readonly status?: AdapterHealth['status'];
 }
 
 export interface BuildWellKnownOptions {
@@ -95,8 +126,10 @@ export interface BuildWellKnownOptions {
   readonly paymentProviders: readonly PaymentProvider[];
   readonly authorizationProviders: readonly AuthorizationProvider[];
   readonly store: ReceiptStore;
-  /** From the memoized readiness probe, so this route shares `/ready`'s `health()` calls */
+  /** From the readiness cache, sharing `/ready`'s `health()` calls */
   readonly adapters: readonly ProbedAdapter[];
+  /** From the same probe; the x402 provider's components give each offer's status */
+  readonly paymentHealth?: readonly ProbedProvider[];
 }
 
 /**
@@ -120,6 +153,35 @@ function publicProtocols(protocols: GatewayConfig['protocols']): WellKnownProtoc
   };
 }
 
+// Allowlist public offer fields: RPC URLs can contain API keys
+function publicOffer(
+  option: X402OptionConfig,
+  statuses: ReadonlyMap<string, AdapterHealth['status']>,
+): WellKnownX402Offer {
+  const { network, asset, assetName, assetVersion, assetDecimals, payTo, assetTransferMethod } =
+    option;
+  const status = statuses.get(x402OfferName(option));
+  return {
+    network,
+    asset,
+    ...(assetName !== undefined ? { assetName } : {}),
+    ...(assetVersion !== undefined ? { assetVersion } : {}),
+    assetDecimals,
+    payTo,
+    ...(assetTransferMethod !== undefined ? { assetTransferMethod } : {}),
+    ...(status !== undefined ? { status } : {}),
+  };
+}
+
+// A rail's per-resource flows, or nothing when no resource overrides the rail
+function flowOverrides(flows: Readonly<Record<string, X402PaymentFlow>> | undefined): {
+  readonly resourcePaymentFlows?: Readonly<Record<string, X402PaymentFlow>>;
+} {
+  return flows !== undefined && Object.keys(flows).length > 0
+    ? { resourcePaymentFlows: flows }
+    : {};
+}
+
 export function buildWellKnownDocument(options: BuildWellKnownOptions): WellKnownDocument {
   const adapters = options.adapters.map(({ descriptor, health }) => ({
     ...descriptor,
@@ -127,6 +189,10 @@ export function buildWellKnownDocument(options: BuildWellKnownOptions): WellKnow
   }));
 
   const { x402, mpp } = options.config.payments;
+  const x402Health = options.paymentHealth?.find((probed) => probed.name === 'x402')?.health;
+  const offerStatuses = new Map(
+    (x402Health?.components ?? []).map((component) => [component.name, component.status]),
+  );
 
   return {
     gateway: {
@@ -146,20 +212,35 @@ export function buildWellKnownDocument(options: BuildWellKnownOptions): WellKnow
               enabled: x402.enabled,
               network: x402.network,
               asset: x402.asset,
-              assetName: x402.assetName,
-              assetVersion: x402.assetVersion,
+              ...(x402.assetName !== undefined ? { assetName: x402.assetName } : {}),
+              ...(x402.assetVersion !== undefined ? { assetVersion: x402.assetVersion } : {}),
               assetDecimals: x402.assetDecimals,
               payTo: x402.payTo,
+              ...(x402.assetTransferMethod !== undefined
+                ? { assetTransferMethod: x402.assetTransferMethod }
+                : {}),
               maxTimeoutSeconds: x402.maxTimeoutSeconds,
               // Only local or remote is public: the facilitator URL can carry
               // a tenant path or an API key, and the signer key is secret
               facilitator: { mode: x402.facilitator.mode },
-              // Chain id 84532 is both the local dev chain and public Base
-              // Sepolia, so the network id alone cannot say which one this is
               mode: resolveDeploymentMode(
-                requireNetworkProfile(x402.network, 'payments.x402.network'),
-                x402.facilitator.mode,
+                requireX402Network(x402.network, 'payments.x402.network', x402.networks),
               ),
+              paymentFlow: x402.paymentFlow ?? X402_DEFAULT_PAYMENT_FLOW,
+              ...flowOverrides(x402.resourcePaymentFlows),
+              ...(x402.options !== undefined && x402.options.length > 1
+                ? { options: x402.options.map((option) => publicOffer(option, offerStatuses)) }
+                : {}),
+              ...(x402.resourceOptions !== undefined
+                ? {
+                    resourceOptions: Object.fromEntries(
+                      Object.entries(x402.resourceOptions).map(([id, list]) => [
+                        id,
+                        list.map((option) => publicOffer(option, offerStatuses)),
+                      ]),
+                    ),
+                  }
+                : {}),
             },
           }
         : {}),
@@ -174,10 +255,9 @@ export function buildWellKnownDocument(options: BuildWellKnownOptions): WellKnow
               assetDecimals: MPP_PROFILE.assetDecimals,
               recipient: mpp.recipient,
               facilitator: { mode: mpp.facilitator.mode },
-              mode: resolveDeploymentMode(
-                requireNetworkProfile(mpp.network, 'payments.mpp.network'),
-                mpp.facilitator.mode,
-              ),
+              mode: resolveDeploymentMode(requireX402Network(mpp.network, 'payments.mpp.network')),
+              paymentFlow: mpp.paymentFlow ?? MPP_DEFAULT_PAYMENT_FLOW,
+              ...flowOverrides(mpp.resourcePaymentFlows),
             },
           }
         : {}),

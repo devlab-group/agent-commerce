@@ -1,15 +1,12 @@
 /**
- * The facilitator verifies an authorization and broadcasts the transfer. Two
- * kinds sit behind one interface, both driving the SDK's own code:
+ * Shared facilitator interface and remote HTTP binding. The in-process EVM
+ * binding lives in `local-facilitator.ts` to keep EVM peers out of this module.
+ * `@x402/core` loads statically; `@coinbase/x402` loads only for `auth.type: cdp`.
+ * Both bindings use the SDK to verify authorizations and broadcast transfers.
  *
- *   local   the SDK's in-process `x402Facilitator`, signing against a dev node
- *   remote  the SDK's HTTP facilitator client, with or without a credential
- *
- * Each verify or settle call opens its own session so that `transportFailed()`
- * covers one request only: concurrent payments must not see each other's
- * transport failures.
+ * Each verify or settle call gets a session with its own `transportFailed()`
+ * flag, isolating concurrent payments' transport failures.
  */
-import { x402Facilitator } from '@x402/core/facilitator';
 import { HTTPFacilitatorClient } from '@x402/core/http';
 import {
   type Network,
@@ -17,13 +14,11 @@ import {
   type PaymentRequirements,
   SettleError,
   type SettleResponse,
+  type SupportedResponse,
   VerifyError,
   type VerifyResponse,
 } from '@x402/core/types';
-import { toFacilitatorEvmSigner } from '@x402/evm';
-import { registerExactEvmScheme } from '@x402/evm/exact/facilitator';
 import { CommerceError } from '../../core';
-import type { LocalFacilitatorClient } from './chain';
 import type { FacilitatorAuth } from './guardrails';
 
 /** One verify or one settle, with its own transport-failure flag */
@@ -43,12 +38,6 @@ export interface FacilitatorSession {
   transportFailed(): boolean;
 }
 
-export interface SupportedKind {
-  readonly x402Version: number;
-  readonly scheme: string;
-  readonly network: string;
-}
-
 interface BindingBase {
   /** Human-readable, never a credential */
   readonly describe: string;
@@ -59,77 +48,21 @@ export type FacilitatorBinding =
   | (BindingBase & { readonly kind: 'local' })
   | (BindingBase & {
       readonly kind: 'remote';
-      /** What the facilitator says it can settle. Used by health(), not by the payment path */
-      supported(): Promise<readonly SupportedKind[]>;
+      /**
+       * SDK-parsed `/supported` response, including kinds and their `extra`
+       * (such as Solana's fee payer), extensions and signers. health() reads
+       * it, and so does a Solana challenge, which names the fee payer
+       */
+      supported(): Promise<SupportedResponse>;
     });
 
-// Bounds each receipt wait of the in-process facilitator, and each request to a
-// remote one
-const SETTLEMENT_CONFIRMATION_TIMEOUT_MS = 60_000;
-
+/** Bounds each receipt wait of the in-process facilitator, and each verify or settle request to a remote one */
+export const SETTLEMENT_CONFIRMATION_TIMEOUT_MS = 60_000;
 /**
- * An in-process `x402Facilitator` with the `exact`/EVM scheme registered for
- * one network rather than an `eip155:*` wildcard, so a payload naming another
- * chain finds no scheme at all
+ * Bounds a remote `/supported` read, retries included. Readiness and every
+ * Solana challenge wait on it, and the SDK retries a 429 for up to 30 s a time.
  */
-export function createLocalFacilitatorBinding(
-  client: LocalFacilitatorClient,
-  network: string,
-  isTransportError: (err: unknown) => boolean,
-): FacilitatorBinding {
-  const build = (): { facilitator: x402Facilitator; failed: () => boolean } => {
-    let failed = false;
-    const watch = <T>(promise: Promise<T>): Promise<T> =>
-      promise.catch((err: unknown) => {
-        if (isTransportError(err)) failed = true;
-        throw err;
-      });
-
-    // Exactly the `FacilitatorEvmSigner` surface, so every call the SDK makes is
-    // watched. `toFacilitatorEvmSigner` wants a flat `address`, which viem
-    // keeps on `client.account`.
-    const signer = {
-      address: client.account.address,
-      readContract: (args: Parameters<LocalFacilitatorClient['readContract']>[0]) =>
-        watch(client.readContract(args)),
-      verifyTypedData: (args: Parameters<LocalFacilitatorClient['verifyTypedData']>[0]) =>
-        watch(client.verifyTypedData(args)),
-      writeContract: (args: Parameters<LocalFacilitatorClient['writeContract']>[0]) =>
-        watch(client.writeContract(args)),
-      sendTransaction: (args: Parameters<LocalFacilitatorClient['sendTransaction']>[0]) =>
-        watch(client.sendTransaction(args)),
-      waitForTransactionReceipt: (
-        args: Parameters<LocalFacilitatorClient['waitForTransactionReceipt']>[0],
-      ) => watch(client.waitForTransactionReceipt(args)),
-      getCode: (args: Parameters<LocalFacilitatorClient['getCode']>[0]) =>
-        watch(client.getCode(args)),
-    } as unknown as Parameters<typeof toFacilitatorEvmSigner>[0];
-
-    // `confirmationTimeoutMs` turns a lost receipt wait into `settlement_pending`
-    // with the broadcast hash, instead of a discarded broadcast
-    const facilitator = registerExactEvmScheme(new x402Facilitator(), {
-      signer: toFacilitatorEvmSigner(signer, {
-        confirmationTimeoutMs: SETTLEMENT_CONFIRMATION_TIMEOUT_MS,
-      }),
-      networks: network as Network,
-    });
-
-    return { facilitator, failed: () => failed };
-  };
-
-  return {
-    kind: 'local',
-    describe: 'local (in-process)',
-    open(): FacilitatorSession {
-      const { facilitator, failed } = build();
-      return {
-        verify: (payload, requirements) => facilitator.verify(payload, requirements),
-        settle: (payload, requirements) => facilitator.settle(payload, requirements),
-        transportFailed: failed,
-      };
-    },
-  };
-}
+export const SUPPORTED_TIMEOUT_MS = 10_000;
 
 export interface RemoteFacilitatorOptions {
   readonly url: string;
@@ -249,6 +182,11 @@ export function createRemoteFacilitatorBinding(
     timeoutMs: SETTLEMENT_CONFIRMATION_TIMEOUT_MS,
     ...(createAuthHeaders ? { createAuthHeaders } : {}),
   });
+  const supportedClient = new HTTPFacilitatorClient({
+    url: options.url,
+    timeoutMs: SUPPORTED_TIMEOUT_MS,
+    ...(createAuthHeaders ? { createAuthHeaders } : {}),
+  });
 
   return {
     kind: 'remote',
@@ -278,9 +216,26 @@ export function createRemoteFacilitatorBinding(
         transportFailed: () => failed,
       };
     },
-    async supported(): Promise<readonly SupportedKind[]> {
-      const response = await client.getSupported();
-      return response.kinds as readonly SupportedKind[];
-    },
+    supported: () => withDeadline(supportedClient.getSupported(), SUPPORTED_TIMEOUT_MS),
   };
+}
+
+// The SDK bounds each attempt but not its retry waits. `Promise.race` keeps
+// a handler on the abandoned call, so its later rejection is not unhandled.
+function withDeadline<T>(call: Promise<T>, ms: number): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () =>
+        reject(
+          new CommerceError(
+            'PAYMENT_PROVIDER_UNAVAILABLE',
+            `x402 provider: facilitator /supported did not answer within ${ms / 1000} s`,
+          ),
+        ),
+      ms,
+    );
+    timer.unref();
+  });
+  return Promise.race([call, deadline]).finally(() => clearTimeout(timer));
 }

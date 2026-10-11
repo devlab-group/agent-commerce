@@ -98,9 +98,9 @@ describe('createConfiguredPaymentProviders', () => {
   });
 
   it.each([
-    ['the rail', { paymentFlow: 'upfront' as const }],
-    ['the resource', { resourcePaymentFlows: { market_report: 'upfront' as const } }],
-  ])('passes an MPP upfront flow set on %s to the provider', async (_label, flow) => {
+    ['the rail', { paymentFlow: 'authorization' as const }],
+    ['the resource', { resourcePaymentFlows: { market_report: 'authorization' as const } }],
+  ])('passes an MPP authorization flow set on %s to the provider', async (_label, flow) => {
     const resource = makeGatewayConfig().resources.find((r) => r.id === 'market_report');
     if (resource === undefined) throw new Error('fixture missing');
     const settleAfterBackend = async (mpp: Mpp): Promise<unknown> => {
@@ -116,7 +116,31 @@ describe('createConfiguredPaymentProviders', () => {
       return requirement.metadata?.['settleAfterBackend'];
     };
 
-    expect(await settleAfterBackend(MAINNET_MPP)).toBe(true);
-    expect(await settleAfterBackend({ ...MAINNET_MPP, ...flow })).toBe(false);
+    expect(await settleAfterBackend(MAINNET_MPP)).toBe(false);
+    expect(await settleAfterBackend({ ...MAINNET_MPP, ...flow })).toBe(true);
+  });
+
+  it('gives a resource with its own offers only those offers', async () => {
+    const resource = makeGatewayConfig().resources.find((r) => r.id === 'market_report');
+    if (resource === undefined) throw new Error('fixture missing');
+    const own = { ...MAINNET_X402, payTo: '0x2222222222222222222222222222222222222222' };
+    const [provider] = createConfiguredPaymentProviders(
+      { x402: { ...MAINNET_X402, resourceOptions: { market_report: [own] } } },
+      NOOP_LOGGER,
+    );
+    if (provider === undefined) throw new Error('no provider');
+    const payees = async (id: string) =>
+      (
+        await provider.createRequirement({
+          requestId: 'req-1',
+          resource: { ...resource, id },
+          amount: '0.01',
+          currency: 'USDC',
+          requestedAt: '2026-01-01T00:00:00.000Z',
+        })
+      ).challenge.accepts.map((offer) => offer['payTo']);
+
+    expect(await payees('market_report')).toEqual([own.payTo]);
+    expect(await payees('another_report')).toEqual([MAINNET_X402.payTo]);
   });
 });

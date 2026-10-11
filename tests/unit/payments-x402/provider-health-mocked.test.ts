@@ -47,6 +47,7 @@ function mockAsGenuineAnvilNode(): void {
 }
 
 const ASSET = '0x5FbDB2315678afecb367f032d93F642f64180aa3' as const;
+const BASE_SEPOLIA_USDC = '0x036CbD53842c5426634e7929541eC2318f3dCF7e' as const;
 const PAY_TO = '0x70997970C51812dc3A010C7d01b50e0d17dc79C8' as const;
 // A dev payTo is refused on any non-local deployment, so remote mode needs another
 const REMOTE_PAY_TO = '0x1111111111111111111111111111111111111111' as const;
@@ -59,11 +60,13 @@ async function makeProvider(
   rpcUrl = 'http://127.0.0.1:19322',
 ) {
   const { createX402PaymentProvider } = await import('../../../src/payments/x402/provider');
+  // Remote mode stands for public Base Sepolia, which settles only in its USDC
+  const local = facilitatorMode === 'local';
   return createX402PaymentProvider({
-    network: 'eip155:84532',
+    network: local ? 'eip155:31337' : 'eip155:84532',
     rpcUrl,
-    asset: ASSET,
-    assetName: 'MockUSDC',
+    asset: local ? ASSET : BASE_SEPOLIA_USDC,
+    assetName: local ? 'MockUSDC' : 'USDC',
     assetVersion: '2',
     assetDecimals: 6,
     payTo: facilitatorMode === 'local' ? PAY_TO : REMOTE_PAY_TO,
@@ -96,7 +99,7 @@ describe('health() - mocked RPC client', () => {
   });
 
   it('passes when chain id matches, the asset has code, and the RPC confirms it is Anvil', async () => {
-    getChainIdMock.mockResolvedValueOnce(84532);
+    getChainIdMock.mockResolvedValueOnce(31337);
     getCodeMock.mockResolvedValueOnce('0x6080604052');
     mockAsGenuineAnvilNode();
     const provider = await makeProvider();
@@ -104,8 +107,8 @@ describe('health() - mocked RPC client', () => {
     expect(health.status).toBe('pass');
   });
 
-  it('fails when the chain id matches (84532) but the RPC does not answer anvil_nodeInfo - e.g. real Base Sepolia', async () => {
-    getChainIdMock.mockResolvedValueOnce(84532);
+  it('fails when the chain id matches but the RPC does not answer anvil_nodeInfo - e.g. a Hardhat node on 31337', async () => {
+    getChainIdMock.mockResolvedValueOnce(31337);
     getCodeMock.mockResolvedValueOnce('0x6080604052');
     requestMock.mockRejectedValueOnce(new Error('the method anvil_nodeInfo does not exist'));
     const provider = await makeProvider();
@@ -117,9 +120,11 @@ describe('health() - mocked RPC client', () => {
   it('passes for a remote facilitator that advertises our scheme and network, without probing anvil_nodeInfo', async () => {
     getChainIdMock.mockResolvedValueOnce(84532);
     getCodeMock.mockResolvedValueOnce('0x6080604052');
-    supportedMock.mockResolvedValueOnce([
-      { x402Version: 2, scheme: 'exact', network: 'eip155:84532' },
-    ]);
+    supportedMock.mockResolvedValueOnce({
+      kinds: [{ x402Version: 2, scheme: 'exact', network: 'eip155:84532' }],
+      extensions: [],
+      signers: {},
+    });
     const provider = await makeProvider('remote');
     const health = await provider.health();
     expect(health.status).toBe('pass');
@@ -134,9 +139,11 @@ describe('health() - mocked RPC client', () => {
     // after the buyer has signed
     getChainIdMock.mockResolvedValueOnce(84532);
     getCodeMock.mockResolvedValueOnce('0x6080604052');
-    supportedMock.mockResolvedValueOnce([
-      { x402Version: 2, scheme: 'exact', network: 'eip155:8453' },
-    ]);
+    supportedMock.mockResolvedValueOnce({
+      kinds: [{ x402Version: 2, scheme: 'exact', network: 'eip155:8453' }],
+      extensions: [],
+      signers: {},
+    });
     const provider = await makeProvider('remote');
     const health = await provider.health();
     expect(health.status).toBe('fail');
@@ -177,7 +184,7 @@ describe('health() - mocked RPC client', () => {
   });
 
   it('fails when the asset address has no code', async () => {
-    getChainIdMock.mockResolvedValueOnce(84532);
+    getChainIdMock.mockResolvedValueOnce(31337);
     getCodeMock.mockResolvedValueOnce('0x');
     const provider = await makeProvider();
     const health = await provider.health();
@@ -186,7 +193,7 @@ describe('health() - mocked RPC client', () => {
   });
 
   it('fails when getCode returns undefined', async () => {
-    getChainIdMock.mockResolvedValueOnce(84532);
+    getChainIdMock.mockResolvedValueOnce(31337);
     getCodeMock.mockResolvedValueOnce(undefined);
     const provider = await makeProvider();
     const health = await provider.health();
@@ -202,13 +209,76 @@ describe('health() - mocked RPC client', () => {
   });
 });
 
+describe('health() - several offers', () => {
+  const OTHER_ASSET = '0x2222222222222222222222222222222222222222' as const;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getChainIdMock.mockResolvedValue(31337);
+    requestMock.mockResolvedValue({ clientVersion: 'anvil/v1.1.0' });
+    getCodeMock.mockResolvedValue('0x6080604052');
+  });
+
+  async function makeTwoOfferProvider() {
+    const { createX402PaymentProvider } = await import('../../../src/payments/x402/provider');
+    const offer = (asset: string) => ({
+      network: 'eip155:31337',
+      rpcUrl: 'http://127.0.0.1:19322',
+      asset,
+      assetName: 'MockUSDC',
+      assetVersion: '2',
+      assetDecimals: 6,
+      payTo: PAY_TO,
+    });
+    return createX402PaymentProvider({
+      offers: [offer(ASSET), offer(OTHER_ASSET)],
+      facilitator: { mode: 'local', signerPrivateKey: BUYER_PRIVATE_KEY },
+    });
+  }
+
+  it('checks every offer and reports each as a component', async () => {
+    getCodeMock.mockImplementation(async ({ address }: { address: string }) =>
+      address === OTHER_ASSET ? '0x' : '0x6080604052',
+    );
+    const health = await (await makeTwoOfferProvider()).health();
+
+    expect(health.status).toBe('fail');
+    // Case variants of EVM addresses share a component name
+    const payTo = PAY_TO.toLowerCase();
+    expect(health.components).toEqual([
+      { name: `eip155:31337 ${ASSET.toLowerCase()} ${payTo}`, status: 'pass' },
+      { name: `eip155:31337 ${OTHER_ASSET} ${payTo}`, status: 'fail' },
+    ]);
+    // Detail includes only the failing offer
+    expect(health.detail).toMatch(new RegExp(`^eip155:31337 ${OTHER_ASSET} ${payTo}: No contract`));
+    expect(health.detail).not.toContain(ASSET.toLowerCase());
+  });
+
+  it('fails only the offer whose check threw', async () => {
+    getChainIdMock.mockRejectedValueOnce(new Error('boom'));
+    const health = await (await makeTwoOfferProvider()).health();
+
+    expect(health.status).toBe('fail');
+    expect(health.components?.map((component) => component.status)).toEqual(['fail', 'pass']);
+    expect(health.detail).toContain('boom');
+  });
+
+  it('passes with every offer named in the detail', async () => {
+    const health = await (await makeTwoOfferProvider()).health();
+
+    expect(health.status).toBe('pass');
+    expect(health.components?.map((component) => component.status)).toEqual(['pass', 'pass']);
+    expect(health.detail).toContain(OTHER_ASSET);
+  });
+});
+
 describe('health() - caching / single-flight', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
   it('collapses a burst of concurrent calls into a single underlying probe', async () => {
-    getChainIdMock.mockResolvedValueOnce(84532);
+    getChainIdMock.mockResolvedValueOnce(31337);
     getCodeMock.mockResolvedValueOnce('0x6080604052');
     mockAsGenuineAnvilNode();
     const provider = await makeProvider();
@@ -222,7 +292,7 @@ describe('health() - caching / single-flight', () => {
   });
 
   it('serves the cached result for a second call within the TTL - no new RPC round-trip', async () => {
-    getChainIdMock.mockResolvedValueOnce(84532);
+    getChainIdMock.mockResolvedValueOnce(31337);
     getCodeMock.mockResolvedValueOnce('0x6080604052');
     mockAsGenuineAnvilNode();
     const { clock, advance } = makeFakeClock();
@@ -237,7 +307,7 @@ describe('health() - caching / single-flight', () => {
   });
 
   it('issues a fresh probe once the TTL elapses', async () => {
-    getChainIdMock.mockResolvedValueOnce(84532);
+    getChainIdMock.mockResolvedValueOnce(31337);
     getCodeMock.mockResolvedValueOnce('0x6080604052');
     mockAsGenuineAnvilNode();
     const { clock, advance } = makeFakeClock();
@@ -254,7 +324,7 @@ describe('health() - caching / single-flight', () => {
     expect(second.status).toBe('fail');
   });
 
-  it('caches a fail result for the same TTL as a pass - symmetric on purpose (see the health cache comment in provider.ts)', async () => {
+  it('caches a fail result for the same TTL as a pass - symmetric on purpose (see the health cache comment in provider/health.ts)', async () => {
     getChainIdMock.mockRejectedValueOnce(new Error('connection refused'));
     const { clock, advance } = makeFakeClock();
     const provider = await makeProvider('local', clock);

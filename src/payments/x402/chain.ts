@@ -3,12 +3,10 @@
  * SDK uses the client it is handed, so the provider's chain calls reach no
  * other RPC.
  *
- * Despite the `Local` names, `createLocalFacilitatorClient` sits on the
- * settlement path and `createLocalPublicClient` backs `health()`. The health
- * client is built for whichever network is configured. The facilitator client
- * always uses chain id 84532: an in-process facilitator is refused on a
- * mainnet, and Base Sepolia is the registry's only testnet. Registering a
- * second testnet means building this client for the configured chain.
+ * `createLocalPublicClient` backs health checks on the configured network.
+ * `createLocalFacilitatorClient` handles settlement and defaults to the local
+ * chain ID, the only network the gateway's in-process facilitator serves.
+ * Deployment tools and test facilitators can pass another chain ID.
  */
 import {
   type Account,
@@ -50,10 +48,7 @@ export function chainIdFromCaip2(network: string): number | undefined {
   return Number.isSafeInteger(chainId) && chainId > 0 ? chainId : undefined;
 }
 
-/**
- * `chainId` defaults to the local dev chain, the only chain the facilitator
- * client is built for. The health client passes the configured network's id.
- */
+// `chainId` defaults to the local dev chain; callers on another chain pass its id
 function buildLocalChain(rpcUrl: string, chainId: number = LOCAL_CHAIN_ID): Chain {
   return {
     id: chainId,
@@ -95,8 +90,9 @@ export function createLocalPublicClient(
 export function createLocalFacilitatorClient(
   rpcUrl: string,
   signerPrivateKey: `0x${string}`,
+  chainId?: number,
 ): LocalFacilitatorClient {
-  const chain = buildLocalChain(rpcUrl);
+  const chain = buildLocalChain(rpcUrl, chainId);
   const account = privateKeyToAccount(signerPrivateKey);
   return createWalletClient({
     account,

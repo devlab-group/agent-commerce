@@ -47,7 +47,7 @@ protocols:
   # Serves JSON-RPC `SendMessage` at mountPath and the Agent Card at
   # /.well-known/agent-card.json. Enable at least one resource with
   # `expose: [a2a]`. Clients send `A2A-Version: 1.0`.
-  # See docs/protocols.md#a2a for supported features.
+  # See docs/protocols/a2a.md for supported features.
   a2a:
     enabled: false
     mountPath: /a2a
@@ -60,7 +60,7 @@ protocols:
   # and the ACP MCP binding are not implemented.
   #
   # Enabling it needs the five mapped resources too - a complete, validating
-  # config is in examples/acp-checkout/. See docs/protocols.md#acp.
+  # config is in examples/acp-checkout/. See docs/protocols/acp.md.
   acp:
     enabled: false
     mountPath: /acp
@@ -140,7 +140,8 @@ payments:
       mode: local
       signerPrivateKey: ${X402_FACILITATOR_PRIVATE_KEY}
     #
-    # A public testnet instead - no key anywhere in this file:
+    # A public testnet instead - no key anywhere in this file. Drop the asset
+    # fields: a public network settles only in its USDC.
     #
     # network: eip155:84532
     # facilitator:
@@ -149,13 +150,11 @@ payments:
     #   auth:
     #     type: none
     #
-    # Base mainnet. None of these are defaults. `auth` is required unless the
-    # facilitator takes no credential and allowUnauthenticatedFacilitator: true
-    # is set instead:
+    # Base mainnet, also without the asset fields. None of these are defaults.
+    # `auth` is required unless the facilitator takes no credential and
+    # allowUnauthenticatedFacilitator: true is set instead:
     #
     # network: eip155:8453
-    # asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"  # USDC on Base
-    # assetName: "USD Coin"  # the EIP-712 domain name, not "USDC"
     # allowMainnet: true
     # facilitator:
     #   mode: remote
@@ -170,6 +169,7 @@ payments:
   #
   # mpp:
   #   enabled: true
+  #   network: eip155:31337 # the local chain; the default is Base Sepolia
   #   rpcUrl: ${X402_RPC_URL}
   #   asset: ${X402_ASSET}
   #   assetName: ${X402_ASSET_NAME}
@@ -177,10 +177,11 @@ payments:
   #   recipient: ${MERCHANT_WALLET}
   #   realm: localhost
   #   challengeSecret: ${MPP_CHALLENGE_SECRET} # at least 32 characters
-  #   # Same values and default as x402 above. Under authorization, the
-  #   # backend must answer before the challenge expires, by default 300 s
-  #   # after it was issued (challengeTtlSeconds).
-  #   paymentFlow: authorization
+  #   # Same values as x402 above, but the default is upfront: MPP's charge
+  #   # intent forbids running the backend before the payment is verified.
+  #   # Under authorization, the backend must answer before the challenge
+  #   # expires, by default 300 s after it was issued (challengeTtlSeconds).
+  #   paymentFlow: upfront
   #   facilitator:
   #     mode: local
   #     signerPrivateKey: ${X402_FACILITATOR_PRIVATE_KEY}
@@ -198,7 +199,7 @@ payments:
 # beside the old one, moving the signer to the new `kid`, then removing the old.
 #
 # Needs the optional peers:  npm install jose @sd-jwt/core canonicalize
-# Full reference: docs/ap2.md
+# Full reference: docs/protocols/ap2.md
 # ---------------------------------------------------------------------------
 # authorization:
 #   ap2:

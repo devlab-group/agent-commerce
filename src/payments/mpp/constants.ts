@@ -7,6 +7,7 @@
  *
  * Importing this metadata does not load `mppx`.
  */
+import type { X402PaymentFlow } from '../x402/payment-flow';
 
 /** Upstream specification repository the pinned drafts were read from */
 export const MPP_SPEC_REPOSITORY = 'https://github.com/tempoxyz/mpp-specs';
@@ -52,12 +53,19 @@ export const MPP_PROFILE = {
 } as const;
 
 /** Supported CAIP-2 networks; gateway config applies the x402 mainnet guardrails */
-export const MPP_NETWORKS = ['eip155:84532', 'eip155:8453'] as const;
+export const MPP_NETWORKS = ['eip155:31337', 'eip155:84532', 'eip155:8453'] as const;
 
 export type MppNetwork = (typeof MPP_NETWORKS)[number];
 
-/** Default network ID, shared by Base Sepolia and the local development chain */
+/** Default network: Base Sepolia. The local Anvil chain is `eip155:31337` */
 export const MPP_DEFAULT_NETWORK: MppNetwork = 'eip155:84532';
+
+/**
+ * Default payment flow: `upfront` settles before the backend runs. The
+ * `charge` intent counts a backend call made before verification completes as
+ * partial access, and EVM charge verification includes the transfer itself.
+ */
+export const MPP_DEFAULT_PAYMENT_FLOW: X402PaymentFlow = 'upfront';
 
 export function isMppNetwork(value: string): value is MppNetwork {
   return (MPP_NETWORKS as readonly string[]).includes(value);

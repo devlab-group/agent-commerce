@@ -12,7 +12,7 @@ const PAY_TO = '0x70997970C51812dc3A010C7d01b50e0d17dc79C8' as const;
 // `PaymentRequired` envelope, and the price is `amount`
 const ACCEPTS = {
   scheme: 'exact',
-  network: 'eip155:84532',
+  network: 'eip155:31337',
   amount: '10000',
   payTo: PAY_TO,
   maxTimeoutSeconds: 60,
@@ -39,7 +39,7 @@ describe('createPaymentProof', () => {
     const decoded = decode(proof);
     expect(decoded.x402Version).toBe(2);
     expect(decoded.accepted.scheme).toBe('exact');
-    expect(decoded.accepted.network).toBe('eip155:84532');
+    expect(decoded.accepted.network).toBe('eip155:31337');
     expect(decoded.payload.authorization.from?.toLowerCase()).toBe(BUYER_ADDRESS.toLowerCase());
     expect(decoded.payload.authorization.to?.toLowerCase()).toBe(PAY_TO.toLowerCase());
     expect(decoded.payload.authorization.value).toBe('10000');
@@ -64,7 +64,7 @@ describe('createPaymentProof', () => {
       domain: {
         name: 'MockUSDC',
         version: '2',
-        chainId: 84532,
+        chainId: 31337,
         verifyingContract: ASSET,
       },
       types: {
@@ -145,6 +145,15 @@ describe('createPaymentProof', () => {
     expect(decode(proofA).payload.authorization.nonce).not.toBe(
       decode(proofB).payload.authorization.nonce,
     );
+  });
+
+  it('refuses an offer that asks for another transfer method', async () => {
+    await expect(
+      createPaymentProof({
+        buyerPrivateKey: BUYER_PRIVATE_KEY,
+        accepts: { ...ACCEPTS, extra: { ...ACCEPTS.extra, assetTransferMethod: 'permit2' } },
+      }),
+    ).rejects.toThrow(/signs EIP-3009 only, and this offer uses "permit2"/);
   });
 
   it('throws a clear error when extra.name/extra.version are missing', async () => {

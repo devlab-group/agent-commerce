@@ -48,6 +48,13 @@ const TRANSFER_WITH_AUTHORIZATION_TYPES = {
 /** Returns the base64 `PAYMENT-SIGNATURE` value to send back to the gateway */
 export async function createPaymentProof(options: CreatePaymentProofOptions): Promise<string> {
   const requirements = PaymentRequirementsV2Schema.parse(options.accepts);
+  const method = requirements.extra?.['assetTransferMethod'];
+  if (method !== undefined && method !== 'eip3009') {
+    throw new CommerceError(
+      'INPUT_INVALID',
+      `createPaymentProof: signs EIP-3009 only, and this offer uses "${String(method)}"; sign it with the SDK's x402Client`,
+    );
+  }
   if (
     !requirements.extra ||
     typeof requirements.extra['name'] !== 'string' ||

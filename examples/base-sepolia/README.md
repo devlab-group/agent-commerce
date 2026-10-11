@@ -50,9 +50,7 @@ MERCHANT_WALLET=0xYourMerchantAddress \
   npm run agent-commerce -- doctor --config examples/base-sepolia/config.yaml
 ```
 
-`doctor` reports the deployment as `TESTNET on Base Sepolia (eip155:84532)`,
-not as local. Chain id 84532 belongs to both, so the facilitator is what
-distinguishes them.
+`doctor` reports the deployment as `TESTNET on Base Sepolia (eip155:84532)`.
 
 ## Proving it settles
 
@@ -62,12 +60,14 @@ X402_TESTNET_MERCHANT_ADDRESS=0xYourMerchantAddress \
   npm run test:testnet
 ```
 
-That suite asks unpaid, signs the challenge, settles through the facilitator,
-and then reads the **on-chain balances and transaction receipt back from the
-network**; the gateway's own report of success is not the proof. It spends
-`X402_TESTNET_AMOUNT` (default `0.01`) USDC per run, and it skips itself with
-an explanation when those variables are absent. The same variables also run
-the MPP Base Sepolia smoke suite, which spends that amount again.
+The suite requests a challenge, signs it and settles through the facilitator,
+then verifies the **USDC `Transfer` in the on-chain receipt**. Each x402 run
+spends `X402_SMOKE_AMOUNT` (default `0.01`) USDC and skips with an explanation
+if the required variables are absent. These variables also enable the separate
+MPP Base Sepolia suite, whose amount is set by `X402_TESTNET_AMOUNT`
+(default `0.01`). The
+[smoke tests](../../docs/smoke-tests.md) page covers the other targets, such as
+Permit2 on Base Sepolia.
 
 It has been run: [`0xf3288399…`](https://sepolia.basescan.org/tx/0xf3288399e31eab683f9bced802fad2dcf44072f93e1aa51223a0f8398e7668e8)
 settled 0.01 USDC on 2026-08-22.

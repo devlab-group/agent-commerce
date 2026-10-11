@@ -1,7 +1,7 @@
 /**
- * Starts the local Anvil chain for the demo and the payment test suites. The
- * chain id defaults to 84532 because the gateway advertises `eip155:84532` and
- * the buyer's signature is bound to that id.
+ * Starts the local Anvil chain for the demo and the payment test suites, on
+ * `LOCAL_CHAIN_ID` (31337, Anvil's own default). The gateway advertises
+ * `eip155:31337` and the buyer's signature is bound to that id.
  *
  * `--block-time` is omitted on purpose: Anvil then mines a block for each
  * transaction and none in between, and some Anvil builds reject

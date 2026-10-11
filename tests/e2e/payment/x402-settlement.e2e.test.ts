@@ -115,7 +115,7 @@ async function startGateway(): Promise<void> {
       payments: {
         x402: {
           enabled: true,
-          network: 'eip155:84532',
+          network: 'eip155:31337',
           rpcUrl: anvil.rpcUrl,
           asset: deployment.asset,
           assetName: deployment.assetName,
@@ -231,7 +231,7 @@ beforeAll(async () => {
   anvil = await startAnvil({ port: PORT, silent: true });
   deployment = await deployLocalChain({ rpcUrl: anvil.rpcUrl, buyerInitialBalance: '100.00' });
   provider = createX402PaymentProvider({
-    network: 'eip155:84532',
+    network: 'eip155:31337',
     rpcUrl: anvil.rpcUrl,
     asset: deployment.asset,
     assetName: deployment.assetName,
@@ -523,7 +523,7 @@ describe('x402 settlement - real local chain', () => {
 
   it('10. provider failure: RPC unreachable yields PAYMENT_PROVIDER_UNAVAILABLE, not a silent pass', async () => {
     const unavailableProvider = createX402PaymentProvider({
-      network: 'eip155:84532',
+      network: 'eip155:31337',
       rpcUrl: await unreachableRpcUrl(),
       asset: deployment.asset,
       assetName: deployment.assetName,
@@ -562,7 +562,7 @@ describe('x402 settlement - real local chain', () => {
     const rpc = await startLossyRpc(anvil.rpcUrl);
     try {
       const lossyProvider = createX402PaymentProvider({
-        network: 'eip155:84532',
+        network: 'eip155:31337',
         rpcUrl: rpc.url,
         asset: deployment.asset,
         assetName: deployment.assetName,
@@ -617,7 +617,7 @@ describe('x402 settlement - real local chain', () => {
     // This one pays with the SDK's own client, as an off-the-shelf buyer would.
     const buyer = privateKeyToAccount(deployment.buyer.privateKey);
     const client = new x402Client();
-    registerExactEvmScheme(client, { signer: buyer, networks: ['eip155:84532'] });
+    registerExactEvmScheme(client, { signer: buyer, networks: ['eip155:31337'] });
     // The SDK's default spend controls allow only assets it recognizes, and
     // MockUSDC is not one, so they are off for this local-only case. A real
     // buyer would allowlist its asset.
@@ -724,7 +724,7 @@ describe('x402 settlement - real local chain', () => {
     const client = new x402Client();
     registerExactEvmScheme(client, {
       signer: privateKeyToAccount(deployment.buyer.privateKey),
-      networks: ['eip155:84532'],
+      networks: ['eip155:31337'],
     });
     client.setSpendControls(false); // MockUSDC is not in the SDK's asset list
     const payload = await client.createPaymentPayload(
@@ -761,7 +761,7 @@ describe('x402 settlement - real local chain', () => {
     });
   });
 
-  it('15. leaves funds untouched when the backend fails before settlement', async () => {
+  it('15. leaves funds untouched when the backend fails before settlement, and the same proof pays once on retry', async () => {
     const proof = await gatewayProof();
     const receiptsBefore = (await store.listReceipts()).length;
     const before = await balances();
@@ -780,5 +780,149 @@ describe('x402 settlement - real local chain', () => {
     expect(after.buyer).toBe(before.buyer);
     expect(after.merchant).toBe(before.merchant);
     expect(await store.listReceipts()).toHaveLength(receiptsBefore);
+
+    // The authorization is unspent, so presenting it again settles it once
+    const again = await invoke({ [PAYMENT_HEADER]: proof });
+
+    expect(again.statusCode).toBe(200);
+    const [receipt] = await store.listReceipts({ limit: 1 });
+    await expectRealSettlement({
+      rpcUrl: anvil.rpcUrl,
+      asset: deployment.asset,
+      buyer: deployment.buyer.address,
+      merchant: deployment.merchant.address,
+      before,
+      after: await balances(),
+      amountBaseUnits: 1_000_000n,
+      txHash: receipt?.payment?.externalReference as string,
+    });
+  });
+});
+
+describe('x402 settlement - several offers', () => {
+  it('13. the SDK client pays the second offer through the gateway, and only that token moves', async () => {
+    // A second, independent MockUSDC on the same chain, which funds the buyer
+    const second = await deployLocalChain({ rpcUrl: anvil.rpcUrl, buyerInitialBalance: '10.00' });
+    const option = (token: typeof deployment) => ({
+      network: 'eip155:31337',
+      payTo: deployment.merchant.address,
+      asset: token.asset,
+      assetName: token.assetName,
+      assetVersion: token.assetVersion,
+      assetDecimals: token.assetDecimals,
+    });
+    const config = parseConfig(
+      {
+        version: 1,
+        merchant: {
+          id: 'x402-offers',
+          name: 'x402 offers',
+          publicBaseUrl: 'http://127.0.0.1:8080',
+        },
+        server: { port: 8080, host: '127.0.0.1', allowedOrigins: [] },
+        storage: { receipts: { driver: 'sqlite', path: ':memory:' } },
+        protocols: { http: { enabled: true }, mcp: { enabled: false, mountPath: '/mcp' } },
+        resources: {
+          [RESOURCE_ID]: {
+            name: 'Market report',
+            backend: { type: 'http', method: 'GET', url: 'http://merchant.invalid/api/report' },
+            pricing: { type: 'fixed', amount: '1.00', currency: 'USDC' },
+            expose: ['http'],
+            payments: ['x402'],
+          },
+        },
+        payments: {
+          x402: {
+            enabled: true,
+            rpcUrl: anvil.rpcUrl,
+            options: [option(deployment), option(second)],
+            maxTimeoutSeconds: 120,
+            facilitator: { mode: 'local', signerPrivateKey: deployment.facilitator.privateKey },
+          },
+        },
+      },
+      {},
+    );
+    const offersStore = createSqliteReceiptStore({ path: ':memory:' });
+    await offersStore.init();
+    const offers = await createGateway({
+      config,
+      store: offersStore,
+      paymentProviders: createConfiguredPaymentProviders(config.payments, NOOP_LOGGER),
+      protocolAdapters: [],
+      backend,
+    });
+    try {
+      const call = (headers: Record<string, string> = {}) =>
+        offers.server.inject({
+          method: 'POST',
+          url: `/api/resources/${RESOURCE_ID}/invoke`,
+          headers: { 'content-type': 'application/json', ...headers },
+          payload: {},
+        });
+
+      const unpaid = await call();
+      expect(unpaid.statusCode).toBe(402);
+      const http = new x402HTTPClient(new x402Client());
+      const challenge = http.getPaymentRequiredResponse(
+        (name) => unpaid.headers[name.toLowerCase()] as string | undefined,
+      );
+      expect(challenge.accepts.map((a) => a.asset)).toEqual([deployment.asset, second.asset]);
+
+      const client = new x402Client((_version, accepts) => accepts[1] as never);
+      registerExactEvmScheme(client, {
+        signer: privateKeyToAccount(deployment.buyer.privateKey),
+        networks: ['eip155:31337'],
+      });
+      client.setSpendControls(false);
+      const payload = await client.createPaymentPayload(challenge);
+
+      const query = (asset: `0x${string}`) =>
+        readBalances({
+          rpcUrl: anvil.rpcUrl,
+          asset,
+          buyer: deployment.buyer.address,
+          merchant: deployment.merchant.address,
+        });
+      const firstBefore = await query(deployment.asset);
+      const secondBefore = await query(second.asset);
+
+      const paid = await call({
+        [PAYMENT_HEADER]: Buffer.from(JSON.stringify(payload)).toString('base64'),
+      });
+      expect(paid.statusCode).toBe(200);
+
+      const settlement = http.getPaymentSettleResponse(
+        (name) => paid.headers[name.toLowerCase()] as string | undefined,
+      );
+      await expectRealSettlement({
+        rpcUrl: anvil.rpcUrl,
+        asset: second.asset,
+        buyer: deployment.buyer.address,
+        merchant: deployment.merchant.address,
+        before: secondBefore,
+        after: await query(second.asset),
+        amountBaseUnits: 1_000_000n,
+        txHash: settlement.transaction,
+      });
+      expect(await query(deployment.asset)).toEqual(firstBefore);
+
+      // The receipt names the token that actually settled
+      const [receipt] = await offersStore.listReceipts({ limit: 1 });
+      expect(receipt?.payment?.asset?.toLowerCase()).toBe(second.asset.toLowerCase());
+
+      // Discovery lists both offers, without either RPC URL
+      const wellKnown = await offers.server.inject({
+        method: 'GET',
+        url: '/.well-known/agent-commerce',
+      });
+      expect(wellKnown.json().payments.x402.options.map((o: { asset: string }) => o.asset)).toEqual(
+        [deployment.asset, second.asset],
+      );
+      expect(wellKnown.body).not.toContain(anvil.rpcUrl);
+    } finally {
+      await offers.close();
+      await offersStore.close();
+    }
   });
 });

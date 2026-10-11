@@ -91,7 +91,7 @@ beforeEach(async () => {
   facilitator.settle.mockReset().mockResolvedValue({
     success: true,
     transaction: TX,
-    network: 'eip155:84532',
+    network: 'eip155:31337',
     payer: buyer.address,
   });
   gateway = await createGateway({
@@ -99,7 +99,7 @@ beforeEach(async () => {
     store: createFakeStore(),
     paymentProviders: [
       createX402PaymentProvider({
-        network: 'eip155:84532',
+        network: 'eip155:31337',
         rpcUrl: RPC_URL,
         asset: ASSET,
         assetName: AUTHORIZATION.name,
@@ -109,6 +109,7 @@ beforeEach(async () => {
         facilitator: REMOTE,
       }),
       createMppPaymentProvider({
+        network: 'eip155:31337',
         recipient: PAY_TO,
         asset: ASSET,
         assetName: AUTHORIZATION.name,
@@ -144,7 +145,7 @@ async function connect(): Promise<Client> {
 
 function x402Payments(): x402Client {
   const payments = new x402Client();
-  registerExactEvmScheme(payments, { signer: buyer, networks: ['eip155:84532'] });
+  registerExactEvmScheme(payments, { signer: buyer, networks: ['eip155:31337'] });
   // Disable SDK spend controls because the test token is not in its asset list
   payments.setSpendControls(false);
   return payments;
@@ -167,7 +168,7 @@ describe('x402 MCP transport', () => {
     expect(result.paymentResponse).toMatchObject({
       success: true,
       transaction: TX,
-      network: 'eip155:84532',
+      network: 'eip155:31337',
       amount: '10000',
     });
     expect(facilitator.settle).toHaveBeenCalledTimes(1);
@@ -351,7 +352,7 @@ describe('MPP MCP transport', () => {
       method: 'evm',
       status: 'success',
       reference: TX,
-      chainId: 84532,
+      chainId: 31337,
     });
     expect(facilitator.settle).toHaveBeenCalledTimes(1);
   });

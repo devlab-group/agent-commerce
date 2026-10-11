@@ -120,8 +120,11 @@
     "@coinbase/x402": "2.1.0",
     "@modelcontextprotocol/server": "2.3.0",
     "@sd-jwt/core": "0.20.1",
+    "@solana/kit": "5.5.1",
     "@x402/core": "2.25.0",
     "@x402/evm": "2.25.0",
+    "@x402/near": "2.25.0",
+    "@x402/svm": "2.25.0",
     "canonicalize": "5.0.0",
     "jose": "6.2.12",
     "mppx": "0.13.1",
@@ -137,10 +140,19 @@
     "@sd-jwt/core": {
       "optional": true
     },
+    "@solana/kit": {
+      "optional": true
+    },
     "@x402/core": {
       "optional": true
     },
     "@x402/evm": {
+      "optional": true
+    },
+    "@x402/near": {
+      "optional": true
+    },
+    "@x402/svm": {
       "optional": true
     },
     "canonicalize": {
@@ -163,7 +175,13 @@
     "@modelcontextprotocol/client": "2.3.0",
     "@modelcontextprotocol/sdk": "1.32.0",
     "@modelcontextprotocol/server": "2.3.0",
+    "@near-js/accounts": "2.5.1",
+    "@near-js/crypto": "2.5.1",
+    "@near-js/providers": "2.5.1",
+    "@near-js/signers": "2.5.1",
+    "@near-js/transactions": "2.5.1",
     "@sd-jwt/core": "0.20.1",
+    "@solana/kit": "5.5.1",
     "@types/better-sqlite3": "9.6.0",
     "@types/node": "24.13.3",
     "@types/react": "19.2.18",
@@ -173,6 +191,8 @@
     "@x402/core": "2.25.0",
     "@x402/evm": "2.25.0",
     "@x402/mcp": "2.25.0",
+    "@x402/near": "2.25.0",
+    "@x402/svm": "2.25.0",
     "canonicalize": "5.0.0",
     "jose": "6.2.12",
     "mppx": "0.13.1",

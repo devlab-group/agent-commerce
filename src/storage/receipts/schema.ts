@@ -75,6 +75,36 @@ const MIGRATIONS: readonly Migration[] = [
       db.exec(`ALTER TABLE receipts ADD COLUMN authorization_json TEXT;`);
     },
   },
+  {
+    version: 3,
+    up(db) {
+      // Archive rejected attempts before reclaim overwrites them. replay_key
+      // is not unique here: one authorization can be rejected and reclaimed
+      // repeatedly.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS payment_attempt_history (
+          seq                 INTEGER PRIMARY KEY AUTOINCREMENT,
+          id                  TEXT NOT NULL,
+          request_id          TEXT NOT NULL,
+          resource_id         TEXT NOT NULL,
+          provider            TEXT NOT NULL,
+          replay_key          TEXT NOT NULL,
+          status              TEXT NOT NULL,
+          amount              TEXT NOT NULL,
+          currency            TEXT NOT NULL,
+          payer               TEXT,
+          payee               TEXT,
+          external_reference  TEXT,
+          rejection_reason    TEXT,
+          created_at          TEXT NOT NULL,
+          updated_at          TEXT NOT NULL,
+          superseded_at       TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_payment_attempt_history_replay_key ON payment_attempt_history(replay_key);
+        CREATE INDEX IF NOT EXISTS idx_payment_attempt_history_request_id ON payment_attempt_history(request_id);
+      `);
+    },
+  },
 ];
 
 /** Target schema version: the version of the last migration */

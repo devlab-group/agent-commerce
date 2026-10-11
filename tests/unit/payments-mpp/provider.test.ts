@@ -86,7 +86,7 @@ function movableClock(start = Date.now()): Clock & { advance(ms: number): void }
 
 function x402Settlement(payTo = recipient, asset: `0x${string}` = ASSET): PaymentProvider {
   return createX402PaymentProvider({
-    network: 'eip155:84532',
+    network: 'eip155:31337',
     rpcUrl: 'http://127.0.0.1:19321', // not contacted because the HTTP client is mocked
     asset,
     assetName: AUTHORIZATION.name,
@@ -98,6 +98,7 @@ function x402Settlement(payTo = recipient, asset: `0x${string}` = ASSET): Paymen
 }
 
 const BASE_OPTIONS = {
+  network: 'eip155:31337',
   recipient,
   asset: ASSET,
   assetName: AUTHORIZATION.name,
@@ -300,14 +301,14 @@ describe('MPP createRequirement', () => {
     expect(request.recipient).toBe(recipient);
     expect(request.currency).toBe(ASSET);
     expect(request.methodDetails).toMatchObject({
-      chainId: 84532,
+      chainId: 31337,
       credentialTypes: ['authorization'],
     });
     expect(requirement).toMatchObject({
       provider: 'mpp',
       amount: '0.01',
       destination: recipient,
-      network: 'eip155:84532',
+      network: 'eip155:31337',
       asset: ASSET,
       expiresAt: '2026-09-23T12:05:00.000Z',
     });
@@ -366,23 +367,28 @@ describe('MPP createRequirement', () => {
   });
 
   it.each([
-    ['authorization by default', {}, true],
-    ['upfront for the rail', { paymentFlow: 'upfront' }, false],
+    ['upfront by default', {}, false],
+    ['authorization for the rail', { paymentFlow: 'authorization' }, true],
     [
-      'a per-resource upfront override',
-      { resourcePaymentFlows: { market_report: 'upfront' } },
+      'a per-resource authorization override',
+      { resourcePaymentFlows: { market_report: 'authorization' } },
+      true,
+    ],
+    [
+      'a per-resource upfront override of an authorization rail',
+      { paymentFlow: 'authorization', resourcePaymentFlows: { market_report: 'upfront' } },
       false,
     ],
     [
-      'a per-resource authorization override of an upfront rail',
-      { paymentFlow: 'upfront', resourcePaymentFlows: { market_report: 'authorization' } },
-      true,
+      "another resource's override",
+      { resourcePaymentFlows: { other_report: 'authorization' } },
+      false,
     ],
-    ["another resource's override", { resourcePaymentFlows: { other_report: 'upfront' } }, true],
   ] as const)(
     'asks the pipeline to settle after the backend under %s',
     async (_label, flow, expected) => {
       const requirement = await requirementFor(makeProvider(flow));
+      // No reuse marker: a challenge's credential is single-use, even unsettled
       expect(requirement.metadata).toEqual({ settleAfterBackend: expected });
     },
   );
@@ -457,12 +463,12 @@ describe('MPP verify', () => {
       payer: buyer.address,
       payee: recipient,
       amount: '0.01',
-      network: 'eip155:84532',
+      network: 'eip155:31337',
       asset: ASSET,
     });
     const { nonce } = Credential.deserialize(credential).payload as { nonce: `0x${string}` };
     expect(result.replayKey).toBe(
-      computeReplayKey({ chainId: 84532, asset: ASSET, from: buyer.address, nonce }),
+      computeReplayKey({ chainId: 31337, asset: ASSET, from: buyer.address, nonce }),
     );
     expect(Method.broadcastCredential).not.toHaveBeenCalled();
     expect(facilitator.verify).toHaveBeenCalledTimes(1);
@@ -692,7 +698,7 @@ describe('MPP verify', () => {
             amount: '0.01',
             currency: ASSET,
             recipient,
-            chainId: 84532,
+            chainId: 31337,
             decimals: 6,
             credentialTypes: ['authorization'],
             ...request,
@@ -807,7 +813,7 @@ describe('MPP verify', () => {
       const misattributed = await signedCredential(
         issuedChallenge(requirement),
         {},
-        { source: `did:pkh:eip155:84532:${stranger.address}` },
+        { source: `did:pkh:eip155:31337:${stranger.address}` },
       );
       const result = await verifyWith(provider, requirement, misattributed);
       expect(result.rejectionReason).toBe('source_mismatch');
@@ -817,8 +823,8 @@ describe('MPP verify', () => {
 
 const SETTLED = {
   success: true,
-  transaction: '0xabc',
-  network: 'eip155:84532',
+  transaction: `0x${'ab'.repeat(32)}`,
+  network: 'eip155:31337',
 };
 
 async function verifiedPayment(provider = makeProvider()) {
@@ -849,12 +855,12 @@ describe('MPP settle', () => {
     expect(result).toMatchObject({
       status: 'settled',
       provider: 'mpp',
-      externalReference: '0xabc',
+      externalReference: `0x${'ab'.repeat(32)}`,
       payer: buyer.address,
       payee: recipient,
       amount: '0.01',
       currency: 'USDC',
-      network: 'eip155:84532',
+      network: 'eip155:31337',
     });
     const {
       type: _type,
@@ -868,7 +874,7 @@ describe('MPP settle', () => {
     expect(payload['payload']).toEqual({ signature, authorization });
     expect(requirements).toMatchObject({
       scheme: 'exact',
-      network: 'eip155:84532',
+      network: 'eip155:31337',
       amount: '10000',
       asset: ASSET,
       payTo: recipient,
@@ -911,7 +917,7 @@ describe('MPP settle', () => {
       success: false,
       errorReason: 'transaction_failed',
       transaction: '',
-      network: 'eip155:84532',
+      network: 'eip155:31337',
     });
 
     expect(await settle()).toMatchObject({
@@ -936,7 +942,7 @@ describe('MPP settle', () => {
       success: false,
       errorReason: 'settlement_pending',
       transaction: '0xpending',
-      network: 'eip155:84532',
+      network: 'eip155:31337',
     });
 
     await expect(settle()).rejects.toSatisfy(
@@ -1006,32 +1012,32 @@ describe('MPP through the execution pipeline', () => {
     expect(facilitator.settle).toHaveBeenCalledTimes(1);
   });
 
-  it('settles after the backend by default and issues a receipt', async () => {
+  it('settles before the backend by default and issues a receipt', async () => {
     const provider = makeProvider();
     const { pipeline, calls } = pipelineFor(provider);
     const credential = await clientCredential(await requirementFor(provider));
 
     const outcome = await pipeline.execute(paidRequest(credential));
 
-    expect(calls).toEqual(['backend', 'settle']);
+    expect(calls).toEqual(['settle', 'backend']);
     expect(outcome).toMatchObject({
       kind: 'delivered',
       payment: { provider: 'mpp', status: 'settled', metadata: { receipt: expect.any(String) } },
     });
   });
 
-  it('settles before the backend under upfront', async () => {
-    const provider = makeProvider({ paymentFlow: 'upfront' });
+  it('settles after the backend under authorization', async () => {
+    const provider = makeProvider({ paymentFlow: 'authorization' });
     const { pipeline, calls } = pipelineFor(provider);
     const credential = await clientCredential(await requirementFor(provider));
 
     await pipeline.execute(paidRequest(credential));
 
-    expect(calls).toEqual(['settle', 'backend']);
+    expect(calls).toEqual(['backend', 'settle']);
   });
 
-  it('settles nothing when the backend fails, and refuses the credential afterwards', async () => {
-    const provider = makeProvider();
+  it('settles nothing when the backend fails under authorization, and refuses the credential afterwards', async () => {
+    const provider = makeProvider({ paymentFlow: 'authorization' });
     const { pipeline, store, calls } = pipelineFor(provider, { backendFails: true });
     const credential = await clientCredential(await requirementFor(provider));
 
@@ -1067,7 +1073,7 @@ describe('MPP through the execution pipeline', () => {
   });
 
   it('withholds the response when settlement is not confirmed after the backend ran', async () => {
-    const provider = makeProvider();
+    const provider = makeProvider({ paymentFlow: 'authorization' });
     const { pipeline, store, calls } = pipelineFor(provider);
     facilitator.settle.mockRejectedValueOnce(new Error('The operation timed out'));
     const credential = await clientCredential(await requirementFor(provider));

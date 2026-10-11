@@ -21,6 +21,7 @@
 import type { Ap2AuthorizationProvider } from '../authorization/ap2';
 import { createAp2AuthorizationProvider } from '../authorization/ap2';
 import { loadConfig } from '../config';
+import type { X402OptionConfig } from '../config/schema';
 import type { ProtocolAdapter, ReceiptStore } from '../core';
 import { CommerceError, isCommerceError } from '../core';
 import { createA2aAdapter } from '../protocols/a2a';
@@ -137,11 +138,22 @@ async function main(): Promise<void> {
   if (x402?.enabled) {
     console.log('');
     console.log('  x402 settlement');
-    // Origin only: Alchemy, Infura and QuickNode put the API key in the URL,
-    // and REDACT_PATHS covers pino's structured fields, not console.log
-    console.log(`    network      ${x402.network}  via ${rpcOrigin(x402.rpcUrl)}`);
-    console.log(`    asset        ${x402.asset} (${x402.assetName} v${x402.assetVersion})`);
-    console.log(`    pays to      ${x402.payTo}   <- merchant-controlled, not the gateway`);
+    // Print each offer's RPC origin only: URLs may contain API keys, and
+    // pino's REDACT_PATHS does not protect console.log
+    const printOffer = (option: X402OptionConfig, indent = '') => {
+      console.log(`${indent}    network      ${option.network}  via ${rpcOrigin(option.rpcUrl)}`);
+      const domain = option.assetName ? ` (${option.assetName} v${option.assetVersion})` : '';
+      const method = option.assetTransferMethod === 'permit2' ? ' via Permit2' : '';
+      console.log(`${indent}    asset        ${option.asset}${domain}${method}`);
+      console.log(
+        `${indent}    pays to      ${option.payTo}   <- merchant-controlled, not the gateway`,
+      );
+    };
+    for (const option of x402.options ?? [x402]) printOffer(option);
+    for (const [id, list] of Object.entries(x402.resourceOptions ?? {})) {
+      console.log(`    resource     ${id} (its own offers)`);
+      for (const option of list) printOffer(option, '  ');
+    }
     console.log(`    facilitator  ${x402.facilitator.mode}`);
     console.log('');
   }

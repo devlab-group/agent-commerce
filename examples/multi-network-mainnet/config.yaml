@@ -1,0 +1,97 @@
+# ---------------------------------------------------------------------------
+# Example: multi-network-mainnet - REAL FUNDS, template
+#
+# One resource offered on Base, Polygon, Arbitrum One and Solana; the buyer
+# pays any one of them. Every offer settles in its network's USDC through one
+# facilitator, which must list each network. Payments have settled on Base
+# and Solana; Polygon and Arbitrum One are supported but have not run with
+# real funds.
+#
+# Solana offers need the optional peers @x402/svm and @solana/kit.
+#
+#   ALLOW_X402_MAINNET=true MERCHANT_WALLET=0x... SOLANA_MERCHANT_WALLET=... \
+#   X402_FACILITATOR_URL=https://... \
+#   npm run agent-commerce -- validate --config examples/multi-network-mainnet/config.yaml
+# ---------------------------------------------------------------------------
+
+version: 1
+
+merchant:
+  id: multi-network-mainnet-example
+  name: Multi-network Mainnet Example
+  publicBaseUrl: ${GATEWAY_PUBLIC_BASE_URL:-http://localhost:8080}
+
+server:
+  port: ${GATEWAY_PORT:-8080}
+  host: 0.0.0.0
+  # Operator routes (receipts, events) 404 without this
+  adminToken: ${ADMIN_TOKEN}
+
+storage:
+  receipts:
+    driver: sqlite
+    path: ${RECEIPT_STORE_PATH:-./data/receipts.sqlite}
+
+protocols:
+  http:
+    enabled: true
+  mcp:
+    enabled: true
+    mountPath: /mcp
+
+resources:
+  premium_report:
+    name: Premium Report
+    description: One paid endpoint, settled in USDC on the network the buyer picks.
+    input:
+      type: object
+      properties: {}
+      additionalProperties: false
+    backend:
+      type: http
+      method: GET
+      url: ${MERCHANT_API_BASE_URL:-http://localhost:3000}/api/report
+      timeoutMs: 10000
+    pricing:
+      type: fixed
+      # USD names the networks' USDC at face value; receipts record USDC
+      amount: "0.01"
+      currency: USD
+    expose: [http, mcp]
+    payments: [x402]
+
+payments:
+  x402:
+    enabled: true
+    # No asset fields: each network's USDC, as config load requires on mainnet
+    options:
+      - network: eip155:8453
+        payTo: ${MERCHANT_WALLET}
+      - network: eip155:137
+        payTo: ${MERCHANT_WALLET}
+      - network: eip155:42161
+        payTo: ${MERCHANT_WALLET}
+      # The wallet's USDC token account must exist before a payment arrives
+      - network: solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp
+        payTo: ${SOLANA_MERCHANT_WALLET}
+    # One endpoint per network, for health checks; dedicated endpoints avoid
+    # public rate limits
+    networks:
+      eip155:8453:
+        rpcUrl: ${BASE_RPC_URL:-https://base.drpc.org}
+      eip155:137:
+        rpcUrl: ${POLYGON_RPC_URL:-https://polygon-bor-rpc.publicnode.com}
+      eip155:42161:
+        rpcUrl: ${ARBITRUM_RPC_URL:-https://arbitrum-one-rpc.publicnode.com}
+      solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp:
+        rpcUrl: ${SOLANA_RPC_URL:-https://api.mainnet-beta.solana.com}
+    maxTimeoutSeconds: 600
+    # Required, and required to be `true`. Mainnet is never a default
+    allowMainnet: ${ALLOW_X402_MAINNET}
+    facilitator:
+      mode: remote
+      # Health fails unless its /supported lists every network above
+      url: ${X402_FACILITATOR_URL}
+      auth:
+        type: bearer
+        token: ${X402_FACILITATOR_TOKEN}

@@ -102,7 +102,7 @@ moves money and never unlocks a resource on its own. Required before review:
       rejection reason that is not an oracle for trust policy
 - [ ] nothing of the proof itself in a receipt, an event or a log
 
-AP2 is the worked example: [`docs/ap2.md`](docs/ap2.md).
+AP2 is the worked example: [`docs/protocols/ap2.md`](docs/protocols/ap2.md).
 
 ## Publishing
 

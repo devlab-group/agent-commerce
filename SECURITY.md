@@ -81,7 +81,7 @@ custodian.
   the agent approved that exact purchase. It is verified and reserved before
   settlement, spendable once, and never a substitute for payment. Trust is
   static public keys in configuration, with no key discovery of any kind. See
-  [`docs/ap2.md`](docs/ap2.md).
+  [`docs/protocols/ap2.md`](docs/protocols/ap2.md).
 - **Bounded built-in HTTP calls.** The included HTTP backend executor applies
   a timeout and a 1 MiB response-body cap. Custom backend executors must
   enforce their own limits.

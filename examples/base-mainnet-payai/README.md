@@ -52,6 +52,7 @@ To actually settle:
 
 ```bash
 export ALLOW_X402_MAINNET=true
+export X402_SMOKE_TARGETS=base
 export X402_MAINNET_BUYER_PRIVATE_KEY=0x...   # funded with USDC on Base
 export X402_MAINNET_MERCHANT_ADDRESS=0x...
 export X402_FACILITATOR_URL=https://facilitator.payai.network
@@ -61,5 +62,5 @@ npm run test:mainnet
 **Each successful x402 smoke run spends real USDC** (default 0.01). Setting
 `ALLOW_MPP_MAINNET=true` also enables the separate, paid MPP smoke suite.
 
-The smoke test checks the buyer and merchant balance changes and reads the
-transaction receipt from Base to confirm settlement.
+The smoke test reads the USDC `Transfer` from the transaction receipt on Base
+to confirm settlement; see [smoke tests](../../docs/smoke-tests.md).

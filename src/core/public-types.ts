@@ -22,6 +22,7 @@ export type {
 export type {
   AdapterDescriptor,
   AdapterHealth,
+  AdapterHealthComponent,
   AuthorizationMethodName,
   DecimalAmount,
   IsoTimestamp,

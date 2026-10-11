@@ -66,9 +66,7 @@ payments:
   x402:
     enabled: true
 
-    # Base Sepolia. The chain id it carries (84532) is the same one this
-    # project's local dev chain uses, which is why `local` vs `testnet` is
-    # decided by the facilitator below, not by this line.
+    # Base Sepolia. The local dev chain is eip155:31337 instead.
     network: eip155:84532
 
     # Only used for health checks here; the facilitator does the chain work.

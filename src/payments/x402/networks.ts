@@ -1,106 +1,274 @@
 /**
- * The networks this gateway settles on, as data: the chain id to sign against,
- * a display name, and whether real money is involved.
+ * Network profiles: family, display name, environment, EVM chain ID and
+ * default stablecoin. Config load rejects unknown IDs; parsing an EVM chain
+ * ID cannot establish whether it is mainnet. Merchants must declare custom
+ * EVM networks under `payments.x402.networks`; built-ins cannot be redeclared.
  *
- * A registry rather than "parse any `eip155:*`": the chain id parses from any
- * such string, but whether it is a mainnet does not, and the guardrails key off
- * that. An unknown id is refused at startup instead of passing as a testnet.
+ * Profiles copy SDK asset defaults to keep config load and the CLI SDK-free.
+ * Tests compare each profile with the pinned SDK tables.
  *
- * The local dev chain runs under Base Sepolia's `eip155:84532`, so nothing may
- * infer "public network" from the id alone. `resolveDeploymentMode` derives
- * the mode from the facilitator too, and the provider's health check confirms
- * that a local facilitator's node is Anvil.
+ * The local Anvil chain has a profile of its own, `eip155:31337` (Anvil's
+ * default chain id), so the network alone tells a local deployment from a
+ * public one. Local health checks still require an Anvil response, because an
+ * RPC endpoint can report any chain id.
  */
 import { CommerceError } from '../../core';
 
-/** Chain id of the local dev chain, which Base Sepolia uses too */
-export const LOCAL_CHAIN_ID = 84532;
+/** Chain id of the local Anvil dev chain, Anvil's default */
+export const LOCAL_CHAIN_ID = 31337;
 
+export type X402NetworkFamily = 'evm' | 'svm' | 'near';
+
+export type NetworkKind = 'testnet' | 'mainnet';
+
+/** An EVM network the x402 provider can settle on */
 export interface NetworkProfile {
   /** CAIP-2 identifier, e.g. `eip155:84532` */
   readonly id: string;
   /** Signed into the buyer's EIP-712 domain */
   readonly chainId: number;
   readonly displayName: string;
-  readonly kind: 'testnet' | 'mainnet';
+  readonly kind: NetworkKind;
+  /** The local Anvil dev chain, where the in-process facilitator runs */
+  readonly local?: boolean;
   /**
-   * The USDC deployment this network settles in, with the EIP-712 domain the
-   * token reports. Enforced on mainnet only, since a testnet may use a mock
-   * token.
+   * Default USDC deployment and EIP-712 domain. A public network's offers
+   * settle only in it; the local chain has none and names its mock token.
    *
-   * `name` is the signed EIP-712 domain name, not the symbol, and the two
-   * deployments differ: `"USDC"` on Base Sepolia, `"USD Coin"` on Base. The
-   * values were read back from the contracts.
+   * `name` is the signed EIP-712 domain name, not the symbol, and deployments
+   * differ: `"USDC"` on Base Sepolia, `"USD Coin"` on Base.
    */
   readonly canonicalAsset?: {
     readonly symbol: string;
     readonly address: string;
     readonly name: string;
     readonly version: string;
+    readonly decimals: number;
   };
 }
 
-const PROFILES: readonly NetworkProfile[] = [
+interface NonEvmNetwork<F extends X402NetworkFamily> {
+  readonly family: F;
+  readonly id: string;
+  readonly displayName: string;
+  readonly kind: NetworkKind;
+  /** Solana mint or NEAR NEP-141 contract account, with no EIP-712 domain */
+  readonly canonicalAsset: {
+    readonly symbol: string;
+    readonly address: string;
+    readonly decimals: number;
+  };
+}
+
+export type X402Network =
+  | (NetworkProfile & { readonly family: 'evm' })
+  | NonEvmNetwork<'svm'>
+  | NonEvmNetwork<'near'>;
+
+/** A merchant-declared EVM network, from `payments.x402.networks` */
+export interface CustomNetworkDeclaration {
+  readonly kind: NetworkKind;
+  readonly displayName: string;
+}
+
+export type CustomNetworks = Readonly<Record<string, CustomNetworkDeclaration>>;
+
+const usdc = (address: string, name: string) =>
+  ({ symbol: 'USDC', address, name, version: '2', decimals: 6 }) as const;
+
+const PROFILES: readonly X402Network[] = [
   {
+    family: 'evm',
+    id: `eip155:${LOCAL_CHAIN_ID}`,
+    chainId: LOCAL_CHAIN_ID,
+    displayName: 'Local Anvil',
+    kind: 'testnet',
+    local: true,
+  },
+  {
+    family: 'evm',
     id: 'eip155:84532',
     chainId: 84532,
     displayName: 'Base Sepolia',
     kind: 'testnet',
-    canonicalAsset: {
-      symbol: 'USDC',
-      address: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
-      name: 'USDC',
-      version: '2',
-    },
+    canonicalAsset: usdc('0x036CbD53842c5426634e7929541eC2318f3dCF7e', 'USDC'),
   },
   {
+    family: 'evm',
     id: 'eip155:8453',
     chainId: 8453,
     displayName: 'Base',
     kind: 'mainnet',
+    canonicalAsset: usdc('0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', 'USD Coin'),
+  },
+  {
+    family: 'evm',
+    id: 'eip155:1',
+    chainId: 1,
+    displayName: 'Ethereum',
+    kind: 'mainnet',
+    canonicalAsset: usdc('0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48', 'USD Coin'),
+  },
+  {
+    family: 'evm',
+    id: 'eip155:137',
+    chainId: 137,
+    displayName: 'Polygon',
+    kind: 'mainnet',
+    canonicalAsset: usdc('0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359', 'USD Coin'),
+  },
+  {
+    family: 'evm',
+    id: 'eip155:42161',
+    chainId: 42161,
+    displayName: 'Arbitrum One',
+    kind: 'mainnet',
+    canonicalAsset: usdc('0xaf88d065e77c8cC2239327C5EDb3A432268e5831', 'USD Coin'),
+  },
+  {
+    family: 'evm',
+    id: 'eip155:421614',
+    chainId: 421614,
+    displayName: 'Arbitrum Sepolia',
+    kind: 'testnet',
+    canonicalAsset: usdc('0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d', 'USD Coin'),
+  },
+  {
+    family: 'evm',
+    id: 'eip155:43114',
+    chainId: 43114,
+    displayName: 'Avalanche C-Chain',
+    kind: 'mainnet',
+    canonicalAsset: usdc('0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E', 'USD Coin'),
+  },
+  {
+    family: 'svm',
+    id: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
+    displayName: 'Solana',
+    kind: 'mainnet',
     canonicalAsset: {
       symbol: 'USDC',
-      address: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
-      name: 'USD Coin',
-      version: '2',
+      address: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+      decimals: 6,
+    },
+  },
+  {
+    family: 'svm',
+    id: 'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1',
+    displayName: 'Solana Devnet',
+    kind: 'testnet',
+    canonicalAsset: {
+      symbol: 'USDC',
+      address: '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU',
+      decimals: 6,
+    },
+  },
+  // NEAR's USDC contracts are implicit accounts: 64 lowercase hex characters
+  {
+    family: 'near',
+    id: 'near:mainnet',
+    displayName: 'NEAR',
+    kind: 'mainnet',
+    canonicalAsset: {
+      symbol: 'USDC',
+      address: '17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1',
+      decimals: 6,
+    },
+  },
+  {
+    family: 'near',
+    id: 'near:testnet',
+    displayName: 'NEAR Testnet',
+    kind: 'testnet',
+    canonicalAsset: {
+      symbol: 'USDC',
+      address: '3e2210e1184b45b64c8a434c0a7e7b23cc04ea7eb7a6c3c32520d03d4afcb8af',
+      decimals: 6,
     },
   },
 ];
 
 const BY_ID = new Map(PROFILES.map((profile) => [profile.id, profile]));
 
-export const SUPPORTED_NETWORK_IDS: readonly string[] = PROFILES.map((p) => p.id);
+/** Built-in networks of every family, for tests and diagnostics */
+export const BUILT_IN_NETWORKS: readonly X402Network[] = PROFILES;
 
-export function findNetworkProfile(id: string): NetworkProfile | undefined {
-  return BY_ID.get(id);
+/** The built-in EVM networks the x402 provider settles on without a declaration */
+export const SUPPORTED_NETWORK_IDS: readonly string[] = PROFILES.filter(
+  (p) => p.family === 'evm',
+).map((p) => p.id);
+
+// A chain id viem and EIP-712 can carry as a JS number
+const EVM_NETWORK_ID = /^eip155:([1-9]\d{0,15})$/;
+
+function invalid(message: string, path: string): CommerceError {
+  return new CommerceError('CONFIG_INVALID', message, { details: { path } });
 }
 
-export function requireNetworkProfile(id: string, path: string): NetworkProfile {
+/** Built-in EVM profile for callers using the original network interface */
+export function findNetworkProfile(id: string): NetworkProfile | undefined {
   const profile = BY_ID.get(id);
-  if (!profile) {
+  return profile?.family === 'evm' ? profile : undefined;
+}
+
+/** A built-in network of any family, or a declared custom EVM network */
+export function findX402Network(id: string, custom?: CustomNetworks): X402Network | undefined {
+  const builtIn = BY_ID.get(id);
+  if (builtIn) return builtIn;
+  const declared = custom?.[id];
+  const chainId = Number(EVM_NETWORK_ID.exec(id)?.[1]);
+  if (!declared || !Number.isSafeInteger(chainId)) return undefined;
+  return {
+    family: 'evm',
+    id,
+    chainId,
+    displayName: declared.displayName,
+    kind: declared.kind,
+  };
+}
+
+export function requireX402Network(id: string, path: string, custom?: CustomNetworks): X402Network {
+  const network = findX402Network(id, custom);
+  if (!network) {
     throw new CommerceError(
       'CONFIG_INVALID',
-      `${path}: "${id}" is not a supported network. Supported CAIP-2 identifiers: ${SUPPORTED_NETWORK_IDS.join(', ')}`,
+      `${path}: "${id}" is not a known network. Built-in CAIP-2 identifiers: ${PROFILES.map((p) => p.id).join(', ')}. Declare another EVM network under payments.x402.networks with its kind and displayName.`,
       { details: { path, network: id } },
     );
   }
-  return profile;
+  return network;
 }
 
 /**
- * What a deployment is, as opposed to the network it names. `local` comes from
- * the facilitator: the in-process facilitator makes a deployment local whatever
- * CAIP-2 id it is configured with, which lets diagnostics show `eip155:84532`
- * without claiming public Base Sepolia.
+ * Allows only new `eip155` networks in `payments.x402.networks`. Redeclaring
+ * built-ins could relabel mainnet as testnet; Solana and NEAR IDs are SDK-fixed.
  */
+export function validateCustomNetworks(custom: CustomNetworks, path: string): void {
+  for (const id of Object.keys(custom)) {
+    const at = `${path}.${id}`;
+    if (BY_ID.has(id)) {
+      throw invalid(
+        `${at}: "${id}" is a built-in network and cannot be redeclared; remove this entry`,
+        at,
+      );
+    }
+    if (!findX402Network(id, custom)) {
+      throw invalid(
+        `${at}: "${id}" is not an EVM CAIP-2 identifier ("eip155:" followed by a positive chain id below 2^53). Only EVM networks can be declared.`,
+        at,
+      );
+    }
+  }
+}
+
+/** What a deployment is: the local dev chain, or a public testnet or mainnet */
 export type DeploymentMode = 'local' | 'testnet' | 'mainnet';
 
-export function resolveDeploymentMode(
-  profile: NetworkProfile,
-  facilitatorMode: 'local' | 'remote',
-): DeploymentMode {
-  if (facilitatorMode === 'local') return 'local';
-  return profile.kind;
+export function resolveDeploymentMode(profile: {
+  readonly kind: NetworkKind;
+  readonly local?: boolean;
+}): DeploymentMode {
+  return profile.local ? 'local' : profile.kind;
 }
 
 // The banner an operator must not miss. Printed for mainnet only

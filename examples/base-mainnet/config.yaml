@@ -10,7 +10,7 @@
 # mode would put a funded gas signer in this process. Buyer funds move directly
 # to the merchant on-chain.
 #
-#   ALLOW_X402_MAINNET=true MERCHANT_WALLET=0x... X402_FACILITATOR_URL=... \
+#   ALLOW_X402_MAINNET=true MERCHANT_WALLET=0x... \
 #   CDP_API_KEY_ID=... CDP_API_KEY_SECRET=... GATEWAY_PUBLIC_BASE_URL=... \
 #   ADMIN_TOKEN=... MERCHANT_API_BASE_URL=... \
 #   npm run agent-commerce -- validate --config examples/base-mainnet/config.yaml
@@ -100,13 +100,14 @@ payments:
     facilitator:
       # required. `local` is refused on mainnet
       mode: remote
-      # required, and must be https
-      url: ${X402_FACILITATOR_URL}
+      # required, and must be https. `cdp` auth works only with this URL
+      url: https://api.cdp.coinbase.com/platform/v2/x402
       # required to be something other than `none` on mainnet, unless
       # allowUnauthenticatedFacilitator is set (see examples/base-mainnet-payai)
       #
       # `cdp` needs the optional peer @coinbase/x402, which signs a fresh JWT
-      # per request. For any facilitator that takes a static token, use:
+      # per request. For any facilitator that takes a static token, set its
+      # url and use:
       #   auth:
       #     type: bearer
       #     token: ${X402_FACILITATOR_TOKEN}

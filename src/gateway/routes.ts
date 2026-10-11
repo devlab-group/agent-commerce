@@ -34,6 +34,7 @@ import {
   settlementResponse,
   settlementResponseFromDetails,
   x402ErrorCode,
+  x402RefusalStatus,
 } from '../payments/x402/transport';
 import { buildOperatorTokenHook } from './access-control';
 import type { AdapterRuntime } from './adapters';
@@ -86,6 +87,7 @@ export function registerRoutes(options: RegisterRoutesOptions): void {
       authorizationProviders: options.authorizationProviders,
       store: options.store,
       adapters: await readinessProbe.adapterHealth(),
+      paymentHealth: await readinessProbe.paymentHealth(),
     }),
   );
 
@@ -267,6 +269,14 @@ async function handleInvoke(
   }
 }
 
+// A provider outage is no verdict on the payment, so the client may retry the
+// same proof after a short pause
+const PROVIDER_UNAVAILABLE_CODES: ReadonlySet<string> = new Set([
+  'PAYMENT_PROVIDER_UNAVAILABLE',
+  'AUTHORIZATION_PROVIDER_UNAVAILABLE',
+]);
+const PROVIDER_RETRY_AFTER_SECONDS = 5;
+
 // Codes whose MPP response body is a Problem Details document
 const MPP_PROBLEM_CODES: ReadonlySet<string> = new Set([
   'PAYMENT_INVALID',
@@ -281,6 +291,9 @@ function sendInvokeError(
   paymentMethod: PaymentMethodName | undefined,
 ): void {
   const details = error.details;
+  if (PROVIDER_UNAVAILABLE_CODES.has(error.code)) {
+    reply.header('retry-after', String(PROVIDER_RETRY_AFTER_SECONDS));
+  }
   // Report a settled payment even if backend delivery fails. MPP forbids a
   // `Payment-Receipt` header on error responses, so send only this summary
   const settled = settlementResponseFromDetails(details);
@@ -302,7 +315,7 @@ function sendInvokeError(
         PAYMENT_REQUIRED_HEADER,
         encodeHeaderDocument({
           ...challenge,
-          error: x402ErrorCode(error.code, details?.['reason']),
+          error: x402ErrorCode(error.code, details?.['reason'], details?.['network']),
         }),
       );
     }
@@ -327,7 +340,12 @@ function sendInvokeError(
       });
     return;
   }
-  reply.status(error.httpStatus).send(envelope);
+  // Preserve the challenge when a missing Permit2 allowance changes 402 to 412
+  const status =
+    paymentMethod === 'x402'
+      ? x402RefusalStatus(error.code, error.httpStatus, details?.['reason'])
+      : error.httpStatus;
+  reply.status(status).send(envelope);
 }
 
 // Each rail has its own proof header. MPP uses HTTP authentication, and an

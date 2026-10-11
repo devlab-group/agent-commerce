@@ -157,6 +157,20 @@ describe('published package metadata', () => {
     expect(manifest.pnpm).toBeUndefined();
   });
 
+  it('pins every @x402 package to one version older than 2.26.0', () => {
+    // Keep the @x402 pins aligned. The EVM facilitator in 2.26.0-2.28.0 can
+    // leave a failed `eth_getCode` promise unhandled, exiting Node. Raise the
+    // bound only for a release that fixes this
+    const versions = new Set(
+      Object.entries({ ...manifest.peerDependencies, ...manifest.devDependencies })
+        .filter(([name]) => name.startsWith('@x402/'))
+        .map(([, version]) => version),
+    );
+    expect(versions.size).toBe(1);
+    const [major, minor] = ([...versions][0] as string).split('.').map(Number);
+    expect(major === 2 && (minor as number) < 26).toBe(true);
+  });
+
   it('keeps the AP2 crypto libraries optional and exactly pinned', () => {
     // A mandate decides whether a purchase was authorized, so nothing in that
     // path floats. `jose` and `@sd-jwt/core` are optional peers because a
@@ -193,8 +207,11 @@ describe('published package metadata', () => {
       '@coinbase/x402',
       '@modelcontextprotocol/server',
       '@sd-jwt/core',
+      '@solana/kit',
       '@x402/core',
       '@x402/evm',
+      '@x402/near',
+      '@x402/svm',
       'canonicalize',
       'jose',
       'mppx',
@@ -397,18 +414,26 @@ describe.skipIf(!existsSync(libEntry))('optional-peer subpaths', () => {
 
   it('imports only its own peer, in each subpath', () => {
     expect(bareImportsOf(mcpEntry)).toEqual(['@modelcontextprotocol/server']);
-    // `@coinbase/x402` is a dynamic import, loaded only for facilitator auth.type `cdp`
+    // Dynamic imports: `@coinbase/x402` loads only for facilitator auth.type
+    // `cdp`, `@x402/svm` and `@solana/kit` only for a Solana offer,
+    // `@x402/near` only for a NEAR offer
     expect(bareImportsOf(x402Entry).sort()).toEqual([
       '@coinbase/x402',
+      '@solana/kit',
       '@x402/core',
       '@x402/evm',
+      '@x402/near',
+      '@x402/svm',
       'viem',
     ]);
     // MPP settles through an x402 facilitator, so its entry also imports the x402 peers
     expect(bareImportsOf(mppEntry).sort()).toEqual([
       '@coinbase/x402',
+      '@solana/kit',
       '@x402/core',
       '@x402/evm',
+      '@x402/near',
+      '@x402/svm',
       'mppx',
       'viem',
     ]);
@@ -453,7 +478,7 @@ describe.skipIf(!existsSync(libEntry))('optional-peer subpaths', () => {
         `import { CommerceError } from ${JSON.stringify(libEntry)};
          import { x402 } from ${JSON.stringify(x402Entry)};
          let caught;
-         try { x402({ asset: 'not-an-address', payTo: '0x0', network: 'eip155:84532' }); }
+         try { x402({ asset: 'not-an-address', payTo: '0x0', network: 'eip155:31337' }); }
          catch (e) { caught = e; }
          process.stdout.write(String(caught instanceof CommerceError));`,
       ],

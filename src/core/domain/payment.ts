@@ -48,8 +48,12 @@ export interface PaymentRequirement {
   readonly provider: PaymentMethodName;
   readonly amount: DecimalAmount;
   readonly currency: string;
-  /** Merchant-controlled settlement destination, never a gateway-owned wallet */
-  readonly destination: string;
+  /**
+   * Merchant-controlled settlement destination, never a gateway-owned wallet.
+   * Multi-offer challenges omit this, `network` and `asset`; selection
+   * supplies the chosen offer's terms.
+   */
+  readonly destination?: string;
   readonly network?: string;
   readonly asset?: string;
   readonly expiresAt?: IsoTimestamp;
@@ -131,6 +135,15 @@ export interface PaymentProvider {
    * paid request, including one that already carries a proof to verify.
    */
   createRequirement(context: PaymentContext): Promise<PaymentRequirement>;
+
+  /**
+   * Selects a proof's offer before verification, returning its destination,
+   * network, asset and metadata while preserving `id` and the full `challenge`.
+   * Verification, authorization, replay reservation and settlement use the result.
+   * This hook must not verify, reserve or settle. If no unique offer matches,
+   * return the original requirement for `verify` to reject.
+   */
+  selectRequirement?(context: PaymentVerificationContext): Promise<PaymentRequirement>;
 
   /**
    * Validate a submitted proof against the requirement. Must return `rejected`

@@ -1,5 +1,5 @@
 /**
- * The branches of provider.ts that depend on what the SDK facilitator returns
+ * The x402 provider's branches that depend on what the SDK facilitator returns
  * or throws: success, rejection with and without a reason, and thrown errors of
  * several shapes. Mocked at the SDK boundary; tests/e2e/payment covers real
  * on-chain settlement.
@@ -112,7 +112,7 @@ describe('provider - SDK-boundary branches (mocked x402/facilitator)', () => {
 
   function makeProvider() {
     return createX402PaymentProvider({
-      network: 'eip155:84532',
+      network: 'eip155:31337',
       rpcUrl: RPC_URL,
       asset: ASSET,
       assetName: 'MockUSDC',
@@ -142,7 +142,7 @@ describe('provider - SDK-boundary branches (mocked x402/facilitator)', () => {
 
     function baseOptions() {
       return {
-        network: 'eip155:84532',
+        network: 'eip155:31337',
         rpcUrl: RPC_URL,
         asset: ASSET,
         assetName: 'MockUSDC',
@@ -209,7 +209,7 @@ describe('provider - SDK-boundary branches (mocked x402/facilitator)', () => {
     const { nonce } = JSON.parse(Buffer.from(proof, 'base64').toString('utf8')).payload
       .authorization;
     expect(result.replayKey).toBe(
-      computeReplayKey({ chainId: 84532, asset: ASSET, from: BUYER_ADDRESS, nonce }),
+      computeReplayKey({ chainId: 31337, asset: ASSET, from: BUYER_ADDRESS, nonce }),
     );
     expect(result.payer).toBe(BUYER_ADDRESS);
     expect(verifyMock).toHaveBeenCalledOnce();
@@ -236,7 +236,7 @@ describe('provider - SDK-boundary branches (mocked x402/facilitator)', () => {
     settleMock.mockResolvedValueOnce({
       success: true,
       transaction: `0x${'ab'.repeat(32)}`,
-      network: 'eip155:84532',
+      network: 'eip155:31337',
     });
 
     const verification = await provider.verify({
@@ -272,7 +272,7 @@ describe('provider - SDK-boundary branches (mocked x402/facilitator)', () => {
     settleMock.mockResolvedValueOnce({
       success: true,
       transaction: `0x${'ab'.repeat(32)}`,
-      network: 'eip155:84532',
+      network: 'eip155:31337',
     });
 
     const verification = await provider.verify({
@@ -317,8 +317,13 @@ describe('provider - SDK-boundary branches (mocked x402/facilitator)', () => {
 
   it.each([
     ['unsupported characters', 'do not expose: secret', 'invalid_payment'],
-    ['exactly 64 characters', 'x'.repeat(64), 'x'.repeat(64)],
-    ['more than 64 characters', 'x'.repeat(65), 'invalid_payment'],
+    ['exactly 128 characters', 'x'.repeat(128), 'x'.repeat(128)],
+    ['more than 128 characters', 'x'.repeat(129), 'invalid_payment'],
+    [
+      'the longest SDK reason',
+      'invalid_exact_svm_payload_transaction_instructions_compute_limit_instruction_too_high',
+      'invalid_exact_svm_payload_transaction_instructions_compute_limit_instruction_too_high',
+    ],
     ['an empty value', '', 'invalid_payment'],
     ['only whitespace', '   ', 'invalid_payment'],
     ['surrounding whitespace', '  insufficient_funds  ', 'insufficient_funds'],
@@ -392,8 +397,8 @@ describe('provider - SDK-boundary branches (mocked x402/facilitator)', () => {
     });
     settleMock.mockResolvedValueOnce({
       success: true,
-      transaction: '0xdeadbeef',
-      network: 'eip155:84532',
+      transaction: `0x${'ab'.repeat(32)}`,
+      network: 'eip155:31337',
       payer: '0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC',
     });
 
@@ -407,17 +412,20 @@ describe('provider - SDK-boundary branches (mocked x402/facilitator)', () => {
         provider: 'x402',
         amount: '0.01',
         currency: 'USD',
-        network: 'eip155:84532',
+        network: 'eip155:31337',
         asset: ASSET,
         replayKey: '0xabc',
       },
     });
     expect(result.status).toBe('settled');
-    expect(result.externalReference).toBe('0xdeadbeef');
+    expect(result.externalReference).toBe(`0x${'ab'.repeat(32)}`);
     expect(result.payee).toBe(PAY_TO);
-    expect(result.network).toBe('eip155:84532');
+    expect(result.network).toBe('eip155:31337');
     expect(result.asset).toBe(ASSET);
     expect(result.replayKey).toBe('0xabc');
+    // The local chain's token has no symbol, so the resource's currency names it
+    expect(result.currency).toBe('USD');
+    expect(result.metadata).not.toHaveProperty('quote');
     expect(result.settledAt).toBeDefined();
   });
 
@@ -430,8 +438,8 @@ describe('provider - SDK-boundary branches (mocked x402/facilitator)', () => {
     });
     settleMock.mockResolvedValueOnce({
       success: true,
-      transaction: '0xfeedface',
-      network: 'eip155:84532',
+      transaction: `0x${'fe'.repeat(32)}`,
+      network: 'eip155:31337',
     });
 
     const result = await provider.settle({
@@ -455,7 +463,7 @@ describe('provider - SDK-boundary branches (mocked x402/facilitator)', () => {
 
     settleMock.mockResolvedValueOnce({
       success: false,
-      network: 'eip155:84532',
+      network: 'eip155:31337',
       errorReason: 'insufficient_funds',
       payer: '0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC',
     });
@@ -479,7 +487,7 @@ describe('provider - SDK-boundary branches (mocked x402/facilitator)', () => {
     expect(withReason.asset).toBe(ASSET);
     expect(withReason.replayKey).toBe('0xdef');
 
-    settleMock.mockResolvedValueOnce({ success: false, network: 'eip155:84532' });
+    settleMock.mockResolvedValueOnce({ success: false, network: 'eip155:31337' });
     const withoutReason = await provider.settle({
       requestId: 'req-1',
       resource: RESOURCE,
@@ -493,8 +501,8 @@ describe('provider - SDK-boundary branches (mocked x402/facilitator)', () => {
 
   it.each([
     ['unsupported characters', 'do not expose: secret', 'settlement_failed'],
-    ['exactly 64 characters', 'x'.repeat(64), 'x'.repeat(64)],
-    ['more than 64 characters', 'x'.repeat(65), 'settlement_failed'],
+    ['exactly 128 characters', 'x'.repeat(128), 'x'.repeat(128)],
+    ['more than 128 characters', 'x'.repeat(129), 'settlement_failed'],
     ['an empty value', '', 'settlement_failed'],
     ['only whitespace', '   ', 'settlement_failed'],
     ['surrounding whitespace', '  insufficient_funds  ', 'insufficient_funds'],
@@ -507,7 +515,7 @@ describe('provider - SDK-boundary branches (mocked x402/facilitator)', () => {
     });
     settleMock.mockResolvedValueOnce({
       success: false,
-      network: 'eip155:84532',
+      network: 'eip155:31337',
       errorReason,
     });
 
@@ -543,14 +551,14 @@ describe('provider - SDK-boundary branches (mocked x402/facilitator)', () => {
         provider: 'x402',
         amount: '0.01',
         currency: 'USD',
-        network: 'eip155:84532',
+        network: 'eip155:31337',
         asset: ASSET,
         replayKey: '0xreverted',
       },
     });
     expect(reverted.status).toBe('rejected');
     expect(reverted.rejectionReason).toBe('transaction_reverted');
-    expect(reverted.network).toBe('eip155:84532');
+    expect(reverted.network).toBe('eip155:31337');
     expect(reverted.asset).toBe(ASSET);
     expect(reverted.replayKey).toBe('0xreverted');
 
@@ -617,14 +625,22 @@ describe('provider - SDK-boundary branches (mocked x402/facilitator)', () => {
     );
   });
 
-  it.each([
+  it.each<[string, string, string, string?]>([
     ['without a hash, as an unknown outcome', '', 'throws'],
     ['with a value that is not a hash, as an unknown outcome', 'not-a-hash', 'throws'],
     ['with a truncated hash, as an unknown outcome', '0xdeadbeef', 'throws'],
     ['with a hash, as a mined revert', `0x${'cd'.repeat(32)}`, 'rejected'],
+    // The SDK's answer when the receipt wait failed and its pending store could
+    // not record the broadcast
+    [
+      'with a hash for a broadcast it could not record, as an unknown outcome',
+      `0x${'cd'.repeat(32)}`,
+      'throws',
+      'settlement_pending, but failed to persist for retry: store offline',
+    ],
   ])(
     'settle() treats the SDK catch-all transaction failure %s',
-    async (_label, transaction, outcome) => {
+    async (_label, transaction, outcome, errorMessage) => {
       const provider = makeProvider();
       const requirement = await provider.createRequirement(paymentContext());
       const proof = await createPaymentProof({
@@ -634,8 +650,9 @@ describe('provider - SDK-boundary branches (mocked x402/facilitator)', () => {
       settleMock.mockResolvedValueOnce({
         success: false,
         errorReason: 'invalid_exact_evm_transaction_failed',
+        ...(errorMessage !== undefined ? { errorMessage } : {}),
         transaction,
-        network: 'eip155:84532',
+        network: 'eip155:31337',
       });
 
       const settled = provider.settle({
@@ -659,6 +676,79 @@ describe('provider - SDK-boundary branches (mocked x402/facilitator)', () => {
     },
   );
 
+  it('settle() records a reverted transaction on its rejection', async () => {
+    const provider = makeProvider();
+    const requirement = await provider.createRequirement(paymentContext());
+    const proof = await createPaymentProof({
+      buyerPrivateKey: BUYER_PRIVATE_KEY,
+      accepts: requirement.challenge.accepts[0] as Record<string, unknown>,
+    });
+    const REVERTED_TX_HASH = `0x${'ef'.repeat(32)}`;
+    settleMock.mockResolvedValueOnce({
+      success: false,
+      errorReason: 'invalid_exact_evm_transaction_failed',
+      transaction: REVERTED_TX_HASH,
+      network: 'eip155:31337',
+    });
+
+    await expect(
+      provider.settle({
+        requestId: 'req-1',
+        resource: RESOURCE,
+        requirement,
+        submission: { method: 'x402', payload: proof },
+        verification: { status: 'verified', provider: 'x402', amount: '0.01', currency: 'USD' },
+      }),
+    ).resolves.toMatchObject({
+      status: 'rejected',
+      rejectionReason: 'invalid_exact_evm_transaction_failed',
+      externalReference: REVERTED_TX_HASH,
+    });
+  });
+
+  // Only a reverted receipt proves a named transaction moved nothing. The SDK
+  // reports a mined transfer whose Transfer log it cannot match as a failure.
+  it.each([
+    [
+      'a mined transfer whose Transfer log did not match',
+      'invalid_exact_evm_transfer_event_mismatch',
+    ],
+    ['a reason outside the SDK vocabulary', 'unexpected_settle_error'],
+    ['no reason', undefined],
+  ])(
+    'settle() treats a failure naming a transaction with %s as an unknown outcome',
+    async (_label, errorReason) => {
+      const provider = makeProvider();
+      const requirement = await provider.createRequirement(paymentContext());
+      const proof = await createPaymentProof({
+        buyerPrivateKey: BUYER_PRIVATE_KEY,
+        accepts: requirement.challenge.accepts[0] as Record<string, unknown>,
+      });
+      const MINED_TX_HASH = `0x${'12'.repeat(32)}`;
+      settleMock.mockResolvedValueOnce({
+        success: false,
+        ...(errorReason !== undefined ? { errorReason } : {}),
+        transaction: MINED_TX_HASH,
+        network: 'eip155:31337',
+      });
+
+      await expect(
+        provider.settle({
+          requestId: 'req-1',
+          resource: RESOURCE,
+          requirement,
+          submission: { method: 'x402', payload: proof },
+          verification: { status: 'verified', provider: 'x402', amount: '0.01', currency: 'USD' },
+        }),
+      ).rejects.toSatisfy(
+        (err: unknown) =>
+          isCommerceError(err) &&
+          err.code === 'PAYMENT_PROVIDER_UNAVAILABLE' &&
+          err.details?.['transactionHash'] === MINED_TX_HASH,
+      );
+    },
+  );
+
   it('settle() attaches transactionHash to PAYMENT_PROVIDER_UNAVAILABLE when the broadcast succeeded but confirmation timed out', async () => {
     // `settlement_pending` means the transfer was broadcast and may be on-chain,
     // so it becomes an unavailable provider carrying the hash, never a
@@ -675,7 +765,7 @@ describe('provider - SDK-boundary branches (mocked x402/facilitator)', () => {
       success: false,
       errorReason: 'settlement_pending',
       transaction: BROADCAST_TX_HASH,
-      network: 'eip155:84532',
+      network: 'eip155:31337',
       payer: '0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC',
     });
 
@@ -751,7 +841,7 @@ describe('provider - a failed signer call is classified as an outage or a verdic
 
   function makeProvider() {
     return createX402PaymentProvider({
-      network: 'eip155:84532',
+      network: 'eip155:31337',
       rpcUrl: RPC_URL,
       asset: ASSET,
       assetName: 'MockUSDC',
@@ -780,12 +870,12 @@ describe('provider - a failed signer call is classified as an outage or a verdic
     );
     settleMock.mockImplementationOnce(async () =>
       (await signerCall(method))
-        ? { success: true, transaction: `0x${'ab'.repeat(32)}`, network: 'eip155:84532' }
+        ? { success: true, transaction: `0x${'ab'.repeat(32)}`, network: 'eip155:31337' }
         : {
             success: false,
             errorReason: 'invalid_exact_evm_signature',
             transaction: '',
-            network: 'eip155:84532',
+            network: 'eip155:31337',
           },
     );
     const provider = makeProvider();

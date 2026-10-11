@@ -84,6 +84,7 @@ describe('payments.mpp wiring', () => {
       method: 'GET',
       url: '/.well-known/agent-commerce',
     });
+    // No network configured, so MPP takes its default, Base Sepolia
     expect(wellKnown.json().payments.mpp).toEqual({
       enabled: true,
       network: 'eip155:84532',
@@ -94,6 +95,7 @@ describe('payments.mpp wiring', () => {
       recipient: MPP.recipient,
       facilitator: { mode: 'remote' },
       mode: 'testnet',
+      paymentFlow: 'upfront',
     });
     for (const secret of [SECRET, RPC_KEY, FACILITATOR_TENANT]) {
       expect(wellKnown.body).not.toContain(secret);

@@ -321,6 +321,12 @@ describe('parseConfig', () => {
   describe('x402 deployment guardrails', () => {
     const MERCHANT = '0x1111111111111111111111111111111111111111';
     const BASE_USDC = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
+    // Public Base Sepolia, which settles only in its USDC
+    const BASE_SEPOLIA = {
+      network: 'eip155:84532',
+      asset: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+      assetName: 'USDC',
+    };
 
     function withX402(overrides: Record<string, unknown>): Record<string, unknown> {
       const raw = validRawConfig();
@@ -357,6 +363,7 @@ describe('parseConfig', () => {
     it('accepts a remote facilitator on a testnet', () => {
       const config = parseConfig(
         withX402({
+          ...BASE_SEPOLIA,
           payTo: MERCHANT,
           facilitator: { mode: 'remote', url: 'https://facilitator.example.com' },
         }),
@@ -391,17 +398,21 @@ describe('parseConfig', () => {
     });
 
     it('rejects an unknown CAIP-2 network', () => {
-      expect(messageFor(withX402({ network: 'eip155:1' }))).toContain('not a supported network');
-      expect(messageFor(withX402({ network: 'solana:mainnet' }))).toContain(
-        'not a supported network',
-      );
+      expect(messageFor(withX402({ network: 'eip155:10' }))).toContain('not a known network');
+      expect(messageFor(withX402({ network: 'solana:mainnet' }))).toContain('not a known network');
     });
 
     it('rejects a mainnet served by the in-process facilitator', () => {
       // The local facilitator signs with a key this process holds: a hot
       // wallet inside the resource server
       const message = messageFor(
-        withX402({ network: 'eip155:8453', asset: BASE_USDC, payTo: MERCHANT, allowMainnet: true }),
+        withX402({
+          network: 'eip155:8453',
+          asset: BASE_USDC,
+          assetName: 'USD Coin',
+          payTo: MERCHANT,
+          allowMainnet: true,
+        }),
       );
       expect(message).toContain('mainnet');
       expect(message).toContain('remote facilitator');
@@ -504,7 +515,10 @@ describe('parseConfig', () => {
     it('rejects a well-known development payTo on a non-local deployment', () => {
       // The fixture's payTo is Anvil account #1, whose private key is public
       const message = messageFor(
-        withX402({ facilitator: { mode: 'remote', url: 'https://facilitator.example.com' } }),
+        withX402({
+          ...BASE_SEPOLIA,
+          facilitator: { mode: 'remote', url: 'https://facilitator.example.com' },
+        }),
       );
       expect(message).toContain('well-known Anvil development address');
     });
@@ -640,12 +654,49 @@ describe('parseConfig', () => {
           payTo: MERCHANT,
           facilitator: {
             mode: 'remote',
-            url: 'https://facilitator.example.com',
+            url: 'https://api.cdp.coinbase.com/platform/v2/x402',
             auth: { type: 'cdp', apiKeyId: 'key-id', apiKeySecret: '${CDP_SECRET:- }' },
           },
         }),
       );
       expect(message).toContain('apiKeySecret is empty');
+    });
+
+    // `@coinbase/x402` signs for CDP's host and route whatever URL is set
+    it.each([
+      ['another host', 'https://facilitator.example.com'],
+      ['another CDP route', 'https://api.cdp.coinbase.com/platform/v1/x402'],
+      ['a query string', 'https://api.cdp.coinbase.com/platform/v2/x402?tenant=a'],
+    ])('rejects CDP auth against %s', (_label, url) => {
+      const message = messageFor(
+        withX402({
+          payTo: MERCHANT,
+          facilitator: {
+            mode: 'remote',
+            url,
+            auth: { type: 'cdp', apiKeyId: 'key-id', apiKeySecret: 'key-secret' },
+          },
+        }),
+      );
+      expect(message).toContain(
+        'signs requests for https://api.cdp.coinbase.com/platform/v2/x402 only',
+      );
+      expect(message).not.toContain('tenant=a');
+    });
+
+    it('accepts CDP auth with a trailing slash on its URL', () => {
+      const config = parseConfig(
+        withX402({
+          payTo: MERCHANT,
+          facilitator: {
+            mode: 'remote',
+            url: 'https://api.cdp.coinbase.com/platform/v2/x402/',
+            auth: { type: 'cdp', apiKeyId: 'key-id', apiKeySecret: 'key-secret' },
+          },
+        }),
+        {},
+      );
+      expect(config.payments.x402?.facilitator).toMatchObject({ mode: 'remote' });
     });
 
     it('rejects an auth type nobody implements, rather than sending nothing', () => {
@@ -2190,6 +2241,26 @@ describe('payments.mpp', () => {
     expectConfigInvalid(() => parseConfig(mppConfig(mpp), {}), path);
   });
 
+  // MPP charges its own 6-decimal USDC, whatever token x402 offers
+  it('checks an MPP-only resource against MPP decimals, not the x402 options', () => {
+    const raw = mppConfig();
+    const x402 = (validRawConfig()['payments'] as { x402: Record<string, unknown> }).x402;
+    (raw['payments'] as Record<string, unknown>)['x402'] = {
+      ...x402,
+      asset: '0x2222222222222222222222222222222222222222',
+      assetName: 'Coarse',
+      assetVersion: '1',
+      assetDecimals: 2,
+    };
+    const resources = raw['resources'] as Record<string, { pricing: Record<string, unknown> }>;
+    (resources['market_report'] as { pricing: Record<string, unknown> }).pricing = {
+      type: 'fixed',
+      amount: '0.001',
+      currency: 'USDC',
+    };
+    expect(() => parseConfig(raw, {})).not.toThrow();
+  });
+
   it('refuses an unknown key in the MPP block', () => {
     expectConfigInvalid(
       () => parseConfig(mppConfig({ currency: 'EUR' }), {}),
@@ -2273,13 +2344,13 @@ describe('payments.mpp', () => {
   });
 
   describe('paymentFlow', () => {
-    it('defaults to authorization, as the x402 rail does', () => {
-      expect(parseConfig(mppConfig(), {}).payments.mpp?.paymentFlow).toBe('authorization');
+    it('defaults to upfront, unlike the x402 rail', () => {
+      expect(parseConfig(mppConfig(), {}).payments.mpp?.paymentFlow).toBe('upfront');
     });
 
-    it('accepts upfront for the rail', () => {
-      const config = parseConfig(mppConfig({ paymentFlow: 'upfront' }), {});
-      expect(config.payments.mpp?.paymentFlow).toBe('upfront');
+    it('accepts authorization for the rail', () => {
+      const config = parseConfig(mppConfig({ paymentFlow: 'authorization' }), {});
+      expect(config.payments.mpp?.paymentFlow).toBe('authorization');
       expect(config.payments.mpp?.resourcePaymentFlows).toBeUndefined();
     });
 
@@ -2313,6 +2384,20 @@ describe('payments.mpp', () => {
       const { payments } = parseConfig(raw, {});
       expect(payments.x402?.resourcePaymentFlows).toEqual({ market_report: 'upfront' });
       expect(payments.mpp?.resourcePaymentFlows).toEqual({ market_report: 'upfront' });
+    });
+
+    it('keeps an override off a rail the resource does not name', () => {
+      const raw = mppConfig();
+      const mpp = (raw['payments'] as Record<string, unknown>)['mpp'];
+      raw['payments'] = { ...(validRawConfig()['payments'] as Record<string, unknown>), mpp };
+      (raw['resources'] as Record<string, Record<string, unknown>>)['market_report'] = {
+        ...(raw['resources'] as Record<string, Record<string, unknown>>)['market_report'],
+        payments: ['x402'],
+        paymentFlow: 'upfront',
+      };
+      const { payments } = parseConfig(raw, {});
+      expect(payments.x402?.resourcePaymentFlows).toEqual({ market_report: 'upfront' });
+      expect(payments.mpp).not.toHaveProperty('resourcePaymentFlows');
     });
   });
 });

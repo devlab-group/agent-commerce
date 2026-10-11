@@ -123,7 +123,7 @@ function x402Provider(overrides: Parameters<typeof createFakePaymentProvider>[0]
       amount: ctx.amount,
       currency: ctx.currency,
       destination: '0xMERCHANT',
-      network: 'eip155:84532',
+      network: 'eip155:31337',
       challenge: {
         provider: 'x402',
         version: '2',
@@ -256,7 +256,9 @@ describe('createGateway HTTP surface', () => {
     const body = res.json();
     expect(body.merchant.id).toBe('demo-store');
     expect(body.payments.x402.payTo).toBe('0x70997970C51812dc3A010C7d01b50e0d17dc79C8');
-    expect(body.payments.x402.network).toBe('eip155:84532');
+    expect(body.payments.x402.network).toBe('eip155:31337');
+    expect(body.payments.x402.paymentFlow).toBe('authorization');
+    expect(body.payments.x402).not.toHaveProperty('resourcePaymentFlows');
     expect(body.adapters).toHaveLength(1);
     expect(body.paymentProviders).toHaveLength(1);
     expect(body.store.name).toBe('fake-store');
@@ -264,6 +266,31 @@ describe('createGateway HTTP surface', () => {
     const raw = res.payload;
     expect(raw).not.toContain('TOTALLY_SECRET_KEY');
     expect(raw).not.toContain('signerPrivateKey');
+  });
+
+  it("publishes each rail's payment flow and its per-resource overrides", async () => {
+    const base = makeGatewayConfig();
+    const x402 = base.payments.x402;
+    if (x402 === undefined) throw new Error('fixture has no x402');
+    const gateway = await buildGateway({
+      config: {
+        ...base,
+        payments: {
+          x402: {
+            ...x402,
+            paymentFlow: 'upfront',
+            resourcePaymentFlows: { market_report: 'authorization' },
+          },
+        },
+      },
+    });
+    const body = (
+      await gateway.server.inject({ method: 'GET', url: '/.well-known/agent-commerce' })
+    ).json();
+    expect(body.payments.x402).toMatchObject({
+      paymentFlow: 'upfront',
+      resourcePaymentFlows: { market_report: 'authorization' },
+    });
   });
 
   // These wire identifiers are in deployed clients, so a rename breaks them.
@@ -330,6 +357,88 @@ describe('createGateway HTTP surface', () => {
     expect(res.json().payments.x402.network).toBeDefined();
     expect(res.json().payments.x402.asset).toBeDefined();
     expect(res.json().payments.x402.payTo).toBeDefined();
+  });
+
+  it("publishes each option's offer terms on /.well-known, never its RPC URL", async () => {
+    const base = makeGatewayConfig();
+    const x402 = base.payments.x402 as NonNullable<typeof base.payments.x402>;
+    const rpcUrl = 'https://rpc.example/v2/OPTION-RPC-KEY';
+    const terms = { network: x402.network, payTo: x402.payTo };
+    const eip3009 = {
+      ...terms,
+      asset: x402.asset,
+      assetName: 'MockUSDC',
+      assetVersion: '2',
+      assetDecimals: 6,
+    };
+    const permit2 = {
+      ...terms,
+      asset: '0x2222222222222222222222222222222222222222',
+      assetDecimals: 18,
+      assetTransferMethod: 'permit2' as const,
+    };
+    const config = makeGatewayConfig({
+      payments: {
+        x402: { ...x402, options: [eip3009, permit2].map((option) => ({ ...option, rpcUrl })) },
+      },
+    });
+    const gateway = await buildGateway({ config });
+    const res = await gateway.server.inject({ method: 'GET', url: '/.well-known/agent-commerce' });
+    expect(res.json().payments.x402.options).toEqual([eip3009, permit2]);
+    expect(res.payload).not.toContain('OPTION-RPC-KEY');
+  });
+
+  it("publishes each resource's own offers, and every offer's health without its detail", async () => {
+    const base = makeGatewayConfig();
+    const x402 = base.payments.x402 as NonNullable<typeof base.payments.x402>;
+    const rpcUrl = 'https://rpc.example/v2/OPTION-RPC-KEY';
+    const option = (asset: string) => ({
+      network: x402.network,
+      payTo: x402.payTo,
+      asset,
+      assetName: 'MockUSDC',
+      assetVersion: '2',
+      assetDecimals: 6,
+    });
+    const first = option(x402.asset);
+    const second = option('0x2222222222222222222222222222222222222222');
+    const own = option('0x3333333333333333333333333333333333333333');
+    const config = makeGatewayConfig({
+      payments: {
+        x402: {
+          ...x402,
+          options: [first, second].map((o) => ({ ...o, rpcUrl })),
+          resourceOptions: { market_report: [{ ...own, rpcUrl }] },
+        },
+      },
+    });
+    // The provider names EVM offers in lowercase; the config spells them mixed
+    const name = (o: typeof first) =>
+      `${o.network} ${o.asset.toLowerCase()} ${o.payTo.toLowerCase()}`;
+    const provider = {
+      ...createFakePaymentProvider(),
+      health: async () => ({
+        status: 'fail' as const,
+        detail: 'SECRET-DETAIL',
+        checkedAt: 'x',
+        components: [
+          { name: name(first), status: 'pass' as const },
+          { name: name(second), status: 'fail' as const },
+          { name: name(own), status: 'pass' as const },
+        ],
+      }),
+    };
+    const gateway = await buildGateway({ config, paymentProviders: [provider] });
+    const res = await gateway.server.inject({ method: 'GET', url: '/.well-known/agent-commerce' });
+    expect(res.json().payments.x402).toMatchObject({
+      options: [
+        { ...first, status: 'pass' },
+        { ...second, status: 'fail' },
+      ],
+      resourceOptions: { market_report: [{ ...own, status: 'pass' }] },
+    });
+    expect(res.payload).not.toContain('OPTION-RPC-KEY');
+    expect(res.payload).not.toContain('SECRET-DETAIL');
   });
 
   it('GET /api/resources lists resources without leaking backend header secrets', async () => {
@@ -529,7 +638,7 @@ describe('createGateway HTTP surface', () => {
         provider: 'x402',
         amount: '0.01',
         currency: 'USDC',
-        network: 'eip155:84532',
+        network: 'eip155:31337',
         payer: '0xBUYER',
         externalReference: 'tx-1',
         metadata: { amountBaseUnits: '10000' },
@@ -541,7 +650,7 @@ describe('createGateway HTTP surface', () => {
     expect(decodeHeader(res.headers[PAYMENT_RESPONSE_HEADER])).toMatchObject({
       success: true,
       transaction: 'tx-1',
-      network: 'eip155:84532',
+      network: 'eip155:31337',
       payer: '0xBUYER',
       // The x402 settlement amount uses base units
       amount: '10000',
@@ -759,7 +868,7 @@ describe('createGateway HTTP surface', () => {
         provider: 'x402',
         amount: '0.01',
         currency: 'USDC',
-        network: 'eip155:84532',
+        network: 'eip155:31337',
         payer: '0xBUYER',
         rejectionReason: 'insufficient_funds',
       }),
@@ -772,7 +881,7 @@ describe('createGateway HTTP surface', () => {
       success: false,
       errorReason: 'insufficient_funds',
       transaction: '',
-      network: 'eip155:84532',
+      network: 'eip155:31337',
       payer: '0xBUYER',
     });
     // x402 answers a refused settlement with PAYMENT-RESPONSE alone
@@ -797,7 +906,7 @@ describe('createGateway HTTP surface', () => {
       success: false,
       errorReason: 'settlement_pending',
       transaction: '0xabc',
-      network: 'eip155:84532',
+      network: 'eip155:31337',
     });
     expect(res.headers[PAYMENT_REQUIRED_HEADER]).toBeUndefined();
   });
@@ -811,6 +920,19 @@ describe('createGateway HTTP surface', () => {
     });
     expect(res.statusCode).toBe(503);
     expect(res.json().code).toBe('PAYMENT_PROVIDER_UNAVAILABLE');
+    // An outage is no verdict, so the client may retry the same payment
+    expect(res.headers['retry-after']).toBe('5');
+  });
+
+  it('sends no Retry-After on a refused payment', async () => {
+    const gateway = await buildGateway({ paymentProviders: [x402Provider()] });
+    const res = await gateway.server.inject({
+      method: 'POST',
+      url: '/api/resources/market_report/invoke',
+      payload: {},
+    });
+    expect(res.statusCode).toBe(402);
+    expect(res.headers['retry-after']).toBeUndefined();
   });
 
   it('returns 402 and a spent-nonce challenge for a settled replay', async () => {
@@ -822,6 +944,64 @@ describe('createGateway HTTP surface', () => {
     expect(replay.json().code).toBe('PAYMENT_REPLAYED');
     expect(decodeHeader(replay.headers[PAYMENT_REQUIRED_HEADER])).toMatchObject({
       x402Version: 2,
+      error: 'invalid_exact_evm_nonce_already_used',
+    });
+  });
+
+  it.each([
+    ['eip155:31337', 'invalid_exact_evm_nonce_already_used'],
+    ['solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1', 'duplicate_settlement'],
+    ['near:testnet', 'invalid_exact_near_payload_delegate_action_nonce_already_used'],
+  ])('names the replay code of the paid network %s', async (network, code) => {
+    const provider = x402Provider({
+      createRequirement: async (ctx) => ({
+        id: 'requirement-1',
+        requestId: ctx.requestId,
+        resourceId: ctx.resource.id,
+        provider: 'x402',
+        amount: ctx.amount,
+        currency: ctx.currency,
+        network,
+        challenge: {
+          provider: 'x402',
+          version: '2',
+          accepts: [{ scheme: 'exact', network }],
+          envelope: { x402Version: 2, accepts: [{ scheme: 'exact', network }] },
+        },
+      }),
+    });
+    const gateway = await buildGateway({ paymentProviders: [provider] });
+    expect((await invokePaid(gateway)).statusCode).toBe(200);
+
+    const replay = await invokePaid(gateway);
+    expect(replay.statusCode).toBe(402);
+    expect(replay.json().details).toMatchObject({ network });
+    expect(decodeHeader(replay.headers[PAYMENT_REQUIRED_HEADER])).toMatchObject({ error: code });
+  });
+
+  it('keeps the EVM replay code when the challenge names no network', async () => {
+    const provider = x402Provider({
+      createRequirement: async (ctx) => ({
+        id: 'requirement-1',
+        requestId: ctx.requestId,
+        resourceId: ctx.resource.id,
+        provider: 'x402',
+        amount: ctx.amount,
+        currency: ctx.currency,
+        challenge: {
+          provider: 'x402',
+          version: '2',
+          accepts: [{ scheme: 'exact' }],
+          envelope: { x402Version: 2, accepts: [{ scheme: 'exact' }] },
+        },
+      }),
+    });
+    const gateway = await buildGateway({ paymentProviders: [provider] });
+    expect((await invokePaid(gateway)).statusCode).toBe(200);
+
+    const replay = await invokePaid(gateway);
+    expect(replay.json().details).not.toHaveProperty('network');
+    expect(decodeHeader(replay.headers[PAYMENT_REQUIRED_HEADER])).toMatchObject({
       error: 'invalid_exact_evm_nonce_already_used',
     });
   });
@@ -846,6 +1026,7 @@ describe('createGateway HTTP surface', () => {
     // No new challenge: the first payment may still settle
     expect(replay.statusCode).toBe(409);
     expect(replay.json().code).toBe('PAYMENT_REPLAYED');
+    expect(replay.json().details).toMatchObject({ network: 'eip155:31337' });
     expect(replay.headers[PAYMENT_REQUIRED_HEADER]).toBeUndefined();
   });
 
@@ -1053,8 +1234,8 @@ describe('createGateway HTTP surface', () => {
           enabled: true,
           network: 'eip155:84532',
           rpcUrl: 'http://127.0.0.1:8545',
-          asset: '0x1111111111111111111111111111111111111111',
-          assetName: 'MockUSDC',
+          asset: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+          assetName: 'USDC',
           assetVersion: '2',
           assetDecimals: 6,
           payTo: '0x70997970C51812dc3A010C7d01b50e0d17dc79C8',

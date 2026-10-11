@@ -62,7 +62,7 @@ function rawConfig(storePath: string): Record<string, unknown> {
     payments: {
       x402: {
         enabled: true,
-        network: 'eip155:84532',
+        network: 'eip155:31337',
         rpcUrl: 'http://127.0.0.1:8545',
         asset: '0x5FbDB2315678afecb367f032d93F642f64180aa3',
         assetName: 'MockUSDC',
@@ -224,7 +224,7 @@ describe('adversarial: duplicate concurrent request', () => {
   it('rejects a malformed PAYMENT-SIGNATURE over HTTP before calling the backend', async () => {
     let backendCalls = 0;
     const provider = createX402PaymentProvider({
-      network: 'eip155:84532',
+      network: 'eip155:31337',
       rpcUrl: 'http://127.0.0.1:8545',
       asset: '0x5FbDB2315678afecb367f032d93F642f64180aa3',
       assetName: 'MockUSDC',
@@ -358,7 +358,7 @@ describe('adversarial: a facilitator that does not answer properly', () => {
       respond = handler;
       let backendCalls = 0;
       const provider = createX402PaymentProvider({
-        network: 'eip155:84532',
+        network: 'eip155:31337',
         rpcUrl: 'http://127.0.0.1:8545',
         asset: '0x5FbDB2315678afecb367f032d93F642f64180aa3',
         assetName: 'MockUSDC',

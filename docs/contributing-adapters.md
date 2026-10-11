@@ -16,7 +16,9 @@ A new name crosses the public contract and runtime wiring. After approval:
 1. Add the name to `ProtocolName` and `PROTOCOL_NAME_KEYS`, or
    `PaymentMethodName` and `PAYMENT_METHOD_NAME_KEYS`, in
    `src/core/domain/common.ts`. The runtime lists derive from those records.
-2. Add its strict config block and normalization in `src/config/schema.ts`.
+2. Add its strict config block to `src/config/schema/raw.ts`, and its
+   normalization to a module under `src/config/schema/` that `normalize.ts`
+   calls.
 3. Wire a protocol adapter in `src/gateway/main.ts`, or build a payment rail in
    `src/gateway/payment-providers.ts`.
 4. For a rail, add its incoming proof and payment-challenge branches in
@@ -29,8 +31,8 @@ A new name crosses the public contract and runtime wiring. After approval:
    entry, package export, optional peer and the real-package check in
    `tests/unit/cli/packaging.test.ts`.
 6. Add its descriptor, discovery and `doctor` output. Update the frozen
-   contract, conformance coverage, and a dedicated section in
-   [protocols.md](protocols.md).
+   contract and conformance coverage, and add a page under `docs/protocols/`
+   that [protocols.md](protocols.md) lists.
 
 ## Protocol adapters
 
@@ -176,5 +178,6 @@ const provider: PaymentProvider = {
       success
 - [ ] no buyer or merchant production key is held by the gateway
 - [ ] the descriptor lists supported and unsupported behavior accurately
-- [ ] [protocols.md](protocols.md) and [payment-flow.md](payment-flow.md) are
+- [ ] the rail's page under `docs/protocols/`, the support matrix in
+      [protocols.md](protocols.md), and [payment-flow.md](payment-flow.md) are
       updated

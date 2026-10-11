@@ -4,13 +4,13 @@ This experimental ACP checkout adapter uses the `2026-04-17` snapshot. Each
 of its five operations maps to a resource backed by the merchant's checkout
 API:
 
-| ACP operation | Route | Resource |
-| --- | --- | --- |
-| `createCheckoutSession` | `POST /acp/checkout_sessions` | `acp_checkout_create` |
-| `updateCheckoutSession` | `POST /acp/checkout_sessions/{id}` | `acp_checkout_update` |
-| `getCheckoutSession` | `GET /acp/checkout_sessions/{id}` | `acp_checkout_get` |
+| ACP operation             | Route                                       | Resource                |
+| ------------------------- | ------------------------------------------- | ----------------------- |
+| `createCheckoutSession`   | `POST /acp/checkout_sessions`               | `acp_checkout_create`   |
+| `updateCheckoutSession`   | `POST /acp/checkout_sessions/{id}`          | `acp_checkout_update`   |
+| `getCheckoutSession`      | `GET /acp/checkout_sessions/{id}`           | `acp_checkout_get`      |
 | `completeCheckoutSession` | `POST /acp/checkout_sessions/{id}/complete` | `acp_checkout_complete` |
-| `cancelCheckoutSession` | `POST /acp/checkout_sessions/{id}/cancel` | `acp_checkout_cancel` |
+| `cancelCheckoutSession`   | `POST /acp/checkout_sessions/{id}/cancel`   | `acp_checkout_cancel`   |
 
 `config.yaml` validates without environment variables.
 
@@ -70,4 +70,4 @@ Carts, feed, standalone orders, delegated payment, delegated authentication,
 webhooks, the ACP MCP transport binding, request `Signature` verification, and
 any ACP version other than `2026-04-17`. `/.well-known/acp.json` advertises
 `services: ["checkout"]` and nothing else, and `agent-commerce doctor` prints
-the full unsupported list. See [docs/protocols.md](../../docs/protocols.md#acp).
+the full unsupported list. See [docs/protocols/acp.md](../../docs/protocols/acp.md).

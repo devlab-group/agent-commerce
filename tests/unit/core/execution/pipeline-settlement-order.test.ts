@@ -7,6 +7,7 @@ import type { CanonicalRequest } from '../../../../src/core/domain/request';
 import { CommerceError, isCommerceError } from '../../../../src/core/errors';
 import { createExecutionPipeline } from '../../../../src/core/execution/pipeline';
 import { createResourceRegistry } from '../../../../src/core/execution/registry';
+import type { PaymentAttemptReservation } from '../../../../src/core/interfaces/store';
 import {
   createCapturingLogger,
   createFakeAuthorizationProvider,
@@ -124,6 +125,27 @@ describe('settling after the backend', () => {
     expect(store.receipts).toHaveLength(0);
     expect(store.events.map((e) => e.type)).toContain('payment.rejected');
   });
+
+  it.each([
+    [{ settleAfterBackend: true, reuseRejectedAuthorization: true }, true],
+    [{ settleAfterBackend: true }, false],
+  ])(
+    'asks the store to reclaim a rejected attempt only for a rail that allows reuse: %o',
+    async (requirementMetadata, reclaim) => {
+      const { pipeline, store } = setup({ provider: { requirementMetadata } });
+      const reserve = store.reservePaymentAttempt;
+      const reservations: PaymentAttemptReservation[] = [];
+      store.reservePaymentAttempt = (reservation) => {
+        reservations.push(reservation);
+        return reserve(reservation);
+      };
+
+      await pipeline.execute(paidRequest());
+
+      expect(reservations).toHaveLength(1);
+      expect(reservations[0]?.reclaimRejected).toBe(reclaim ? true : undefined);
+    },
+  );
 
   it('answers a retry with the same authorization with a fresh challenge', async () => {
     const { pipeline } = setup({ backendFails: true });
