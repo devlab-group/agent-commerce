@@ -1,0 +1,23 @@
+# BuildKit uses this file instead of the root .dockerignore when it builds
+# .oss-scanner/Dockerfile. The root file is written for the demo images and
+# drops contracts/lib, the vendored forge-std the contract tests compile
+# against, so it must not apply here.
+node_modules
+**/node_modules
+dist
+**/dist
+coverage
+**/coverage
+.git
+data
+.deploy
+contracts/out
+contracts/cache
+**/*.tsbuildinfo
+**/*.log
+.env
+.env.local
+*.sqlite
+*.sqlite-*
+*.tgz
+config.yaml
