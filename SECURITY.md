@@ -180,13 +180,17 @@ CORS headers at all.
   persisting the receipt fails, the delivery still happens and the failure is
   logged. A missing receipt therefore does not prove a resource was not
   delivered.
-- **A reserved payment authorization is never released.** If settlement fails,
-  or the backend fails before an `authorization`-flow payment settles, that
-  authorization cannot be reused at this gateway even when nothing moved
-  on-chain. This is deliberate, since releasing it would reopen a replay
-  window, but a buyer hit by a transient error must sign a fresh authorization.
-  An AP2 mandate is handed back in the narrower case where settlement provably
-  moved no money, and kept otherwise.
+- **A payment authorization is released only when its attempt is rejected.**
+  An attempt is `rejected` when the backend fails before an
+  `authorization`-flow payment settles, or when the provider confirms that
+  settlement moved nothing. An x402 buyer can then present the same
+  authorization again: it is verified afresh, and the chain still executes it
+  at most once. MPP credentials are single-use, so an MPP buyer needs a new
+  challenge. A `settlement-uncertain` attempt keeps its authorization reserved
+  even if nothing moved on-chain, since releasing it would reopen a replay
+  window, so a buyer hit by a transient error there must sign a fresh one. An
+  AP2 mandate is handed back with a rejected attempt and stays reserved with an
+  uncertain one.
 - **A rejected request can still have been charged for.** Most request-shape
   checks run **before** any payment is taken: missing, empty, `.` and `..` path
   parameters, a bound input group that is not an object, input keys that
