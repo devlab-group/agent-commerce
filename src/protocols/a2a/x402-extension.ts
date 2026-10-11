@@ -38,8 +38,8 @@ const DEFAULT_PENDING_TTL_MS = 10 * 60 * 1000;
 const MAX_PENDING_TTL_MS = 60 * 60 * 1000;
 
 // Bound memory used by unpaid tasks from unauthenticated callers. Each task
-// holds one request's input; deployments can raise this cap or use a shared
-// store if valid tasks are evicted before payment.
+// holds one request's input. A full store refuses new purchases rather than
+// evicting a live one, whose buyer may already have signed.
 const MAX_PENDING_PAYMENTS = 256;
 
 /** `A2A-Extensions` is a comma-separated URI list, possibly repeated */
@@ -79,17 +79,15 @@ export function createPendingPayments(clock: Clock, maxEntries = MAX_PENDING_PAY
   }
 
   return {
-    /** Holds a purchase until `expiresAt`, evicting the oldest one when full */
-    put(taskId: string, pending: Omit<PendingPayment, 'expiresAtMs'>, expiresAt?: string): void {
+    /** Holds a purchase until `expiresAt`; returns false, holding nothing, when full */
+    put(taskId: string, pending: Omit<PendingPayment, 'expiresAtMs'>, expiresAt?: string): boolean {
       purgeExpired();
-      if (tasks.size >= maxEntries) {
-        const [oldest] = tasks.keys();
-        if (oldest !== undefined) tasks.delete(oldest);
-      }
+      if (tasks.size >= maxEntries) return false;
       const requested = expiresAt !== undefined ? Date.parse(expiresAt) : Number.NaN;
       const ttl = Number.isFinite(requested) ? requested - now() : DEFAULT_PENDING_TTL_MS;
       const expiresAtMs = now() + Math.min(Math.max(ttl, 0), MAX_PENDING_TTL_MS);
       tasks.set(taskId, { ...pending, expiresAtMs });
+      return true;
     },
 
     get(taskId: string): PendingPayment | undefined {

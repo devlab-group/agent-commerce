@@ -407,7 +407,7 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
         return taskResult(id, task);
       }
       const network = outcome.requirement.network;
-      this.pendingPayments?.put(
+      const held = this.pendingPayments?.put(
         identity.taskId,
         {
           contextId: identity.contextId,
@@ -418,6 +418,18 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
         },
         outcome.requirement.expiresAt,
       );
+      if (held === false) {
+        return taskResult(
+          id,
+          failedTask(
+            new CommerceError(
+              'GATEWAY_BUSY',
+              'Too many unpaid purchases are waiting for payment; retry shortly.',
+            ),
+            identity,
+          ),
+        );
+      }
       return taskResult(
         id,
         inputRequired(task, paymentRequiredMetadata(envelope), identity.statusMessageId),

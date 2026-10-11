@@ -326,6 +326,29 @@ describe('x402 A2A extension', () => {
     expect(again.body.error?.code).toBe(-32001);
   });
 
+  // A full store must preserve purchases whose buyers may have signed.
+  // New purchases are rejected until a slot is free.
+  it('refuses a new purchase while every pending slot is taken, and keeps the waiting ones', async () => {
+    const first = await challenged();
+    for (let i = 1; i < 256; i++) await challenged();
+
+    const { body } = await rpc(buy('x402_report'));
+    const busy = body.result?.task;
+    expect(busy?.status.state).toBe('TASK_STATE_FAILED');
+    expect(busy?.artifacts?.[0]?.parts[0]?.data).toMatchObject({
+      code: 'GATEWAY_BUSY',
+      retryable: true,
+    });
+
+    const paid = await rpc(
+      pay(first, {
+        'x402.payment.status': 'payment-submitted',
+        'x402.payment.payload': await paymentPayload(first),
+      }),
+    );
+    expect(paid.body.result?.task.status.state).toBe('TASK_STATE_COMPLETED');
+  });
+
   it('keeps the task waiting after a malformed payment message', async () => {
     const task = await challenged();
 

@@ -59,16 +59,27 @@ describe('pending x402 payments', () => {
     expect(pending.get('task-1')).toBeUndefined();
   });
 
-  it('evicts the oldest purchase when full', () => {
+  it('refuses a new purchase when full, keeping the live ones', () => {
     const pending = createPendingPayments(clockAt(0).clock, 2);
-    pending.put('task-1', PURCHASE);
-    pending.put('task-2', PURCHASE);
-    pending.put('task-3', PURCHASE);
+    expect(pending.put('task-1', PURCHASE)).toBe(true);
+    expect(pending.put('task-2', PURCHASE)).toBe(true);
+    expect(pending.put('task-3', PURCHASE)).toBe(false);
 
-    expect(pending.get('task-1')).toBeUndefined();
+    expect(pending.get('task-1')).toBeDefined();
     expect(pending.get('task-2')).toBeDefined();
-    expect(pending.get('task-3')).toBeDefined();
+    expect(pending.get('task-3')).toBeUndefined();
     expect(pending.size()).toBe(2);
+  });
+
+  it('takes a new purchase once an expired one frees its slot', () => {
+    const time = clockAt(Date.parse('2026-10-05T00:00:00Z'));
+    const pending = createPendingPayments(time.clock, 1);
+    expect(pending.put('task-1', PURCHASE, '2026-10-05T00:01:00Z')).toBe(true);
+    expect(pending.put('task-2', PURCHASE)).toBe(false);
+
+    time.advance(60_000);
+    expect(pending.put('task-2', PURCHASE)).toBe(true);
+    expect(pending.get('task-2')).toBeDefined();
   });
 });
 

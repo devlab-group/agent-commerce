@@ -97,8 +97,9 @@ carries `contextId`, `taskId`, `extensions: [<extension URI>]` and the
 
 The gateway holds unpaid tasks in process memory until the payment
 requirement expires, for no longer than one hour. If the requirement has no
-expiry, the task waits ten minutes. When 256 tasks are pending, the oldest is
-evicted. A restart or a payment routed to another instance loses the task;
+expiry, the task waits ten minutes. While 256 tasks are pending, a new
+purchase fails with `GATEWAY_BUSY`; no waiting task is evicted to make room.
+A restart or a payment routed to another instance loses the task;
 the client receives `TaskNotFoundError` and must start a new purchase.
 `GetTask` and `CancelTask` also answer `TaskNotFoundError` for a pending task,
 which stays payable.

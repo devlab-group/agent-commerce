@@ -920,6 +920,19 @@ describe('createGateway HTTP surface', () => {
     });
     expect(res.statusCode).toBe(503);
     expect(res.json().code).toBe('PAYMENT_PROVIDER_UNAVAILABLE');
+    // An outage is no verdict, so the client may retry the same payment
+    expect(res.headers['retry-after']).toBe('5');
+  });
+
+  it('sends no Retry-After on a refused payment', async () => {
+    const gateway = await buildGateway({ paymentProviders: [x402Provider()] });
+    const res = await gateway.server.inject({
+      method: 'POST',
+      url: '/api/resources/market_report/invoke',
+      payload: {},
+    });
+    expect(res.statusCode).toBe(402);
+    expect(res.headers['retry-after']).toBeUndefined();
   });
 
   it('returns 402 and a spent-nonce challenge for a settled replay', async () => {

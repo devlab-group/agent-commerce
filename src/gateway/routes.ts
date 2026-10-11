@@ -269,6 +269,14 @@ async function handleInvoke(
   }
 }
 
+// A provider outage is no verdict on the payment, so the client may retry the
+// same proof after a short pause
+const PROVIDER_UNAVAILABLE_CODES: ReadonlySet<string> = new Set([
+  'PAYMENT_PROVIDER_UNAVAILABLE',
+  'AUTHORIZATION_PROVIDER_UNAVAILABLE',
+]);
+const PROVIDER_RETRY_AFTER_SECONDS = 5;
+
 // Codes whose MPP response body is a Problem Details document
 const MPP_PROBLEM_CODES: ReadonlySet<string> = new Set([
   'PAYMENT_INVALID',
@@ -283,6 +291,9 @@ function sendInvokeError(
   paymentMethod: PaymentMethodName | undefined,
 ): void {
   const details = error.details;
+  if (PROVIDER_UNAVAILABLE_CODES.has(error.code)) {
+    reply.header('retry-after', String(PROVIDER_RETRY_AFTER_SECONDS));
+  }
   // Report a settled payment even if backend delivery fails. MPP forbids a
   // `Payment-Receipt` header on error responses, so send only this summary
   const settled = settlementResponseFromDetails(details);
