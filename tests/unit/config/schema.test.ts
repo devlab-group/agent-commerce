@@ -654,12 +654,49 @@ describe('parseConfig', () => {
           payTo: MERCHANT,
           facilitator: {
             mode: 'remote',
-            url: 'https://facilitator.example.com',
+            url: 'https://api.cdp.coinbase.com/platform/v2/x402',
             auth: { type: 'cdp', apiKeyId: 'key-id', apiKeySecret: '${CDP_SECRET:- }' },
           },
         }),
       );
       expect(message).toContain('apiKeySecret is empty');
+    });
+
+    // `@coinbase/x402` signs for CDP's host and route whatever URL is set
+    it.each([
+      ['another host', 'https://facilitator.example.com'],
+      ['another CDP route', 'https://api.cdp.coinbase.com/platform/v1/x402'],
+      ['a query string', 'https://api.cdp.coinbase.com/platform/v2/x402?tenant=a'],
+    ])('rejects CDP auth against %s', (_label, url) => {
+      const message = messageFor(
+        withX402({
+          payTo: MERCHANT,
+          facilitator: {
+            mode: 'remote',
+            url,
+            auth: { type: 'cdp', apiKeyId: 'key-id', apiKeySecret: 'key-secret' },
+          },
+        }),
+      );
+      expect(message).toContain(
+        'signs requests for https://api.cdp.coinbase.com/platform/v2/x402 only',
+      );
+      expect(message).not.toContain('tenant=a');
+    });
+
+    it('accepts CDP auth with a trailing slash on its URL', () => {
+      const config = parseConfig(
+        withX402({
+          payTo: MERCHANT,
+          facilitator: {
+            mode: 'remote',
+            url: 'https://api.cdp.coinbase.com/platform/v2/x402/',
+            auth: { type: 'cdp', apiKeyId: 'key-id', apiKeySecret: 'key-secret' },
+          },
+        }),
+        {},
+      );
+      expect(config.payments.x402?.facilitator).toMatchObject({ mode: 'remote' });
     });
 
     it('rejects an auth type nobody implements, rather than sending nothing', () => {
@@ -2202,6 +2239,26 @@ describe('payments.mpp', () => {
     ],
   ])('refuses %s, naming the MPP field', (_label, mpp, path) => {
     expectConfigInvalid(() => parseConfig(mppConfig(mpp), {}), path);
+  });
+
+  // MPP charges its own 6-decimal USDC, whatever token x402 offers
+  it('checks an MPP-only resource against MPP decimals, not the x402 options', () => {
+    const raw = mppConfig();
+    const x402 = (validRawConfig()['payments'] as { x402: Record<string, unknown> }).x402;
+    (raw['payments'] as Record<string, unknown>)['x402'] = {
+      ...x402,
+      asset: '0x2222222222222222222222222222222222222222',
+      assetName: 'Coarse',
+      assetVersion: '1',
+      assetDecimals: 2,
+    };
+    const resources = raw['resources'] as Record<string, { pricing: Record<string, unknown> }>;
+    (resources['market_report'] as { pricing: Record<string, unknown> }).pricing = {
+      type: 'fixed',
+      amount: '0.001',
+      currency: 'USDC',
+    };
+    expect(() => parseConfig(raw, {})).not.toThrow();
   });
 
   it('refuses an unknown key in the MPP block', () => {

@@ -160,14 +160,16 @@ export function normalizeX402(raw: RawX402, resources: RawConfig['resources']): 
           `${at}.rpcUrl`,
         );
       }
-      const owner = rpcOwners.get(rpcUrl);
+      // Parsed, so `https://rpc.example` and `https://rpc.example/` are one endpoint
+      const endpoint = new URL(rpcUrl).href;
+      const owner = rpcOwners.get(endpoint);
       if (owner !== undefined && owner !== network) {
         throw x402Invalid(
           `${at}: ${owner} and ${network} would use the same RPC endpoint; give each network its own ${at}.networks.<id>.rpcUrl`,
           `${at}.networks`,
         );
       }
-      rpcOwners.set(rpcUrl, network);
+      rpcOwners.set(endpoint, network);
 
       // EVM addresses compare case-insensitively; Solana and NEAR exactly
       const comparable = (value: string) =>

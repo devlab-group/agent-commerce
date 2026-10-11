@@ -116,6 +116,14 @@ export function resolveX402Deployment(input: X402DeploymentInput): X402Deploymen
 
   if (input.facilitator.mode === 'remote') {
     assertFacilitatorUrlIsSafe(input.facilitator.url, mode, at);
+    // `@coinbase/x402` signs each request for CDP's own host and route,
+    // whatever URL is configured, so no other facilitator can accept the credential
+    if (input.facilitator.auth.type === 'cdp' && !isCdpFacilitatorUrl(input.facilitator.url)) {
+      throw invalid(
+        `${at}: facilitator.auth.type "cdp" signs requests for ${CDP_FACILITATOR_URL} only, so facilitator ${describeOrigin(input.facilitator.url)} cannot accept its credential. Set facilitator.url to ${CDP_FACILITATOR_URL}, or use auth.type "bearer" or "none".`,
+        `${at}.facilitator.url`,
+      );
+    }
     // The authorization fixes recipient, amount and chain, so a facilitator
     // cannot redirect funds. A credential adds an account: rate limits, terms
     // and support. On mainnet, going without one is an explicit choice.
@@ -224,6 +232,24 @@ function assertFacilitatorUrlIsSafe(url: string, mode: DeploymentMode, at: strin
     `${at}: facilitator ${describeOrigin(url)} is reached over plain HTTP. Payment authorizations and settlement results would travel unencrypted. Use https, or point at a local/private host on a non-mainnet deployment.`,
     `${at}.facilitator.url`,
   );
+}
+
+/** The facilitator URL `@coinbase/x402` signs its JWTs for */
+export const CDP_FACILITATOR_URL = 'https://api.cdp.coinbase.com/platform/v2/x402';
+
+// The SDK client strips trailing slashes before appending its route
+function isCdpFacilitatorUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    const expected = new URL(CDP_FACILITATOR_URL);
+    return (
+      parsed.origin === expected.origin &&
+      parsed.pathname.replace(/\/+$/, '') === expected.pathname &&
+      parsed.search === ''
+    );
+  } catch {
+    return false;
+  }
 }
 
 // Origin only: a facilitator URL can carry a tenant path or an API key

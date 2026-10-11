@@ -11,6 +11,21 @@ const NumberOrString = z.union([z.number(), z.string()]);
 // A boolean, or a "true"/"false" string from env substitution
 const BooleanOrString = z.union([z.boolean(), z.string()]);
 
+// An RPC endpoint. The message never echoes the value, which can carry an API key
+const RpcUrl = z
+  .string()
+  .min(1)
+  .refine(isHttpUrl, { message: 'must be an http:// or https:// URL' });
+
+function isHttpUrl(value: string): boolean {
+  try {
+    const { protocol } = new URL(value);
+    return protocol === 'http:' || protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
 const MerchantSchema = z
   .object({
     id: z.string().min(1),
@@ -284,7 +299,7 @@ const X402NetworkSettingsSchema = z
   .object({
     kind: z.enum(['testnet', 'mainnet']).optional(),
     displayName: z.string().min(1).optional(),
-    rpcUrl: z.string().min(1).optional(),
+    rpcUrl: RpcUrl.optional(),
   })
   .strict();
 
@@ -302,7 +317,7 @@ const X402Schema = z
     options: z.array(X402OptionSchema).optional(),
     networks: z.record(z.string().min(1), X402NetworkSettingsSchema).optional(),
     // The RPC for every network without its own `networks.<id>.rpcUrl`
-    rpcUrl: z.string().min(1).optional(),
+    rpcUrl: RpcUrl.optional(),
     maxTimeoutSeconds: NumberOrString,
     // `authorization` (the x402 default) settles after the backend call
     paymentFlow: z.enum(X402_PAYMENT_FLOWS).optional(),
@@ -318,7 +333,7 @@ const MppSchema = z
   .object({
     enabled: BooleanOrString,
     network: z.string().min(1).optional(),
-    rpcUrl: z.string().min(1),
+    rpcUrl: RpcUrl,
     asset: z.string().min(1),
     assetName: z.string().min(1),
     assetVersion: z.string().min(1),

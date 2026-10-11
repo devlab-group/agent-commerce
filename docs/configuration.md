@@ -356,9 +356,9 @@ Public built-in networks, testnet or mainnet, settle only in their USDC. On the
 local chain or a declared EVM network, set `asset`, `assetName`,
 `assetVersion` and `assetDecimals` together; no fields are inherited from
 USDC. A [Permit2](#permit2) token needs only `asset` and `assetDecimals`.
-Overrides for the default token must match its metadata. An explicit `asset`
-allows another resource currency label, but payments in the network's default
-token still record its symbol; other tokens use the resource's label.
+Overrides for the default token must match its metadata. Naming the default
+token's address is the same as omitting it, so those resources are priced in
+`USDC` or `USD` too. Payments in another token use the resource's label.
 
 ### Permit2
 
@@ -480,8 +480,10 @@ payments:
 
 Each network needs a distinct RPC endpoint for health checks. Set
 `payments.x402.networks.<id>.rpcUrl`, or use the shared `payments.x402.rpcUrl`
-as a fallback. All offers use the facilitator under `payments.x402`; it must
-advertise their networks and scheme.
+as a fallback. RPC URLs must use `http://` or `https://`. Equivalent URLs,
+such as those with and without a trailing slash, count as one endpoint.
+All offers use the facilitator under `payments.x402`; it must advertise their
+networks and scheme.
 
 When options use default assets, price the resource in `USD` or their shared
 token symbol. Decimal precision cannot exceed the least precise option.
@@ -622,7 +624,9 @@ facilitator:
 Omitting `auth` is equivalent to `type: none`: the gateway sends no credential.
 Use it only with a facilitator that accepts anonymous requests. Supported types
 are `none`, `bearer` (a static token) and `cdp` (a fresh JWT per request).
-The `cdp` type requires the optional `@coinbase/x402` peer.
+The `cdp` type requires the optional `@coinbase/x402` peer. It signs each
+request for `https://api.cdp.coinbase.com/platform/v2/x402`, so config load
+refuses `cdp` with any other `url`.
 
 Deployment mode - `local`, `testnet` or `mainnet` - comes from the network:
 `eip155:31337` is local, and every other network is the testnet or mainnet it

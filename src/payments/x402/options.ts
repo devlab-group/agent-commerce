@@ -162,7 +162,7 @@ export function resolveX402Option(
       asset: asset ?? canonical.address,
       ...(domain ? { assetName: domain.name, assetVersion: domain.version } : {}),
       assetDecimals: canonical.decimals,
-      ...(asset === undefined ? { defaultAssetSymbol: canonical.symbol } : {}),
+      defaultAssetSymbol: canonical.symbol,
       assetTransferMethod: method,
     };
   }

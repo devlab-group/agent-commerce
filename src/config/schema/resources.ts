@@ -143,8 +143,11 @@ export function normalizeResource(
   const offers = x402 !== undefined ? (x402.resources[id] ?? x402) : undefined;
 
   if (entry.pricing.type === 'fixed') {
-    // The price is charged in every option's token, so the coarsest one bounds it
-    const decimals = offers?.options.map((option) => option.assetDecimals);
+    // An x402 price is charged in every option's token, so the coarsest one
+    // bounds it. MPP checks its own token's decimals below.
+    const decimals = paymentMethods.includes('x402')
+      ? offers?.options.map((option) => option.assetDecimals)
+      : undefined;
     validatePricingAmount(id, entry.pricing.amount, decimals && Math.min(...decimals));
   }
 
@@ -178,8 +181,8 @@ export function normalizeResource(
         { details: { path: `resources.${id}.payments`, resourceId: id, paymentMethods } },
       );
     }
-    // With no asset configured, the x402 offer settles in the network's default
-    // stablecoin, so the price must name that token or USD
+    // An offer in the network's default stablecoin, named or not, charges the
+    // price in that token, so the price must name that token or USD
     const symbols = offers?.defaultAssetSymbols ?? [];
     const currency = entry.pricing.currency;
     if (
@@ -192,7 +195,7 @@ export function normalizeResource(
       const tokens = symbols.join(' and ');
       throw new CommerceError(
         'CONFIG_INVALID',
-        `Resource "${id}" is priced in ${currency}, but x402 settles in ${tokens}, the default asset of its network. Price it in ${symbols.length === 1 ? `${tokens} or ` : ''}USD, or set the option's asset.`,
+        `Resource "${id}" is priced in ${currency}, but x402 settles in ${tokens}, the default asset of its network. Price it in ${symbols.length === 1 ? `${tokens} or ` : ''}USD.`,
         { details: { path: `resources.${id}.pricing.currency`, resourceId: id } },
       );
     }

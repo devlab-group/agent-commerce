@@ -1,17 +1,19 @@
 # Upgrading from 2.0 to 2.1
 
 2.1 adds x402 payments on more EVM networks, Permit2, Solana and NEAR, several
-offers per resource, and health per offer. Six changes can break a 2.0
-configuration, integration or type check. Check each one before upgrading.
+offers per resource, and health per offer. The changes below can break a 2.0
+configuration, integration or type check. Review them before upgrading.
 
-| Change                                                                                  | Affects                                                     |
-| --------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
-| [The local chain is `eip155:31337`](#the-local-chain-is-eip15531337)                    | local development on Anvil, x402 and MPP                    |
-| [Public networks settle only in their USDC](#public-networks-settle-only-in-their-usdc) | another token on Base Sepolia                               |
-| [MPP settles before the backend](#mpp-settles-before-the-backend)                       | MPP resources without `paymentFlow`                         |
-| [Payments in USDC record `USDC`](#payments-in-usdc-record-usdc)                         | receipts and events of resources not priced in `USDC`       |
-| [`destination` is optional](#destination-is-optional)                                   | TypeScript code reading payment requirements                |
-| [`assetName` and `assetVersion` are optional](#assetname-and-assetversion-are-optional) | TypeScript code and discovery clients reading x402 settings |
+| Change                                                                                  | Affects                                                              |
+| --------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| [The local chain is `eip155:31337`](#the-local-chain-is-eip15531337)                    | local development on Anvil, x402 and MPP                             |
+| [Public networks settle only in their USDC](#public-networks-settle-only-in-their-usdc) | another token on Base Sepolia                                        |
+| [Prices in USDC need a USDC label](#prices-in-usdc-need-a-usdc-label)                   | resources priced in neither `USD` nor `USDC` on Base or Base Sepolia |
+| [URLs that cannot work are refused](#urls-that-cannot-work-are-refused)                 | `auth.type: cdp` at another URL; an RPC URL that is not http(s)      |
+| [MPP settles before the backend](#mpp-settles-before-the-backend)                       | MPP resources without `paymentFlow`                                  |
+| [Payments in USDC record `USDC`](#payments-in-usdc-record-usdc)                         | receipts and events of resources not priced in `USDC`                |
+| [`destination` is optional](#destination-is-optional)                                   | TypeScript code reading payment requirements                         |
+| [`assetName` and `assetVersion` are optional](#assetname-and-assetversion-are-optional) | TypeScript code and discovery clients reading x402 settings          |
 
 ## Configuration
 
@@ -41,6 +43,21 @@ token on a public testnet, such as a mock token on Base Sepolia. Omit the asset
 fields to settle in the network's USDC, or use the local chain or a network
 you declare under `payments.x402.networks` (see
 [configuration.md](configuration.md#network-and-facilitator)).
+
+### Prices in USDC need a USDC label
+
+2.0 let a resource keep any currency label when its option named the network's
+USDC as `asset`, and charged the price in USDC at face value. 2.1 treats that
+option like one that omits the asset: price its resources in `USDC` or `USD`.
+
+### URLs that cannot work are refused
+
+Config load refuses two settings that 2.0 accepted but could not use:
+
+- `facilitator.auth.type: cdp` with a `url` other than
+  `https://api.cdp.coinbase.com/platform/v2/x402`, the URL `@coinbase/x402`
+  signs for.
+- An `rpcUrl` that is not an `http://` or `https://` URL.
 
 ### MPP settles before the backend
 

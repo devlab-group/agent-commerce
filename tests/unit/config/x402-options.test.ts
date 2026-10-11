@@ -117,6 +117,21 @@ describe('default assets', () => {
     expect(pathOf(error)).toBe('resources.market_report.pricing.currency');
   });
 
+  // Naming the default USDC charges the price in USDC all the same
+  it('applies the currency rule when an option names its network USDC', () => {
+    const named = {
+      ...operational(),
+      facilitator: REMOTE,
+      ...MINIMAL,
+      asset: '0x036cbd53842c5426634e7929541ec2318f3dcf7e',
+    };
+    for (const currency of ['USD', 'USDC']) {
+      expect(() => parseConfig(withX402(named, { amount: '0.01', currency }), {})).not.toThrow();
+    }
+    const error = refusal(withX402(named, { amount: '0.01', currency: 'EUR' }));
+    expect(pathOf(error)).toBe('resources.market_report.pricing.currency');
+  });
+
   it('keeps a configured asset under the currency label it always had', () => {
     // The fixture names MockUSDC explicitly; its label is the merchant's choice
     const raw = validRawConfig();
@@ -224,6 +239,24 @@ describe('payments.x402.networks', () => {
       }),
     );
     expect(error.message).toContain('has no default asset');
+  });
+
+  it('refuses a chain id above 2^53, which a number cannot hold exactly', () => {
+    const declare = (id: string) =>
+      withX402({
+        ...operational(),
+        facilitator: REMOTE,
+        networks: { [id]: { kind: 'testnet', displayName: 'Big' } },
+        network: id,
+        payTo: MERCHANT,
+        ...token,
+      });
+    expect(pathOf(refusal(declare('eip155:9007199254740993')))).toBe(
+      'payments.x402.networks.eip155:9007199254740993',
+    );
+    expect(parseConfig(declare('eip155:9007199254740991'), {}).payments.x402).toMatchObject({
+      network: 'eip155:9007199254740991',
+    });
   });
 
   it('refuses to redeclare a built-in network or to declare a non-EVM one', () => {
@@ -355,6 +388,23 @@ describe('several options', () => {
     expect(refusal(withX402({ ...shared, options: [MINIMAL, MINIMAL] })).message).toContain(
       'repeats an earlier option',
     );
+    // EVM addresses compare without case
+    const lower = { ...MINIMAL, payTo: `0x${'ab'.repeat(20)}` };
+    const upper = { ...MINIMAL, payTo: `0x${'AB'.repeat(20)}` };
+    expect(refusal(withX402({ ...shared, options: [lower, upper] })).message).toContain(
+      'repeats an earlier option',
+    );
+    // One endpoint, spelled with and without a trailing slash
+    const slashed = {
+      ...remote(),
+      networks: {
+        'eip155:84532': { rpcUrl: 'https://rpc.example' },
+        'eip155:421614': { rpcUrl: 'https://rpc.example/' },
+      },
+    };
+    expect(
+      refusal(withX402({ ...slashed, options: [MINIMAL, ARBITRUM_SEPOLIA] })).message,
+    ).toContain('would use the same RPC endpoint');
     const mixed = refusal(
       withX402({
         ...remote(),
@@ -392,6 +442,22 @@ describe('several options', () => {
       withX402({ ...local, options: [fine, coarse] }, { amount: '0.001', currency: 'USDC' }),
     );
     expect(error.message).toContain('2 decimals');
+  });
+
+  // The value is not echoed: an RPC URL can carry an API key
+  it.each([
+    ['payments.x402.rpcUrl', { rpcUrl: 'file:///etc/passwd' }],
+    ['payments.x402.rpcUrl', { rpcUrl: 'not a url' }],
+    [
+      'payments.x402.networks.eip155:84532.rpcUrl',
+      { networks: { 'eip155:84532': { rpcUrl: 'ftp://rpc.example/key-123' } } },
+    ],
+  ])('refuses a %s that is not an http(s) URL', (path, fields) => {
+    const error = refusal(withX402({ ...remote(), ...MINIMAL, ...fields }));
+    expect(error.message).toBe(
+      `Configuration invalid at "${path}": must be an http:// or https:// URL`,
+    );
+    expect(JSON.stringify(error.toInfo())).not.toMatch(/passwd|key-123|not a url/);
   });
 
   it('takes an RPC alone for a built-in network, and refuses half a declaration', () => {
