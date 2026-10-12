@@ -141,7 +141,7 @@ class McpProtocolAdapter implements HttpProtocolAdapter {
       resources = context.resources.listExposedVia('mcp');
     } catch (err) {
       context.logger.error(
-        { adapter: 'mcp', err: toLogInfo(err) },
+        { err: toLogInfo(err) },
         'mcp adapter: failed to list mcp-exposed resources',
       );
       resources = [];
@@ -180,10 +180,7 @@ class McpProtocolAdapter implements HttpProtocolAdapter {
     }
 
     for (const s of skipped) {
-      context.logger.warn(
-        { adapter: 'mcp', resourceId: s.id, reason: s.reason },
-        'mcp adapter: resource skipped',
-      );
+      context.logger.warn({ resourceId: s.id, reason: s.reason }, 'mcp adapter: resource skipped');
     }
 
     this.tools = tools;
@@ -195,15 +192,13 @@ class McpProtocolAdapter implements HttpProtocolAdapter {
       {
         legacy: 'stateless',
         // Reporting only: a request the SDK rejects is already answered
-        onerror: (err) =>
-          context.logger.debug({ adapter: 'mcp', err: toLogInfo(err) }, 'mcp adapter: SDK error'),
+        onerror: (err) => context.logger.debug({ err: toLogInfo(err) }, 'mcp adapter: SDK error'),
       },
     );
     this.started = true;
 
     context.logger.info(
       {
-        adapter: 'mcp',
         mountPath: this.mountPath,
         toolCount: tools.length,
         skippedCount: skipped.length,
@@ -261,10 +256,7 @@ class McpProtocolAdapter implements HttpProtocolAdapter {
       );
       await writeWebResponse(response, res);
     } catch (err) {
-      this.context?.logger.error(
-        { adapter: 'mcp', err: toLogInfo(err) },
-        'mcp adapter: request handling failed',
-      );
+      this.context?.logger.error({ err: toLogInfo(err) }, 'mcp adapter: request handling failed');
       this.writeJsonRpcError(res, 500, 'Internal server error.');
     }
   }
@@ -393,10 +385,7 @@ class McpProtocolAdapter implements HttpProtocolAdapter {
       }
     } catch (err) {
       const error = toCommerceError(err);
-      context.logger.warn(
-        { adapter: 'mcp', resourceId, err: toLogInfo(error) },
-        'mcp adapter: execution failed',
-      );
+      context.logger.warn({ resourceId, err: toLogInfo(error) }, 'mcp adapter: execution failed');
       return errorResult(error, resource.paymentMethods[0]);
     }
   }
