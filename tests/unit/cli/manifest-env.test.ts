@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   fillEnvFromLocalChainManifest,
+  hasChainDeployScript,
   LOCAL_CHAIN_MANIFEST_PATH,
   MANIFEST_FILLABLE_ENV_VAR_NAMES,
 } from '../../../src/cli/lib/manifest-env';
@@ -89,5 +90,36 @@ describe('fillEnvFromLocalChainManifest', () => {
     expect(result.manifestFound).toBe(false);
     expect(result.filled).toEqual([]);
     expect(result.env).toEqual({});
+  });
+});
+
+describe('hasChainDeployScript', () => {
+  // A repository clone defines the script; a merchant's own project does not
+  it.each([
+    [
+      "this repository's package.json",
+      true,
+      '{"name":"@devlab.group/agent-commerce","scripts":{"chain:deploy":"tsx deploy.ts"}}',
+    ],
+    [
+      'another project with its own chain:deploy',
+      false,
+      '{"name":"merchant-contracts","scripts":{"chain:deploy":"hardhat run deploy.ts"}}',
+    ],
+    [
+      'a package.json without the script',
+      false,
+      '{"name":"merchant-app","scripts":{"start":"node ."}}',
+    ],
+    ['an unparseable package.json', false, '{'],
+    ['no package.json', false, undefined],
+  ])('%s: %s', (_label, expected, manifest) => {
+    const dir = mkdtempSync(join(tmpdir(), 'oac-chain-deploy-'));
+    try {
+      if (manifest !== undefined) writeFileSync(join(dir, 'package.json'), manifest);
+      expect(hasChainDeployScript(dir)).toBe(expected);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

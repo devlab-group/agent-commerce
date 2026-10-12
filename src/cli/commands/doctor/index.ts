@@ -6,8 +6,9 @@ import { type GatewayConfig, loadConfigDynamic } from '../../lib/config-client';
 import { fetchJson } from '../../lib/http';
 import {
   fillEnvFromLocalChainManifest,
+  hasChainDeployScript,
   LOCAL_CHAIN_MANIFEST_PATH,
-  MANIFEST_FILLABLE_ENV_VAR_NAMES,
+  unresolvedVariableHint,
 } from '../../lib/manifest-env';
 import { readVersionReport } from '../../lib/versions';
 import { ap2Checks } from './ap2';
@@ -56,6 +57,7 @@ export async function runDoctor(
   const loadConfig = deps.loadConfig ?? loadConfigDynamic;
   const createStore = deps.createStore ?? ((path: string) => createSqliteReceiptStore({ path }));
   const fillEnvFromManifest = deps.fillEnvFromManifest ?? fillEnvFromLocalChainManifest;
+  const chainDeploy = (deps.hasChainDeployScript ?? hasChainDeployScript)();
 
   const checks: DoctorCheck[] = [];
   let config: GatewayConfig | undefined;
@@ -79,10 +81,8 @@ export async function runDoctor(
   } catch (err) {
     const variable = isCommerceError(err) ? err.details?.['variable'] : undefined;
     const hint =
-      !manifestFound &&
-      typeof variable === 'string' &&
-      MANIFEST_FILLABLE_ENV_VAR_NAMES.has(variable)
-        ? `. Run "npm run chain:deploy": it writes ${LOCAL_CHAIN_MANIFEST_PATH}, which fills local X402_*/MERCHANT_WALLET placeholders automatically`
+      typeof variable === 'string'
+        ? `. Hint: ${unresolvedVariableHint(variable, manifestFound, chainDeploy)}`
         : '';
     checks.push({
       name: 'Config',
@@ -149,7 +149,7 @@ export async function runDoctor(
   // 5-7. Protocols, AP2, payments and storage
   checks.push(...protocolChecks(config, wellKnown));
   checks.push(...ap2Checks(config));
-  checks.push(...paymentChecks(config, wellKnown, gatewayUrl));
+  checks.push(...paymentChecks(config, wellKnown, gatewayUrl, chainDeploy));
   checks.push(...(await storageChecks(config, createStore)));
 
   // 8. Protocol versions

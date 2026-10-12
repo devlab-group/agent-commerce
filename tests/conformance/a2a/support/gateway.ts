@@ -278,7 +278,7 @@ export async function startConformanceGateway(): Promise<RunningGateway> {
     config: gatewayConfig,
     store: createFakeStore(),
     paymentProviders: [provider],
-    // Built as src/gateway/main.ts builds it, so the suite certifies the
+    // Built as src/gateway/run.ts builds it, so the suite certifies the
     // adapter production runs
     protocolAdapters: [
       createA2aAdapter({

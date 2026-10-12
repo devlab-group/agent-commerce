@@ -46,8 +46,10 @@ const MAINNET_MPP: Mpp = {
   allowUnauthenticatedFacilitator: true,
 };
 
-function names(payments: Payments): string[] {
-  return createConfiguredPaymentProviders(payments, NOOP_LOGGER).map((provider) => provider.name);
+async function names(payments: Payments): Promise<string[]> {
+  return (await createConfiguredPaymentProviders(payments, NOOP_LOGGER)).map(
+    (provider) => provider.name,
+  );
 }
 
 afterEach(() => {
@@ -55,15 +57,18 @@ afterEach(() => {
 });
 
 describe('createConfiguredPaymentProviders', () => {
-  it('builds no provider for a rail that is configured but disabled', () => {
-    expect(names({ x402: MAINNET_X402, mpp: MAINNET_MPP })).toEqual(['x402', 'mpp']);
+  it('builds no provider for a rail that is configured but disabled', async () => {
+    expect(await names({ x402: MAINNET_X402, mpp: MAINNET_MPP })).toEqual(['x402', 'mpp']);
     // A disabled rail must not settle anything, whatever its resources list
     expect(
-      names({ x402: { ...MAINNET_X402, enabled: false }, mpp: { ...MAINNET_MPP, enabled: false } }),
+      await names({
+        x402: { ...MAINNET_X402, enabled: false },
+        mpp: { ...MAINNET_MPP, enabled: false },
+      }),
     ).toEqual([]);
   });
 
-  it('passes the mainnet acknowledgements through to the providers they gate', () => {
+  it('passes the mainnet acknowledgements through to the providers they gate', async () => {
     // Config load checks these too; without the pass-through, a config that
     // loads would still fail at provider construction
     const { allowMainnet: _x402Ack, ...x402NoAck } = MAINNET_X402;
@@ -71,16 +76,16 @@ describe('createConfiguredPaymentProviders', () => {
     const { allowMainnet: _mppAck, ...mppNoAck } = MAINNET_MPP;
     const { allowUnauthenticatedFacilitator: _mppAnon, ...mppNoAnon } = MAINNET_MPP;
 
-    expect(() => names({ x402: x402NoAck })).toThrow(/allowMainnet/);
-    expect(() => names({ x402: x402NoAnon })).toThrow(/allowUnauthenticatedFacilitator/);
-    expect(() => names({ mpp: mppNoAck })).toThrow(/allowMainnet/);
-    expect(() => names({ mpp: mppNoAnon })).toThrow(/allowUnauthenticatedFacilitator/);
+    await expect(names({ x402: x402NoAck })).rejects.toThrow(/allowMainnet/);
+    await expect(names({ x402: x402NoAnon })).rejects.toThrow(/allowUnauthenticatedFacilitator/);
+    await expect(names({ mpp: mppNoAck })).rejects.toThrow(/allowMainnet/);
+    await expect(names({ mpp: mppNoAnon })).rejects.toThrow(/allowUnauthenticatedFacilitator/);
   });
 
   it('applies the configured MPP challenge lifetime instead of the default', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
-    const [provider] = createConfiguredPaymentProviders(
+    const [provider] = await createConfiguredPaymentProviders(
       { mpp: { ...MAINNET_MPP, challengeTtlSeconds: 60 } },
       NOOP_LOGGER,
     );
@@ -104,7 +109,7 @@ describe('createConfiguredPaymentProviders', () => {
     const resource = makeGatewayConfig().resources.find((r) => r.id === 'market_report');
     if (resource === undefined) throw new Error('fixture missing');
     const settleAfterBackend = async (mpp: Mpp): Promise<unknown> => {
-      const [provider] = createConfiguredPaymentProviders({ mpp }, NOOP_LOGGER);
+      const [provider] = await createConfiguredPaymentProviders({ mpp }, NOOP_LOGGER);
       if (provider === undefined) throw new Error('no provider');
       const requirement = await provider.createRequirement({
         requestId: 'req-1',
@@ -124,7 +129,7 @@ describe('createConfiguredPaymentProviders', () => {
     const resource = makeGatewayConfig().resources.find((r) => r.id === 'market_report');
     if (resource === undefined) throw new Error('fixture missing');
     const own = { ...MAINNET_X402, payTo: '0x2222222222222222222222222222222222222222' };
-    const [provider] = createConfiguredPaymentProviders(
+    const [provider] = await createConfiguredPaymentProviders(
       { x402: { ...MAINNET_X402, resourceOptions: { market_report: [own] } } },
       NOOP_LOGGER,
     );
@@ -147,7 +152,7 @@ describe('createConfiguredPaymentProviders', () => {
   it("passes the resources' media types to the x402 provider", async () => {
     const resource = makeGatewayConfig().resources.find((r) => r.id === 'market_report');
     if (resource === undefined) throw new Error('fixture missing');
-    const [provider] = createConfiguredPaymentProviders(
+    const [provider] = await createConfiguredPaymentProviders(
       { x402: { ...MAINNET_X402, resourceMimeTypes: { market_report: 'text/csv' } } },
       NOOP_LOGGER,
     );

@@ -726,4 +726,7 @@ It exits non-zero on any of them.
 ## Environment
 
 `${VAR}` works in any string value, and `${VAR:-default}` supplies a fallback.
+`agent-commerce start`, `validate` and `doctor` also read variables from a file
+with `--env-file <path>`; a variable already set in the environment wins over
+the file.
 See [`.env.example`](../.env.example) for the variables the demo uses.

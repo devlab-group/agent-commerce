@@ -168,8 +168,8 @@ export function normalizeResource(
         );
       }
     }
-    // At least one named rail must be enabled, not every one. `main.ts` checks
-    // again at composition as defense in depth.
+    // At least one named rail must be enabled, not every one. `runGateway`
+    // checks again at composition as defense in depth.
     const enabledRails = [
       ...(x402?.config.enabled ? ['x402'] : []),
       ...(mpp?.enabled ? ['mpp'] : []),

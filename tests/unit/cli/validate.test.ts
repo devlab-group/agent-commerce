@@ -115,7 +115,7 @@ describe('runValidate: local chain manifest fill (docker vs. host env parity)', 
     expect(io.out.join('\n')).not.toContain('using local chain manifest');
   });
 
-  it('adds a "run npm run chain:deploy" hint when the failure is an unresolved manifest-fillable variable and no manifest was found', async () => {
+  it('adds a "run npm run chain:deploy" hint in a repository clone when the failure is an unresolved manifest-fillable variable and no manifest was found', async () => {
     const io = createCapturingIo();
     const code = await runValidate({}, io, {
       loadConfig: async () => {
@@ -126,12 +126,33 @@ describe('runValidate: local chain manifest fill (docker vs. host env parity)', 
         );
       },
       fillEnvFromManifest: () => ({ env: process.env, filled: [], manifestFound: false }),
+      hasChainDeployScript: () => true,
     });
     expect(code).toBe(1);
     expect(io.err.join('\n')).toContain('npm run chain:deploy');
   });
 
-  it('does NOT add the hint when a manifest was found (the failure is something else)', async () => {
+  it('points outside a repository clone to the environment, not to a script that does not exist', async () => {
+    const io = createCapturingIo();
+    await runValidate({}, io, {
+      loadConfig: async () => {
+        throw new CommerceError(
+          'CONFIG_INVALID',
+          'Unresolved environment variable "${MERCHANT_WALLET}" referenced at config path "$.payments.x402.payTo"',
+          { details: { variable: 'MERCHANT_WALLET', path: '$.payments.x402.payTo' } },
+        );
+      },
+      fillEnvFromManifest: () => ({ env: process.env, filled: [], manifestFound: false }),
+      hasChainDeployScript: () => false,
+    });
+    const err = io.err.join('\n');
+    expect(err).toContain(
+      'hint: set MERCHANT_WALLET in the environment, or in a file passed with --env-file',
+    );
+    expect(err).not.toContain('chain:deploy');
+  });
+
+  it('does not suggest chain:deploy when a manifest was found (the failure is something else)', async () => {
     const io = createCapturingIo();
     await runValidate({}, io, {
       loadConfig: async () => {
@@ -146,7 +167,7 @@ describe('runValidate: local chain manifest fill (docker vs. host env parity)', 
     expect(io.err.join('\n')).not.toContain('npm run chain:deploy');
   });
 
-  it('does NOT add the hint when the unresolved variable is unrelated to the manifest', async () => {
+  it('does not suggest chain:deploy when the unresolved variable is unrelated to the manifest', async () => {
     const io = createCapturingIo();
     await runValidate({}, io, {
       loadConfig: async () => {

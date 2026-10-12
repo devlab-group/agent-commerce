@@ -193,7 +193,7 @@ beforeAll(async () => {
   gateway = await createGateway({
     config,
     store,
-    paymentProviders: createConfiguredPaymentProviders(config.payments, NOOP_LOGGER),
+    paymentProviders: await createConfiguredPaymentProviders(config.payments, NOOP_LOGGER),
     protocolAdapters: [],
     backend,
   });
@@ -513,7 +513,7 @@ describeWithSandbox('x402 NEAR settlement on a local sandbox', () => {
   });
 
   it('fails health: the sandbox is not the chain its offer names', async () => {
-    const provider = createConfiguredPaymentProviders(config.payments, NOOP_LOGGER)[0];
+    const provider = (await createConfiguredPaymentProviders(config.payments, NOOP_LOGGER))[0];
     const health = await provider?.health();
     expect(health?.status).toBe('fail');
     const status = await nearRpc<{ chain_id: string }>(sandbox.rpcUrl, 'status', []);

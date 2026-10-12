@@ -147,7 +147,7 @@ beforeAll(async () => {
   );
   store = createSqliteReceiptStore({ path: ':memory:' });
   await store.init();
-  const providers = createConfiguredPaymentProviders(config.payments, NOOP_LOGGER);
+  const providers = await createConfiguredPaymentProviders(config.payments, NOOP_LOGGER);
   provider = providers[0] as PaymentProvider;
   gateway = await createGateway({
     config,

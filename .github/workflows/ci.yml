@@ -168,6 +168,40 @@ jobs:
           npx agent-commerce version | grep -q '@modelcontextprotocol/server'
           npx agent-commerce init --yes
           npx agent-commerce validate
+          # `start` loads each enabled feature's peers, so the init config,
+          # which enables x402, must refuse and name the missing package
+          status=0
+          timeout 30 npx agent-commerce start > start.log 2>&1 || status=$?
+          cat start.log
+          test "$status" -eq 1
+          grep -q 'payments.x402 is enabled, but the package' start.log
+          # Peers load before the receipt store opens, so nothing was created
+          test ! -e data/receipts.db
+          # Free HTTP needs no peers with MCP, AP2 and payment rails disabled
+          cat > free.yaml <<'EOF'
+          version: 1
+          merchant: { id: free, name: Free, publicBaseUrl: "http://localhost:8081" }
+          server: { port: 8081, host: 127.0.0.1 }
+          storage: { receipts: { driver: sqlite, path: ./free.sqlite } }
+          protocols: { http: { enabled: true }, mcp: { enabled: false, mountPath: /mcp } }
+          resources:
+            hello:
+              name: Hello
+              input: { type: object, properties: {}, additionalProperties: false }
+              backend: { type: http, method: GET, url: "http://127.0.0.1:3000/hello" }
+              pricing: { type: free }
+              expose: [http]
+          payments: {}
+          EOF
+          ./node_modules/.bin/agent-commerce start --config free.yaml &
+          pid=$!
+          for _ in $(seq 30); do
+            node -e "fetch('http://127.0.0.1:8081/health').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))" && break
+            sleep 1
+          done
+          node -e "fetch('http://127.0.0.1:8081/health').then((r) => { if (!r.ok) process.exit(1); })"
+          kill -TERM "$pid"
+          wait "$pid"
           # The main entry must compose and serve without optional peers
           node --input-type=module -e "
             import { createGateway, loadConfig, receipts } from '@devlab.group/agent-commerce';
@@ -216,6 +250,29 @@ jobs:
             if (!(caught instanceof CommerceError)) throw new Error('CommerceError identity broken across subpaths');
             console.log('subpath install ok: mcp + x402 compose with the main entry');
           "
+          # With its peers installed, `start` serves the init config's paid
+          # resource: a 402 challenge, which needs no chain
+          ./node_modules/.bin/agent-commerce start &
+          pid=$!
+          for _ in $(seq 30); do
+            node -e "fetch('http://127.0.0.1:8080/health').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))" && break
+            sleep 1
+          done
+          node -e "
+            fetch('http://127.0.0.1:8080/api/resources/report/invoke', {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: '{}',
+            }).then((r) => {
+              if (r.status !== 402 || !r.headers.has('payment-required')) {
+                console.error('invoke -> ' + r.status);
+                process.exit(1);
+              }
+              console.log('start ok: paid resource challenged with 402');
+            });
+          "
+          kill -TERM "$pid"
+          wait "$pid"
 
   build:
     name: Build and quickstart test

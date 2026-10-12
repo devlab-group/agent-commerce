@@ -27,9 +27,10 @@ const shared = {
  * bundles would each carry their own `CommerceError`, and an error from a
  * subpath would fail `instanceof CommerceError` against the main entry's class.
  *
- * CLI: `dist/cli/index.js`, built separately without shared chunks, so no
- * chunk reaching gateway code can pull `fastify` into it. Packaging tests
- * assert the CLI's imports.
+ * CLI: `dist/cli/index.js`, built separately with its chunks under
+ * `dist/cli/`. `start` imports the gateway dynamically, so the imports of
+ * `fastify` and the optional peers sit in chunks only `start` loads, and no
+ * library chunk is shared. Packaging tests assert the CLI's static imports.
  *
  * tsup keeps `dependencies` and `peerDependencies` external by default, so npm
  * resolves them at install time and an optional peer stays optional.
@@ -54,7 +55,10 @@ export default defineConfig([
     entry: { 'cli/index': 'src/cli/index.ts' },
     // Runs second; cleaning here would delete the library build above
     clean: false,
-    splitting: false,
+    splitting: true,
+    esbuildOptions(options) {
+      options.chunkNames = 'cli/[name]-[hash]';
+    },
     // src/cli/index.ts carries its own shebang, which esbuild preserves. A
     // `banner` here would emit a second one and the output would not parse.
   },

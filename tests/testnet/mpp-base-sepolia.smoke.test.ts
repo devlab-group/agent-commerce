@@ -139,7 +139,7 @@ describeOrSkip('MPP on Base Sepolia - real settlement through a remote facilitat
     gateway = await createGateway({
       config,
       store,
-      paymentProviders: createConfiguredPaymentProviders(config.payments, NOOP_LOGGER),
+      paymentProviders: await createConfiguredPaymentProviders(config.payments, NOOP_LOGGER),
       protocolAdapters: [],
       backend: {
         call: async () => ({

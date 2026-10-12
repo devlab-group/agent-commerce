@@ -7,8 +7,9 @@
  * (reported, not passed) when it is absent, so `npm test` works on a fresh
  * clone; CI runs `npm run build` first and then this file.
  */
-import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { type AddressInfo, createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -63,17 +64,19 @@ const BUILTINS = new Set([
  * form for an external whose bindings were tree-shaken but whose side effects
  * it cannot prove absent, and missing it would report the CLI viem-free while
  * the published binary cannot start without viem. A dynamic import fails later,
- * when the code path that calls it runs.
+ * when the code path that calls it runs; `dynamic: false` leaves those out.
  */
-const bareImportsOf = (file: string): string[] => {
-  const pattern =
-    /^(?:import|export)\b[^;]*?from\s*['"]([^'"]+)['"]|^import\s*['"]([^'"]+)['"]|\bimport\(\s*['"]([^'"]+)['"]\s*\)/gm;
+const bareImportsOf = (file: string, { dynamic = true } = {}): string[] => {
+  const pattern = dynamic
+    ? /^(?:import|export)\b[^;]*?from\s*['"]([^'"]+)['"]|^import\s*['"]([^'"]+)['"]|\bimport\(\s*['"]([^'"]+)['"]\s*\)/gm
+    : /^(?:import|export)\b[^;]*?from\s*['"]([^'"]+)['"]|^import\s*['"]([^'"]+)['"]/gm;
   const packages = new Set<string>();
   const seen = new Set<string>();
 
-  // Follows relative imports, static and dynamic: the library entries are
-  // built with `splitting: true`, so shared code lives in `dist/chunk-*.js`,
-  // and a peer import that moved into a chunk would otherwise go unseen
+  // Follows relative imports, and dynamic ones too unless `dynamic: false`:
+  // the library entries are built with `splitting: true`, so shared code lives
+  // in `dist/chunk-*.js`, and a peer import that moved into a chunk would
+  // otherwise go unseen
   const visit = (path: string): void => {
     if (seen.has(path) || !existsSync(path)) return;
     seen.add(path);
@@ -100,6 +103,15 @@ const built = existsSync(distEntry);
 const run = (...args: string[]): string =>
   execFileSync(process.execPath, [distEntry, ...args], { encoding: 'utf8' });
 
+// The chunk `start` imports: esbuild names a dynamic entry's chunk after its file
+const gatewayChunk = (): string => {
+  const chunks = readdirSync(join(pkgRoot, 'dist', 'cli')).filter((file) =>
+    /^run-\w+\.js$/.test(file),
+  );
+  expect(chunks).toHaveLength(1);
+  return join(pkgRoot, 'dist', 'cli', chunks[0] as string);
+};
+
 describe('the bundle import scanner', () => {
   it('finds side-effect and dynamic imports, including those in relative chunks', () => {
     const dir = mkdtempSync(join(tmpdir(), 'agent-commerce-scan-'));
@@ -110,7 +122,15 @@ describe('the bundle import scanner', () => {
     );
     writeFileSync(join(dir, 'lazy.js'), 'export const load = () => import("mppx");\n');
 
-    expect(bareImportsOf(join(dir, 'entry.js'))).toEqual(['@x402/core', 'mppx', 'viem']);
+    try {
+      expect(bareImportsOf(join(dir, 'entry.js'))).toEqual(['@x402/core', 'mppx', 'viem']);
+      expect(bareImportsOf(join(dir, 'entry.js'), { dynamic: false })).toEqual([
+        '@x402/core',
+        'viem',
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -290,7 +310,7 @@ describe.skipIf(!built)('built executable', () => {
 
   it('offers every documented command', () => {
     const help = run('--help');
-    for (const command of ['init', 'import', 'validate', 'doctor', 'demo', 'version']) {
+    for (const command of ['init', 'import', 'validate', 'start', 'doctor', 'demo', 'version']) {
       expect(help).toContain(command);
     }
   });
@@ -322,14 +342,172 @@ describe.skipIf(!built)('built executable', () => {
   });
 
   it('leaves only npm-resolvable modules as imports', () => {
-    // `dependencies` only - not the optional peers. The binary must run on a
-    // default `npm i @devlab.group/agent-commerce`, with nothing else installed.
-    const declared = new Set(Object.keys(manifest.dependencies ?? {}));
-    const imports = bareImportsOf(distEntry);
+    // Static imports come from `dependencies` only: the binary must run on a
+    // default `npm i @devlab.group/agent-commerce`, with nothing else
+    // installed. Optional peers may appear only behind a dynamic import.
+    const dependencies = new Set(Object.keys(manifest.dependencies ?? {}));
+    const imports = bareImportsOf(distEntry, { dynamic: false });
     expect(imports).toContain('commander');
     for (const pkg of imports) {
-      expect(declared).toContain(pkg);
+      expect(dependencies).toContain(pkg);
     }
+    const resolvable = new Set([...dependencies, ...Object.keys(manifest.peerDependencies ?? {})]);
+    for (const pkg of bareImportsOf(distEntry)) {
+      expect(resolvable).toContain(pkg);
+    }
+  });
+
+  it('loads the gateway for start without any optional peer', () => {
+    // Loading runGateway alone must not load optional peers; enabled features
+    // import them during startup
+    const imports = bareImportsOf(gatewayChunk(), { dynamic: false });
+    expect(imports).toContain('fastify');
+    const dependencies = new Set(Object.keys(manifest.dependencies ?? {}));
+    for (const pkg of imports) {
+      expect(dependencies).toContain(pkg);
+    }
+  });
+
+  it('starts a free-only gateway from the built binary, with --env-file, and exits 0 on SIGTERM', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agent-commerce-start-'));
+    const configPath = join(dir, 'config.yaml');
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        version: 1,
+        // Resolved only through --env-file: Node does not load a path given after the script
+        merchant: {
+          id: 'start-smoke',
+          name: '${OAC_START_NAME}',
+          publicBaseUrl: 'http://localhost',
+        },
+        server: { port: 0, host: '127.0.0.1' },
+        storage: { receipts: { driver: 'sqlite', path: join(dir, 'receipts.sqlite') } },
+        protocols: { http: { enabled: true }, mcp: { enabled: false, mountPath: '/mcp' } },
+        resources: {
+          hello: {
+            name: 'Hello',
+            input: { type: 'object', properties: {}, additionalProperties: false },
+            backend: { type: 'http', method: 'GET', url: 'http://127.0.0.1:1/hello' },
+            pricing: { type: 'free' },
+            expose: ['http'],
+          },
+        },
+        payments: {},
+      }),
+    );
+    const envPath = join(dir, '.env');
+    writeFileSync(envPath, 'OAC_START_NAME=Start Smoke\n');
+    const child = spawn(
+      process.execPath,
+      [distEntry, 'start', '--config', configPath, '--env-file', envPath],
+      {
+        env: { ...process.env, NODE_ENV: 'production', LOG_LEVEL: 'info' },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    );
+    try {
+      const exited = new Promise<number | null>((done) => child.once('exit', done));
+      let stdout = '';
+      let stderr = '';
+      child.stderr.on('data', (chunk: Buffer) => {
+        stderr += chunk.toString('utf8');
+      });
+      // The `gateway listening` log line carries the bound URL
+      const url = await Promise.race([
+        new Promise<string>((done) => {
+          child.stdout.on('data', (chunk: Buffer) => {
+            stdout += chunk.toString('utf8');
+            const found = /"url":"([^"]+)"[^\n]*"msg":"gateway listening"/.exec(stdout)?.[1];
+            if (found !== undefined) done(found);
+          });
+        }),
+        exited.then((code) => {
+          throw new Error(`start exited with ${code}: ${stderr}`);
+        }),
+      ]);
+      expect((await fetch(`${url}/health`)).status).toBe(200);
+      child.kill('SIGTERM');
+      expect(await exited).toBe(0);
+    } finally {
+      if (child.exitCode === null) child.kill('SIGKILL');
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it('keeps serving when its log reader goes away during startup, and exits 0 on SIGTERM', async () => {
+    // Exiting on that EPIPE would hang: pino flushes on exit, and sonic-boom
+    // retries a write to a closed pipe forever
+    const port = await new Promise<number>((done) => {
+      const probe = createServer().listen(0, '127.0.0.1', () => {
+        const { port: free } = probe.address() as AddressInfo;
+        probe.close(() => done(free));
+      });
+    });
+    const dir = mkdtempSync(join(tmpdir(), 'agent-commerce-epipe-'));
+    const configPath = join(dir, 'config.yaml');
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        version: 1,
+        merchant: { id: 'epipe', name: 'Epipe', publicBaseUrl: 'http://localhost' },
+        server: { port, host: '127.0.0.1' },
+        storage: { receipts: { driver: 'sqlite', path: join(dir, 'receipts.sqlite') } },
+        protocols: { http: { enabled: true }, mcp: { enabled: false, mountPath: '/mcp' } },
+        resources: {},
+        // x402, so the settlement banner is written into the closed pipe;
+        // nothing listens on port 1, so no chain is reached
+        payments: {
+          x402: {
+            enabled: true,
+            network: 'eip155:31337',
+            rpcUrl: 'http://127.0.0.1:1',
+            asset: '0x1111111111111111111111111111111111111111',
+            assetName: 'MockUSDC',
+            assetVersion: '2',
+            assetDecimals: 6,
+            payTo: '0x3333333333333333333333333333333333333333',
+            maxTimeoutSeconds: 120,
+            facilitator: { mode: 'local', signerPrivateKey: `0x${'22'.repeat(32)}` },
+          },
+        },
+      }),
+    );
+    const child = spawn(process.execPath, [distEntry, 'start', '--config', configPath], {
+      env: { ...process.env, NODE_ENV: 'production', LOG_LEVEL: 'info' },
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    child.stdout.destroy();
+    try {
+      const exited = new Promise<number | null>((done) => child.once('exit', done));
+      let status = 0;
+      for (let attempt = 0; attempt < 50 && status !== 200; attempt++) {
+        status = await fetch(`http://127.0.0.1:${port}/health`, {
+          signal: AbortSignal.timeout(1000),
+        }).then(
+          (response) => response.status,
+          () => 0,
+        );
+        if (status !== 200) await new Promise((wait) => setTimeout(wait, 200));
+      }
+      expect(status).toBe(200);
+      child.kill('SIGTERM');
+      expect(await exited).toBe(0);
+    } finally {
+      if (child.exitCode === null) child.kill('SIGKILL');
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it('refuses an --env-file path that does not exist, naming it', () => {
+    // Node 24.8.0 checks the path before the CLI runs and exits 9
+    const result = spawnSync(
+      process.execPath,
+      [distEntry, 'validate', '--env-file', join(pkgRoot, 'does-not-exist.env')],
+      { encoding: 'utf8' },
+    );
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('does-not-exist.env');
   });
 });
 
@@ -406,10 +584,13 @@ describe.skipIf(!existsSync(libEntry))('optional-peer subpaths', () => {
       [libEntry, 'fastify'],
       [distEntry, 'commander'],
     ] as const) {
-      const imports = bareImportsOf(entry);
+      // The CLI's `start` imports peers dynamically, for enabled features only
+      const imports = bareImportsOf(entry, { dynamic: entry !== distEntry });
       expect(imports).toContain(ownImport);
       expect(imports.filter((pkg) => peers.includes(pkg))).toEqual([]);
     }
+    // Only `start` needs the HTTP server
+    expect(bareImportsOf(distEntry, { dynamic: false })).not.toContain('fastify');
   });
 
   it('imports only its own peer, in each subpath', () => {

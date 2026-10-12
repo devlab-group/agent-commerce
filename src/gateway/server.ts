@@ -1,4 +1,4 @@
-// `createGateway()`: the Fastify server, usable with injected fakes and without `main.ts`
+// `createGateway()`: the Fastify server, usable with injected fakes and without `run.ts`
 
 import type { IncomingMessage } from 'node:http';
 import Fastify, { type FastifyInstance } from 'fastify';

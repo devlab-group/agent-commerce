@@ -590,7 +590,7 @@ export interface Ap2TrustedKey {
 ```
 
 The replay database is separate from payment replay storage. The caller that
-creates the provider must close it. `main.ts` calls `close()` after
+creates the provider must close it. `runGateway` calls `close()` after
 `gateway.close()`; `gateway.close()` does not close authorization providers.
 
 The merchant-side checkout signer has this boundary:
@@ -891,7 +891,10 @@ The result is the base64 `PAYMENT-SIGNATURE` value returned to the gateway.
 
 ## Composition root
 
-`src/gateway/main.ts` loads configuration, creates concrete providers and
-adapters, starts the gateway, and closes owned resources during shutdown.
-`createGateway` remains usable with injected fakes and does not depend on the
-composition root.
+`runGateway` in `src/gateway/run.ts` loads configuration, builds providers and
+adapters, starts the gateway, and closes the server, AP2 providers and receipt
+store on SIGTERM or SIGINT. `src/gateway/main.ts` and `agent-commerce start`
+both call it. It imports MCP, AP2 and payment rail implementations only when
+enabled. An enabled rail can share another rail's peers: MPP uses x402 for
+settlement even with `payments.x402` disabled. `createGateway` accepts injected
+implementations and does not import the composition root.

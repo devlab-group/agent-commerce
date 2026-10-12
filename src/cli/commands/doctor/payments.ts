@@ -211,8 +211,7 @@ function findRailMismatch(
     if (liveOverrides !== localOverrides)
       differ('resourcePaymentFlows', liveOverrides, localOverrides);
   }
-  if (diffs.length === 0) return undefined;
-  return `${diffs.join('; ')}; the gateway may be running against an older deployment - restart it or re-run chain:deploy`;
+  return diffs.length === 0 ? undefined : diffs.join('; ');
 }
 
 /**
@@ -328,8 +327,11 @@ export function paymentChecks(
   config: GatewayConfig | undefined,
   wellKnown: WellKnownResult | undefined,
   gatewayUrl: string,
+  chainDeploy = false,
 ): DoctorCheck[] {
   const checks: DoctorCheck[] = [];
+  // Suggest the repository deployment script only when the caller found it
+  const stale = `; the gateway may be running against an older deployment - restart it${chainDeploy ? ' or re-run chain:deploy' : ''}`;
   // 6. Payments
   const x402 = config?.payments.x402;
   if (x402 === undefined || !x402.enabled) {
@@ -359,12 +361,12 @@ export function paymentChecks(
     const live = wellKnown?.ok ? extractLiveRail(wellKnown.body) : undefined;
     const placeholder = PLACEHOLDER_ASSET_ADDRESS.toLowerCase();
     if (everyOption.some((option) => option.asset.toLowerCase() === placeholder)) {
-      // The gateway echoes init's placeholder, so matching configs alone
-      // cannot detect the missing token contract. Payment fails closed.
+      // Matching live and local config does not establish that a placeholder
+      // address has a token contract
       checks.push({
         name: 'Payments',
         status: 'WARN',
-        detail: `${summary}, but the asset is still the init placeholder ${maskMiddle(PLACEHOLDER_ASSET_ADDRESS)}. No token contract exists there, so every paid call will fail. Set payments.x402.asset (\${X402_ASSET} is filled from .deploy/local.json, which "npm run chain:deploy" writes)`,
+        detail: `${summary}, but at least one offer uses the init placeholder ${maskMiddle(PLACEHOLDER_ASSET_ADDRESS)}. Set that offer's asset to its token contract address${chainDeploy ? ' (${X402_ASSET} is filled from .deploy/local.json, which "npm run chain:deploy" writes)' : ''}`,
       });
     } else if (live === 'disabled') {
       // Verified, and it disagrees: the gateway runs a different configuration
@@ -400,7 +402,7 @@ export function paymentChecks(
       checks.push(
         mismatch === undefined
           ? { name: 'Payments', status: 'PASS', detail: summary }
-          : { name: 'Payments', status: 'FAIL', detail: mismatch },
+          : { name: 'Payments', status: 'FAIL', detail: `${mismatch}${stale}` },
       );
       const offerHealth = offerHealthCheck(live, named);
       if (offerHealth !== undefined) checks.push(offerHealth);
@@ -456,7 +458,7 @@ export function paymentChecks(
       checks.push(
         mismatch === undefined
           ? { name: 'Payments (MPP)', status: 'PASS', detail: summary }
-          : { name: 'Payments (MPP)', status: 'FAIL', detail: mismatch },
+          : { name: 'Payments (MPP)', status: 'FAIL', detail: `${mismatch}${stale}` },
       );
     }
     if (mode === 'mainnet') {

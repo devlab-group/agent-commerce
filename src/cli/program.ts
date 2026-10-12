@@ -5,10 +5,12 @@ import { runDemo } from './commands/demo';
 import { printDoctorReport, runDoctor } from './commands/doctor';
 import { runImportOpenApi } from './commands/import-openapi';
 import { runInit } from './commands/init';
-import { runValidate } from './commands/validate';
+import { formatConfigError, runValidate } from './commands/validate';
 import { runVersion } from './commands/version';
 import { type Io, processIo } from './lib/io';
 import { readVersionReport } from './lib/versions';
+
+const ENV_FILE_HELP = 'load environment variables from this file; variables already set win';
 
 /**
  * Builds the `agent-commerce` Commander program.
@@ -22,7 +24,7 @@ export function buildProgram(io: Io = processIo): Command {
 
   program
     .name('agent-commerce')
-    .description('CLI for the Agent Commerce Gateway: init, import, validate, doctor, demo.')
+    .description('CLI for the Agent Commerce Gateway: init, import, validate, start, doctor, demo.')
     // `--version` prints the CLI version only; the `version` subcommand also
     // lists the pinned protocol/SDK versions. Both read `readVersionReport()`,
     // so they cannot disagree.
@@ -31,6 +33,20 @@ export function buildProgram(io: Io = processIo): Command {
     .configureOutput({
       writeOut: (str) => io.stdout(str.replace(/\n+$/, '')),
       writeErr: (str) => io.stderr(str.replace(/\n+$/, '')),
+    })
+    // Load before the action reads config; existing environment variables win.
+    // Node 24.8.0 checks --env-file paths anywhere on the command line but does
+    // not load files named after the script, so this hook handles those paths.
+    .hook('preAction', (_program, command) => {
+      const { envFile } = command.opts<{ envFile?: string }>();
+      if (envFile === undefined) return;
+      try {
+        process.loadEnvFile(envFile);
+      } catch (error) {
+        command.error(
+          `error: cannot read --env-file "${envFile}": ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
     });
 
   program
@@ -44,6 +60,7 @@ export function buildProgram(io: Io = processIo): Command {
     .command('validate')
     .description(`Validate ${DEFAULT_CONFIG_FILENAME} and exit non-zero if it is invalid.`)
     .option('--config <path>', `path to ${DEFAULT_CONFIG_FILENAME}`)
+    .option('--env-file <path>', ENV_FILE_HELP)
     .action(async (opts: { config?: string }) => {
       const code = await runValidate(
         opts.config !== undefined ? { configPath: opts.config } : {},
@@ -53,9 +70,32 @@ export function buildProgram(io: Io = processIo): Command {
     });
 
   program
+    .command('start')
+    .description(
+      `Start the gateway from ${DEFAULT_CONFIG_FILENAME} and serve until SIGTERM or SIGINT.`,
+    )
+    .option('--config <path>', `path to ${DEFAULT_CONFIG_FILENAME}`)
+    .option('--env-file <path>', ENV_FILE_HELP)
+    .action(async (opts: { config?: string }) => {
+      try {
+        // Loaded on demand: the gateway brings fastify, and each enabled
+        // feature its optional peers, which no other command may need
+        const { runGateway } = await import('../gateway/run');
+        await runGateway(opts.config !== undefined ? { configPath: opts.config } : {});
+      } catch (error) {
+        // The same report as validate. start never reads the local chain
+        // manifest, so the hint for an unset variable must not suggest it.
+        io.stderr(formatConfigError(error, false, false));
+        // Do not wait on anything a failed startup left open
+        process.exit(1);
+      }
+    });
+
+  program
     .command('doctor')
     .description('Diagnose config, gateway, backend, protocol and payment health.')
     .option('--config <path>', `path to ${DEFAULT_CONFIG_FILENAME}`)
+    .option('--env-file <path>', ENV_FILE_HELP)
     .option(
       '--gateway <url>',
       'gateway base URL (default: derived from config, else http://localhost:8080)',

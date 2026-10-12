@@ -155,7 +155,7 @@ describeOrSkip('MPP on Base mainnet - real funds', () => {
       config,
       store,
       logger,
-      paymentProviders: createConfiguredPaymentProviders(config.payments, logger),
+      paymentProviders: await createConfiguredPaymentProviders(config.payments, logger),
       protocolAdapters: [],
       backend: {
         call: async () => ({

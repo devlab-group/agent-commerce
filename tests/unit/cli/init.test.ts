@@ -24,6 +24,8 @@ describe('runInit --yes (non-interactive, required for scripting/tests)', () => 
     expect(io.out.join('\n')).toContain('PASS  Wrote');
     expect(io.out.join('\n')).toContain('is valid');
     expect(io.out.join('\n')).toContain('Next steps:');
+    // The defaults enable x402 and MCP
+    expect(io.out.join('\n')).toContain('# needs the x402 and MCP peers');
   });
 
   it('refuses to overwrite an existing file without --force', async () => {
@@ -139,6 +141,23 @@ describe('runInit: interactive path (collectAnswers injected)', () => {
     const written = readFileSync(outputPath, 'utf8');
     expect(written).toContain('localhost:4000');
     expect(written).not.toContain('report:');
+    // Without x402 and MCP, start imports no optional peer
+    expect(io.out.join('\n')).toContain('# needs no optional peers');
+  });
+
+  it('names only the peers of the features the answers enable', async () => {
+    const outputPath = tmpConfigPath();
+    const io = createCapturingIo();
+
+    const code = await runInit({ outputPath }, io, {
+      collectAnswers: async () => ({
+        ...defaultInitAnswers(),
+        protocols: ['http'],
+      }),
+    });
+
+    expect(code).toBe(0);
+    expect(io.out.join('\n')).toContain('# needs the x402 peers');
   });
 
   it('aborts (exit 1, nothing written) when the user cancels', async () => {

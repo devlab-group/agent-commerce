@@ -13,6 +13,8 @@
  * `validate` and `doctor` call this: the config loader and gateway startup
  * never do.
  */
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 // The narrow module, not the `testing.ts` barrel: the barrel also re-exports
 // the deploy engine, which imports `viem`, an optional peer.
 // esbuild keeps a bare `import 'viem'` even when the bindings are tree-shaken,
@@ -74,4 +76,39 @@ export function fillEnvFromLocalChainManifest(
     }
   }
   return { env, filled, manifestFound: true };
+}
+
+/**
+ * Checks for this package's name and a `chain:deploy` script in `cwd`, so
+ * diagnostics can suggest the repository's local deployment command
+ */
+export function hasChainDeployScript(cwd: string = process.cwd()): boolean {
+  try {
+    const pkg = JSON.parse(readFileSync(join(cwd, 'package.json'), 'utf8')) as {
+      name?: unknown;
+      scripts?: Record<string, unknown>;
+    };
+    return (
+      pkg.name === '@devlab.group/agent-commerce' &&
+      typeof pkg.scripts?.['chain:deploy'] === 'string'
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Suggests `npm run chain:deploy` for manifest variables when the repository
+ * script is available and no valid manifest was read. Otherwise names the
+ * variable to set through the environment or `--env-file`.
+ */
+export function unresolvedVariableHint(
+  variable: string,
+  manifestFound: boolean,
+  chainDeploy: boolean,
+): string {
+  if (chainDeploy && !manifestFound && MANIFEST_FILLABLE_ENV_VAR_NAMES.has(variable)) {
+    return `"npm run chain:deploy" writes ${LOCAL_CHAIN_MANIFEST_PATH}, which validate and doctor read to fill local X402_* and MERCHANT_WALLET placeholders`;
+  }
+  return `set ${variable} in the environment, or in a file passed with --env-file`;
 }

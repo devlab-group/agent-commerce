@@ -53,11 +53,13 @@ afterEach(async () => {
 });
 
 describe('payments.mpp wiring', () => {
-  it('registers MPP alone, without exposing its x402 settlement provider as a rail', () => {
-    const names = (config: ReturnType<typeof mppOnlyConfig>) =>
-      createConfiguredPaymentProviders(config.payments, NOOP_TEST_LOGGER).map((p) => p.name);
-    expect(names(mppOnlyConfig())).toEqual(['mpp']);
-    expect(names(mppOnlyConfig(true))).toEqual(['x402', 'mpp']);
+  it('registers MPP alone, without exposing its x402 settlement provider as a rail', async () => {
+    const names = async (config: ReturnType<typeof mppOnlyConfig>) =>
+      (await createConfiguredPaymentProviders(config.payments, NOOP_TEST_LOGGER)).map(
+        (p) => p.name,
+      );
+    expect(await names(mppOnlyConfig())).toEqual(['mpp']);
+    expect(await names(mppOnlyConfig(true))).toEqual(['x402', 'mpp']);
   });
 
   it('challenges with the configured realm and publishes safe fields only', async () => {
@@ -65,7 +67,7 @@ describe('payments.mpp wiring', () => {
     gateway = await createGateway({
       config,
       store: createFakeStore(),
-      paymentProviders: createConfiguredPaymentProviders(config.payments, NOOP_TEST_LOGGER),
+      paymentProviders: await createConfiguredPaymentProviders(config.payments, NOOP_TEST_LOGGER),
       protocolAdapters: [],
       backend,
     });

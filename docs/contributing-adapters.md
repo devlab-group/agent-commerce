@@ -19,8 +19,9 @@ A new name crosses the public contract and runtime wiring. After approval:
 2. Add its strict config block to `src/config/schema/raw.ts`, and its
    normalization to a module under `src/config/schema/` that `normalize.ts`
    calls.
-3. Wire a protocol adapter in `src/gateway/main.ts`, or build a payment rail in
-   `src/gateway/payment-providers.ts`.
+3. Wire a protocol adapter in `src/gateway/run.ts`, or build a payment rail in
+   `src/gateway/payment-providers.ts`. Import an adapter or rail that needs an
+   optional peer through `importOptionalPeer`, inside its `enabled` branch.
 4. For a rail, add its incoming proof and payment-challenge branches in
    `src/gateway/routes.ts`; add a receipt branch only if the rail defines one.
    The route already sends `Cache-Control: no-store` on every challenge and

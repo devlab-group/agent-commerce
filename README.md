@@ -70,11 +70,23 @@ agent-commerce doctor
 ```
 
 Requires **Node >= 22**. The package includes the `agent-commerce` CLI
-(`init`, `validate`, `doctor`, `demo`, `import openapi`, `version`) and a library
-for embedding the gateway.
+(`init`, `validate`, `start`, `doctor`, `demo`, `import openapi`, `version`) and
+a library for embedding the gateway.
 The default install excludes optional protocol, payment and authorization
 peers. The OpenAPI parser is a regular dependency because import is part of the
 CLI.
+
+```bash
+agent-commerce start --config config.yaml --env-file .env
+```
+
+`start` runs the configured gateway in the foreground until SIGTERM or SIGINT.
+Install the optional peers for the features you enable, listed below. Missing
+startup imports stop the gateway with an error naming the package; missing
+Solana, NEAR or CDP peers fail provider health checks or payment requests.
+`start`, `validate` and `doctor` accept `--env-file <path>` to load environment
+variables before reading the config. Variables already set in the environment
+take precedence. To embed the gateway in your own process, use the library:
 
 ```ts
 import { createGateway, loadConfig, receipts } from '@devlab.group/agent-commerce';

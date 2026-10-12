@@ -22,9 +22,10 @@ export default defineConfig({
         '**/*.test.ts',
         '**/index.ts',
         '**/*.d.ts',
-        // Runs only as a child process (tests/unit/gateway/main.test.ts), which
+        // Run only as a child process (tests/unit/gateway/main.test.ts), which
         // this process's V8 coverage cannot see
         'src/gateway/main.ts',
+        'src/gateway/run.ts',
       ],
       // Enforced by CI's `npm run test:coverage`; `npm test` collects no coverage
       thresholds: {

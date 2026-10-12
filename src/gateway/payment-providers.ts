@@ -1,13 +1,14 @@
 /**
- * Builds providers for the enabled payment rails. This composition-root module
- * statically imports both rail implementations and their static peer
- * dependencies, so the peer-free main entry and CLI must not import it.
+ * Builds enabled payment rails on demand. x402 needs no `mppx`; MPP uses
+ * x402 internally and needs its EVM peers. Peer loading follows each rail's
+ * `enabled` flag, not resource prices: an enabled rail needs its peers even
+ * when every resource is free.
  */
 import type { GatewayConfig } from '../config';
 import type { X402OptionConfig } from '../config/schema';
 import type { Logger, PaymentProvider } from '../core';
-import { createMppPaymentProvider } from '../payments/mpp/provider';
-import { createX402PaymentProvider, type X402OfferOptions } from '../payments/x402';
+import type { X402OfferOptions } from '../payments/x402';
+import { importOptionalPeer } from './optional-peer';
 
 function offerOptions(option: X402OptionConfig): X402OfferOptions {
   return {
@@ -24,13 +25,17 @@ function offerOptions(option: X402OptionConfig): X402OfferOptions {
   };
 }
 
-export function createConfiguredPaymentProviders(
+export async function createConfiguredPaymentProviders(
   payments: GatewayConfig['payments'],
   logger: Logger,
-): PaymentProvider[] {
+): Promise<PaymentProvider[]> {
   const providers: PaymentProvider[] = [];
   const { x402, mpp } = payments;
   if (x402?.enabled) {
+    const { createX402PaymentProvider } = await importOptionalPeer(
+      'payments.x402',
+      () => import('../payments/x402'),
+    );
     providers.push(
       createX402PaymentProvider({
         // Support manually built single-option configs without `options`
@@ -64,6 +69,10 @@ export function createConfiguredPaymentProviders(
     );
   }
   if (mpp?.enabled) {
+    const { createMppPaymentProvider } = await importOptionalPeer(
+      'payments.mpp',
+      () => import('../payments/mpp/provider'),
+    );
     providers.push(
       createMppPaymentProvider({
         recipient: mpp.recipient as `0x${string}`,

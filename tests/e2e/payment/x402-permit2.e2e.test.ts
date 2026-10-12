@@ -53,9 +53,9 @@ const balances = () =>
   });
 
 // A fresh provider has no cached health result
-const freshHealth = () =>
+const freshHealth = async () =>
   (
-    createConfiguredPaymentProviders(config.payments, NOOP_LOGGER)[0] as {
+    (await createConfiguredPaymentProviders(config.payments, NOOP_LOGGER))[0] as {
       health(): Promise<{ status: string; detail?: string }>;
     }
   ).health();
@@ -142,7 +142,7 @@ beforeAll(async () => {
   gateway = await createGateway({
     config,
     store,
-    paymentProviders: createConfiguredPaymentProviders(config.payments, NOOP_LOGGER),
+    paymentProviders: await createConfiguredPaymentProviders(config.payments, NOOP_LOGGER),
     protocolAdapters: [],
     backend,
   });

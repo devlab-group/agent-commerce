@@ -181,13 +181,22 @@ export async function runInit(options: InitOptions, io: Io, deps: InitDeps = {})
     return 1;
   }
 
+  // start imports the peers of each enabled feature, so name only those
+  const peers = [
+    ...(config.payments.x402?.enabled === true ? ['x402'] : []),
+    ...(config.protocols.mcp.enabled ? ['MCP'] : []),
+  ];
+  const startNote =
+    peers.length > 0 ? `needs the ${peers.join(' and ')} peers` : 'needs no optional peers';
+
   io.stdout('');
   io.stdout('Next steps:');
   io.stdout(`  agent-commerce validate --config ${outputPath}`);
+  io.stdout(`  agent-commerce start --config ${outputPath}    # ${startNote}`);
+  io.stdout(`  agent-commerce doctor --config ${outputPath}   # from a second terminal`);
   // No `npm run dev:*`: those scripts exist only in a repo clone, and the
   // compose line says it needs one
-  io.stdout('  docker compose up     # start the local demo stack (from a repo clone)');
-  io.stdout(`  agent-commerce doctor --config ${outputPath}`);
+  io.stdout('  docker compose up     # or the whole local demo stack, from a repo clone');
 
   return 0;
 }

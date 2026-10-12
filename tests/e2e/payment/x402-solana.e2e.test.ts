@@ -175,7 +175,7 @@ beforeAll(async () => {
   gateway = await createGateway({
     config,
     store,
-    paymentProviders: createConfiguredPaymentProviders(config.payments, NOOP_LOGGER),
+    paymentProviders: await createConfiguredPaymentProviders(config.payments, NOOP_LOGGER),
     protocolAdapters: [],
     backend,
   });
@@ -353,7 +353,7 @@ describeWithValidator('x402 Solana settlement on a local validator', () => {
   });
 
   it('fails health: the validator is not the devnet cluster its offer names', async () => {
-    const provider = createConfiguredPaymentProviders(config.payments, NOOP_LOGGER)[0];
+    const provider = (await createConfiguredPaymentProviders(config.payments, NOOP_LOGGER))[0];
     const health = await provider?.health();
     expect(health?.status).toBe('fail');
     const genesis = await solanaRpc<string>(validator.rpcUrl, 'getGenesisHash', []);

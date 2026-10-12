@@ -159,7 +159,7 @@ function defineTarget(kind: SmokeKind, target: SmokeTarget, settings: SmokeSetti
       const config = parseConfig(smokeConfig(target, settings, facilitator), {});
       store = createSqliteReceiptStore({ path: ':memory:' });
       await store.init();
-      const providers = createConfiguredPaymentProviders(config.payments, logger);
+      const providers = await createConfiguredPaymentProviders(config.payments, logger);
       provider = providers[0] as PaymentProvider;
       gateway = await createGateway({
         config,

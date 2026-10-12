@@ -2,22 +2,24 @@
 import { CommanderError } from 'commander';
 import { buildProgram } from './program';
 
-/**
- * `agent-commerce version | grep -q x402` closes the pipe on grep's first
- * match while the CLI is still writing. Node reports that as an unhandled
- * `EPIPE` error and aborts with a stack trace, so a command that did what was
- * asked would read as a crash. Exit quietly on `EPIPE`; any other stream error
- * still throws.
- */
+// Set when `start` runs, which serves until a signal rather than finishing
+let serving = false;
+
+// A reader such as `grep -q` can close the pipe before the CLI finishes writing.
+// Exit quietly on EPIPE for finite commands. Keep `start` serving: exiting would
+// invoke pino's synchronous flush, whose sonic-boom retry loop hangs on EPIPE.
 for (const stream of [process.stdout, process.stderr]) {
   stream.on('error', (err: NodeJS.ErrnoException) => {
-    if (err.code === 'EPIPE') process.exit(0);
-    throw err;
+    if (err.code !== 'EPIPE') throw err;
+    if (!serving) process.exit(0);
   });
 }
 
 async function main(): Promise<void> {
   const program = buildProgram();
+  program.hook('preAction', (_program, command) => {
+    serving = command.name() === 'start';
+  });
   try {
     await program.parseAsync(process.argv);
   } catch (err) {
