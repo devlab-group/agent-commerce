@@ -2197,6 +2197,17 @@ describe('payments.mpp', () => {
     return raw;
   }
 
+  it('rejects a mimeType on a resource paid only through MPP, whose challenge has none', () => {
+    const raw = mppConfig();
+    (raw['resources'] as { market_report: Record<string, unknown> }).market_report['mimeType'] =
+      'text/html';
+    expectConfigInvalid(
+      () => parseConfig(raw, {}),
+      'resources.market_report.mimeType',
+      'requires fixed pricing and "x402" in payments',
+    );
+  });
+
   it('loads an MPP-only deployment without any x402 block', () => {
     const config = parseConfig(mppConfig({ challengeTtlSeconds: '120' }), {});
     expect(config.payments.x402).toBeUndefined();
@@ -2441,6 +2452,50 @@ describe('x402 payment flow', () => {
       () => parseConfig(raw, {}),
       'resources.weather_basic.paymentFlow',
       'requires fixed pricing',
+    );
+  });
+});
+
+describe('resource mimeType', () => {
+  function resourceEntry(raw: Record<string, unknown>, id: string): Record<string, unknown> {
+    return (raw['resources'] as Record<string, Record<string, unknown>>)[id] as Record<
+      string,
+      unknown
+    >;
+  }
+
+  it('gives the x402 rail no media types when no resource sets one', () => {
+    expect(parseConfig(validRawConfig(), {}).payments.x402?.resourceMimeTypes).toBeUndefined();
+  });
+
+  it('carries a resource media type, parameters included, to the x402 rail', () => {
+    const raw = validRawConfig();
+    resourceEntry(raw, 'market_report')['mimeType'] = 'text/html; charset=utf-8';
+    expect(parseConfig(raw, {}).payments.x402?.resourceMimeTypes).toEqual({
+      market_report: 'text/html; charset=utf-8',
+    });
+  });
+
+  it.each(['html', 'text/', '/html', 'text /html', '', 'text/html\n; a=b', 'text/html\r\n;a=b'])(
+    'rejects %j as a media type',
+    (value) => {
+      const raw = validRawConfig();
+      resourceEntry(raw, 'market_report')['mimeType'] = value;
+      expectConfigInvalid(
+        () => parseConfig(raw, {}),
+        'resources.market_report.mimeType',
+        'must be a media type',
+      );
+    },
+  );
+
+  it('rejects a media type on a free resource, whose response no challenge describes', () => {
+    const raw = validRawConfig();
+    resourceEntry(raw, 'weather_basic')['mimeType'] = 'text/html';
+    expectConfigInvalid(
+      () => parseConfig(raw, {}),
+      'resources.weather_basic.mimeType',
+      'requires fixed pricing and "x402" in payments',
     );
   });
 });

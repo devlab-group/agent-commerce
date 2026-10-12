@@ -263,10 +263,46 @@ async function handleInvoke(
       // private caching for responses carrying `Payment-Receipt`
       reply.header('cache-control', 'private');
     }
+    const contentType = relayedContentType(outcome.headers?.['content-type'], outcome.body);
+    if (contentType !== undefined) reply.type(contentType);
+    if (typeof outcome.body === 'string') {
+      // Text from the backend, a page included, must not run as the gateway's origin
+      reply.header('content-security-policy', 'sandbox');
+      reply.header('x-content-type-options', 'nosniff');
+    }
     reply.status(outcome.backendStatus).send(outcome.body);
   } catch (error) {
     sendInvokeError(reply, toCommerceError(error), paymentMethod);
   }
+}
+
+// The backend's own Content-Type, when it is a text type that fits the body as
+// relayed: a JSON type for a parsed JSON body, any other for a text body.
+// Fastify sends text as text/plain otherwise, and refuses an object under a
+// non-JSON type. The body always leaves as UTF-8, so a charset the backend
+// named gives way.
+function relayedContentType(header: string | undefined, body: unknown): string | undefined {
+  if (header === undefined) return undefined;
+  // Split on `;` outside quoted strings, so a quoted value keeps its own `;`
+  const [essence = '', ...parameters] = (header.match(/(?:[^;"]|"(?:[^"\\]|\\.)*"?)+/g) ?? []).map(
+    (part) => part.trim(),
+  );
+  const json = /[/+]json$/i.test(essence);
+  if (!isTextType(essence) || json === (typeof body === 'string')) return undefined;
+  const kept = parameters.filter(
+    (parameter) => parameter !== '' && !/^charset\s*=/i.test(parameter),
+  );
+  return [essence, ...kept, 'charset=utf-8'].join('; ');
+}
+
+// The executor decodes every backend body as UTF-8, so a binary body has
+// already changed by now and must not keep a binary type
+function isTextType(essence: string): boolean {
+  return (
+    /^text\//i.test(essence) ||
+    /[/+](?:json|xml)$/i.test(essence) ||
+    /^application\/(?:java|ecma)script$/i.test(essence)
+  );
 }
 
 // A provider outage is no verdict on the payment, so the client may retry the

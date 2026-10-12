@@ -54,7 +54,21 @@ export function normalize(raw: RawConfig): GatewayConfig {
     );
     return Object.keys(flows).length > 0 ? { resourcePaymentFlows: flows } : {};
   };
-  const x402WithFlows = x402 !== undefined ? { ...x402, ...flowOverrides('x402') } : x402;
+  // The same holds for media types, which only x402 challenges carry
+  const mimeTypes = Object.fromEntries(
+    resources.flatMap((resource) => {
+      const mimeType = raw.resources[resource.id]?.mimeType;
+      return mimeType !== undefined ? [[resource.id, mimeType]] : [];
+    }),
+  );
+  const x402WithFlows =
+    x402 !== undefined
+      ? {
+          ...x402,
+          ...flowOverrides('x402'),
+          ...(Object.keys(mimeTypes).length > 0 ? { resourceMimeTypes: mimeTypes } : {}),
+        }
+      : x402;
   const mppWithFlows = mpp !== undefined ? { ...mpp, ...flowOverrides('mpp') } : mpp;
   if (protocols.acp.enabled) validateAcpCheckoutMapping(protocols.acp, resources);
   // Require an exposed resource so the enabled adapter publishes a skill

@@ -143,4 +143,24 @@ describe('createConfiguredPaymentProviders', () => {
     expect(await payees('market_report')).toEqual([own.payTo]);
     expect(await payees('another_report')).toEqual([MAINNET_X402.payTo]);
   });
+
+  it("passes the resources' media types to the x402 provider", async () => {
+    const resource = makeGatewayConfig().resources.find((r) => r.id === 'market_report');
+    if (resource === undefined) throw new Error('fixture missing');
+    const [provider] = createConfiguredPaymentProviders(
+      { x402: { ...MAINNET_X402, resourceMimeTypes: { market_report: 'text/csv' } } },
+      NOOP_LOGGER,
+    );
+    if (provider === undefined) throw new Error('no provider');
+    const requirement = await provider.createRequirement({
+      requestId: 'req-1',
+      resource,
+      amount: '0.01',
+      currency: 'USDC',
+      requestedAt: '2026-01-01T00:00:00.000Z',
+    });
+
+    const envelope = requirement.challenge.envelope as { resource: Record<string, unknown> };
+    expect(envelope.resource['mimeType']).toBe('text/csv');
+  });
 });

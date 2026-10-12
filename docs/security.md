@@ -98,6 +98,16 @@ It logs at most 512 body characters at `debug`; default log settings may hide
 that detail. This prevents stack traces, internal hosts, and similar backend
 details from reaching the client.
 
+On `POST /api/resources/:id/invoke`, a delivery keeps the backend's
+`Content-Type` when that is a text type (`text/*`, JSON, XML or JavaScript) that
+fits the relayed body: a JSON type for a parsed JSON body, any other for text.
+The header then says `charset=utf-8`, because the gateway relays text as UTF-8.
+Otherwise JSON goes out as `application/json` and text as `text/plain`. Binary
+responses are not supported: the executor decodes every body as UTF-8, so a
+binary type is never relayed. Every text delivery also carries
+`Content-Security-Policy: sandbox` and `X-Content-Type-Options: nosniff`, so an
+HTML page from the backend cannot run script as the gateway's origin.
+
 ## Input validation
 
 | Input           | Check                                                                                                                                                                                                                                                                                                                                                                                  |
@@ -398,6 +408,7 @@ real funds.
 | **an ACP bearer token bound for the merchant**                                                                                          | never forwarded; only the six listed caller headers are                                                                                                                     | `tests/conformance/acp/protocol.test.ts`, `tests/integration/acp-over-gateway.test.ts`                                                     |
 | **a forwarded header with CR/LF or an illegal name**                                                                                    | ACP drops a value that is not printable ASCII or exceeds 2048 characters; the backend executor refuses an illegal forwarded name or value as `INPUT_INVALID` before pricing | `tests/unit/protocols-acp/adapter.test.ts`, `tests/unit/core/execution/backend-http.test.ts`, `tests/unit/core/execution/pipeline.test.ts` |
 | **a forwarded header naming `Idempotency-Key` or `Content-Type`**                                                                       | never forwarded; the merchant gets the derived key and the executor's content type                                                                                          | `tests/unit/core/execution/backend-http.test.ts`                                                                                           |
+| **a backend page with script, relayed to a browser**                                                                                    | delivered as text with `Content-Security-Policy: sandbox` and `nosniff`, so the script cannot act as the gateway's origin                                                   | `tests/unit/gateway/server.test.ts`                                                                                                        |
 | **a merchant `Retry-After` that is huge, an HTTP date or absent**                                                                       | clamped to 1-300 seconds; 5 when absent or not whole seconds                                                                                                                | `tests/conformance/acp/errors.test.ts`                                                                                                     |
 | **a merchant ACP error with an `idempotency_*` code**                                                                                   | not relayed; the gateway's own code is sent                                                                                                                                 | same                                                                                                                                       |
 | **an ACP checkout resource configured as paid**                                                                                         | refused at config load; a defensive runtime challenge maps to 500                                                                                                           | `tests/unit/config/schema.test.ts`, `tests/unit/protocols-acp/checkout-mapping.test.ts`                                                    |

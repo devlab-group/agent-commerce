@@ -106,6 +106,9 @@ resources:
       currency: USDC
     expose: [http, mcp]
     payments: [x402]
+    # What the backend returns, declared in each x402 challenge before payment;
+    # an HTTP delivery keeps the backend's own Content-Type when it is text
+    # mimeType: application/json
 
 payments:
   x402:

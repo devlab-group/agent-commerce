@@ -11,6 +11,13 @@ const NumberOrString = z.union([z.number(), z.string()]);
 // A boolean, or a "true"/"false" string from env substitution
 const BooleanOrString = z.union([z.boolean(), z.string()]);
 
+// A media type as in a Content-Type header: `type/subtype`, then any parameters
+const MediaType = z
+  .string()
+  .regex(/^[A-Za-z0-9][\w!#$&^.+-]*\/[A-Za-z0-9][\w!#$&^.+-]*(?:[ \t]*;.*)?$/, {
+    message: 'must be a media type such as application/json',
+  });
+
 // An RPC endpoint. The message never echoes the value, which can carry an API key
 const RpcUrl = z
   .string()
@@ -240,6 +247,8 @@ const ResourceEntrySchema = z
     description: z.string().optional(),
     input: JsonSchemaValueSchema.optional(),
     output: JsonSchemaValueSchema.optional(),
+    // What the backend returns; x402 challenges declare it, `application/json` by default
+    mimeType: MediaType.optional(),
     backend: BackendHandlerSchema,
     pricing: PricingSchema,
     expose: z.array(z.string().min(1)).min(1),

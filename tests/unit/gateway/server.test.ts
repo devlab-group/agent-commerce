@@ -1385,3 +1385,118 @@ describe('createGateway HTTP surface', () => {
     gateways = gateways.filter((g) => g !== gateway);
   });
 });
+
+describe('the content type of a delivered HTTP response', () => {
+  // The fixture's market_report is paid with x402
+  async function paidResponse(backendType: string | undefined, body: unknown, mimeType?: string) {
+    const base = makeGatewayConfig();
+    const x402 = base.payments.x402;
+    if (x402 === undefined) throw new Error('fixture missing');
+    const gateway = await buildGateway({
+      config: makeGatewayConfig({
+        payments: {
+          ...base.payments,
+          x402: {
+            ...x402,
+            ...(mimeType !== undefined ? { resourceMimeTypes: { market_report: mimeType } } : {}),
+          },
+        },
+      }),
+      paymentProviders: [createFakePaymentProvider()],
+      backend: createFakeBackend(async () => ({
+        status: 200,
+        headers: backendType !== undefined ? { 'content-type': backendType } : {},
+        body,
+        durationMs: 1,
+      })),
+    });
+    return invokePaid(gateway);
+  }
+
+  // Each body is one backend-http can produce: it decodes every body as UTF-8
+  // and parses it as JSON only under a type that mentions json
+  it.each([
+    ["text under the backend's type", 'text/html', '<p>report</p>', 'text/html; charset=utf-8'],
+    [
+      'text as UTF-8 whatever charset the backend named',
+      'text/csv; header=present; charset=latin1',
+      'a,b',
+      'text/csv; header=present; charset=utf-8',
+    ],
+    [
+      'a quoted parameter unchanged',
+      'text/plain; format="a;b"; charset=latin1',
+      'x',
+      'text/plain; format="a;b"; charset=utf-8',
+    ],
+    [
+      "JSON under the backend's JSON type",
+      'application/vnd.api+json',
+      { data: [] },
+      'application/vnd.api+json; charset=utf-8',
+    ],
+    [
+      'parsed JSON as application/json under a type that only mentions JSON',
+      'application/x-ndjson',
+      { data: [] },
+      'application/json; charset=utf-8',
+    ],
+    ['unparseable JSON as text/plain', 'application/json', 'not json', 'text/plain; charset=utf-8'],
+    [
+      'XML under its own type',
+      'application/atom+xml',
+      '<feed/>',
+      'application/atom+xml; charset=utf-8',
+    ],
+    [
+      'JavaScript under its own type',
+      'application/javascript',
+      'x()',
+      'application/javascript; charset=utf-8',
+    ],
+    ['a malformed type as text/plain', 'text/', 'x', 'text/plain; charset=utf-8'],
+    [
+      'a binary type, whose body was decoded as text, as text/plain',
+      'image/png',
+      '\uFFFDPNG',
+      'text/plain; charset=utf-8',
+    ],
+    ['text as text/plain without a backend type', undefined, 'report', 'text/plain; charset=utf-8'],
+  ])('sends %s', async (_label, backendType, body, contentType) => {
+    const res = await paidResponse(backendType, body);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toBe(contentType);
+    expect(res.body).toBe(typeof body === 'string' ? body : JSON.stringify(body));
+    // Every text delivery is sandboxed, so a page cannot act as the gateway origin
+    const text = typeof body === 'string';
+    expect(res.headers['content-security-policy']).toBe(text ? 'sandbox' : undefined);
+    expect(res.headers['x-content-type-options']).toBe(text ? 'nosniff' : undefined);
+  });
+
+  it('relays the type for a free resource too', async () => {
+    const gateway = await buildGateway({
+      backend: createFakeBackend(async () => ({
+        status: 200,
+        headers: { 'content-type': 'text/html' },
+        body: '<p>weather</p>',
+        durationMs: 1,
+      })),
+    });
+    const res = await gateway.server.inject({
+      method: 'POST',
+      url: '/api/resources/weather_basic/invoke',
+      payload: { city: 'Berlin' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toBe('text/html; charset=utf-8');
+    expect(res.headers['content-security-policy']).toBe('sandbox');
+  });
+
+  it("follows the backend, not the resource's declared mimeType", async () => {
+    const res = await paidResponse('text/csv', 'a,b', 'text/html');
+
+    expect(res.headers['content-type']).toBe('text/csv; charset=utf-8');
+  });
+});

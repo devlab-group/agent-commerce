@@ -279,6 +279,14 @@ persistence must not fail the commerce flow.
 - `CreatePaymentProofOptions` dropped the deprecated `rpcUrl`, which the helper
   ignored. TypeScript rejects it on a fresh object literal; callers passing a
   variable with extra properties should remove it as well.
+- A resource's `mimeType` sets the media type its x402 challenges declare as
+  `resource.mimeType`; `application/json` remains the default.
+  `X402ProviderOptions.resourceMimeTypes` and
+  `GatewayConfig.payments.x402.resourceMimeTypes` carry it by resource id.
+- `POST /api/resources/:id/invoke` delivers the backend's `Content-Type`, with
+  `charset=utf-8`, when it is a text type that fits the relayed body; text no
+  longer always goes out as `text/plain`. Every text delivery also carries
+  `Content-Security-Policy: sandbox` and `X-Content-Type-Options: nosniff`.
 
 ### Authorization and AP2
 
@@ -404,6 +412,8 @@ export interface X402ProviderOptions extends X402OfferOptions {
   readonly paymentFlow?: X402PaymentFlow;
   /** Per-resource overrides of `paymentFlow`, keyed by resource id */
   readonly resourcePaymentFlows?: Readonly<Record<string, X402PaymentFlow>>;
+  /** Each resource's challenge `resource.mimeType`; defaults to 'application/json' */
+  readonly resourceMimeTypes?: Readonly<Record<string, string>>;
   /** Offers that replace the provider's for a resource, keyed by resource id */
   readonly resourceOffers?: Readonly<Record<string, readonly X402OfferOptions[]>>;
   readonly facilitator: X402FacilitatorConfig;
@@ -751,6 +761,7 @@ export interface GatewayConfig {
       readonly maxTimeoutSeconds: number;
       readonly paymentFlow?: X402PaymentFlow; // default 'authorization'
       readonly resourcePaymentFlows?: Readonly<Record<string, X402PaymentFlow>>;
+      readonly resourceMimeTypes?: Readonly<Record<string, string>>; // resources that set `mimeType`
       readonly facilitator: X402FacilitatorConfig;
       readonly allowMainnet?: boolean;
       readonly allowUnauthenticatedFacilitator?: boolean;
@@ -789,16 +800,16 @@ unset `adminToken` makes operator routes return 404; an empty
 
 ## Gateway HTTP surface
 
-| Route                             | Behavior                                                                                                                                                              |
-| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET /health`                     | Returns 200 after the Host check and, when present, the Origin check pass; a rejected Host or Origin returns 403.                                                     |
-| `GET /ready`                      | Returns 503 if the store, an adapter, or either provider kind reports `fail`; `warn` remains ready. Results are briefly cached and concurrent probes share one check. |
-| `GET /.well-known/agent-commerce` | Publishes merchant and sanitized adapter, provider, store, and protocol metadata.                                                                                     |
-| `GET /api/resources`              | Lists canonical resources without secrets.                                                                                                                            |
-| `POST /api/resources/:id/invoke`  | Invokes the HTTP surface. Payment and authorization use their defined headers; an unpaid request returns 402.                                                         |
-| `GET /api/receipts?limit=`        | Lists recent receipts through the operator-token gate.                                                                                                                |
-| `GET /api/events?limit=`          | Lists recent events through the operator-token gate.                                                                                                                  |
-| Adapter mounts and fixed routes   | Delegated to enabled protocol adapters, with collision checks and per-mount limits.                                                                                   |
+| Route                             | Behavior                                                                                                                                                                                                                                   |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `GET /health`                     | Returns 200 after the Host check and, when present, the Origin check pass; a rejected Host or Origin returns 403.                                                                                                                          |
+| `GET /ready`                      | Returns 503 if the store, an adapter, or either provider kind reports `fail`; `warn` remains ready. Results are briefly cached and concurrent probes share one check.                                                                      |
+| `GET /.well-known/agent-commerce` | Publishes merchant and sanitized adapter, provider, store, and protocol metadata.                                                                                                                                                          |
+| `GET /api/resources`              | Lists canonical resources without secrets.                                                                                                                                                                                                 |
+| `POST /api/resources/:id/invoke`  | Invokes the HTTP surface. Payment and authorization use their defined headers; an unpaid request returns 402. A delivery relays the backend's status, body and text `Content-Type`; see [security.md](security.md#backend-response-relay). |
+| `GET /api/receipts?limit=`        | Lists recent receipts through the operator-token gate.                                                                                                                                                                                     |
+| `GET /api/events?limit=`          | Lists recent events through the operator-token gate.                                                                                                                                                                                       |
+| Adapter mounts and fixed routes   | Delegated to enabled protocol adapters, with collision checks and per-mount limits.                                                                                                                                                        |
 
 Without `server.adminToken`, both operator routes return 404. With a token,
 they require `Authorization: Bearer <token>`; query-string tokens are not

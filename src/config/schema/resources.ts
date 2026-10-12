@@ -224,6 +224,17 @@ export function normalizeResource(
     );
   }
 
+  if (
+    entry.mimeType !== undefined &&
+    (entry.pricing.type !== 'fixed' || !paymentMethods.includes('x402'))
+  ) {
+    throw new CommerceError(
+      'CONFIG_INVALID',
+      `Resource "${id}" sets mimeType, which requires fixed pricing and "x402" in payments`,
+      { details: { path: `resources.${id}.mimeType`, resourceId: id } },
+    );
+  }
+
   const pricing: Pricing =
     entry.pricing.type === 'free'
       ? { type: 'free' }

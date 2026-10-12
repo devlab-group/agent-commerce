@@ -50,6 +50,9 @@ export function createConfiguredPaymentProviders(
         ...(x402.resourcePaymentFlows !== undefined
           ? { resourcePaymentFlows: x402.resourcePaymentFlows }
           : {}),
+        ...(x402.resourceMimeTypes !== undefined
+          ? { resourceMimeTypes: x402.resourceMimeTypes }
+          : {}),
         facilitator: x402.facilitator,
         ...(x402.allowMainnet !== undefined ? { allowMainnet: x402.allowMainnet } : {}),
         ...(x402.allowUnauthenticatedFacilitator !== undefined

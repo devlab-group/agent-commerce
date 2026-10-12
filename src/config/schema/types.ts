@@ -87,6 +87,8 @@ export interface GatewayConfig {
       readonly paymentFlow?: X402PaymentFlow;
       /** Resources whose `paymentFlow` overrides the rail's, by resource id */
       readonly resourcePaymentFlows?: Readonly<Record<string, X402PaymentFlow>>;
+      /** Resources that set `mimeType`, by resource id; others declare `application/json` */
+      readonly resourceMimeTypes?: Readonly<Record<string, string>>;
       readonly facilitator: X402FacilitatorConfig;
       readonly allowMainnet?: boolean;
       readonly allowUnauthenticatedFacilitator?: boolean;

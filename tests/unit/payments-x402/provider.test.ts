@@ -156,6 +156,20 @@ describe('createRequirement', () => {
     expect(resource['mimeType']).toBe('application/json');
   });
 
+  it("declares a resource's own media type, and application/json for the rest", async () => {
+    const provider = makeProvider({ resourceMimeTypes: { 'demo.report': 'text/html' } });
+    const mimeType = async (id: string) => {
+      const requirement = await provider.createRequirement(
+        paymentContext({ resource: { ...paymentContext().resource, id } }),
+      );
+      const envelope = requirement.challenge.envelope as { resource: Record<string, unknown> };
+      return envelope.resource['mimeType'];
+    };
+
+    expect(await mimeType('demo.report')).toBe('text/html');
+    expect(await mimeType('other.report')).toBe('application/json');
+  });
+
   it('sets an expiresAt in the future, bounded by maxTimeoutSeconds', async () => {
     const provider = makeProvider({ maxTimeoutSeconds: 30 });
     const before = Date.now();
