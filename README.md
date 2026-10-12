@@ -281,8 +281,8 @@ Minor releases may break experimental configurations, integrations or types.
 This applies to MPP, A2A, ACP, AP2 and `agent-commerce import openapi`.
 Runtime adapters and providers report `status: experimental` in
 `GET /.well-known/agent-commerce`. Pin an exact version and test upgrades
-before deploying them. 2.1 also changes some supported x402 behavior and
-types; see [Upgrading from 2.0](docs/migration-2.1.md).
+before deploying them. Since 2.1, some supported x402 behavior and types
+differ from 2.0; see [Upgrading from 2.0 to 2.x](docs/migration-2.1.md).
 
 ## Payment model
 
