@@ -147,6 +147,24 @@ missing package.
 `facilitator.auth.type: cdp` and brings the larger CDP dependency tree. A
 facilitator with a static token can use `auth.type: bearer` without it.
 
+## Integrate with an AI coding agent
+
+The repository includes an experimental [Agent Skills](https://agentskills.io)
+skill, [`skills/agent-commerce`](skills/agent-commerce/SKILL.md), for adding the
+gateway to an existing API. It covers Base Sepolia configuration, startup and
+checks through an unpaid 402 challenge. Its instructions keep secrets out of
+chat and leave payment signing to the user. The skill has automated CLI and
+config checks.
+
+```text
+# Claude Code
+/plugin marketplace add devlab-group/agent-commerce
+/plugin install agent-commerce@agent-commerce
+
+# Codex, Cursor and other agents (a third-party installer)
+DISABLE_TELEMETRY=1 npx skills add devlab-group/agent-commerce --skill agent-commerce
+```
+
 ## Quickstart
 
 Requirements: **Node >= 22**, **npm 10**, **Docker**. Nothing else - no API

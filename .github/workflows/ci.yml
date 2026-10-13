@@ -175,7 +175,7 @@ jobs:
           cat start.log
           test "$status" -eq 1
           grep -q 'payments.x402 is enabled, but the package' start.log
-          # Peers load before the receipt store opens, so nothing was created
+          # Peers load before the receipt store opens. Nothing was created
           test ! -e data/receipts.db
           # Free HTTP needs no peers with MCP, AP2 and payment rails disabled
           cat > free.yaml <<'EOF'

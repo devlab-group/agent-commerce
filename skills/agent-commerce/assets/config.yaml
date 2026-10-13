@@ -1,0 +1,88 @@
+# Agent Commerce Gateway config template: Base Sepolia testnet, public x402.org
+# facilitator. It needs no credentials, and no funds to issue a real 402.
+# Every value that is secret or differs per environment is a ${VAR}; list the
+# names in .env.example and keep the values in the environment
+
+version: 1
+
+merchant:
+  id: my-api # names the logger
+  name: My API # shown to agents, for example in the A2A Agent Card
+  # The URL agents use. Its hostname and loopback names pass the Host check
+  publicBaseUrl: ${GATEWAY_PUBLIC_BASE_URL:-http://localhost:8080}
+
+server:
+  port: ${GATEWAY_PORT:-8080}
+  host: 127.0.0.1 # 0.0.0.0 only behind a firewall or TLS proxy
+  # Receipts and events routes return 404 without it. Set before deploying
+  # adminToken: ${ADMIN_TOKEN}
+
+storage:
+  receipts:
+    driver: sqlite
+    path: ${RECEIPT_STORE_PATH:-./data/receipts.sqlite}
+
+protocols:
+  http:
+    enabled: true
+  mcp:
+    enabled: true # needs @modelcontextprotocol/server
+    mountPath: /mcp
+
+# Replace both examples with the user's endpoints. The key is the resource id:
+# the HTTP path segment and the MCP tool name.
+resources:
+  status:
+    name: Service status
+    description: Free example for checking backend access.
+    input:
+      type: object
+      properties: {}
+      additionalProperties: false
+    backend:
+      type: http
+      method: GET
+      url: ${MERCHANT_API_BASE_URL:-http://localhost:3000}/health
+      timeoutMs: 10000
+    pricing:
+      type: free
+    expose: [http, mcp]
+
+  premium_report:
+    name: Premium report
+    description: Paid example. Replace the sample price with the user's price.
+    input:
+      type: object
+      properties: {}
+      additionalProperties: false
+    backend:
+      type: http
+      method: GET
+      url: ${MERCHANT_API_BASE_URL:-http://localhost:3000}/api/report
+      timeoutMs: 10000
+    pricing:
+      type: fixed
+      amount: "0.01" # decimal string in USDC, never a float
+      currency: USDC
+    expose: [http, mcp]
+    payments: [x402]
+
+payments:
+  x402:
+    enabled: true # needs @x402/core @x402/evm viem
+    network: eip155:84532 # Base Sepolia
+    # Health checks only; the facilitator does the chain work
+    rpcUrl: ${X402_RPC_URL:-https://base-sepolia-rpc.publicnode.com}
+    # Circle USDC on Base Sepolia, EIP-712 domain ("USDC", "2")
+    asset: "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
+    assetName: USDC
+    assetVersion: "2"
+    assetDecimals: 6
+    # The merchant's own wallet address. Never a gateway-owned wallet
+    payTo: ${MERCHANT_WALLET}
+    maxTimeoutSeconds: 300
+    facilitator:
+      mode: remote
+      url: ${X402_FACILITATOR_URL:-https://x402.org/facilitator}
+      auth:
+        type: none
