@@ -1,10 +1,8 @@
 #!/usr/bin/env node
 /**
- * Asserts that the published package's provenance fields point at the real
- * repository. Otherwise npm's repository link and "report a vulnerability"
- * path could resolve to a namespace an attacker registers, a cheap way to
- * intercept private disclosures. An allowlist, because a blocklist catches
- * only the placeholder spellings someone thought of.
+ * Require package and Claude Code plugin links to point at the real repository.
+ * A wrong namespace could send private vulnerability reports to an attacker.
+ * An allowlist rejects destinations a placeholder blocklist would miss.
  */
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -13,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const manifestPath = resolve(root, 'package.json');
 const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+const plugin = JSON.parse(readFileSync(resolve(root, '.claude-plugin', 'plugin.json'), 'utf8'));
 
 const EXPECTED = 'github.com/devlab-group/agent-commerce';
 
@@ -20,6 +19,8 @@ const fields = [
   ['repository.url', manifest.repository?.url],
   ['bugs.url', manifest.bugs?.url],
   ['homepage', manifest.homepage],
+  ['.claude-plugin/plugin.json repository', plugin.repository],
+  ['.claude-plugin/plugin.json homepage', plugin.homepage],
 ];
 
 // Anchored at the scheme and host, because npm renders these as links: a
@@ -41,7 +42,7 @@ function pointsAtRepository(value) {
 const bad = fields.filter(([, value]) => !pointsAtRepository(value));
 
 if (bad.length > 0) {
-  console.error(`package.json provenance fields must point at ${EXPECTED}:`);
+  console.error(`Provenance fields must point at ${EXPECTED}:`);
   for (const [field, value] of bad) console.error(`  ${field} = ${String(value)}`);
   process.exit(1);
 }

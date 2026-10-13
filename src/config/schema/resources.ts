@@ -168,8 +168,8 @@ export function normalizeResource(
         );
       }
     }
-    // At least one named rail must be enabled, not every one. `main.ts` checks
-    // again at composition as defense in depth.
+    // At least one named rail must be enabled, not every one. `runGateway`
+    // checks again at composition as defense in depth.
     const enabledRails = [
       ...(x402?.config.enabled ? ['x402'] : []),
       ...(mpp?.enabled ? ['mpp'] : []),
@@ -221,6 +221,17 @@ export function normalizeResource(
       'CONFIG_INVALID',
       `Resource "${id}" sets paymentFlow, which requires fixed pricing and "x402" or "mpp" in payments`,
       { details: { path: `resources.${id}.paymentFlow`, resourceId: id } },
+    );
+  }
+
+  if (
+    entry.mimeType !== undefined &&
+    (entry.pricing.type !== 'fixed' || !paymentMethods.includes('x402'))
+  ) {
+    throw new CommerceError(
+      'CONFIG_INVALID',
+      `Resource "${id}" sets mimeType, which requires fixed pricing and "x402" in payments`,
+      { details: { path: `resources.${id}.mimeType`, resourceId: id } },
     );
   }
 

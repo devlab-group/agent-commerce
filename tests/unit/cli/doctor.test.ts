@@ -617,6 +617,7 @@ describe('runDoctor: degraded scenarios report the failure', () => {
         }),
         loadConfig: async () => makeGatewayConfig({ payments: { x402: X402_CONFIG } }),
         createStore: () => makeFakeReceiptStore(),
+        hasChainDeployScript: () => true,
       },
     );
     const payments = report.checks.find((c) => c.name === 'Payments');
@@ -625,6 +626,24 @@ describe('runDoctor: degraded scenarios report the failure', () => {
     expect(payments?.detail).toContain(X402_CONFIG.asset);
     expect(payments?.detail).toContain('chain:deploy');
     expect(report.exitCode).toBe(1);
+  });
+
+  it('advises only a restart for that mismatch outside a repository clone', async () => {
+    const report = await runDoctor(
+      { gatewayUrl: GATEWAY },
+      {
+        fetchImpl: healthyFetch({
+          [`${GATEWAY}/.well-known/agent-commerce`]: () =>
+            jsonResponse(wellKnownBody({ asset: '0x1111111111111111111111111111111111111111' })),
+        }),
+        loadConfig: async () => makeGatewayConfig({ payments: { x402: X402_CONFIG } }),
+        createStore: () => makeFakeReceiptStore(),
+        hasChainDeployScript: () => false,
+      },
+    );
+    const payments = report.checks.find((c) => c.name === 'Payments');
+    expect(payments?.status).toBe('FAIL');
+    expect(payments?.detail).toMatch(/restart it$/);
   });
 
   it('FAILs Payments when the gateway is using a different network than local config resolves to', async () => {
@@ -1217,7 +1236,7 @@ describe('runDoctor: local chain manifest fill (docker vs. host env parity)', ()
     expect(receivedEnv?.['X402_ASSET']).toBe('0xfilled');
   });
 
-  it('adds a "run npm run chain:deploy" hint to the FAIL detail when no manifest was found for a fillable variable', async () => {
+  it('adds a "run npm run chain:deploy" hint to the FAIL detail in a repository clone when no manifest was found for a fillable variable', async () => {
     const report = await runDoctor(
       { gatewayUrl: GATEWAY },
       {
@@ -1231,11 +1250,36 @@ describe('runDoctor: local chain manifest fill (docker vs. host env parity)', ()
         },
         createStore: () => makeFakeReceiptStore(),
         fillEnvFromManifest: () => ({ env: process.env, filled: [], manifestFound: false }),
+        hasChainDeployScript: () => true,
       },
     );
     const config = report.checks.find((c) => c.name === 'Config');
     expect(config?.status).toBe('FAIL');
     expect(config?.detail).toContain('npm run chain:deploy');
+  });
+
+  it('points outside a repository clone to the environment instead', async () => {
+    const report = await runDoctor(
+      { gatewayUrl: GATEWAY },
+      {
+        fetchImpl: healthyFetch(),
+        loadConfig: async () => {
+          throw new CommerceError(
+            'CONFIG_INVALID',
+            'Unresolved environment variable "${X402_ASSET}" referenced at config path "$.payments.x402.asset"',
+            { details: { variable: 'X402_ASSET', path: '$.payments.x402.asset' } },
+          );
+        },
+        createStore: () => makeFakeReceiptStore(),
+        fillEnvFromManifest: () => ({ env: process.env, filled: [], manifestFound: false }),
+        hasChainDeployScript: () => false,
+      },
+    );
+    const config = report.checks.find((c) => c.name === 'Config');
+    expect(config?.detail).toContain(
+      'Hint: set X402_ASSET in the environment, or in a file passed with --env-file',
+    );
+    expect(config?.detail).not.toContain('chain:deploy');
   });
 
   it('does not add the hint when a manifest was found (a real config problem, not a missing deployment)', async () => {

@@ -28,6 +28,7 @@ export interface DoctorDeps {
   readonly loadConfig?: ConfigLoader;
   readonly createStore?: (path: string) => ReceiptStore;
   readonly fillEnvFromManifest?: (env: NodeJS.ProcessEnv) => ManifestEnvFill;
+  readonly hasChainDeployScript?: () => boolean;
 }
 
 export type WellKnownResult = FetchJsonResult<Record<string, unknown>>;

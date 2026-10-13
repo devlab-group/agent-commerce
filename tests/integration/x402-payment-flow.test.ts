@@ -86,7 +86,7 @@ beforeEach(async () => {
   gateway = await createGateway({
     config,
     store: createFakeStore(),
-    paymentProviders: createConfiguredPaymentProviders(config.payments, NOOP_LOGGER),
+    paymentProviders: await createConfiguredPaymentProviders(config.payments, NOOP_LOGGER),
     protocolAdapters: [],
     backend: {
       async call() {

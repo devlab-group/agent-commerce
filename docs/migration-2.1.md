@@ -1,8 +1,9 @@
-# Upgrading from 2.0 to 2.1
+# Upgrading from 2.0 to 2.x
 
-2.1 adds x402 payments on more EVM networks, Permit2, Solana and NEAR, several
-offers per resource, and health per offer. The changes below can break a 2.0
-configuration, integration or type check. Review them before upgrading.
+2.1 added x402 payments on more EVM networks, Permit2, Solana and NEAR, several
+offers per resource, and health per offer. The changes below came in 2.1, remain
+in later 2.x releases, and can break a 2.0 configuration, integration or type
+check. Review them before upgrading.
 
 | Change                                                                                  | Affects                                                              |
 | --------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
@@ -19,9 +20,9 @@ configuration, integration or type check. Review them before upgrading.
 
 ### The local chain is `eip155:31337`
 
-2.0 ran the local Anvil chain under Base Sepolia's id, `eip155:84532`. In 2.1
-that id always means the public Base Sepolia testnet, and the local chain uses
-Anvil's default id, `eip155:31337`. Config load refuses `eip155:84532` with
+2.0 ran the local Anvil chain under Base Sepolia's id, `eip155:84532`. Since
+2.1, that id always means the public Base Sepolia testnet, and the local chain
+uses Anvil's default id, `eip155:31337`. Config load refuses `eip155:84532` with
 `facilitator.mode: local`, for x402 and MPP, and the message names the local
 chain id.
 
@@ -38,17 +39,18 @@ A setup that settles on the real Base Sepolia needs a remote facilitator, as in
 
 ### Public networks settle only in their USDC
 
-2.0 required the network's USDC on mainnet only. 2.1 also refuses another
-token on a public testnet, such as a mock token on Base Sepolia. Omit the asset
-fields to settle in the network's USDC, or use the local chain or a network
-you declare under `payments.x402.networks` (see
+2.0 required the network's USDC on mainnet only. Since 2.1, config load also
+refuses another token on a public testnet, such as a mock token on Base Sepolia.
+Omit the asset fields to settle in the network's USDC, or use the local chain or
+a network you declare under `payments.x402.networks` (see
 [configuration.md](configuration.md#network-and-facilitator)).
 
 ### Prices in USDC need a USDC label
 
 2.0 let a resource keep any currency label when its option named the network's
-USDC as `asset`, and charged the price in USDC at face value. 2.1 treats that
-option like one that omits the asset: price its resources in `USDC` or `USD`.
+USDC as `asset`, and charged the price in USDC at face value. Since 2.1, the
+gateway treats that option like one that omits the asset: price its resources in
+`USDC` or `USD`.
 
 ### URLs that cannot work are refused
 
@@ -61,23 +63,23 @@ Config load refuses two settings that 2.0 accepted but could not use:
 
 ### MPP settles before the backend
 
-2.0 ran an MPP resource's backend before settling, like x402. 2.1 defaults MPP
-to `upfront`, which settles first: the `charge` intent counts a backend call
-before payment as partial access. A backend failure now leaves the payment
-settled, and the receipt records the failed delivery. To keep the 2.0 order,
-set `paymentFlow: authorization` under `payments.mpp` or on the resource; see
+2.0 ran an MPP resource's backend before settling, like x402. Since 2.1, MPP
+defaults to `upfront`, which settles first: the `charge` intent counts a backend
+call before payment as partial access. A backend failure now leaves the payment
+settled, and the receipt records the failed delivery. To keep the 2.0 order, set
+`paymentFlow: authorization` under `payments.mpp` or on the resource; see
 [MPP](protocols/mpp.md) for what that order costs.
 
 ## Receipts and events
 
 ### Payments in USDC record `USDC`
 
-In 2.0 a payment recorded the resource's `pricing.currency`. In 2.1 an x402
-payment in the network's USDC records `USDC` whatever the resource's label.
-When the label differs, as with `USD`, the settlement keeps the resource's
-price as `metadata.quote`. Payments in other tokens still record the
-resource's label. Code that reads `currency` from receipts, events or the
-payment summary returned with a delivery should accept `USDC`.
+In 2.0 a payment recorded the resource's `pricing.currency`. Since 2.1, an x402
+payment in the network's USDC records `USDC` whatever the resource's label. When
+the label differs, as with `USD`, the settlement keeps the resource's price as
+`metadata.quote`. Payments in other tokens still record the resource's label.
+Code that reads `currency` from receipts, events or the payment summary returned
+with a delivery should accept `USDC`.
 
 ## TypeScript
 
@@ -98,3 +100,21 @@ They are optional in `X402ProviderOptions`, `X402OfferOptions`,
 signs under its own domain. EIP-3009 offers still need both: config load fills
 them from the network's USDC or requires them, and provider construction
 refuses an EIP-3009 offer without them.
+
+`X402ProviderOptions.asset` and `payTo` also widened from `` `0x${string}` `` to
+`string`, to carry Solana and NEAR addresses; code reading either as an EVM
+address must narrow it.
+
+## Other behavior changes
+
+- A rejected x402 attempt, after a backend failure or a refused settlement, can
+  be retried with the same proof; 2.0 answered `402`. A custom `ReceiptStore`
+  that ignores `reclaimRejected` still refuses these retries.
+- `PAYMENT_PROVIDER_UNAVAILABLE` and `AUTHORIZATION_PROVIDER_UNAVAILABLE` on the
+  invoke route carry `Retry-After: 5`.
+- A missing Permit2 allowance answers `412` with a fresh `PAYMENT-REQUIRED`.
+- When 256 unpaid A2A extension tasks are pending, a new purchase fails with
+  `GATEWAY_BUSY` instead of evicting the oldest task.
+- `/.well-known/agent-commerce` publishes each rail's `paymentFlow`,
+  per-resource overrides, and, with several offers, each offer with its health
+  status.

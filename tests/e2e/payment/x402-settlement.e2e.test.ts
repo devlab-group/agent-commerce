@@ -134,7 +134,7 @@ async function startGateway(): Promise<void> {
   gateway = await createGateway({
     config,
     store,
-    paymentProviders: createConfiguredPaymentProviders(config.payments, NOOP_LOGGER),
+    paymentProviders: await createConfiguredPaymentProviders(config.payments, NOOP_LOGGER),
     protocolAdapters: [createA2aAdapter()],
     backend,
   });
@@ -848,7 +848,7 @@ describe('x402 settlement - several offers', () => {
     const offers = await createGateway({
       config,
       store: offersStore,
-      paymentProviders: createConfiguredPaymentProviders(config.payments, NOOP_LOGGER),
+      paymentProviders: await createConfiguredPaymentProviders(config.payments, NOOP_LOGGER),
       protocolAdapters: [],
       backend,
     });

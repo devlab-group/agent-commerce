@@ -115,7 +115,9 @@ export function createRequirementBuilders(
           ? `resource://agent-commerce/${encodeURIComponent(single.network)}/${single.payTo}/resources/${resourceId}`
           : `resource://agent-commerce/resources/${resourceId}`,
         description: context.resource.description ?? context.resource.name,
-        mimeType: DEFAULT_MIME_TYPE,
+        // The media type the merchant declares, else `application/json`; an HTTP
+        // delivery carries the backend's own type when it is text and fits the body
+        mimeType: options.resourceMimeTypes?.[context.resource.id] ?? DEFAULT_MIME_TYPE,
       },
       accepts,
     };

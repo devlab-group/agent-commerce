@@ -3,9 +3,10 @@ import { type ConfigLoader, loadConfigDynamic } from '../lib/config-client';
 import type { Io } from '../lib/io';
 import {
   fillEnvFromLocalChainManifest,
+  hasChainDeployScript,
   LOCAL_CHAIN_MANIFEST_PATH,
-  MANIFEST_FILLABLE_ENV_VAR_NAMES,
   type ManifestEnvFill,
+  unresolvedVariableHint,
 } from '../lib/manifest-env';
 
 export interface ValidateOptions {
@@ -15,6 +16,7 @@ export interface ValidateOptions {
 export interface ValidateDeps {
   readonly loadConfig?: ConfigLoader;
   readonly fillEnvFromManifest?: (env: NodeJS.ProcessEnv) => ManifestEnvFill;
+  readonly hasChainDeployScript?: () => boolean;
 }
 
 /**
@@ -26,25 +28,22 @@ export interface ValidateDeps {
  * `INTERNAL_ERROR`. Nothing here adds a resolved `${ENV}` value: the config
  * error names only the variable.
  *
- * When no manifest was found, an unresolved variable that `.deploy/local.json`
- * would supply gets a hint to run `npm run chain:deploy` (see
- * `../lib/manifest-env`).
+ * An unresolved variable also gets a hint naming where to set it (see
+ * `unresolvedVariableHint`).
  */
-export function formatConfigError(err: unknown, manifestFound = false): string {
+export function formatConfigError(
+  err: unknown,
+  manifestFound = false,
+  chainDeploy = hasChainDeployScript(),
+): string {
   if (isCommerceError(err)) {
     const lines = [`FAIL  ${err.code}: ${err.message}`];
     if (err.details !== undefined) {
       lines.push(`      details: ${JSON.stringify(err.details)}`);
     }
     const variable = err.details?.['variable'];
-    if (
-      !manifestFound &&
-      typeof variable === 'string' &&
-      MANIFEST_FILLABLE_ENV_VAR_NAMES.has(variable)
-    ) {
-      lines.push(
-        `      hint: "npm run chain:deploy" writes ${LOCAL_CHAIN_MANIFEST_PATH}, which validate/doctor read automatically to fill local X402_*/MERCHANT_WALLET placeholders.`,
-      );
+    if (typeof variable === 'string') {
+      lines.push(`      hint: ${unresolvedVariableHint(variable, manifestFound, chainDeploy)}`);
     }
     return lines.join('\n');
   }
@@ -54,7 +53,10 @@ export function formatConfigError(err: unknown, manifestFound = false): string {
   return `FAIL  ${String(err)}`;
 }
 
-/** `agent-commerce validate [--config <path>]`. Exits non-zero on invalid configuration */
+/**
+ * `agent-commerce validate [--config <path>] [--env-file <path>]`. Exits
+ * non-zero on invalid configuration.
+ */
 export async function runValidate(
   options: ValidateOptions,
   io: Io,
@@ -84,7 +86,9 @@ export async function runValidate(
     io.stdout(`      authorization: ap2=${onOff(config.authorization?.ap2.enabled)}`);
     return 0;
   } catch (err) {
-    io.stderr(formatConfigError(err, manifestFound));
+    io.stderr(
+      formatConfigError(err, manifestFound, (deps.hasChainDeployScript ?? hasChainDeployScript)()),
+    );
     return 1;
   }
 }

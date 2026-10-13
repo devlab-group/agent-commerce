@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -8,6 +8,18 @@ import { parse as parseYaml } from 'yaml';
 import type { DoctorReport } from '../../../src/cli/commands/doctor';
 import { buildProgram } from '../../../src/cli/program';
 import { createCapturingIo } from './fixtures';
+
+// Directories the tests create, removed after each test
+const tempDirs: string[] = [];
+afterEach(() => {
+  for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+
+function tempDir(prefix: string): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  tempDirs.push(dir);
+  return dir;
+}
 
 /**
  * Runs the program the same way index.ts does (exitOverride + a catch that
@@ -40,12 +52,12 @@ describe('agent-commerce --help', () => {
     const text = io.out.join('\n');
     expect(exitCode).toBe(0);
     expect(text).toContain('Usage: agent-commerce');
-    for (const command of ['version', 'validate', 'doctor', 'init', 'import', 'demo']) {
+    for (const command of ['version', 'validate', 'start', 'doctor', 'init', 'import', 'demo']) {
       expect(text).toMatch(new RegExp(`^  ${command}\\b`, 'm'));
     }
   });
 
-  it.each(['version', 'validate', 'doctor', 'init', 'demo'])(
+  it.each(['version', 'validate', 'start', 'doctor', 'init', 'demo'])(
     '%s --help exits 0 and prints its usage',
     async (command) => {
       const { exitCode, io } = await run([command, '--help']);
@@ -74,7 +86,7 @@ describe('agent-commerce version', () => {
 
 describe('agent-commerce validate', () => {
   it('exits 0 for a valid config file', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'agent-commerce-program-'));
+    const dir = tempDir('agent-commerce-program-');
     const configPath = join(dir, 'config.yaml');
     writeFileSync(
       configPath,
@@ -102,9 +114,65 @@ payments: {}
   });
 });
 
+describe('--env-file', () => {
+  // process.loadEnvFile writes to process.env, so each test uses its own names
+  // and removes them afterwards
+  const NAMES = ['OAC_ENV_FILE_NAME', 'OAC_ENV_FILE_PORT'];
+  afterEach(() => {
+    for (const name of NAMES) delete process.env[name];
+  });
+
+  function stage(): { configPath: string; envPath: string } {
+    const dir = tempDir('agent-commerce-env-file-');
+    const configPath = join(dir, 'config.yaml');
+    writeFileSync(
+      configPath,
+      `
+version: 1
+merchant: { id: demo, name: "\${OAC_ENV_FILE_NAME}", publicBaseUrl: http://localhost:8080 }
+server: { port: "\${OAC_ENV_FILE_PORT}", host: 127.0.0.1 }
+storage: { receipts: { driver: sqlite, path: ./data/receipts.db } }
+protocols: { http: { enabled: true }, mcp: { enabled: false, mountPath: /mcp } }
+resources: {}
+payments: {}
+`,
+      'utf8',
+    );
+    const envPath = join(dir, '.env');
+    writeFileSync(envPath, 'OAC_ENV_FILE_NAME=From File\nOAC_ENV_FILE_PORT=8080\n', 'utf8');
+    return { configPath, envPath };
+  }
+
+  it('resolves ${VAR} placeholders from the file', async () => {
+    const { configPath, envPath } = stage();
+    const { exitCode, io } = await run(['validate', '--config', configPath, '--env-file', envPath]);
+    expect(exitCode).toBe(0);
+    expect(io.out.join('\n')).toContain('merchant: From File (demo)');
+  });
+
+  it('keeps a variable the environment already sets', async () => {
+    const { configPath, envPath } = stage();
+    process.env['OAC_ENV_FILE_NAME'] = 'From Shell';
+    const { exitCode, io } = await run(['validate', '--config', configPath, '--env-file', envPath]);
+    expect(exitCode).toBe(0);
+    expect(io.out.join('\n')).toContain('merchant: From Shell (demo)');
+  });
+
+  // In a real process Node refuses an unreadable path first; see packaging.test.ts
+  it.each(['validate', 'doctor', 'start'])(
+    '%s exits 1 naming an env file that cannot be read, before doing anything else',
+    async (command) => {
+      const { exitCode, io } = await run([command, '--env-file', '/does/not/exist.env']);
+      expect(exitCode).toBe(1);
+      expect(io.err.join('\n')).toContain('cannot read --env-file "/does/not/exist.env"');
+      expect(io.out).toEqual([]);
+    },
+  );
+});
+
 describe('agent-commerce doctor', () => {
   it('exits 1 and emits JSON when the gateway is unreachable', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'agent-commerce-program-'));
+    const dir = tempDir('agent-commerce-program-');
     const configPath = join(dir, 'config.yaml');
     const dbPath = join(dir, 'receipts.db').replace(/\\/g, '/');
     writeFileSync(
@@ -142,8 +210,7 @@ payments: {}
 });
 
 describe('agent-commerce init', () => {
-  const tmpConfigPath = () =>
-    join(mkdtempSync(join(tmpdir(), 'agent-commerce-program-init-')), 'config.yaml');
+  const tmpConfigPath = () => join(tempDir('agent-commerce-program-init-'), 'config.yaml');
 
   it('--yes writes a valid config through the real program wiring', async () => {
     const outputPath = tmpConfigPath();
@@ -171,8 +238,7 @@ describe('agent-commerce init', () => {
 
 describe('agent-commerce import openapi', () => {
   const source = fileURLToPath(new URL('../openapi/fixtures/responses-3.1.yaml', import.meta.url));
-  const tmpOutput = () =>
-    join(mkdtempSync(join(tmpdir(), 'agent-commerce-program-import-')), 'out.yaml');
+  const tmpOutput = () => join(tempDir('agent-commerce-program-import-'), 'out.yaml');
 
   it('passes every option through to the importer', async () => {
     const output = tmpOutput();

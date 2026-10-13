@@ -32,9 +32,15 @@ export function openSqliteDatabase(options: OpenSqliteOptions): Database.Databas
   const isFileBacked = path !== ':memory:';
 
   if (isFileBacked) {
-    // 0700 on a directory this creates. A recursive mkdir leaves an existing
-    // one, the operator's, with its mode.
-    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    try {
+      createDirectory(dirname(path));
+    } catch (cause) {
+      throw new CommerceError(
+        'STORAGE_ERROR',
+        `${label} directory "${dirname(path)}" cannot be created: ${cause instanceof Error ? cause.message : String(cause)}`,
+        { details: { path }, cause },
+      );
+    }
   }
 
   // Check write access at startup. SQLite can open a read-only database and
@@ -70,6 +76,21 @@ export function openSqliteDatabase(options: OpenSqliteOptions): Database.Databas
   db.pragma('foreign_keys = ON');
   if (isFileBacked) restrictDatabasePermissions(path, label, logger);
   return db;
+}
+
+// Create missing directory levels at 0700, preserving existing modes. Explicit
+// recursion avoids the recursive mkdir hang observed on Node 24.8.0 when /proc
+// returns ENOENT for a directory it cannot create.
+function createDirectory(dir: string): void {
+  if (existsSync(dir)) return;
+  const parent = dirname(dir);
+  if (parent !== dir) createDirectory(parent);
+  try {
+    mkdirSync(dir, { mode: 0o700 });
+  } catch (error) {
+    // Created by someone else in the meantime
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+  }
 }
 
 /**

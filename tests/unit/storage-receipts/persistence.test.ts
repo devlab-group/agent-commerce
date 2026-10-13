@@ -1,4 +1,12 @@
-import { chmodSync, existsSync, mkdtempSync, readdirSync, rmSync, statSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
@@ -59,6 +67,48 @@ describe('schema lifecycle', () => {
     expect(existsSync(nested)).toBe(true);
     await store.close();
   });
+
+  it.runIf(process.platform !== 'win32')(
+    'creates each missing parent directory at 0700',
+    async () => {
+      const nested = join(dir, 'level-1', 'level-2', 'receipts.db');
+      const store = createSqliteReceiptStore({ path: nested });
+      await store.init();
+      for (const level of [join(dir, 'level-1'), join(dir, 'level-1', 'level-2')]) {
+        expect(statSync(level).mode & 0o777).toBe(0o700);
+      }
+      await store.close();
+    },
+  );
+
+  // The store opens its file when created, so the factory is what throws
+  const openError = (path: string): unknown => {
+    try {
+      createSqliteReceiptStore({ path });
+    } catch (error) {
+      return error;
+    }
+    return undefined;
+  };
+
+  it('refuses a directory it cannot create with STORAGE_ERROR, naming it', () => {
+    writeFileSync(join(dir, 'a-file'), '');
+    expect(openError(join(dir, 'a-file', 'sub', 'receipts.db'))).toMatchObject({
+      code: 'STORAGE_ERROR',
+      message: expect.stringContaining(`"${join(dir, 'a-file', 'sub')}" cannot be created`),
+    });
+  });
+
+  // Node's recursive mkdir never returned for a path like this one
+  it.runIf(process.platform === 'linux' && existsSync('/proc/self'))(
+    'refuses a directory under /proc instead of hanging',
+    () => {
+      expect(openError('/proc/agent-commerce-test/receipts.db')).toMatchObject({
+        code: 'STORAGE_ERROR',
+      });
+    },
+    5_000,
+  );
 
   it('preserves data across a restart against the same file (gateway restart)', async () => {
     const path = join(dir, 'receipts.db');

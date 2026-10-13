@@ -20,6 +20,11 @@ export interface X402ProviderOptions extends X402OfferOptions {
   /** Per-resource overrides of `paymentFlow`, keyed by resource id */
   readonly resourcePaymentFlows?: Readonly<Record<string, X402PaymentFlow>>;
   /**
+   * The media type each resource's challenge declares as `resource.mimeType`,
+   * keyed by resource id. Defaults to `application/json`.
+   */
+  readonly resourceMimeTypes?: Readonly<Record<string, string>>;
+  /**
    * Which facilitator verifies and broadcasts. `local` runs one in this process
    * against a dev chain, and its `signerPrivateKey` pays gas there, usually
    * an Anvil well-known key (LOCAL DEVELOPMENT ONLY - DO NOT FUND). `remote`

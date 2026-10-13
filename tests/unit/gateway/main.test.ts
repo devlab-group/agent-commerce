@@ -1,9 +1,9 @@
-// `main.ts` is the composition root that `npm run demo:gateway` and the Docker
-// Compose gateway service run. E2E and integration tests build the gateway
-// with `createGateway`, so only these tests run the entry point: each starts
-// it as a child process against a config file in its own temporary directory.
+// Test the shared runGateway startup through main.ts and `agent-commerce start`.
+// Each child process uses a config in its own temporary directory; the E2E and
+// integration suites construct gateways directly with createGateway.
 import { spawn } from 'node:child_process';
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import * as nodeModule from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -162,15 +162,25 @@ function fullConfig(dir: string) {
   return config;
 }
 
-// Starts main.ts on `config` (JSON is valid YAML) and collects what it prints
-function startMain(dir: string, config: unknown, env: Record<string, string> = {}) {
+// Starts main.ts, or `agent-commerce start --config`, on `config` (JSON is
+// valid YAML) and collects what it prints. An `undefined` in `env` unsets
+// that variable: spawn skips undefined values.
+function startMain(
+  dir: string,
+  config: unknown,
+  env: Record<string, string | undefined> = {},
+  entry: 'main' | 'cli' = 'main',
+) {
   const path = join(dir, 'config.yaml');
   writeFileSync(path, JSON.stringify(config));
-  const child = spawn(process.execPath, ['--import', 'tsx', 'src/gateway/main.ts'], {
+  const args =
+    entry === 'main' ? ['src/gateway/main.ts'] : ['src/cli/index.ts', 'start', '--config', path];
+  const child = spawn(process.execPath, ['--import', 'tsx', ...args], {
     // JSON log lines, one of which carries the bound URL
     env: {
       ...process.env,
-      AGENT_COMMERCE_CONFIG: path,
+      // The CLI gets a path that does not exist, so only --config can find the file
+      AGENT_COMMERCE_CONFIG: entry === 'main' ? path : join(dir, 'absent.yaml'),
       NODE_ENV: 'production',
       LOG_LEVEL: 'info',
       ...env,
@@ -218,7 +228,34 @@ function tempDir(): string {
   return mkdtempSync(join(tmpdir(), 'oac-main-'));
 }
 
-describe.concurrent('gateway entry point (main.ts)', () => {
+// Preloaded into the child so one installed package resolves as Node reports
+// an uninstalled one
+const HIDE_PACKAGE_HOOK = `
+import { registerHooks } from 'node:module';
+const hidden = process.env.OAC_HIDDEN_PACKAGE;
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    if (specifier === hidden || specifier.startsWith(hidden + '/')) {
+      const error = new Error("Cannot find package '" + hidden + "' imported from " + context.parentURL);
+      error.code = 'ERR_MODULE_NOT_FOUND';
+      throw error;
+    }
+    return nextResolve(specifier, context);
+  },
+});
+`;
+
+// module.registerHooks needs Node 22.15 or later; engines allows any Node 22
+const CAN_HIDE_PACKAGES = typeof nodeModule.registerHooks === 'function';
+
+// Environment for startMain that hides `pkg` from the child's resolver
+function hidePackage(dir: string, pkg: string): Record<string, string> {
+  const hook = join(dir, 'hide-package.mjs');
+  writeFileSync(hook, HIDE_PACKAGE_HOOK);
+  return { NODE_OPTIONS: `--import ${hook}`, OAC_HIDDEN_PACKAGE: pkg };
+}
+
+describe.concurrent('gateway entry points (main.ts and agent-commerce start)', () => {
   it('boots x402 and MCP, prints the settlement origin without the RPC path, and exits 0 on SIGTERM', async () => {
     const dir = tempDir();
     const gateway = startMain(dir, baseConfig(dir));
@@ -302,6 +339,87 @@ describe.concurrent('gateway entry point (main.ts)', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   }, 30_000);
+
+  describe('agent-commerce start', () => {
+    it('boots the same gateway from --config and exits 0 on SIGTERM', async () => {
+      const dir = tempDir();
+      const gateway = startMain(dir, baseConfig(dir), {}, 'cli');
+      try {
+        await gateway.printed('"gateway listening"', 'facilitator  local');
+        expect((await fetch(`${gateway.url()}/health`)).status).toBe(200);
+        expect(gateway.output.stdout).toContain(`pays to      ${MERCHANT_WALLET}`);
+
+        gateway.child.kill('SIGTERM');
+        expect(await gateway.exited).toBe(0);
+      } finally {
+        gateway.stop();
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }, 30_000);
+
+    it('exits 1 on an invalid config, printing CODE: message', async () => {
+      const dir = tempDir();
+      const config = baseConfig(dir);
+      (config.resources['market_report'] as Section)['pricing'] = { type: 'fixed' };
+      const gateway = startMain(dir, config, {}, 'cli');
+      try {
+        expect(await gateway.exited).toBe(1);
+        expect(gateway.output.stderr).toContain('CONFIG_INVALID: ');
+        expect(gateway.output.stdout).not.toContain('gateway listening');
+      } finally {
+        gateway.stop();
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }, 30_000);
+
+    it('hints at the environment, not the local chain manifest, for an unset variable', async () => {
+      // The child runs in this repository, where validate and doctor would
+      // suggest `npm run chain:deploy`; start never reads that manifest
+      const dir = tempDir();
+      const config = baseConfig(dir);
+      (config.payments['x402'] as Section)['payTo'] = '${MERCHANT_WALLET}';
+      const gateway = startMain(dir, config, { MERCHANT_WALLET: undefined }, 'cli');
+      try {
+        expect(await gateway.exited).toBe(1);
+        expect(gateway.output.stderr).toContain(
+          'hint: set MERCHANT_WALLET in the environment, or in a file passed with --env-file',
+        );
+        expect(gateway.output.stderr).not.toContain('chain:deploy');
+      } finally {
+        gateway.stop();
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }, 30_000);
+
+    it.skipIf(!CAN_HIDE_PACKAGES).each([
+      ['payments.x402', '@x402/evm', baseConfig],
+      ['payments.mpp', 'mppx', fullConfig],
+      [
+        'authorization.ap2',
+        'jose',
+        (dir: string) => ({ ...baseConfig(dir), authorization: ap2Block(dir) }),
+      ],
+      ['protocols.mcp', '@modelcontextprotocol/server', baseConfig],
+    ])(
+      'exits 1 naming %s and its missing package %s, before opening the store',
+      async (feature, pkg, config) => {
+        const dir = tempDir();
+        const gateway = startMain(dir, config(dir), hidePackage(dir, pkg), 'cli');
+        try {
+          expect(await gateway.exited).toBe(1);
+          expect(gateway.output.stderr).toContain(
+            `FAIL  CONFIG_INVALID: ${feature} is enabled, but the package "${pkg}" is not installed`,
+          );
+          expect(gateway.output.stdout).not.toContain('gateway listening');
+          expect(existsSync(join(dir, 'receipts.sqlite'))).toBe(false);
+        } finally {
+          gateway.stop();
+          rmSync(dir, { recursive: true, force: true });
+        }
+      },
+      30_000,
+    );
+  });
 
   describe.skipIf(RUNS_AS_ROOT)('a store that cannot be written', () => {
     it.each([

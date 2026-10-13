@@ -2,7 +2,7 @@
  * MPP settling on a real local chain through the whole gateway.
  *
  * The buyer is the mppx client. Gateways are built from parsed config with
- * `createConfiguredPaymentProviders`, the builder `main.ts` uses, so MPP
+ * `createConfiguredPaymentProviders`, the builder `runGateway` uses, so MPP
  * settles through its internal x402 provider and a local facilitator. Outcomes
  * are read back off the chain as balance deltas and transaction receipts.
  *
@@ -132,7 +132,7 @@ async function startGateway(options: GatewayOptions = {}): Promise<Running> {
   const gateway = await createGateway({
     config,
     store,
-    paymentProviders: createConfiguredPaymentProviders(config.payments, NOOP_LOGGER),
+    paymentProviders: await createConfiguredPaymentProviders(config.payments, NOOP_LOGGER),
     protocolAdapters: [],
     backend: options.backend ?? backend,
   });

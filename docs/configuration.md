@@ -75,6 +75,14 @@ fall back after a failure. Config load rejects a paid resource with no enabled
 listed rail. A resource can replace the x402 rail's offers with
 [its own](#a-resources-own-offers).
 
+`mimeType` names what the backend returns, such as `text/html` or
+`text/csv; header=present`. Each x402 challenge for the resource declares it as
+`resource.mimeType` before the buyer pays, `application/json` when unset. An
+HTTP delivery then carries the backend's own `Content-Type` when it is text and
+fits the body (see [security.md](security.md#backend-response-relay)); this
+setting does not change it. Config load accepts `mimeType` only on a fixed-price
+resource that lists `x402` in `payments`.
+
 `url` supports `{param}` templating from validated input; values are
 URL-encoded. Remaining input becomes query string for `GET`/`DELETE` and a JSON
 body otherwise - unless `backend.inputBindings` says otherwise, below.
@@ -708,12 +716,17 @@ serves, including the A2A Agent Card and ACP discovery paths · an ACP checkout
 mapping that is incomplete, names a missing or non-`acp` resource, reuses one
 resource for two operations, or maps a paid one · an ACP idempotency retention
 below 24 hours · an invalid or zero `payTo`/`asset`/`recipient` · an
-`x402.accepts` list that is empty or on a resource that cannot use it · an MPP
-`challengeSecret` with length below 32 or a multi-line `realm`.
+`x402.accepts` list that is empty or on a resource that cannot use it · a
+`mimeType` that is not a media type, or on a resource that is not fixed-price
+with `x402` in `payments` · an MPP `challengeSecret` with length below 32 or a
+multi-line `realm`.
 
 It exits non-zero on any of them.
 
 ## Environment
 
 `${VAR}` works in any string value, and `${VAR:-default}` supplies a fallback.
+`agent-commerce start`, `validate` and `doctor` also read variables from a file
+with `--env-file <path>`; a variable already set in the environment wins over
+the file.
 See [`.env.example`](../.env.example) for the variables the demo uses.

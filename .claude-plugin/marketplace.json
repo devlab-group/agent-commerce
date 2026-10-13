@@ -1,0 +1,12 @@
+{
+  "name": "agent-commerce",
+  "owner": { "name": "devlab-group", "url": "https://github.com/devlab-group" },
+  "description": "The Agent Commerce Gateway skill for coding agents.",
+  "plugins": [
+    {
+      "name": "agent-commerce",
+      "source": ".",
+      "description": "Integrate the Agent Commerce Gateway into an existing HTTP API: configure, start and verify it."
+    }
+  ]
+}
