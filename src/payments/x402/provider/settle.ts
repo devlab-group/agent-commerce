@@ -5,6 +5,7 @@ import { CommerceError } from '../../../core';
 import { redactedErrorText } from '../../../core/errors';
 import { isTransactionReference } from '../addresses';
 import { decodePaymentSubmission, forFacilitator } from '../payload';
+import { HEALTH_TIMEOUT_MS } from './constants';
 import {
   isNearVerdict,
   isOnChainRevertError,
@@ -24,7 +25,7 @@ import type { ProviderContext } from './types';
 export function createSettle(
   ctx: ProviderContext,
 ): (context: PaymentSettlementContext) => Promise<PaymentResult> {
-  const { offersFor, clock, logger } = ctx;
+  const { offersFor, clock, logger, nano } = ctx;
 
   async function settle(context: PaymentSettlementContext): Promise<PaymentResult> {
     const { requirement, submission, verification } = context;
@@ -69,6 +70,56 @@ export function createSettle(
       ...(verification.replayKey !== undefined ? { replayKey: verification.replayKey } : {}),
       rejectionReason,
     });
+
+    // Nano: the buyer already sent the payment. Settling reads the block again
+    // under the replay reservation the pipeline now holds; nothing is sent.
+    if (offer.family === 'nano') {
+      const nanoModule = await nano();
+      const inspected = nanoModule.inspectNanoPayload(payload.payload, offer.network);
+      if (typeof inspected === 'string') return rejectedSettlement(inspected);
+      let sent: Awaited<ReturnType<typeof nanoModule.checkNanoSend>>;
+      try {
+        sent = await nanoModule.checkNanoSend(
+          nanoModule.createNanoRpc(offer.rpcUrl, HEALTH_TIMEOUT_MS),
+          {
+            blockHash: inspected.blockHash,
+            payTo: offer.payTo,
+            amount: BigInt(requirements.amount),
+          },
+        );
+      } catch (err) {
+        // Nothing was submitted, so the attempt is released for a retry
+        throw new CommerceError(
+          'PAYMENT_PROVIDER_UNAVAILABLE',
+          'x402 provider: the Nano node could not be read during settle()',
+          {
+            cause: err,
+            details: { settlementNotSubmitted: true, reason: 'nano_rpc_unavailable' },
+          },
+        );
+      }
+      if (typeof sent === 'string') return rejectedSettlement(sent);
+      return {
+        status: 'settled',
+        provider: 'x402',
+        externalReference: inspected.blockHash,
+        payer: sent.payer,
+        payee: offer.payTo,
+        amount: verification.amount,
+        currency: verification.currency,
+        network: offer.network,
+        ...(verification.asset !== undefined ? { asset: verification.asset } : {}),
+        replayKey: inspected.replayKey,
+        settledAt: clock.nowIso(),
+        metadata: {
+          // What the block sent, which may exceed the offer
+          amountBaseUnits: sent.amount.toString(),
+          ...(verification.currency !== requirement.currency
+            ? { quote: { amount: requirement.amount, currency: requirement.currency } }
+            : {}),
+        },
+      };
+    }
 
     const scope = offer.binding.open();
     let sdkResult: SettleResponse;

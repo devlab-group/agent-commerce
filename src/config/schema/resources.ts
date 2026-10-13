@@ -9,6 +9,7 @@ import {
   RESERVED_INPUT_FIELDS,
 } from '../../core';
 import { MPP_PROFILE } from '../../payments/mpp/constants';
+import { findX402Network } from '../../payments/x402/networks';
 import { MCP_TOOL_NAME_PATTERN } from '../../protocols/mcp/constants';
 import { normalizeResourceAuthorization } from './ap2';
 import {
@@ -179,6 +180,24 @@ export function normalizeResource(
         'CONFIG_INVALID',
         `Resource "${id}" names payment method(s) "${paymentMethods.join(', ')}", none of which is configured and enabled under "payments"`,
         { details: { path: `resources.${id}.payments`, resourceId: id, paymentMethods } },
+      );
+    }
+    // XNO has no USD peg and the gateway holds no exchange rate, so a Nano
+    // offer charges the price in XNO itself, and no other offer of the same
+    // list can share that price
+    const nanoOffers = (offers?.options ?? []).filter(
+      (option) => findX402Network(option.network)?.family === 'nano',
+    );
+    if (
+      x402?.config.enabled &&
+      paymentMethods.includes('x402') &&
+      nanoOffers.length > 0 &&
+      (entry.pricing.currency !== 'XNO' || nanoOffers.length !== offers?.options.length)
+    ) {
+      throw new CommerceError(
+        'CONFIG_INVALID',
+        `Resource "${id}" has an x402 offer in XNO on Nano, which has no USD rate. Price it in XNO and list only Nano offers for it, or give the resource its own offers without Nano.`,
+        { details: { path: `resources.${id}.pricing.currency`, resourceId: id } },
       );
     }
     // An offer in the network's default stablecoin, named or not, charges the

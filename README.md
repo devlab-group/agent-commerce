@@ -279,16 +279,16 @@ See [docs/configuration.md](docs/configuration.md).
 
 ## Protocol support
 
-| Protocol | Status       | Pinned revision                                                                                              |
-| -------- | ------------ | ------------------------------------------------------------------------------------------------------------ |
-| **HTTP** | Supported    | native routes                                                                                                |
-| **MCP**  | Supported    | `2026-07-28` and `2025-11-25`, `@modelcontextprotocol/server@2.3.0`                                          |
-| **x402** | Supported    | x402 v2 (`@x402/core`, `@x402/evm`, `@x402/svm`, `@x402/near`), scheme `exact`, EVM and Solana; NEAR partial |
-| **MPP**  | Experimental | `mppx@0.13.1`, `charge` + `evm` + EIP-3009, USDC on Base Sepolia and Base                                    |
-| **A2A**  | Experimental | A2A v1.0.1, binding `JSONRPC`, method `SendMessage`, x402 extension                                          |
-| **ACP**  | Experimental | ACP `2026-04-17`, REST checkout + discovery                                                                  |
-| **AP2**  | Experimental | AP2 `v0.2.0`, Direct Checkout Mandate verification                                                           |
-| UCP      | Planned      | no implementation                                                                                            |
+| Protocol | Status       | Pinned revision                                                                                                                 |
+| -------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------- |
+| **HTTP** | Supported    | native routes                                                                                                                   |
+| **MCP**  | Supported    | `2026-07-28` and `2025-11-25`, `@modelcontextprotocol/server@2.3.0`                                                             |
+| **x402** | Supported    | x402 v2 (`@x402/core`, `@x402/evm`, `@x402/svm`, `@x402/near`), scheme `exact`, EVM and Solana; NEAR partial; Nano experimental |
+| **MPP**  | Experimental | `mppx@0.13.1`, `charge` + `evm` + EIP-3009, USDC on Base Sepolia and Base                                                       |
+| **A2A**  | Experimental | A2A v1.0.1, binding `JSONRPC`, method `SendMessage`, x402 extension                                                             |
+| **ACP**  | Experimental | ACP `2026-04-17`, REST checkout + discovery                                                                                     |
+| **AP2**  | Experimental | AP2 `v0.2.0`, Direct Checkout Mandate verification                                                                              |
+| UCP      | Planned      | no implementation                                                                                                               |
 
 [AP2](docs/protocols/ap2.md) is an authorization method, not a transport. It verifies a
 mandate before a paid resource settles; the gateway does not issue the mandate

@@ -17,7 +17,7 @@ import { CommerceError } from '../../core';
 /** Chain id of the local Anvil dev chain, Anvil's default */
 export const LOCAL_CHAIN_ID = 31337;
 
-export type X402NetworkFamily = 'evm' | 'svm' | 'near';
+export type X402NetworkFamily = 'evm' | 'svm' | 'near' | 'nano';
 
 export type NetworkKind = 'testnet' | 'mainnet';
 
@@ -52,7 +52,10 @@ interface NonEvmNetwork<F extends X402NetworkFamily> {
   readonly id: string;
   readonly displayName: string;
   readonly kind: NetworkKind;
-  /** Solana mint or NEAR NEP-141 contract account, with no EIP-712 domain */
+  /**
+   * Solana mint or NEAR NEP-141 contract account, with no EIP-712 domain.
+   * Nano has no tokens: its asset is the native coin, named by its symbol.
+   */
   readonly canonicalAsset: {
     readonly symbol: string;
     readonly address: string;
@@ -63,7 +66,8 @@ interface NonEvmNetwork<F extends X402NetworkFamily> {
 export type X402Network =
   | (NetworkProfile & { readonly family: 'evm' })
   | NonEvmNetwork<'svm'>
-  | NonEvmNetwork<'near'>;
+  | NonEvmNetwork<'near'>
+  | NonEvmNetwork<'nano'>;
 
 /** A merchant-declared EVM network, from `payments.x402.networks` */
 export interface CustomNetworkDeclaration {
@@ -186,6 +190,14 @@ const PROFILES: readonly X402Network[] = [
       decimals: 6,
     },
   },
+  // Nano settles only its native coin, XNO, in raw units: 1 XNO is 10^30 raw
+  {
+    family: 'nano',
+    id: 'nano:mainnet',
+    displayName: 'Nano',
+    kind: 'mainnet',
+    canonicalAsset: { symbol: 'XNO', address: 'XNO', decimals: 30 },
+  },
 ];
 
 const BY_ID = new Map(PROFILES.map((profile) => [profile.id, profile]));
@@ -241,7 +253,7 @@ export function requireX402Network(id: string, path: string, custom?: CustomNetw
 
 /**
  * Allows only new `eip155` networks in `payments.x402.networks`. Redeclaring
- * built-ins could relabel mainnet as testnet; Solana and NEAR IDs are SDK-fixed.
+ * built-ins could relabel mainnet as testnet; Solana, NEAR and Nano IDs are fixed.
  */
 export function validateCustomNetworks(custom: CustomNetworks, path: string): void {
   for (const id of Object.keys(custom)) {

@@ -32,6 +32,7 @@ export const X402_MCP_PAYMENT_RESPONSE_META_KEY = 'x402/payment-response';
 const REPLAY_CODES: Readonly<Record<string, string>> = {
   near: 'invalid_exact_near_payload_delegate_action_nonce_already_used',
   solana: 'duplicate_settlement',
+  nano: 'invalid_exact_nano_block_already_used',
 };
 
 /**

@@ -1,6 +1,6 @@
 /**
  * `@devlab.group/agent-commerce/x402`: the x402 payment provider (`exact`
- * scheme on EVM, Solana and NEAR). A separate entry point because the rail
+ * scheme on EVM, Solana and NEAR; Nano send blocks, experimental). A separate entry point because the rail
  * brings the EVM signing and RPC stack, which a consumer serving free resources
  * should not install. The EVM peers are needed whatever the offers' networks.
  *

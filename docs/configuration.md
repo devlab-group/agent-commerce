@@ -465,6 +465,40 @@ payments:
   slow backend call is refused at settlement, and the client signs again; use
   `upfront` for handlers that can outlast `maxTimeoutSeconds`.
 
+### Nano
+
+Experimental. Nano options settle the native coin, XNO, which has no fees and
+no tokens. The buyer publishes a send block to `payTo` first and presents its
+hash; the gateway reads that block from a Nano node at `rpcUrl`. It holds no
+key, signs nothing and broadcasts nothing, and no facilitator is called, though
+the `facilitator` block and the mainnet guardrails still apply to the rail.
+
+```yaml
+payments:
+  x402:
+    network: nano:mainnet
+    rpcUrl: ${NANO_RPC_URL} # a node's HTTP RPC
+    payTo: ${NANO_MERCHANT_ADDRESS} # nano_...; no asset fields: XNO
+```
+
+- `payTo` is a `nano_` (or legacy `xrb_`) address with a valid checksum.
+  `asset` may be omitted or set to `XNO`; `assetDecimals` is 30, so a price of
+  `0.001` is 10^27 raw.
+- The gateway has no XNO exchange rate. A resource with a Nano offer must be
+  priced in `XNO`, and its offer list may hold only Nano offers; give it its
+  own [`x402.accepts`](#a-resources-own-offers) to keep USDC offers on the
+  other resources.
+- Verification requires a confirmed (cemented) `state` block of subtype `send`
+  whose `link_as_account` is `payTo` and whose amount is at least the price.
+  A block not yet confirmed or not yet seen is refused, and the client can
+  present it again. A node that does not answer is
+  `PAYMENT_PROVIDER_UNAVAILABLE`.
+- The block hash is the replay key, so one send pays for one request. A send
+  is public once published: use a `payTo` that receives nothing but payments
+  for this gateway, since any unclaimed send to it can be presented by whoever
+  presents it first.
+- Health checks that the node answers `version` for the `live` network.
+
 ### Several options
 
 Use `options` to offer x402 resources on several networks or in several
@@ -584,6 +618,7 @@ development address, and either a facilitator credential or
 | `solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1` | Solana Devnet     | testnet | [remote facilitator only](#solana)         |
 | `near:mainnet`                            | NEAR              | mainnet | [remote facilitator only](#near)           |
 | `near:testnet`                            | NEAR Testnet      | testnet | [remote facilitator only](#near)           |
+| `nano:mainnet`                            | Nano              | mainnet | [experimental; no facilitator](#nano)      |
 
 Every built-in EVM network is supported: the signing code is the same on
 each, and on 2026-10-10 each network's USDC signing domain matched the chain

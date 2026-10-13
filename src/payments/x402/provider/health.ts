@@ -11,11 +11,11 @@ import type { FacilitatorBinding } from '../facilitator';
 import { describeDeploymentMode } from '../networks';
 import { x402OfferName } from '../options';
 import { HEALTH_TIMEOUT_MS, X402_VERSION } from './constants';
-import type { NearOffer, Offer, ProviderContext, SvmOffer } from './types';
+import type { NanoOffer, NearOffer, Offer, ProviderContext, SvmOffer } from './types';
 
 /** Builds the provider's `health`, which probes every offer and caches the result */
 export function createHealthCheck(ctx: ProviderContext): () => Promise<AdapterHealth> {
-  const { offers, clock, deploymentMode, remoteBinding, svm, near } = ctx;
+  const { offers, clock, deploymentMode, remoteBinding, svm, near, nano } = ctx;
 
   // One offer's chain, asset and facilitator support. `kinds` fetches the
   // remote facilitator's `/supported` once per probe, shared by every offer.
@@ -25,6 +25,7 @@ export function createHealthCheck(ctx: ProviderContext): () => Promise<AdapterHe
   ): Promise<{ readonly status: 'pass' | 'fail'; readonly detail: string }> {
     if (offer.family === 'svm') return svmOfferHealth(offer, kinds);
     if (offer.family === 'near') return nearOfferHealth(offer, kinds);
+    if (offer.family === 'nano') return nanoOfferHealth(offer);
     const { profile, rpcOrigin, healthClient, binding } = offer;
     const chainId = await healthClient.getChainId();
     if (chainId !== profile.chainId) {
@@ -255,6 +256,25 @@ export function createHealthCheck(ctx: ProviderContext): () => Promise<AdapterHe
         `token ${offer.asset} has ${decimals} decimals and storage for ${offer.payTo}, ` +
         `facilitator ${binding.describe} supports exact/${offer.network}`,
     };
+  }
+
+  // A Nano offer needs only a node of the live network: no facilitator, no token
+  async function nanoOfferHealth(
+    offer: NanoOffer,
+  ): Promise<{ readonly status: 'pass' | 'fail'; readonly detail: string }> {
+    const nanoModule = await nano();
+    const live = await nanoModule.isLiveNanoNode(
+      nanoModule.createNanoRpc(offer.rpcUrl, HEALTH_TIMEOUT_MS),
+    );
+    return live
+      ? {
+          status: 'pass',
+          detail: `${describeDeploymentMode(deploymentMode)}: Nano node ${offer.rpcOrigin} serves the live network; payments to ${offer.payTo} are read from it, without a facilitator`,
+        }
+      : {
+          status: 'fail',
+          detail: `RPC at ${offer.rpcOrigin} does not report the live Nano network`,
+        };
   }
 
   // Check all offers and report each status; any failure fails readiness.

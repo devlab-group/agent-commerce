@@ -1,6 +1,7 @@
 // The challenge a resource answers with, and the offer a proof selects from it
 import type { PaymentRequired, PaymentRequirements } from '@x402/core/types';
 import type { PaymentContext, PaymentRequirement, PaymentVerificationContext } from '../../../core';
+import { CommerceError } from '../../../core';
 import {
   REUSE_REJECTED_AUTHORIZATION_METADATA_KEY,
   SETTLE_AFTER_BACKEND_METADATA_KEY,
@@ -64,6 +65,14 @@ export function createRequirementBuilders(
 
   async function createRequirement(context: PaymentContext): Promise<PaymentRequirement> {
     const offers = offersFor(context.resource.id);
+    // XNO has no USD peg and the gateway holds no rate: a price in any other
+    // currency would be charged as that many XNO
+    if (context.currency !== 'XNO' && offers.some((offer) => offer.family === 'nano')) {
+      throw new CommerceError(
+        'CONFIG_INVALID',
+        `x402 provider: resource "${context.resource.id}" is priced in ${context.currency}, but a Nano offer charges XNO`,
+      );
+    }
     const paymentFlow =
       options.resourcePaymentFlows?.[context.resource.id] ??
       options.paymentFlow ??
@@ -88,7 +97,7 @@ export function createRequirementBuilders(
         extra:
           offer.family === 'svm'
             ? { feePayer: await svmFeePayer(offer), ...flow }
-            : offer.family === 'near'
+            : offer.family === 'near' || offer.family === 'nano'
               ? { ...flow }
               : {
                   ...(offer.assetName !== undefined ? { name: offer.assetName } : {}),

@@ -125,7 +125,18 @@ export interface NearOffer extends OfferBase {
   readonly payTo: string;
 }
 
-export type Offer = EvmOffer | SvmOffer | NearOffer;
+/**
+ * The buyer has already sent the payment, so no facilitator is called: the
+ * gateway reads the send block from the offer's RPC
+ */
+export interface NanoOffer extends OfferBase {
+  readonly family: 'nano';
+  readonly profile: Extract<X402Network, { family: 'nano' }>;
+  readonly asset: string;
+  readonly payTo: string;
+}
+
+export type Offer = EvmOffer | SvmOffer | NearOffer | NanoOffer;
 
 /** What the request-time modules share, resolved once when the provider is built */
 export interface ProviderContext {
@@ -145,4 +156,6 @@ export interface ProviderContext {
   readonly svm: () => Promise<typeof import('../svm')>;
   /** The NEAR inspection module; rejects when no NEAR offer is configured */
   readonly near: () => Promise<typeof import('../near')>;
+  /** The Nano verification module; rejects when no Nano offer is configured */
+  readonly nano: () => Promise<typeof import('../nano')>;
 }

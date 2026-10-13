@@ -55,8 +55,21 @@ export function resolveOffers(
       const known = findX402Network(input.network, options.customNetworks);
       if (known !== undefined && known.family !== 'evm') {
         const shape =
-          known.family === 'svm' ? 'a Solana address (base58, 32 bytes)' : 'a NEAR account ID';
-        for (const name of ['asset', 'payTo'] as const) {
+          known.family === 'svm'
+            ? 'a Solana address (base58, 32 bytes)'
+            : known.family === 'near'
+              ? 'a NEAR account ID'
+              : 'a nano_ address with a valid checksum';
+        // Nano's only asset is its native coin, named by its symbol
+        if (known.family === 'nano' && input.asset !== known.canonicalAsset.address) {
+          throw new CommerceError(
+            'CONFIG_INVALID',
+            `x402 provider: ${at('asset')} must be "${known.canonicalAsset.address}", ${known.displayName}'s native coin`,
+          );
+        }
+        for (const name of known.family === 'nano'
+          ? (['payTo'] as const)
+          : (['asset', 'payTo'] as const)) {
           if (normalizeAddress(known, input[name]) === undefined) {
             throw new CommerceError('CONFIG_INVALID', `x402 provider: ${at(name)} is not ${shape}`);
           }
@@ -187,6 +200,13 @@ export function resolveOffers(
         rpcOrigin: describeRpc(input.rpcUrl),
         binding,
       };
+      if (profile.family === 'nano') {
+        // The `nano_` form, which the challenge names
+        const payTo = normalizeAddress(profile, input.payTo) as string;
+        const offer: Offer = { ...base, family: 'nano', profile, asset: input.asset, payTo };
+        built.set(identity, offer);
+        return offer;
+      }
       const offer: Offer =
         profile.family === 'svm'
           ? { ...base, family: 'svm', profile, asset: input.asset, payTo: input.payTo }
