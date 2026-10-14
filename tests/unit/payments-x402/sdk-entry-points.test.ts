@@ -99,8 +99,9 @@ describe('pinned x402 SDK entry points', () => {
   });
 
   // Config load cannot import the SDK, so the profiles repeat its default assets
-  // The local Anvil chain has no default asset and is skipped
-  it.each(BUILT_IN_NETWORKS.filter((n) => n.canonicalAsset).map((n) => [n.id, n] as const))(
+  // The local Anvil chain has no default asset and is skipped; Nano has no SDK
+  const sdkNetworks = BUILT_IN_NETWORKS.filter((n) => n.canonicalAsset && n.family !== 'nano');
+  it.each(sdkNetworks.map((n) => [n.id, n] as const))(
     '%s defaults to the asset the SDK names',
     (_id, network) => {
       const id = network.id as `${string}:${string}`;

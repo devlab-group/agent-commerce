@@ -90,3 +90,18 @@ export function computeNearReplayKey(input: {
     .digest('hex');
   return `0x${digest}`;
 }
+
+/**
+ * Identifies a Nano payment by network and send block hash. A block is
+ * immutable once published, so its hash names the one transfer it carries.
+ */
+export function computeNanoReplayKey(input: {
+  readonly network: string;
+  readonly blockHash: string;
+}): string {
+  const digest = createHash('sha256')
+    .update('x402/exact/nano/v1\0')
+    .update(`${input.network}\0${input.blockHash.toUpperCase()}`)
+    .digest('hex');
+  return `0x${digest}`;
+}

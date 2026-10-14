@@ -1,7 +1,10 @@
 /**
  * SDK-free address checks for config load and the CLI. EVM addresses compare
- * without case; Solana keys and NEAR account IDs compare exactly.
+ * without case; Solana keys and NEAR account IDs compare exactly. Nano
+ * addresses carry a checksum and compare by public key, so the legacy `xrb_`
+ * prefix names the same account as `nano_`.
  */
+import { nanoPublicKey, normalizeNanoAddress } from './nano-address';
 import type { X402Network } from './networks';
 
 // `0x` + 40 hex characters. Config load cannot check the EIP-55 checksum,
@@ -31,10 +34,15 @@ const SOLANA_SIGNATURE = /^[1-9A-HJ-NP-Za-km-z]{64,88}$/;
 const NEAR_ACCOUNT_ID = /^(([a-z\d]+[-_])*[a-z\d]+\.)*([a-z\d]+[-_])*[a-z\d]+$/;
 // A transaction hash: 32 bytes in base58
 const NEAR_TRANSACTION_HASH = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+// A Nano block hash: 32 bytes in uppercase hex
+const NANO_BLOCK_HASH = /^[0-9A-F]{64}$/;
+// The all-zero public key, which no one holds
+const NANO_BURN = 'nano_1111111111111111111111111111111111111111111111111111hifc8npp';
 
 /**
  * Returns the family's wire address or `undefined`. NEAR uses named or
  * implicit account IDs; a `.near` suffix does not identify the network.
+ * A Nano address must carry a valid checksum and is returned as `nano_`.
  */
 export function normalizeAddress(network: X402Network, value: string): string | undefined {
   switch (network.family) {
@@ -46,12 +54,14 @@ export function normalizeAddress(network: X402Network, value: string): string | 
       return value.length >= 2 && value.length <= 64 && NEAR_ACCOUNT_ID.test(value)
         ? value
         : undefined;
+    case 'nano':
+      return normalizeNanoAddress(value);
   }
 }
 
 /**
  * An address funds cannot be recovered from: the zero address of its family.
- * NEAR has no zero account.
+ * NEAR has no zero account; Nano's is the all-zero public key.
  */
 export function isBurnAddress(network: X402Network, wireAddress: string): boolean {
   switch (network.family) {
@@ -61,17 +71,28 @@ export function isBurnAddress(network: X402Network, wireAddress: string): boolea
       return wireAddress === SOLANA_ZERO;
     case 'near':
       return false;
+    case 'nano':
+      return normalizeNanoAddress(wireAddress) === NANO_BURN;
   }
 }
 
-/** Compare EVM addresses case-insensitively, Solana keys and NEAR account IDs exactly */
+/**
+ * Compare EVM addresses case-insensitively, Solana keys and NEAR account IDs
+ * exactly, and Nano addresses by public key
+ */
 export function sameAddress(network: X402Network, a: string, b: string): boolean {
-  return network.family === 'evm' ? a.toLowerCase() === b.toLowerCase() : a === b;
+  if (network.family === 'evm') return a.toLowerCase() === b.toLowerCase();
+  if (network.family === 'nano') {
+    // Nano's asset is the native coin's symbol, not an address
+    const key = (value: string) => nanoPublicKey(value) ?? value;
+    return key(a) === key(b);
+  }
+  return a === b;
 }
 
 /**
  * A settlement reference in its family's form: an EVM transaction hash, a
- * Solana transaction signature or a NEAR transaction hash
+ * Solana transaction signature, a NEAR transaction hash or a Nano block hash
  */
 export function isTransactionReference(network: X402Network, value: string): boolean {
   switch (network.family) {
@@ -81,6 +102,8 @@ export function isTransactionReference(network: X402Network, value: string): boo
       return SOLANA_SIGNATURE.test(value) && base58ByteLength(value) === 64;
     case 'near':
       return NEAR_TRANSACTION_HASH.test(value) && base58ByteLength(value) === 32;
+    case 'nano':
+      return NANO_BLOCK_HASH.test(value);
   }
 }
 

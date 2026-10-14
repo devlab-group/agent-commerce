@@ -225,6 +225,17 @@ persistence must not fail the commerce flow.
   - `createX402PaymentProvider` refuses a `maxTimeoutSeconds` that is not a
     positive integer with `CONFIG_INVALID`, as config load already did: the
     NEAR facilitator refuses every payment under such a value.
+- The x402 provider serves Nano offers (`nano:mainnet`, experimental) without
+  a facilitator.
+  - `X402NetworkFamily` gains `nano`. A Nano offer's `asset` is `XNO`, its
+    `assetDecimals` 30 and its `payTo` a checksummed `nano_` address (`xrb_`
+    is read as the same account and stored as `nano_`).
+  - The proof's `payload` is `{ blockHash }`: a send block the buyer already
+    published. Verify and settle read it from the offer's `rpcUrl`
+    (`block_info`), the facilitator is never called, and settle sends
+    nothing. The replay key is derived from the network and block hash.
+  - The descriptor's `supportedSpec` can name `family=nano`; capabilities gain
+    `exact-nano-send-block`. A Nano offer must be priced in `XNO`.
 - x402 verification and settlement `currency` uses the network's default
   token symbol when paying that asset, otherwise the resource's currency.
   Settlement preserves a differently labeled price, such as `USD`, in
@@ -392,13 +403,13 @@ Published as `@devlab.group/agent-commerce/x402`.
 export interface X402OfferOptions {
   readonly network: string; // CAIP-2, for example 'eip155:84532'
   readonly rpcUrl: string;
-  readonly asset: string; // ERC-20 contract, Solana mint or NEAR token account
+  readonly asset: string; // ERC-20 contract, Solana mint, NEAR token account or 'XNO'
   /** The token's EIP-712 domain; an EIP-3009 offer needs both */
   readonly assetName?: string;
   readonly assetVersion?: string;
   readonly assetDecimals: number;
   /** Merchant-controlled settlement destination. */
-  readonly payTo: string; // on Solana the wallet, on NEAR the account
+  readonly payTo: string; // on Solana the wallet, on NEAR the account, on Nano a nano_ address
   /** EVM only. Default 'eip3009'. A Permit2 buyer approves Permit2 for the token first */
   readonly assetTransferMethod?: X402AssetTransferMethod;
 }

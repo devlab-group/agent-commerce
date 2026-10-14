@@ -68,6 +68,7 @@ const ADDRESS_SHAPES = {
   evm: '"0x" followed by 40 hex characters',
   svm: 'a base58 public key of 32 bytes',
   near: 'a NEAR account ID: 2 to 64 lowercase characters, digits and single "-", "_" or "." separators',
+  nano: 'a nano_ address with a valid checksum',
 } as const;
 
 function invalid(message: string, path: string): CommerceError {
@@ -134,7 +135,23 @@ export function resolveX402Option(
   const canonical = network.canonicalAsset;
   const domain = canonical && 'name' in canonical ? canonical : undefined;
 
-  const asset = input.asset !== undefined ? address('asset', input.asset) : undefined;
+  // Nano has no tokens: the only asset is the native coin, named by its symbol
+  if (
+    network.family === 'nano' &&
+    input.asset !== undefined &&
+    input.asset !== canonical?.address
+  ) {
+    throw invalid(
+      `${path}.asset: ${network.displayName} settles only its native coin; omit asset or set it to "${canonical?.address}"`,
+      `${path}.asset`,
+    );
+  }
+  const asset =
+    input.asset === undefined
+      ? undefined
+      : network.family === 'nano'
+        ? input.asset
+        : address('asset', input.asset);
   if (asset !== undefined && isBurnAddress(network, asset)) {
     throw invalid(`${path}.asset must not be the zero address`, `${path}.asset`);
   }

@@ -3,7 +3,8 @@
  * EIP-3009 `transferWithAuthorization` or a Permit2 transfer through the x402
  * exact proxy; on Solana, a token transfer whose fee the facilitator pays; on
  * NEAR, a delegated NEP-141 `ft_transfer` that the facilitator's relayer
- * submits.
+ * submits; on Nano, a send block the buyer has already published, which the
+ * gateway reads from a Nano node instead of a facilitator (experimental).
  *
  * `verify()` never moves funds. `settle()` does, and throws unless it is handed
  * a successful verification. Both run through a facilitator (see
@@ -66,6 +67,7 @@ export function createX402PaymentProvider(
   const evmOffers = offers.filter((offer): offer is EvmOffer => offer.family === 'evm');
   const hasSvm = offers.some((offer) => offer.family === 'svm');
   const hasNear = offers.some((offer) => offer.family === 'near');
+  const hasNano = offers.some((offer) => offer.family === 'nano');
   const descriptor: AdapterDescriptor = {
     name: 'x402',
     kind: 'payment',
@@ -74,11 +76,13 @@ export function createX402PaymentProvider(
       ...(evmOffers.length > 0 ? ['eip155'] : []),
       ...(hasSvm ? ['solana'] : []),
       ...(hasNear ? ['near'] : []),
+      ...(hasNano ? ['nano'] : []),
     ].join(',')}`,
     capabilities: [
       ...(evmOffers.length > 0 ? ['exact-evm'] : []),
       ...(hasSvm ? ['exact-svm'] : []),
       ...(hasNear ? ['exact-near'] : []),
+      ...(hasNano ? ['exact-nano-send-block'] : []),
       `${options.facilitator.mode}-facilitator`,
       ...(evmOffers.some((offer) => offer.method === 'eip3009') ? ['eip-3009'] : []),
       ...(evmOffers.some((offer) => offer.method === 'permit2') ? ['permit2'] : []),
@@ -105,6 +109,9 @@ export function createX402PaymentProvider(
   const nearModule = hasNear
     ? loadOptionalModule(() => import('../near'), 'NEAR offers need @x402/near')
     : undefined;
+  const nanoModule = hasNano
+    ? loadOptionalModule(() => import('../nano'), 'Nano offers could not load')
+    : undefined;
   const svm = async () => {
     if (!svmModule)
       throw new CommerceError('INTERNAL_ERROR', 'x402 provider: no Solana offer is configured');
@@ -114,6 +121,11 @@ export function createX402PaymentProvider(
     if (!nearModule)
       throw new CommerceError('INTERNAL_ERROR', 'x402 provider: no NEAR offer is configured');
     return nearModule;
+  };
+  const nano = async () => {
+    if (!nanoModule)
+      throw new CommerceError('INTERNAL_ERROR', 'x402 provider: no Nano offer is configured');
+    return nanoModule;
   };
 
   const ctx: ProviderContext = {
@@ -128,6 +140,7 @@ export function createX402PaymentProvider(
     maxTimeoutSeconds,
     svm,
     near,
+    nano,
   };
   const { createRequirement, selectRequirement } = createRequirementBuilders(
     ctx,

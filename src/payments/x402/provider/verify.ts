@@ -6,7 +6,7 @@ import { CommerceError } from '../../../core';
 import { redactedErrorText } from '../../../core/errors';
 import { normalizeAddress, sameAddress } from '../addresses';
 import { declaredX402Version, decodePaymentSubmission, forFacilitator } from '../payload';
-import { X402_VERSION } from './constants';
+import { HEALTH_TIMEOUT_MS, X402_VERSION } from './constants';
 import { offerCurrency } from './offers';
 import { isProviderUnavailableError, NO_VERDICT_REASONS, sanitizeReason } from './reasons';
 import { acceptedMatchesOffer, offerIndexOf } from './requirement';
@@ -17,7 +17,7 @@ import type { ProviderContext } from './types';
 export function createVerify(
   ctx: ProviderContext,
 ): (context: PaymentVerificationContext) => Promise<PaymentResult> {
-  const { offersFor, clock, logger, svm, near } = ctx;
+  const { offersFor, clock, logger, svm, near, nano } = ctx;
 
   /**
    * Checks a submission against the requirement this provider built, never
@@ -88,10 +88,17 @@ export function createVerify(
     // EVM: the authorization names payer, payee and amount. Solana: the
     // facilitator reads the transaction, and the gateway takes its identity.
     // NEAR: the delegate names the transfer, checked here against the offer.
+    // Nano: the payload names a send block, read from the chain below.
     let transfer: Transfer | undefined;
     let replayKey: string;
     let derivedPayer: string | undefined;
-    if (offer.family === 'svm') {
+    let nanoBlockHash: string | undefined;
+    if (offer.family === 'nano') {
+      const inspected = (await nano()).inspectNanoPayload(payload.payload, offer.network);
+      if (typeof inspected === 'string') return rejected(inspected);
+      replayKey = inspected.replayKey;
+      nanoBlockHash = inspected.blockHash;
+    } else if (offer.family === 'svm') {
       const identity = (await svm()).svmReplayKey(payload.payload, offer.network);
       if (typeof identity === 'string') return rejected(identity);
       replayKey = identity.replayKey;
@@ -146,6 +153,28 @@ export function createVerify(
       if (authorizedValue !== required) {
         return rejected(transfer.amountMismatch);
       }
+    }
+
+    // A Nano payment has already moved: the block on chain is the verdict, and
+    // no facilitator is involved. A node that does not answer throws.
+    if (offer.family === 'nano') {
+      const nanoModule = await nano();
+      const sent = await nanoModule.checkNanoSend(
+        nanoModule.createNanoRpc(offer.rpcUrl, HEALTH_TIMEOUT_MS),
+        { blockHash: nanoBlockHash as string, payTo: offer.payTo, amount: required },
+      );
+      if (typeof sent === 'string') return rejected(sent);
+      return {
+        status: 'verified',
+        provider: 'x402',
+        payer: sent.payer,
+        payee: offer.payTo,
+        amount: formatUnits(required, offer.assetDecimals),
+        currency: offerCurrency(offer, requirement.currency),
+        network: payload.accepted.network,
+        asset: offer.asset,
+        replayKey,
+      };
     }
 
     const scope = offer.binding.open();
