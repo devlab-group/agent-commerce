@@ -462,7 +462,7 @@ export interface NetworkProfile {
   readonly kind: 'testnet' | 'mainnet';
   /** The local Anvil dev chain, where the in-process facilitator runs */
   readonly local?: boolean;
-  /** The network's USDC and its EIP-712 domain; a public network settles only in it */
+  /** Default USDC deployment and EIP-712 domain */
   readonly canonicalAsset?: {
     readonly symbol: string;
     readonly address: string;

@@ -1,9 +1,9 @@
 # Upgrading from 2.0 to 2.x
 
-2.1 added x402 payments on more EVM networks, Permit2, Solana and NEAR, several
-offers per resource, and health per offer. The changes below came in 2.1, remain
-in later 2.x releases, and can break a 2.0 configuration, integration or type
-check. Review them before upgrading.
+2.1 added x402 payments on more EVM networks, Permit2, Solana and NEAR,
+multiple offers per resource, and health per offer. These changes can break
+2.0 configurations, integrations or type checks. They apply to later 2.x
+releases unless noted otherwise. Review them before upgrading.
 
 | Change                                                                                  | Affects                                                              |
 | --------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
@@ -39,11 +39,16 @@ A setup that settles on the real Base Sepolia needs a remote facilitator, as in
 
 ### Public networks settle only in their USDC
 
-2.0 required the network's USDC on mainnet only. Since 2.1, config load also
-refuses another token on a public testnet, such as a mock token on Base Sepolia.
-Omit the asset fields to settle in the network's USDC, or use the local chain or
-a network you declare under `payments.x402.networks` (see
+2.0 required the network's USDC only on mainnet. From 2.1 to 2.2.0, public
+built-in testnets also require it, so a mock token on Base Sepolia is refused.
+Omit the asset fields to use USDC, or use the local chain or a network declared
+under `payments.x402.networks` (see
 [configuration.md](configuration.md#network-and-facilitator)).
+
+2.2.1 restores other tokens for x402 on built-in EVM networks with explicit
+token metadata; see [the settlement asset](configuration.md#the-settlement-asset).
+MPP configuration on public networks and Solana or NEAR offers still require
+USDC.
 
 ### Prices in USDC need a USDC label
 

@@ -32,8 +32,8 @@ export interface NetworkProfile {
   /** The local Anvil dev chain, where the in-process facilitator runs */
   readonly local?: boolean;
   /**
-   * Default USDC deployment and EIP-712 domain. A public network's offers
-   * settle only in it; the local chain has none and names its mock token.
+   * Default USDC deployment and EIP-712 domain. EVM offers may name another
+   * token; the local chain has no default and requires explicit token metadata.
    *
    * `name` is the signed EIP-712 domain name, not the symbol, and deployments
    * differ: `"USDC"` on Base Sepolia, `"USD Coin"` on Base.

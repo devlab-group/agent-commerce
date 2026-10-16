@@ -9,6 +9,7 @@ import type { Clock } from '../../../src/core';
 
 const getChainIdMock = vi.fn();
 const getCodeMock = vi.fn();
+const readContractMock = vi.fn();
 const requestMock = vi.fn();
 const supportedMock = vi.fn();
 
@@ -36,6 +37,7 @@ vi.mock('../../../src/payments/x402/chain', async (importOriginal) => {
     createLocalPublicClient: () => ({
       getChainId: () => getChainIdMock(),
       getCode: (...args: unknown[]) => getCodeMock(...args),
+      readContract: (...args: unknown[]) => readContractMock(...args),
       request: (...args: unknown[]) => requestMock(...args),
     }),
   };
@@ -60,7 +62,7 @@ async function makeProvider(
   rpcUrl = 'http://127.0.0.1:19322',
 ) {
   const { createX402PaymentProvider } = await import('../../../src/payments/x402/provider');
-  // Remote mode stands for public Base Sepolia, which settles only in its USDC
+  // Remote mode uses Base Sepolia's default USDC
   const local = facilitatorMode === 'local';
   return createX402PaymentProvider({
     network: local ? 'eip155:31337' : 'eip155:84532',
@@ -96,6 +98,7 @@ function makeFakeClock(startMs = 0): { clock: Clock; advance: (deltaMs: number) 
 describe('health() - mocked RPC client', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    readContractMock.mockResolvedValue(6);
   });
 
   it('passes when chain id matches, the asset has code, and the RPC confirms it is Anvil', async () => {
@@ -192,6 +195,29 @@ describe('health() - mocked RPC client', () => {
     expect(health.detail).toContain('No contract code');
   });
 
+  it('reads configured token decimals and rejects mismatches', async () => {
+    getChainIdMock.mockResolvedValueOnce(31337);
+    getCodeMock.mockResolvedValueOnce('0x6080604052');
+    readContractMock.mockResolvedValueOnce(18);
+    const provider = await makeProvider();
+    const health = await provider.health();
+    expect(health.status).toBe('fail');
+    expect(health.detail).toBe(`Token ${ASSET} has 18 decimals, configured 6`);
+    expect(readContractMock).toHaveBeenCalledWith(
+      expect.objectContaining({ address: ASSET, functionName: 'decimals' }),
+    );
+  });
+
+  it('fails when the token cannot report its decimals', async () => {
+    getChainIdMock.mockResolvedValueOnce(31337);
+    getCodeMock.mockResolvedValueOnce('0x6080604052');
+    readContractMock.mockRejectedValueOnce(new Error('execution reverted'));
+    const provider = await makeProvider();
+    const health = await provider.health();
+    expect(health.status).toBe('fail');
+    expect(health.detail).toContain('execution reverted');
+  });
+
   it('fails when getCode returns undefined', async () => {
     getChainIdMock.mockResolvedValueOnce(31337);
     getCodeMock.mockResolvedValueOnce(undefined);
@@ -214,6 +240,7 @@ describe('health() - several offers', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    readContractMock.mockResolvedValue(6);
     getChainIdMock.mockResolvedValue(31337);
     requestMock.mockResolvedValue({ clientVersion: 'anvil/v1.1.0' });
     getCodeMock.mockResolvedValue('0x6080604052');
@@ -275,6 +302,7 @@ describe('health() - several offers', () => {
 describe('health() - caching / single-flight', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    readContractMock.mockResolvedValue(6);
   });
 
   it('collapses a burst of concurrent calls into a single underlying probe', async () => {

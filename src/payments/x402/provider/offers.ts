@@ -117,6 +117,8 @@ export function resolveOffers(
         ...(options.allowUnauthenticatedFacilitator !== undefined
           ? { allowUnauthenticatedFacilitator: options.allowUnauthenticatedFacilitator }
           : {}),
+        // Every EVM offer names its decimals and, under EIP-3009, its domain
+        allowOtherEvmToken: true,
       });
       const profile = deployment.profile;
       // Refuse offers mixing local, testnet and mainnet deployment modes

@@ -321,7 +321,7 @@ describe('parseConfig', () => {
   describe('x402 deployment guardrails', () => {
     const MERCHANT = '0x1111111111111111111111111111111111111111';
     const BASE_USDC = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
-    // Public Base Sepolia, which settles only in its USDC
+    // Base Sepolia's default USDC
     const BASE_SEPOLIA = {
       network: 'eip155:84532',
       asset: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
@@ -576,22 +576,6 @@ describe('parseConfig', () => {
       expect(parseConfig(raw, { ALLOW_X402_MAINNET: 'true' }).payments.x402?.allowMainnet).toBe(
         true,
       );
-    });
-
-    it('rejects a mainnet asset that is not the canonical USDC', () => {
-      const message = messageFor(
-        withX402({
-          network: 'eip155:8453',
-          payTo: MERCHANT,
-          allowMainnet: true,
-          facilitator: {
-            mode: 'remote',
-            url: 'https://facilitator.example.com',
-            auth: { type: 'bearer', token: 'secret-token' },
-          },
-        }),
-      );
-      expect(message).toContain('is not USDC on Base');
     });
 
     it('rejects a facilitator URL that is neither http nor https', () => {

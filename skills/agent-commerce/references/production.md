@@ -31,10 +31,10 @@ requires:
 | `facilitator.mode: remote` with an `https` `url`                   | a local facilitator needs a funded gas key in-process       |
 | `allowUnauthenticatedFacilitator: true` when `auth.type` is `none` | explicit consent to unauthenticated settlement requests     |
 | a valid `payTo` outside the well-known development addresses       | the user must confirm ownership; validation cannot prove it |
-| the built-in network's USDC as `asset`                             | a built-in network settles only in its USDC                 |
+| `asset`: USDC, or another EVM token with explicit metadata for x402       | MPP, Solana and NEAR require USDC                           |
 
-For built-in EVM networks, any configured `assetName` or `assetVersion` must
-match the registry's token defaults; on Base those are `"USD Coin"` and `"2"`.
+For USDC on built-in EVM networks, configured `assetName` and `assetVersion`
+must match the registry's defaults; Base uses `"USD Coin"` and `"2"`.
 EIP-3009 signatures depend on these domain values.
 
 ```yaml

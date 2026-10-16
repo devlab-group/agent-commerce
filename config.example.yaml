@@ -143,8 +143,8 @@ payments:
       mode: local
       signerPrivateKey: ${X402_FACILITATOR_PRIVATE_KEY}
     #
-    # A public testnet instead - no key anywhere in this file. Drop the asset
-    # fields: a public network settles only in its USDC.
+    # Public testnet example: no private key. Omit the MockUSDC asset fields
+    # to use the network's USDC.
     #
     # network: eip155:84532
     # facilitator:

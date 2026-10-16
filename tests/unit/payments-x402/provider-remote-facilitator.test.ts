@@ -107,7 +107,7 @@ describe('provider - remote facilitator', () => {
   });
 
   it('holds no signing key and reports itself as a remote testnet deployment', () => {
-    // Public Base Sepolia, which settles only in its USDC
+    // Base Sepolia's default USDC
     const provider = makeProvider(
       { type: 'none' },
       {

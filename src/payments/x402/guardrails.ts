@@ -58,6 +58,11 @@ export interface X402DeploymentInput {
    * the facilitator, under its anonymous-access limits.
    */
   readonly allowUnauthenticatedFacilitator?: boolean;
+  /**
+   * Allow other tokens on built-in EVM networks with explicit metadata.
+   * MPP config leaves this unset; Solana and NEAR still require USDC.
+   */
+  readonly allowOtherEvmToken?: boolean;
   /** Error-path prefix, `payments.x402` by default */
   readonly configPath?: string;
   /** Settlement-recipient field named in errors, `payTo` by default */
@@ -169,31 +174,37 @@ export function resolveX402Deployment(input: X402DeploymentInput): X402Deploymen
     );
   }
 
-  // A public built-in network settles only in its USDC. The local chain and
-  // declared networks have no default asset and name their token.
+  // Public built-ins require USDC unless the caller allows another EVM token.
+  // Local and declared networks have no default asset.
   const canonical = profile.canonicalAsset;
   if (canonical) {
     if (!sameAddress(profile, input.asset, canonical.address)) {
-      throw invalid(
-        `${at}: asset ${input.asset} is not ${canonical.symbol} on ${profile.displayName} (expected ${canonical.address}). A built-in network settles only in its ${canonical.symbol}.`,
-        `${at}.asset`,
-      );
-    }
-    // The buyer signs the EIP-712 domain and the scheme checks it. A wrong one
-    // refuses every payment with `invalid_exact_evm_token_name_mismatch` after
-    // the buyer signed, so it is caught here, before the gateway starts.
-    const domain = 'name' in canonical ? canonical : undefined;
-    if (domain && input.assetName !== undefined && input.assetName !== domain.name) {
-      throw invalid(
-        `${at}: assetName "${input.assetName}" is not the EIP-712 domain name ${canonical.symbol} reports on ${profile.displayName} (expected "${domain.name}"). Every payment would be refused after the buyer signed.`,
-        `${at}.assetName`,
-      );
-    }
-    if (domain && input.assetVersion !== undefined && input.assetVersion !== domain.version) {
-      throw invalid(
-        `${at}: assetVersion "${input.assetVersion}" is not the EIP-712 domain version ${canonical.symbol} reports on ${profile.displayName} (expected "${domain.version}").`,
-        `${at}.assetVersion`,
-      );
+      if (input.allowOtherEvmToken !== true || profile.family !== 'evm') {
+        const rule =
+          input.allowOtherEvmToken === true
+            ? `Only an EVM network accepts another token; ${profile.displayName} settles only in its ${canonical.symbol}.`
+            : `A built-in network settles only in its ${canonical.symbol}.`;
+        throw invalid(
+          `${at}: asset ${input.asset} is not ${canonical.symbol} on ${profile.displayName} (expected ${canonical.address}). ${rule}`,
+          `${at}.asset`,
+        );
+      }
+    } else {
+      // Catch USDC domain mismatches before accepting payments; a wrong name
+      // can fail with `invalid_exact_evm_token_name_mismatch`
+      const domain = 'name' in canonical ? canonical : undefined;
+      if (domain && input.assetName !== undefined && input.assetName !== domain.name) {
+        throw invalid(
+          `${at}: assetName "${input.assetName}" is not the EIP-712 domain name ${canonical.symbol} reports on ${profile.displayName} (expected "${domain.name}"). Every payment would be refused after the buyer signed.`,
+          `${at}.assetName`,
+        );
+      }
+      if (domain && input.assetVersion !== undefined && input.assetVersion !== domain.version) {
+        throw invalid(
+          `${at}: assetVersion "${input.assetVersion}" is not the EIP-712 domain version ${canonical.symbol} reports on ${profile.displayName} (expected "${domain.version}").`,
+          `${at}.assetVersion`,
+        );
+      }
     }
   }
 

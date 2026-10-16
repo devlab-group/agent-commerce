@@ -2,6 +2,7 @@
 
 import type { SupportedKind } from '@x402/core/types';
 import { PERMIT2_ADDRESS, x402ExactPermit2ProxyAddress } from '@x402/evm';
+import { erc20Abi } from 'viem';
 import { type AdapterHealth, CommerceError } from '../../../core';
 import { redactedErrorText } from '../../../core/errors';
 import { isRecord } from '../../../core/is-record';
@@ -39,6 +40,18 @@ export function createHealthCheck(ctx: ProviderContext): () => Promise<AdapterHe
       return {
         status: 'fail',
         detail: `No contract code found at configured asset address ${offer.asset}`,
+      };
+    }
+    // Decimals scale signed amounts; verify them on-chain, as for Solana and NEAR
+    const decimals = await healthClient.readContract({
+      address: offer.asset,
+      abi: erc20Abi,
+      functionName: 'decimals',
+    });
+    if (decimals !== offer.assetDecimals) {
+      return {
+        status: 'fail',
+        detail: `Token ${offer.asset} has ${decimals} decimals, configured ${offer.assetDecimals}`,
       };
     }
     // Permit2 offers settle through two contracts the merchant does not deploy

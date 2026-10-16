@@ -711,6 +711,17 @@ describe('createX402PaymentProvider - deployment guardrails', () => {
     expect(mainnet().descriptor.capabilities).toContain('mode=mainnet');
   });
 
+  it('offers another token on a built-in mainnet with its own decimals and EIP-712 domain', async () => {
+    const provider = mainnet({ asset: ASSET, assetName: 'MockUSDC', assetDecimals: 18 });
+    const requirement = await provider.createRequirement(paymentContext());
+    expect(requirement.challenge.accepts[0]).toMatchObject({
+      network: 'eip155:8453',
+      asset: ASSET,
+      amount: '10000000000000000',
+      extra: { name: 'MockUSDC', version: '2' },
+    });
+  });
+
   it.each<[string, Partial<X402ProviderOptions>, string]>([
     ['no allowMainnet', { allowMainnet: false }, 'allowMainnet'],
     [
@@ -745,7 +756,6 @@ describe('createX402PaymentProvider - deployment guardrails', () => {
     // A loopback RPC, so only the deployment check can see that the dev
     // address would receive mainnet funds
     ['a well-known Anvil payTo', { rpcUrl: 'http://127.0.0.1:8545', payTo: PAY_TO }, 'payTo'],
-    ['a token other than canonical USDC', { asset: ASSET }, 'asset'],
     ["Base Sepolia's EIP-712 name", { assetName: 'USDC' }, 'assetName'],
     ['another EIP-712 version', { assetVersion: '1' }, 'assetVersion'],
   ])('refuses %s', (_label, overrides, field) => {

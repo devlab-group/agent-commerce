@@ -197,6 +197,8 @@ export function normalizeX402(raw: RawX402, resources: RawConfig['resources']): 
           ? { allowUnauthenticatedFacilitator }
           : {}),
         ...(networks !== undefined ? { customNetworks: networks } : {}),
+        // resolveX402Option required the token's own metadata
+        allowOtherEvmToken: true,
       });
       // Keep all offers in one deployment mode: local, testnet or mainnet
       if (firstMode !== undefined && mode !== firstMode) {

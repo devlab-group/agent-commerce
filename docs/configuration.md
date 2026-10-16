@@ -360,10 +360,14 @@ be priced in `USDC` or `USD`. `USD` treats USDC at face value, without an
 exchange-rate lookup, and the payment records `USDC` (see
 [payment-flow.md](payment-flow.md#amounts)).
 
-Public built-in networks, testnet or mainnet, settle only in their USDC. On the
-local chain or a declared EVM network, set `asset`, `assetName`,
-`assetVersion` and `assetDecimals` together; no fields are inherited from
-USDC. A [Permit2](#permit2) token needs only `asset` and `assetDecimals`.
+Built-in, local and declared EVM networks can use other tokens. For EIP-3009,
+set `asset`, `assetName`, `assetVersion` and `assetDecimals`; no USDC fields
+are inherited. [Permit2](#permit2) needs only `asset` and `assetDecimals`.
+Health fails if on-chain decimals differ from `assetDecimals`. The facilitator
+must support the token. Health checks its advertised x402 version, network
+and scheme, not token support. Solana and NEAR offers require their network's
+USDC.
+
 Overrides for the default token must match its metadata. Naming the default
 token's address is the same as omitting it, so those resources are priced in
 `USDC` or `USD` too. Payments in another token use the resource's label.
@@ -494,7 +498,9 @@ All offers use the facilitator under `payments.x402`; it must advertise their
 networks and scheme.
 
 When options use default assets, price the resource in `USD` or their shared
-token symbol. Decimal precision cannot exceed the least precise option.
+token symbol. Decimal precision cannot exceed the least precise option. Each
+option charges the resource's amount in its own token, without exchange-rate
+conversion.
 
 The proof's `accepted` echo selects an offer before verification; zero or
 multiple matches are rejected. AP2 binds to the selected destination, network
@@ -654,7 +660,7 @@ these are refused at config load, before the gateway starts:
 | `facilitator.auth.type: none` without explicit acceptance | an unauthenticated counterparty must be acknowledged       |
 | a non-HTTPS `facilitator.url`                             | authorizations and settlement results would be unencrypted |
 | a well-known Anvil `payTo` or MPP `recipient`             | its private key is public                                  |
-| an `asset` other than USDC on a built-in mainnet          | it could settle an unintended token                        |
+| an `asset` other than USDC for MPP, Solana or NEAR        | they settle only in USDC                                   |
 | the wrong USDC `assetName` or `assetVersion`              | the buyer signs that EIP-712 domain                        |
 
 The same rules apply to any non-local deployment where they make sense: plain

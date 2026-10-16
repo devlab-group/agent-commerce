@@ -99,9 +99,11 @@ Use a testnet until the user confirms mainnet.
 Recorded public settlement runs cover Base Sepolia, Base, Solana Devnet and
 Solana mainnet. NEAR remains partial: its testnet and mainnet runs used the
 suite's own facilitator, rather than a hosted service. An unknown network
-fails validation. A public built-in network accepts only its configured USDC
-profile; copy the asset fields from a matching example in
+fails validation. For a built-in network's USDC, omit asset fields or use a
+matching config in
 [examples/](https://github.com/devlab-group/agent-commerce/tree/master/examples).
+Other EVM tokens need `asset` and `assetDecimals`; EIP-3009 also needs
+`assetName` and `assetVersion`. Solana and NEAR require their network's USDC.
 
 ## Facilitator
 

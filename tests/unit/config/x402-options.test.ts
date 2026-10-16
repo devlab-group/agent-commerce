@@ -194,15 +194,56 @@ describe('asset overrides', () => {
     expect(pathOf(unknown)).toBe('payments.x402.assetTransferMethod');
   });
 
-  it('refuses another token on a public network, testnet or mainnet', () => {
-    const token = { asset: OTHER_TOKEN, assetName: 'Other', assetVersion: '1', assetDecimals: 6 };
-    expect(refusal(withX402({ ...base, ...MINIMAL, ...token })).message).toContain(
-      'is not USDC on Base Sepolia',
-    );
+  it('accepts custom tokens and price labels on built-in EVM testnets and mainnets', () => {
+    const token = { asset: OTHER_TOKEN, assetName: 'Other', assetVersion: '1', assetDecimals: 18 };
+    const price = { amount: '1.00', currency: 'EURC' };
+    const testnet = parseConfig(withX402({ ...base, ...MINIMAL, ...token }, price), {});
+    expect(testnet.payments.x402).toMatchObject({ network: 'eip155:84532', ...token });
     const mainnet = { ...base, allowMainnet: true, network: 'eip155:1', payTo: MERCHANT };
-    expect(refusal(withX402({ ...mainnet, ...token })).message).toContain(
-      'is not USDC on Ethereum',
+    expect(parseConfig(withX402({ ...mainnet, ...token }, price), {}).payments.x402).toMatchObject({
+      network: 'eip155:1',
+      ...token,
+    });
+  });
+
+  it('requires domain metadata for custom EIP-3009 tokens on built-in networks', () => {
+    const error = refusal(
+      withX402(
+        { ...base, ...MINIMAL, asset: OTHER_TOKEN, assetDecimals: 18 },
+        { amount: '1.00', currency: 'EURC' },
+      ),
     );
+    expect(error.message).toContain('a token other than USDC on Base Sepolia needs assetName');
+  });
+
+  it('rejects other tokens on Solana and NEAR', () => {
+    const { rpcUrl: _shared, ...shared } = operational();
+    const networks = {
+      'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1': { rpcUrl: 'https://solana-devnet.example' },
+      'near:testnet': { rpcUrl: 'https://near-testnet.example' },
+    };
+    const solana = {
+      network: 'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1',
+      payTo: '9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM',
+      asset: 'So11111111111111111111111111111111111111112',
+      assetDecimals: 9,
+    };
+    const near = {
+      network: 'near:testnet',
+      payTo: 'merchant.testnet',
+      asset: 'token.testnet',
+      assetDecimals: 18,
+    };
+    for (const option of [solana, near]) {
+      const error = refusal(
+        withX402(
+          { ...shared, facilitator: REMOTE, networks, options: [option] },
+          { amount: '1.00', currency: 'EURC' },
+        ),
+      );
+      expect(error.message).toContain(`Only an EVM network accepts another token`);
+      expect(pathOf(error)).toBe('payments.x402.asset');
+    }
   });
 });
 
