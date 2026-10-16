@@ -119,6 +119,46 @@ describe('receipts', () => {
     });
   });
 
+  describe('listReceipts({ undelivered: true })', () => {
+    it('matches countUndeliveredReceipts and sorts newest first', async () => {
+      const statuses = { ok1: 200, ok2: 299, bad1: 500, bad2: 199, bad3: 300, bad4: 0 };
+      let minute = 0;
+      for (const [id, backendStatus] of Object.entries(statuses)) {
+        const deliveredAt = `2026-01-01T00:0${minute++}:00.000Z`;
+        await store.saveReceipt(makeReceipt({ id, backendStatus, deliveredAt }));
+      }
+
+      const listed = await store.listReceipts({ undelivered: true });
+      expect(listed.map((r) => r.id)).toEqual(['bad4', 'bad3', 'bad2', 'bad1']);
+      expect(listed).toHaveLength(await store.countUndeliveredReceipts());
+      expect(await store.listReceipts({ undelivered: false })).toHaveLength(6);
+    });
+
+    it('finds older undelivered receipts despite the page limit', async () => {
+      const baseMs = Date.parse('2026-01-01T00:00:00.000Z');
+      await store.saveReceipt(
+        makeReceipt({ id: 'old', backendStatus: 502, deliveredAt: new Date(baseMs).toISOString() }),
+      );
+      for (let i = 1; i <= 500; i++) {
+        const deliveredAt = new Date(baseMs + i).toISOString();
+        await store.saveReceipt(makeReceipt({ id: `d${i}`, deliveredAt }));
+      }
+
+      expect((await store.listReceipts({ limit: 500 })).map((r) => r.id)).not.toContain('old');
+      expect((await store.listReceipts({ undelivered: true })).map((r) => r.id)).toEqual(['old']);
+    });
+
+    it('combines with requestId and limit', async () => {
+      await store.saveReceipt(makeReceipt({ id: 'a_ok', requestId: 'req_a' }));
+      await store.saveReceipt(makeReceipt({ id: 'a_bad', requestId: 'req_a', backendStatus: 500 }));
+      await store.saveReceipt(makeReceipt({ id: 'b_bad', requestId: 'req_b', backendStatus: 500 }));
+
+      const scoped = await store.listReceipts({ requestId: 'req_a', undelivered: true });
+      expect(scoped.map((r) => r.id)).toEqual(['a_bad']);
+      expect(await store.listReceipts({ undelivered: true, limit: 1 })).toHaveLength(1);
+    });
+  });
+
   it('round-trips optional fields (payment, protocol, metadata, authorization) exactly', async () => {
     const receipt = makeReceipt({
       id: 'r_full',

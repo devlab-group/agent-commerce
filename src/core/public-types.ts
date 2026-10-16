@@ -113,5 +113,6 @@ export type {
   ListOptions,
   PaymentAttemptReservation,
   PaymentAttemptUpdate,
+  ReceiptListOptions,
   ReceiptStore,
 } from './interfaces/store';

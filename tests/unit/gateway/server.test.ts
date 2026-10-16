@@ -1227,6 +1227,32 @@ describe('createGateway HTTP surface', () => {
     expect(eventsRes.statusCode).toBe(400);
   });
 
+  it('passes ?undelivered=true to the store and rejects invalid flags', async () => {
+    const config = makeGatewayConfig({
+      server: { ...makeGatewayConfig().server, adminToken: ADMIN_TOKEN },
+    });
+    const store = createFakeStore();
+    const listReceipts = vi.spyOn(store, 'listReceipts');
+    const gateway = await buildGateway({ config, store });
+    const get = (url: string) =>
+      gateway.server.inject({ method: 'GET', url, headers: adminHeaders(ADMIN_TOKEN) });
+
+    expect((await get('/api/receipts?undelivered=true&limit=5')).statusCode).toBe(200);
+    expect(listReceipts).toHaveBeenLastCalledWith({ limit: 5, undelivered: true });
+    await get('/api/receipts?undelivered=false');
+    expect(listReceipts).toHaveBeenLastCalledWith({});
+    await get('/api/receipts?undelivered=true&undelivered=false');
+    expect(listReceipts).toHaveBeenLastCalledWith({ undelivered: true });
+
+    listReceipts.mockClear();
+    for (const bad of ['yes', '1', '']) {
+      const res = await get(`/api/receipts?undelivered=${bad}`);
+      expect(res.statusCode).toBe(400);
+      expect(res.json().code).toBe('INPUT_INVALID');
+    }
+    expect(listReceipts).not.toHaveBeenCalled();
+  });
+
   it('.well-known shows a remote facilitator URL (never signerPrivateKey) and handles no x402 config', async () => {
     const configWithRemote = makeGatewayConfig({
       payments: {

@@ -120,6 +120,9 @@ persistence must not fail the commerce flow.
 - `GATEWAY_BUSY` is a retryable 503 used for transient load shedding.
 - `ReceiptStore` gained `countReceipts` and `countUndeliveredReceipts`; list
   results are capped and cannot provide reliable totals.
+- `ReceiptStore.listReceipts` accepts `ReceiptListOptions`; `undelivered: true`
+  filters for receipts counted by `countUndeliveredReceipts`. Custom stores that
+  ignore the flag also return delivered receipts.
 - `DeliverySummary`, `toDeliverySummary`, and `DELIVERY_SUMMARY_META_KEY` expose
   a buyer's settlement result. The key is `agent-commerce/delivery`.
 - x402 v2 changed the HTTP headers to `payment-signature`, `payment-required`,
@@ -807,7 +810,7 @@ unset `adminToken` makes operator routes return 404; an empty
 | `GET /.well-known/agent-commerce` | Publishes merchant and sanitized adapter, provider, store, and protocol metadata.                                                                                                                                                          |
 | `GET /api/resources`              | Lists canonical resources without secrets.                                                                                                                                                                                                 |
 | `POST /api/resources/:id/invoke`  | Invokes the HTTP surface. Payment and authorization use their defined headers; an unpaid request returns 402. A delivery relays the backend's status, body and text `Content-Type`; see [security.md](security.md#backend-response-relay). |
-| `GET /api/receipts?limit=`        | Lists recent receipts through the operator-token gate.                                                                                                                                                                                     |
+| `GET /api/receipts?limit=`        | Lists recent receipts behind the operator-token gate; `undelivered=true` filters for failed deliveries.                                                                                                                                    |
 | `GET /api/events?limit=`          | Lists recent events through the operator-token gate.                                                                                                                                                                                       |
 | Adapter mounts and fixed routes   | Delegated to enabled protocol adapters, with collision checks and per-mount limits.                                                                                                                                                        |
 

@@ -37,6 +37,14 @@ export interface ListOptions {
   readonly requestId?: string;
 }
 
+export interface ReceiptListOptions extends ListOptions {
+  /**
+   * When true, return only receipts counted by {@link ReceiptStore.countUndeliveredReceipts}.
+   * Stores ignoring this flag also return delivered receipts.
+   */
+  readonly undelivered?: boolean;
+}
+
 export interface ReceiptStore {
   init(): Promise<void>;
 
@@ -59,7 +67,7 @@ export interface ReceiptStore {
 
   saveReceipt(receipt: CommerceReceipt): Promise<void>;
   getReceipt(id: string): Promise<CommerceReceipt | undefined>;
-  listReceipts(options?: ListOptions): Promise<readonly CommerceReceipt[]>;
+  listReceipts(options?: ReceiptListOptions): Promise<readonly CommerceReceipt[]>;
 
   /**
    * Total receipts held. `listReceipts` clamps every page, so counting a list's

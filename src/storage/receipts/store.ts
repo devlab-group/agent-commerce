@@ -18,6 +18,7 @@ import {
   type PaymentAttempt,
   type PaymentAttemptReservation,
   type PaymentAttemptUpdate,
+  type ReceiptListOptions,
   type ReceiptStore,
   systemClock,
   toCommerceError,
@@ -51,6 +52,11 @@ function clampListLimit(limit: number | undefined): number {
   const base = limit !== undefined && Number.isFinite(limit) ? limit : DEFAULT_LIST_LIMIT;
   return Math.min(Math.max(Math.trunc(base), 1), MAX_LIST_LIMIT);
 }
+
+// Non-2xx statuses, including 0 (unknown), are undelivered, matching
+// deliveryResult() in ReceiptList.tsx. NOT NULL prevents NULL comparisons from
+// hiding rows.
+const UNDELIVERED = 'backend_status NOT BETWEEN 200 AND 299';
 
 export interface SqliteReceiptStoreOptions {
   /** File path, or ':memory:' for tests. Parent directory is created if missing */
@@ -96,14 +102,17 @@ export function createSqliteReceiptStore(options: SqliteReceiptStoreOptions): Re
   const listReceiptsByRequestStmt = db.prepare<[string, number], ReceiptRow>(
     'SELECT * FROM receipts WHERE request_id = ? ORDER BY delivered_at DESC, seq DESC LIMIT ?',
   );
+  const listUndeliveredReceiptsStmt = db.prepare<[number], ReceiptRow>(
+    `SELECT * FROM receipts WHERE ${UNDELIVERED} ORDER BY delivered_at DESC, seq DESC LIMIT ?`,
+  );
+  const listUndeliveredReceiptsByRequestStmt = db.prepare<[string, number], ReceiptRow>(
+    `SELECT * FROM receipts WHERE request_id = ? AND ${UNDELIVERED} ORDER BY delivered_at DESC, seq DESC LIMIT ?`,
+  );
   const countReceiptsStmt = db.prepare<[], { count: number }>(
     'SELECT COUNT(*) AS count FROM receipts',
   );
-  // backend_status is NOT NULL, so NOT BETWEEN cannot skip a row. 0 (no status
-  // known) and every non-2xx status count as undelivered, the same rule as the
-  // dashboard's deliveryResult() in ReceiptList.tsx.
   const countUndeliveredReceiptsStmt = db.prepare<[], { count: number }>(
-    'SELECT COUNT(*) AS count FROM receipts WHERE backend_status NOT BETWEEN 200 AND 299',
+    `SELECT COUNT(*) AS count FROM receipts WHERE ${UNDELIVERED}`,
   );
 
   const insertEventStmt = db.prepare(
@@ -290,12 +299,16 @@ export function createSqliteReceiptStore(options: SqliteReceiptStoreOptions): Re
       return row !== undefined ? rowToReceipt(row) : undefined;
     },
 
-    async listReceipts(listOptions: ListOptions = {}): Promise<readonly CommerceReceipt[]> {
+    async listReceipts(listOptions: ReceiptListOptions = {}): Promise<readonly CommerceReceipt[]> {
       const limit = clampListLimit(listOptions.limit);
+      const undelivered = listOptions.undelivered === true;
       const rows =
         listOptions.requestId !== undefined
-          ? listReceiptsByRequestStmt.all(listOptions.requestId, limit)
-          : listReceiptsStmt.all(limit);
+          ? (undelivered ? listUndeliveredReceiptsByRequestStmt : listReceiptsByRequestStmt).all(
+              listOptions.requestId,
+              limit,
+            )
+          : (undelivered ? listUndeliveredReceiptsStmt : listReceiptsStmt).all(limit);
       return rows.map(rowToReceipt);
     },
 

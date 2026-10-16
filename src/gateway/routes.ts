@@ -115,7 +115,11 @@ export function registerRoutes(options: RegisterRoutesOptions): void {
   server.get(
     '/api/receipts',
     { onRequest: tokenHook },
-    ledgerHandler('receipts', (list) => options.store.listReceipts(list)),
+    ledgerHandler('receipts', (list, query) =>
+      options.store.listReceipts(
+        parseFlag(query['undelivered'], 'undelivered') ? { ...list, undelivered: true } : list,
+      ),
+    ),
   );
   server.get(
     '/api/events',
@@ -145,12 +149,14 @@ function digestingStream(request: FastifyRequest): Transform {
 // `GET /api/receipts` and `GET /api/events`: one page of a ledger
 function ledgerHandler<K extends string>(
   key: K,
-  list: (options: { limit?: number }) => Promise<unknown>,
+  list: (options: { limit?: number }, query: Record<string, unknown>) => Promise<unknown>,
 ): (request: FastifyRequest, reply: FastifyReply) => Promise<Record<K, unknown> | undefined> {
   return async (request, reply) => {
     try {
-      const limit = parseLimit((request.query as Record<string, unknown>)['limit']);
-      return { [key]: await list(limit !== undefined ? { limit } : {}) } as Record<K, unknown>;
+      const query = request.query as Record<string, unknown>;
+      const limit = parseLimit(query['limit']);
+      const page = await list(limit !== undefined ? { limit } : {}, query);
+      return { [key]: page } as Record<K, unknown>;
     } catch (error) {
       const commerceError = toCommerceError(error);
       reply.status(commerceError.httpStatus).send(toErrorEnvelope(commerceError));
@@ -429,4 +435,15 @@ function parseLimit(value: unknown): number | undefined {
     );
   }
   return n;
+}
+
+// Invalid flags raise INPUT_INVALID so a bad filter cannot return unfiltered
+// receipts; unparseable limits use the default
+function parseFlag(value: unknown, field: string): boolean {
+  if (Array.isArray(value)) return parseFlag(value[0], field);
+  if (value === undefined || value === 'false') return false;
+  if (value === 'true') return true;
+  throw new CommerceError('INPUT_INVALID', `Query parameter "${field}" must be true or false`, {
+    details: { field },
+  });
 }

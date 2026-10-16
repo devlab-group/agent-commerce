@@ -545,7 +545,8 @@ providers must enforce budgets, per-task limits and kill switches across payment
 
 The gateway offers no escrow, refunds or chargebacks. Payments settle directly
 to the merchant; the gateway holds no buyer funds and needs no merchant wallet
-key. Refunds come from the merchant's own wallet.
+key. Refunds come from the merchant's own wallet. Use
+`GET /api/receipts?undelivered=true` to find paid purchases whose delivery failed.
 
 ## Threats we are not addressing
 
