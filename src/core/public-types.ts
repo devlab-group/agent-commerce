@@ -111,6 +111,7 @@ export type { Clock, IdGenerator } from './interfaces/runtime';
 export { systemClock } from './interfaces/runtime';
 export type {
   ListOptions,
+  PaymentAttemptListOptions,
   PaymentAttemptReservation,
   PaymentAttemptUpdate,
   ReceiptListOptions,

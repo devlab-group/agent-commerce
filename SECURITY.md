@@ -117,14 +117,14 @@ omits the bearer token, backend URLs and other private configuration. Request
 substitutes for the bearer token, so ACP must be deployed behind TLS. See
 [docs/security.md](docs/security.md#acp).
 
-**The operator routes are different.** `GET /api/receipts` and
-`GET /api/events` expose the merchant's commerce ledger: payer and payee
-addresses, amounts, settlement transaction hashes, resource ids and timings.
-That is revenue history and customer on-chain identity, not public data. They
-require `server.adminToken`, and **if no token is configured they return 404
-rather than serving openly**. The token is accepted only in the
-`Authorization` header, never as a query parameter, which `Referer`, browser
-history and intermediary logs could expose.
+**Operator routes expose private commerce records.** `GET /api/receipts`,
+`GET /api/events` and `GET /api/payment-attempts` return ledger data, including
+payer and payee addresses, amounts, settlement transaction hashes, resource IDs
+and timings. These records reveal revenue history and customers' on-chain
+identities. The routes require `server.adminToken` and return **404** when none
+is configured. They accept the token only in the `Authorization` header;
+query parameters could expose it through `Referer`, browser history and
+intermediary logs.
 
 The dashboard needs that same token to read those routes, via
 `VITE_ADMIN_TOKEN`. Because Vite inlines every `VITE_`-prefixed variable into

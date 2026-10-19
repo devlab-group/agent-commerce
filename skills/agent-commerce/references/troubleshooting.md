@@ -46,11 +46,16 @@ load optional peers, so only `start` reports a missing package.
 | 502 `PAYMENT_SETTLEMENT_FAILED`       | Settlement is uncertain. Reconcile the attempt before paying again; a missing transaction hash does not prove that nothing moved |
 | 403 `FORBIDDEN`, `Host not allowed`   | The `Host` header is neither `merchant.publicBaseUrl`'s hostname nor a loopback name. Behind a proxy, keep the `Host` header     |
 | 403 `FORBIDDEN`, `Origin not allowed` | A browser origin missing from `server.allowedOrigins`                                                                            |
-| 404 on `/api/receipts`, `/api/events` | `server.adminToken` is not set; with it, send `Authorization: Bearer <token>`                                                    |
+| 404 on an operator route              | `server.adminToken` is not set; with it, send `Authorization: Bearer <token>`                                                    |
 
 A replayed proof whose attempt already settled or was rejected gets a 402 with
 a new challenge. Every other replay gets 409 without one, because a second
 challenge could lead to a second payment.
+
+A 502 `PAYMENT_SETTLEMENT_FAILED` leaves no receipt. To reconcile the payment,
+use `GET /api/payment-attempts?uncertain=true`, which lists `settlement-uncertain`
+and legacy `failed` attempts with transaction hashes when available. This route
+requires the same operator token as `/api/receipts` and `/api/events`.
 
 If an upfront payment settled before the backend failed, the response is
 502 `BACKEND_ERROR`, including for a backend timeout. It carries the settled

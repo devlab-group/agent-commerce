@@ -3,7 +3,7 @@
  * - `buildAccessControlHook`, registered once on the server: the DNS-rebinding
  * Host check and allowlisted CORS. Neither depends on the path.
  * - `buildOperatorTokenHook`, registered on each operator route (`/api/receipts`,
- * `/api/events`): the `server.adminToken` gate.
+ * `/api/events`, `/api/payment-attempts`): the `server.adminToken` gate.
  *
  * The token gate is per route because a global hook could only compare
  * `request.url`, which is still percent-encoded, while Fastify's router

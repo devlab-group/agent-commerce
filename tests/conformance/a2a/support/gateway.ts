@@ -77,6 +77,11 @@ function createFakeStore(): ReceiptStore {
     async countUndeliveredReceipts() {
       return 0;
     },
+    async countUncertainPaymentAttempts() {
+      return [...attempts.values()].filter(
+        (a) => a.status === 'settlement-uncertain' || a.status === 'failed',
+      ).length;
+    },
     async listEvents() {
       return events;
     },

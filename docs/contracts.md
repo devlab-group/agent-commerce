@@ -123,6 +123,12 @@ persistence must not fail the commerce flow.
 - `ReceiptStore.listReceipts` accepts `ReceiptListOptions`; `undelivered: true`
   filters for receipts counted by `countUndeliveredReceipts`. Custom stores that
   ignore the flag also return delivered receipts.
+- `ReceiptStore.countUncertainPaymentAttempts` is required and counts
+  `settlement-uncertain` and legacy `failed` attempts. Uncertain settlements
+  leave no receipt, so `countUndeliveredReceipts` cannot find them.
+  `listPaymentAttempts` accepts `PaymentAttemptListOptions`; `uncertain: true`
+  filters for the same statuses. Custom stores that ignore the flag do not
+  filter by settlement status.
 - `DeliverySummary`, `toDeliverySummary`, and `DELIVERY_SUMMARY_META_KEY` expose
   a buyer's settlement result. The key is `agent-commerce/delivery`.
 - x402 v2 changed the HTTP headers to `payment-signature`, `payment-required`,
@@ -812,9 +818,10 @@ unset `adminToken` makes operator routes return 404; an empty
 | `POST /api/resources/:id/invoke`  | Invokes the HTTP surface. Payment and authorization use their defined headers; an unpaid request returns 402. A delivery relays the backend's status, body and text `Content-Type`; see [security.md](security.md#backend-response-relay). |
 | `GET /api/receipts?limit=`        | Lists recent receipts behind the operator-token gate; `undelivered=true` filters for failed deliveries.                                                                                                                                    |
 | `GET /api/events?limit=`          | Lists recent events through the operator-token gate.                                                                                                                                                                                       |
+| `GET /api/payment-attempts`       | Lists recent payment attempts behind the operator-token gate. `limit=` bounds the result size; `uncertain=true` selects `settlement-uncertain` and legacy `failed` attempts for reconciliation. |
 | Adapter mounts and fixed routes   | Delegated to enabled protocol adapters, with collision checks and per-mount limits.                                                                                                                                                        |
 
-Without `server.adminToken`, both operator routes return 404. With a token,
+Without `server.adminToken`, the operator routes return 404. With a token,
 they require `Authorization: Bearer <token>`; query-string tokens are not
 accepted.
 

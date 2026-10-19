@@ -489,9 +489,9 @@ reachable by anyone else, know the split:
 - **Agent routes** (`/api/resources/:id/invoke`, `/mcp`, the A2A mount) are
   unauthenticated by design - paid resources are protected by payment, not by a
   password. ACP is the exception: its checkout routes require a bearer token.
-- **Operator routes** (`/api/receipts`, `/api/events`) are the merchant's
-  commerce ledger: payer addresses, amounts, settlement hashes.
-  They require `server.adminToken`, and return **404** if none is configured.
+- **Operator routes** (`/api/receipts`, `/api/events`, `/api/payment-attempts`)
+  expose the merchant's commerce ledger: payer addresses, amounts and settlement
+  hashes. They require `server.adminToken` and return **404** if none is configured.
 - **Browsers** are governed by `server.allowedOrigins`, an explicit allowlist
   that defaults to empty.
 - **There is no rate limiting.** A free resource is an unauthenticated proxy to

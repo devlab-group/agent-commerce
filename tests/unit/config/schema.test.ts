@@ -1393,6 +1393,7 @@ describe('protocols.mcp.mountPath', () => {
     ['a trailing newline', '/mcp\n', 'must not contain'],
     ['a route the gateway serves', '/health', 'must not collide'],
     ['another route the gateway serves', '/api/receipts', 'must not collide'],
+    ['the payment attempts operator route', '/api/payment-attempts', 'must not collide'],
     ['a prefix of a gateway route', '/api', 'must not collide'],
     ['the root path, which is a prefix of everything', '/', 'must not collide'],
   ])('rejects %s', (_label, mountPath, message) => {

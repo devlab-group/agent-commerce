@@ -16,6 +16,7 @@ import {
   type Logger,
   NOOP_LOGGER,
   type PaymentAttempt,
+  type PaymentAttemptListOptions,
   type PaymentAttemptReservation,
   type PaymentAttemptUpdate,
   type ReceiptListOptions,
@@ -57,6 +58,9 @@ function clampListLimit(limit: number | undefined): number {
 // deliveryResult() in ReceiptList.tsx. NOT NULL prevents NULL comparisons from
 // hiding rows.
 const UNDELIVERED = 'backend_status NOT BETWEEN 200 AND 299';
+
+// Statuses needing reconciliation; see ReceiptStore.countUncertainPaymentAttempts
+const UNCERTAIN = "status IN ('settlement-uncertain', 'failed')";
 
 export interface SqliteReceiptStoreOptions {
   /** File path, or ':memory:' for tests. Parent directory is created if missing */
@@ -163,6 +167,15 @@ export function createSqliteReceiptStore(options: SqliteReceiptStoreOptions): Re
   );
   const listPaymentAttemptsByRequestStmt = db.prepare<[string, number], PaymentAttemptRow>(
     'SELECT * FROM payment_attempts WHERE request_id = ? ORDER BY created_at DESC, seq DESC LIMIT ?',
+  );
+  const listUncertainPaymentAttemptsStmt = db.prepare<[number], PaymentAttemptRow>(
+    `SELECT * FROM payment_attempts WHERE ${UNCERTAIN} ORDER BY created_at DESC, seq DESC LIMIT ?`,
+  );
+  const listUncertainPaymentAttemptsByRequestStmt = db.prepare<[string, number], PaymentAttemptRow>(
+    `SELECT * FROM payment_attempts WHERE request_id = ? AND ${UNCERTAIN} ORDER BY created_at DESC, seq DESC LIMIT ?`,
+  );
+  const countUncertainPaymentAttemptsStmt = db.prepare<[], { count: number }>(
+    `SELECT COUNT(*) AS count FROM payment_attempts WHERE ${UNCERTAIN}`,
   );
   const paymentAttemptStatusStmt = db.prepare<[string], Pick<PaymentAttemptRow, 'status'>>(
     'SELECT status FROM payment_attempts WHERE replay_key = ?',
@@ -322,6 +335,10 @@ export function createSqliteReceiptStore(options: SqliteReceiptStoreOptions): Re
       return countUndeliveredReceiptsStmt.get()?.count ?? 0;
     },
 
+    async countUncertainPaymentAttempts(): Promise<number> {
+      return countUncertainPaymentAttemptsStmt.get()?.count ?? 0;
+    },
+
     async listEvents(listOptions: ListOptions = {}): Promise<readonly CommerceEvent[]> {
       const limit = clampListLimit(listOptions.limit);
       const rows =
@@ -331,12 +348,18 @@ export function createSqliteReceiptStore(options: SqliteReceiptStoreOptions): Re
       return rows.map(rowToEvent);
     },
 
-    async listPaymentAttempts(listOptions: ListOptions = {}): Promise<readonly PaymentAttempt[]> {
+    async listPaymentAttempts(
+      listOptions: PaymentAttemptListOptions = {},
+    ): Promise<readonly PaymentAttempt[]> {
       const limit = clampListLimit(listOptions.limit);
+      const uncertain = listOptions.uncertain === true;
       const rows =
         listOptions.requestId !== undefined
-          ? listPaymentAttemptsByRequestStmt.all(listOptions.requestId, limit)
-          : listPaymentAttemptsStmt.all(limit);
+          ? (uncertain
+              ? listUncertainPaymentAttemptsByRequestStmt
+              : listPaymentAttemptsByRequestStmt
+            ).all(listOptions.requestId, limit)
+          : (uncertain ? listUncertainPaymentAttemptsStmt : listPaymentAttemptsStmt).all(limit);
       return rows.map(rowToPaymentAttempt);
     },
 

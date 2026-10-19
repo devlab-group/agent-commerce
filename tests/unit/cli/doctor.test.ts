@@ -1208,6 +1208,54 @@ describe('runDoctor: additional derivation and error-recovery branches', () => {
     expect(storage?.detail).toContain('receipts=1200');
     expect(storage?.detail).not.toContain('undelivered');
   });
+
+  // Receipt counts cannot reveal uncertain settlements
+  it('reports payments with an unknown settlement outcome and where to list them', async () => {
+    const report = await runDoctor(
+      { gatewayUrl: GATEWAY },
+      {
+        fetchImpl: healthyFetch(),
+        loadConfig: async () => makeGatewayConfig(),
+        createStore: () =>
+          makeFakeReceiptStore({
+            countReceipts: async () => 1200,
+            countUncertainPaymentAttempts: async () => 3,
+          }),
+      },
+    );
+    const storage = report.checks.find((c) => c.name === 'Storage');
+    expect(storage?.status).toBe('PASS');
+    expect(storage?.detail).toContain(
+      '3 payment(s) with unknown settlement outcome, see GET /api/payment-attempts?uncertain=true',
+    );
+  });
+
+  it.each([
+    ['is 0', async () => 0],
+    [
+      'throws',
+      async () => {
+        throw new Error('countUncertainPaymentAttempts boom');
+      },
+    ],
+  ])('omits the uncertain payments note when the count %s', async (_label, count) => {
+    const report = await runDoctor(
+      { gatewayUrl: GATEWAY },
+      {
+        fetchImpl: healthyFetch(),
+        loadConfig: async () => makeGatewayConfig(),
+        createStore: () =>
+          makeFakeReceiptStore({
+            countReceipts: async () => 1200,
+            countUncertainPaymentAttempts: count,
+          }),
+      },
+    );
+    const storage = report.checks.find((c) => c.name === 'Storage');
+    expect(storage?.status).toBe('PASS');
+    expect(storage?.detail).toContain('receipts=1200');
+    expect(storage?.detail).not.toContain('settlement outcome');
+  });
 });
 
 describe('runDoctor: local chain manifest fill (docker vs. host env parity)', () => {

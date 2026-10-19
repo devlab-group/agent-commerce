@@ -45,6 +45,14 @@ export interface ReceiptListOptions extends ListOptions {
   readonly undelivered?: boolean;
 }
 
+export interface PaymentAttemptListOptions extends ListOptions {
+  /**
+   * When true, return only attempts counted by {@link ReceiptStore.countUncertainPaymentAttempts}.
+   * Stores that ignore this flag do not filter by settlement status.
+   */
+  readonly uncertain?: boolean;
+}
+
 export interface ReceiptStore {
   init(): Promise<void>;
 
@@ -86,8 +94,17 @@ export interface ReceiptStore {
    * notice, because settlement is final and the gateway issues no refunds.
    */
   countUndeliveredReceipts(): Promise<number>;
+
+  /**
+   * Counts `settlement-uncertain` and legacy `failed` payment attempts.
+   * Funds may have moved, but the pipeline withholds delivery and writes no
+   * receipt for an uncertain settlement. {@link countUndeliveredReceipts}
+   * therefore misses these attempts. Reconcile them on chain using
+   * `externalReference` when it holds a transaction hash.
+   */
+  countUncertainPaymentAttempts(): Promise<number>;
   listEvents(options?: ListOptions): Promise<readonly CommerceEvent[]>;
-  listPaymentAttempts(options?: ListOptions): Promise<readonly PaymentAttempt[]>;
+  listPaymentAttempts(options?: PaymentAttemptListOptions): Promise<readonly PaymentAttempt[]>;
 
   readonly descriptor: AdapterDescriptor;
   health(): Promise<AdapterHealth>;

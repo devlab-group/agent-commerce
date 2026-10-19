@@ -22,9 +22,10 @@ server:
   port: ${GATEWAY_PORT}
   host: 0.0.0.0
 
-  # Required to serve the operator routes (/api/receipts, /api/events). If
-  # unset they return 404 rather than serving the merchant's commerce ledger
-  # openly. Use a real secret in any deployment reachable by anyone else.
+  # Required for /api/receipts, /api/events and /api/payment-attempts.
+  # These routes expose the merchant's commerce ledger and return 404
+  # when this token is unset. Use a real secret if anyone else can reach
+  # the deployment.
   adminToken: ${ADMIN_TOKEN}
 
   # Browser origins permitted to read the gateway. Empty (the default) means

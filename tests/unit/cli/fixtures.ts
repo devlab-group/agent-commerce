@@ -95,6 +95,7 @@ export function makeFakeReceiptStore(overrides: Partial<ReceiptStore> = {}): Rec
     listReceipts: overrides.listReceipts ?? (async () => []),
     countReceipts: overrides.countReceipts ?? (async () => 0),
     countUndeliveredReceipts: overrides.countUndeliveredReceipts ?? (async () => 0),
+    countUncertainPaymentAttempts: overrides.countUncertainPaymentAttempts ?? (async () => 0),
     listEvents: overrides.listEvents ?? (async () => []),
     listPaymentAttempts: overrides.listPaymentAttempts ?? (async () => []),
     descriptor: overrides.descriptor ?? {

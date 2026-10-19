@@ -467,3 +467,112 @@ describe('updatePaymentAttempt', () => {
     ).rejects.toSatisfy((err: unknown) => isCommerceError(err) && err.code === 'STORAGE_ERROR');
   });
 });
+
+// Keep uncertain attempts visible even when settlement produces no receipt
+describe('uncertain payment attempts', () => {
+  let store: ReceiptStore;
+
+  beforeEach(async () => {
+    store = createSqliteReceiptStore({
+      path: ':memory:',
+      clock: createFakeClock(),
+      ids: createFakeIds(),
+    });
+    await store.init();
+  });
+
+  afterEach(async () => {
+    await store.close();
+  });
+
+  // One attempt per status, reserved in this order, so the newest is last
+  async function seedEveryStatus(): Promise<void> {
+    const statuses = [
+      'reserved',
+      'verified',
+      'settled',
+      'rejected',
+      'failed',
+      'settlement-uncertain',
+    ] as const;
+    for (const status of statuses) {
+      await store.reservePaymentAttempt(
+        makeReservation({ replayKey: status, requestId: `req_${status}` }),
+      );
+      if (status !== 'reserved') await store.updatePaymentAttempt({ replayKey: status, status });
+    }
+  }
+
+  it('is zero on an empty store', async () => {
+    expect(await store.countUncertainPaymentAttempts()).toBe(0);
+    expect(await store.listPaymentAttempts({ uncertain: true })).toEqual([]);
+  });
+
+  it('counts and lists settlement-uncertain and legacy failed attempts only, newest first', async () => {
+    await seedEveryStatus();
+
+    expect(await store.countUncertainPaymentAttempts()).toBe(2);
+    const listed = await store.listPaymentAttempts({ uncertain: true });
+    expect(listed.map((a) => a.status)).toEqual(['settlement-uncertain', 'failed']);
+    expect(await store.listPaymentAttempts({ uncertain: false })).toHaveLength(6);
+  });
+
+  it('returns the transaction hash an uncertain settlement recorded', async () => {
+    await store.reservePaymentAttempt(makeReservation({ replayKey: 'pending', payer: '0xbuyer' }));
+    await store.updatePaymentAttempt({
+      replayKey: 'pending',
+      status: 'settlement-uncertain',
+      externalReference: '0xpending',
+    });
+
+    const [attempt] = await store.listPaymentAttempts({ uncertain: true });
+    expect(attempt).toMatchObject({
+      replayKey: 'pending',
+      status: 'settlement-uncertain',
+      externalReference: '0xpending',
+      payer: '0xbuyer',
+      amount: '0.01',
+      currency: 'USDC',
+    });
+  });
+
+  it('combines with requestId and limit', async () => {
+    await seedEveryStatus();
+    await store.reservePaymentAttempt(
+      makeReservation({ replayKey: 'second-uncertain', requestId: 'req_failed' }),
+    );
+    await store.updatePaymentAttempt({
+      replayKey: 'second-uncertain',
+      status: 'settlement-uncertain',
+    });
+
+    const scoped = await store.listPaymentAttempts({ requestId: 'req_failed', uncertain: true });
+    expect(scoped.map((a) => a.replayKey)).toEqual(['second-uncertain', 'failed']);
+    expect(await store.listPaymentAttempts({ requestId: 'req_settled', uncertain: true })).toEqual(
+      [],
+    );
+    expect(await store.listPaymentAttempts({ uncertain: true, limit: 1 })).toHaveLength(1);
+  });
+
+  it('counts exactly above the list clamp (500)', async () => {
+    for (let i = 0; i < 600; i++) {
+      await store.reservePaymentAttempt(makeReservation({ replayKey: `u${i}` }));
+      await store.updatePaymentAttempt({ replayKey: `u${i}`, status: 'settlement-uncertain' });
+    }
+    expect(await store.countUncertainPaymentAttempts()).toBe(600);
+  });
+
+  it('finds an old uncertain attempt that a full page of newer attempts hides', async () => {
+    await store.reservePaymentAttempt(makeReservation({ replayKey: 'old' }));
+    await store.updatePaymentAttempt({ replayKey: 'old', status: 'settlement-uncertain' });
+    for (let i = 0; i < 500; i++) {
+      await store.reservePaymentAttempt(makeReservation({ replayKey: `settled_${i}` }));
+      await store.updatePaymentAttempt({ replayKey: `settled_${i}`, status: 'settled' });
+    }
+
+    const page = await store.listPaymentAttempts({ limit: 500 });
+    expect(page.map((a) => a.replayKey)).not.toContain('old');
+    const uncertain = await store.listPaymentAttempts({ uncertain: true, limit: 500 });
+    expect(uncertain.map((a) => a.replayKey)).toEqual(['old']);
+  });
+});

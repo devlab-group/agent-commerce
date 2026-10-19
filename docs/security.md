@@ -160,7 +160,7 @@ pass the `server.allowedOrigins` check, whose default is empty.
 | `/mcp`                                                         | Agents    | None; available when MCP is enabled; paid resources require payment. |
 | `GET /api/resources`, `/health`, `/.well-known/agent-commerce` | Public    | None.                                                                |
 | `GET /ready`                                                   | Operators | None; it returns fixed status vocabulary rather than raw details.    |
-| `GET /api/receipts`, `/api/events`                             | Operators | `server.adminToken`, compared in constant time.                      |
+| `GET /api/receipts`, `/api/events`, `/api/payment-attempts`    | Operators | `server.adminToken`, compared in constant time.                      |
 | `GET /.well-known/agent-card.json`                             | Public    | None; available when A2A is enabled.                                 |
 | `/a2a`                                                         | Agents    | None; available when A2A is enabled; paid resources require payment. |
 | `GET /.well-known/acp.json`                                    | Public    | None; it omits private configuration.                                |
@@ -550,6 +550,11 @@ The gateway offers no escrow, refunds or chargebacks. Payments settle directly
 to the merchant; the gateway holds no buyer funds and needs no merchant wallet
 key. Refunds come from the merchant's own wallet. Use
 `GET /api/receipts?undelivered=true` to find paid purchases whose delivery failed.
+
+An uncertain settlement leaves no receipt even though funds may have moved.
+Use `GET /api/payment-attempts?uncertain=true` to list `settlement-uncertain`
+and legacy `failed` attempts for reconciliation. Check each on chain using its
+transaction hash when available. `doctor` reports the count when it is nonzero.
 
 ## Threats we are not addressing
 

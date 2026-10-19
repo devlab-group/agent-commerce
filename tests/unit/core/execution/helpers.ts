@@ -157,6 +157,11 @@ export function createFakeStore(options: FakeStoreOptions = {}): FakeStore {
     async countUndeliveredReceipts() {
       return receipts.filter((r) => r.backendStatus < 200 || r.backendStatus > 299).length;
     },
+    async countUncertainPaymentAttempts() {
+      return [...attempts.values()].filter(
+        (a) => a.status === 'settlement-uncertain' || a.status === 'failed',
+      ).length;
+    },
     async listEvents() {
       return events;
     },

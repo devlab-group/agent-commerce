@@ -126,6 +126,15 @@ export function registerRoutes(options: RegisterRoutesOptions): void {
     { onRequest: tokenHook },
     ledgerHandler('events', (list) => options.store.listEvents(list)),
   );
+  server.get(
+    '/api/payment-attempts',
+    { onRequest: tokenHook },
+    ledgerHandler('paymentAttempts', (list, query) =>
+      options.store.listPaymentAttempts(
+        parseFlag(query['uncertain'], 'uncertain') ? { ...list, uncertain: true } : list,
+      ),
+    ),
+  );
 }
 
 // Keep a digest of each invoke body's original bytes through parsing.
@@ -146,7 +155,7 @@ function digestingStream(request: FastifyRequest): Transform {
   });
 }
 
-// `GET /api/receipts` and `GET /api/events`: one page of a ledger
+// Return one page from an operator ledger: receipts, events or payment attempts
 function ledgerHandler<K extends string>(
   key: K,
   list: (options: { limit?: number }, query: Record<string, unknown>) => Promise<unknown>,
@@ -437,8 +446,7 @@ function parseLimit(value: unknown): number | undefined {
   return n;
 }
 
-// Invalid flags raise INPUT_INVALID so a bad filter cannot return unfiltered
-// receipts; unparseable limits use the default
+// Reject invalid flags with INPUT_INVALID rather than returning an unfiltered list
 function parseFlag(value: unknown, field: string): boolean {
   if (Array.isArray(value)) return parseFlag(value[0], field);
   if (value === undefined || value === 'false') return false;

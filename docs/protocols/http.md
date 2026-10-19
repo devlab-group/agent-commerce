@@ -8,6 +8,7 @@
 | `GET /api/resources`                               | canonical resource list                                    |
 | `POST /api/resources/:id/invoke`                   | invoke; returns 402 when proof is absent                   |
 | `GET /api/receipts`, `GET /api/events`             | operator audit                                             |
+| `GET /api/payment-attempts`                        | operator payment ledger; `?uncertain=true` for reconciliation |
 | `/mcp`                                             | MCP Streamable HTTP when enabled                           |
 | `/.well-known/agent-card.json`, `/a2a`             | A2A discovery and JSON-RPC when enabled                    |
 | `/.well-known/acp.json`, `/acp/checkout_sessions…` | ACP discovery and checkout when enabled                    |

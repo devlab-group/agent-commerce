@@ -1253,6 +1253,101 @@ describe('createGateway HTTP surface', () => {
     expect(listReceipts).not.toHaveBeenCalled();
   });
 
+  // This route exposes uncertain settlements that receipt queries cannot find
+  it('lists an uncertain settlement at /api/payment-attempts?uncertain=true, with its transaction hash', async () => {
+    const { CommerceError } = await import('../../../src/core');
+    const { createSqliteReceiptStore } = await import('../../../src/storage/receipts');
+    const config = makeGatewayConfig({
+      server: { ...makeGatewayConfig().server, adminToken: ADMIN_TOKEN },
+    });
+    const store = createSqliteReceiptStore({
+      path: ':memory:',
+      clock: createFakeClock(),
+      ids: createFakeIdGenerator(),
+    });
+    await store.init();
+    let payments = 0;
+    const provider = x402Provider({
+      verify: async () => ({
+        status: 'verified',
+        provider: 'x402',
+        amount: '0.01',
+        currency: 'USDC',
+        replayKey: `replay-${++payments}`,
+      }),
+      settle: async (ctx) => {
+        if (ctx.verification.replayKey === 'replay-1') {
+          throw new CommerceError('PAYMENT_PROVIDER_UNAVAILABLE', 'broadcast, not confirmed', {
+            details: { transactionHash: '0xabc' },
+          });
+        }
+        return { status: 'settled', provider: 'x402', amount: '0.01', currency: 'USDC' };
+      },
+    });
+    const gateway = await buildGateway({ config, store, paymentProviders: [provider] });
+    expect((await invokePaid(gateway)).statusCode).toBe(502);
+    expect((await invokePaid(gateway)).statusCode).toBe(200);
+    const get = (url: string) =>
+      gateway.server.inject({ method: 'GET', url, headers: adminHeaders(ADMIN_TOKEN) });
+
+    const all = await get('/api/payment-attempts');
+    expect(all.statusCode).toBe(200);
+    expect(
+      all
+        .json()
+        .paymentAttempts.map((a: { replayKey: string; status: string }) => [a.replayKey, a.status]),
+    ).toEqual([
+      ['replay-2', 'settled'],
+      ['replay-1', 'settlement-uncertain'],
+    ]);
+
+    const uncertain = await get('/api/payment-attempts?uncertain=true');
+    expect(uncertain.statusCode).toBe(200);
+    expect(uncertain.json().paymentAttempts).toEqual([
+      expect.objectContaining({
+        replayKey: 'replay-1',
+        resourceId: 'market_report',
+        status: 'settlement-uncertain',
+        externalReference: '0xabc',
+        amount: '0.01',
+        currency: 'USDC',
+      }),
+    ]);
+  });
+
+  it('gates /api/payment-attempts like the other operator routes', async () => {
+    const closed = await buildGateway();
+    expect(
+      (await closed.server.inject({ method: 'GET', url: '/api/payment-attempts' })).statusCode,
+    ).toBe(404);
+
+    const config = makeGatewayConfig({
+      server: { ...makeGatewayConfig().server, adminToken: ADMIN_TOKEN },
+    });
+    const store = createFakeStore();
+    const listPaymentAttempts = vi.spyOn(store, 'listPaymentAttempts');
+    const gateway = await buildGateway({ config, store });
+    const get = (url: string, token?: string) =>
+      gateway.server.inject({
+        method: 'GET',
+        url,
+        ...(token !== undefined ? { headers: adminHeaders(token) } : {}),
+      });
+
+    expect((await get('/api/payment-attempts?uncertain=true')).statusCode).toBe(401);
+    expect((await get('/api/payment-attempts?uncertain=true', 'not-the-token')).statusCode).toBe(
+      401,
+    );
+    expect(listPaymentAttempts).not.toHaveBeenCalled();
+
+    for (const bad of ['yes', '1', '']) {
+      const res = await get(`/api/payment-attempts?uncertain=${bad}`, ADMIN_TOKEN);
+      expect(res.statusCode).toBe(400);
+      expect(res.json().code).toBe('INPUT_INVALID');
+    }
+    expect(listPaymentAttempts).not.toHaveBeenCalled();
+  });
+
   it('.well-known shows a remote facilitator URL (never signerPrivateKey) and handles no x402 config', async () => {
     const configWithRemote = makeGatewayConfig({
       payments: {

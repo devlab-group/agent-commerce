@@ -97,16 +97,27 @@ export async function storageChecks(
       } catch {
         undeliveredCount = undefined;
       }
+      let uncertainCount: number | undefined;
+      try {
+        // Count uncertain settlements separately because they produce no receipt
+        uncertainCount = await store.countUncertainPaymentAttempts();
+      } catch {
+        uncertainCount = undefined;
+      }
       const status: CheckStatus =
         storeHealth.status === 'pass' ? 'PASS' : storeHealth.status === 'warn' ? 'WARN' : 'FAIL';
       const receiptsSuffix =
         receiptCount !== undefined
           ? `; receipts=${receiptCount}${undeliveredCount !== undefined && undeliveredCount > 0 ? ` (${undeliveredCount} undelivered)` : ''}`
           : '';
+      const uncertainSuffix =
+        uncertainCount !== undefined && uncertainCount > 0
+          ? `; ${uncertainCount} payment(s) with unknown settlement outcome, see GET /api/payment-attempts?uncertain=true`
+          : '';
       checks.push({
         name: 'Storage',
         status,
-        detail: `${storeHealth.detail ?? 'sqlite'}${receiptsSuffix}`,
+        detail: `${storeHealth.detail ?? 'sqlite'}${receiptsSuffix}${uncertainSuffix}`,
       });
     } catch (err) {
       checks.push({

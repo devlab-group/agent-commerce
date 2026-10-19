@@ -30,9 +30,9 @@ server:
   # 0.0.0.0 inside the container; docker-compose publishes to 127.0.0.1 only
   host: 0.0.0.0
 
-  # Operator routes (/api/receipts, /api/events) expose the merchant's
-  # commerce ledger. They require this token and return 404 when it is unset,
-  # so a missing token never reads as "no restriction".
+  # Operator routes (/api/receipts, /api/events, /api/payment-attempts)
+  # expose the merchant's commerce ledger and require this token.
+  # Without it, they return 404.
   adminToken: ${ADMIN_TOKEN:-local-demo-admin-token}
 
   # Explicit allowlist; empty means no browser may read any route. Agent
