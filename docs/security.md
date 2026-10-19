@@ -556,6 +556,12 @@ Use `GET /api/payment-attempts?uncertain=true` to list `settlement-uncertain`
 and legacy `failed` attempts for reconciliation. Check each on chain using its
 transaction hash when available. `doctor` reports the count when it is nonzero.
 
+The gateway attempts to save a receipt before sending the response. If the
+connection then drops, a saved receipt for a successful backend call still
+counts as delivered and is excluded from `?undelivered=true`. The gateway does
+not redeliver the response or accept the settled payment proof again. The
+buyer must pay for a new request or ask the merchant for a refund.
+
 ## Threats we are not addressing
 
 Buyer identity and screening · fraud and disputes · refunds and chargebacks ·
