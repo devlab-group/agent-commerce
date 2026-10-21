@@ -18,7 +18,7 @@ Two things are structurally different from the local and testnet examples:
 
 |                                    |                                                                                                                                                          |
 | ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `MERCHANT_WALLET`                  | your wallet. Address only: the gateway never takes a merchant key.                                                                                       |
+| `MERCHANT_WALLET`                  | your wallet. Address only: the gateway never takes a merchant key. See [Paying into a contract](#paying-into-a-contract-address). |
 | `ALLOW_X402_MAINNET=true`          | the explicit opt-in. Never a default.                                                                                                                    |
 | CDP credentials, or a bearer token | `cdp` requires the optional `@coinbase/x402` peer and CDP's URL, already configured. `bearer` needs no extra package; set its facilitator's https `url`. |
 | `ADMIN_TOKEN`                      | required here: it guards the receipt routes, which carry your ledger.                                                                                    |
@@ -26,6 +26,19 @@ Two things are structurally different from the local and testnet examples:
 
 To run without a facilitator credential, see [base-mainnet-payai](../base-mainnet-payai/),
 which sets `allowUnauthenticatedFacilitator`.
+
+## Paying into a contract address
+
+`MERCHANT_WALLET` only becomes the x402 `payTo`, so it doesn't need to be an
+EOA. It can be a contract that holds USDC, for example a revenue-split contract
+on Base. USDC's EIP-3009 `transferWithAuthorization` credits `to` as a plain
+token transfer and never calls the recipient, so a contract with no special
+receive logic still gets paid. Two caveats:
+
+- The contract can't sign anything, so set it only where an address is
+  expected. Don't use it as a key or a signer.
+- Make sure the contract can move USDC onward (for a split, its distribute
+  function). Otherwise the funds stay at that address.
 
 ## Validate before anything else
 
