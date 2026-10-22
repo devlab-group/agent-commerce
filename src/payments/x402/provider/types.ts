@@ -1,6 +1,6 @@
 // Provider options, the offers resolved from them, and the state the modules share
 import type { Network } from '@x402/core/types';
-import type { Clock, IdGenerator, Logger } from '../../../core';
+import type { Clock, IdGenerator, Logger, PaymentProvider } from '../../../core';
 import type { createLocalPublicClient } from '../chain';
 import type { FacilitatorBinding } from '../facilitator';
 import type { X402FacilitatorConfig } from '../guardrails';
@@ -55,6 +55,20 @@ export interface X402ProviderOptions extends X402OfferOptions {
   readonly logger?: Logger;
   readonly clock?: Clock;
   readonly ids?: IdGenerator;
+}
+
+/** x402 payment provider with optional public quote metadata */
+export interface X402PaymentProvider extends PaymentProvider {
+  /**
+   * Experimental. Present when ERC-8409 quote signing is enabled.
+   * Publishes the issuer address for signature checks, the request scheme and
+   * the key under `PaymentRequired.extensions`.
+   */
+  readonly quote?: {
+    readonly issuer: `0x${string}`;
+    readonly requestScheme: string;
+    readonly extension: string;
+  };
 }
 
 /** Settlement network, token and merchant payee for one offer */

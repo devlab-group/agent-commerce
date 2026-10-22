@@ -336,6 +336,14 @@ const X402Schema = z
     allowMainnet: BooleanOrString.optional(),
     // Accepts credential-free facilitator access on mainnet. Never defaulted
     allowUnauthenticatedFacilitator: BooleanOrString.optional(),
+    // Experimental ERC-8409 quotes; signing a quote transfers no funds
+    quote: z
+      .object({
+        enabled: BooleanOrString,
+        signerPrivateKey: z.string().min(1).optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 

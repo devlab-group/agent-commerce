@@ -104,6 +104,11 @@ export interface GatewayConfig {
        * Absent when no resource overrides its offers.
        */
       readonly resourceOptions?: Readonly<Record<string, readonly X402OptionConfig[]>>;
+      /**
+       * Experimental ERC-8409 quotes. Config loading includes this field only
+       * when `quote.enabled` is true. The signing key must not hold funds.
+       */
+      readonly quote?: { readonly signerPrivateKey: string };
     };
     readonly mpp?: {
       readonly enabled: boolean;

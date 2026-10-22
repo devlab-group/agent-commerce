@@ -11,6 +11,7 @@ import { randomBytes } from 'node:crypto';
 import { type Hex, keccak256, stringToBytes } from 'viem';
 import { type PrivateKeyAccount, privateKeyToAccount } from 'viem/accounts';
 import { type Clock, CommerceError } from '../../../core';
+import { canonicalJson } from '../../../core/canonical-json';
 import { isWellKnownDevKey } from '../dev-key-guard';
 import type { DeploymentMode } from '../networks';
 import type { EvmOffer, Offer } from './types';
@@ -229,37 +230,8 @@ export function createQuoteIssuer(options: {
   };
 }
 
-// With the `u` flag, a valid surrogate pair is one code point, so this pattern
-// matches only lone surrogates
-const LONE_SURROGATE = /\p{Cs}/u;
-
 /** Hash under {@link QUOTE_REQUEST_SCHEME}, or undefined when canonicalJson rejects the request */
 export function quoteRequestHash(resourceId: string, input: unknown): Hex | undefined {
   const canonical = canonicalJson({ input, resource: resourceId });
   return canonical === undefined ? undefined : keccak256(stringToBytes(canonical));
-}
-
-/**
- * Serializes JSON data using RFC 8785 (JCS) rules. Non-finite numbers, lone
- * surrogates and unsupported primitive values return undefined.
- * JSON.stringify supplies number formatting and string escaping; the default
- * sort orders keys by UTF-16 code units.
- */
-export function canonicalJson(value: unknown): string | undefined {
-  if (typeof value === 'string')
-    return LONE_SURROGATE.test(value) ? undefined : JSON.stringify(value);
-  if (typeof value === 'number') return Number.isFinite(value) ? JSON.stringify(value) : undefined;
-  if (value === null || typeof value === 'boolean') return JSON.stringify(value);
-  if (Array.isArray(value)) {
-    const items = value.map(canonicalJson);
-    return items.includes(undefined) ? undefined : `[${items.join(',')}]`;
-  }
-  if (typeof value !== 'object') return undefined;
-  const members: string[] = [];
-  for (const key of Object.keys(value).sort()) {
-    const member = canonicalJson((value as Record<string, unknown>)[key]);
-    if (member === undefined || LONE_SURROGATE.test(key)) return undefined;
-    members.push(`${JSON.stringify(key)}:${member}`);
-  }
-  return `{${members.join(',')}}`;
 }

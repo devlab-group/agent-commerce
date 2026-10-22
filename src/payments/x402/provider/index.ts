@@ -10,14 +10,14 @@
  * `../facilitator.ts`): the SDK's own `x402Facilitator` in this process, or a
  * remote HTTP facilitator.
  */
-import type { AdapterDescriptor, PaymentProvider } from '../../../core';
+import type { AdapterDescriptor } from '../../../core';
 import { CommerceError, NOOP_LOGGER, systemClock } from '../../../core';
 import { PACKAGE_VERSION } from '../../../version';
 import { DEFAULT_IDS, DEFAULT_MAX_TIMEOUT_SECONDS, X402_VERSION } from './constants';
 import { createSvmFeePayerSource } from './fee-payer';
 import { createHealthCheck } from './health';
 import { resolveOffers } from './offers';
-import { createQuoteIssuer } from './quote';
+import { createQuoteIssuer, QUOTE_EXTENSION, QUOTE_REQUEST_SCHEME } from './quote';
 import { createRequirementBuilders } from './requirement';
 import { createSettle } from './settle';
 import type {
@@ -25,16 +25,22 @@ import type {
   ProviderContext,
   X402MultiOfferProviderOptions,
   X402OfferOptions,
+  X402PaymentProvider,
   X402ProviderOptions,
 } from './types';
 import { createVerify } from './verify';
 
 export { DEFAULT_IDS } from './constants';
-export type { X402MultiOfferProviderOptions, X402OfferOptions, X402ProviderOptions } from './types';
+export type {
+  X402MultiOfferProviderOptions,
+  X402OfferOptions,
+  X402PaymentProvider,
+  X402ProviderOptions,
+} from './types';
 
 export function createX402PaymentProvider(
   options: X402ProviderOptions | X402MultiOfferProviderOptions,
-): PaymentProvider {
+): X402PaymentProvider {
   const inputs: readonly X402OfferOptions[] = 'offers' in options ? options.offers : [options];
   if (inputs.length === 0) {
     throw new CommerceError('CONFIG_INVALID', 'x402 provider: "offers" is empty');
@@ -159,6 +165,15 @@ export function createX402PaymentProvider(
     verify,
     settle,
     health,
+    ...(quotes
+      ? {
+          quote: {
+            issuer: quotes.issuer,
+            requestScheme: QUOTE_REQUEST_SCHEME,
+            extension: QUOTE_EXTENSION,
+          },
+        }
+      : {}),
   };
 }
 

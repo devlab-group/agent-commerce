@@ -28,6 +28,7 @@ import {
 } from '../payments/x402/networks';
 import { x402OfferName } from '../payments/x402/options';
 import { X402_DEFAULT_PAYMENT_FLOW, type X402PaymentFlow } from '../payments/x402/payment-flow';
+import type { X402PaymentProvider } from '../payments/x402/provider/types';
 import { PACKAGE_VERSION } from '../version';
 import type { ProbedAdapter, ProbedProvider } from './readiness';
 
@@ -88,6 +89,8 @@ export interface WellKnownDocument {
       readonly options?: readonly WellKnownX402Offer[];
       /** Resource offer overrides by id, replacing the rail's offers */
       readonly resourceOptions?: Readonly<Record<string, readonly WellKnownX402Offer[]>>;
+      /** Absent unless the x402 provider signs ERC-8409 quotes */
+      readonly quote?: WellKnownX402Quote;
     };
     /** Public settlement fields; excludes the challenge secret and facilitator credentials */
     readonly mpp?: {
@@ -119,6 +122,18 @@ export interface WellKnownX402Offer {
   readonly assetTransferMethod?: 'permit2';
   /** Last reported health status, excluding diagnostic detail */
   readonly status?: AdapterHealth['status'];
+}
+
+/**
+ * Public metadata for authenticating this provider's quotes.
+ * Verify each quote's signature against the advertised `issuer`.
+ */
+export interface WellKnownX402Quote {
+  readonly issuer: string;
+  readonly requestScheme: string;
+  /** The key in `PaymentRequired.extensions` that carries the quotes */
+  readonly extension: string;
+  readonly status: 'experimental';
 }
 
 export interface BuildWellKnownOptions {
@@ -182,6 +197,16 @@ function flowOverrides(flows: Readonly<Record<string, X402PaymentFlow>> | undefi
     : {};
 }
 
+// Use the provider's quote metadata so discovery advertises its signing issuer
+function publicQuote(providers: readonly PaymentProvider[]): WellKnownX402Quote | undefined {
+  const x402 = providers.find((provider) => provider.name === 'x402') as
+    | X402PaymentProvider
+    | undefined;
+  if (x402?.quote === undefined) return undefined;
+  const { issuer, requestScheme, extension } = x402.quote;
+  return { issuer, requestScheme, extension, status: 'experimental' };
+}
+
 export function buildWellKnownDocument(options: BuildWellKnownOptions): WellKnownDocument {
   const adapters = options.adapters.map(({ descriptor, health }) => ({
     ...descriptor,
@@ -193,6 +218,7 @@ export function buildWellKnownDocument(options: BuildWellKnownOptions): WellKnow
   const offerStatuses = new Map(
     (x402Health?.components ?? []).map((component) => [component.name, component.status]),
   );
+  const quote = publicQuote(options.paymentProviders);
 
   return {
     gateway: {
@@ -241,6 +267,7 @@ export function buildWellKnownDocument(options: BuildWellKnownOptions): WellKnow
                     ),
                   }
                 : {}),
+              ...(quote !== undefined ? { quote } : {}),
             },
           }
         : {}),
