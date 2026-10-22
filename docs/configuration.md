@@ -530,6 +530,50 @@ own tokens and decimals. Config load rejects empty lists, repeated entries,
 and `x402.accepts` on free resources, without `x402` in `payments`, or without
 `payments.x402`.
 
+### ERC-8409 quotes
+
+Experimental and disabled by default. Enable
+[ERC-8409 quotes](protocols/x402.md#erc-8409-signed-quotes) to sign EVM offers
+in x402 challenges.
+
+```yaml
+payments:
+  x402:
+    quote:
+      enabled: true
+      signerPrivateKey: ${X402_QUOTE_SIGNER_KEY} # dedicated; holds no funds
+```
+
+Use a dedicated key that signs nothing else and holds no funds. Never reuse a
+merchant's or buyer's key. Anyone with the key can sign quotes as the merchant;
+signing a quote does not transfer funds. The gateway keeps the key in memory
+and publishes the issuer address.
+
+When `enabled` is true, `signerPrivateKey` is required. `validate` checks that
+it is a nonempty string; the provider checks the key during construction.
+Construction fails with `CONFIG_INVALID` for a malformed key, a well-known
+Anvil key outside the local chain, a key matching an EVM `payTo`, or a provider
+with no EVM offer. Restart the gateway after rotating the key. `doctor`
+compares the configured key's address with the published issuer to detect a
+gateway still using the old key.
+
+Quotes increase header sizes. Each quoted offer adds about 0.9 KB of base64
+to `PAYMENT-REQUIRED`, plus about 1 KB for the extension's schema. A small
+challenge grows from roughly 0.6 KB to 2.5 KB with one offer, or 4.9 KB with
+three; sizes vary with the offer and resource metadata.
+
+Behind nginx, size
+[`proxy_buffer_size`](https://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_buffer_size)
+to fit the response headers. Its default is one 4 or 8 KB memory page;
+oversized headers cause nginx to reject the response. SDK clients echo quotes
+in `PAYMENT-SIGNATURE`, which can reach about 7.4 KB with six quoted offers.
+This approaches nginx's default 8 KB limit for a single request header field,
+set by
+[`large_client_header_buffers`](https://nginx.org/en/docs/http/ngx_http_core_module.html#large_client_header_buffers).
+
+Each cache miss requires a signature per EVM offer. Rate-limit unpaid requests
+at the edge; see [Denial of service](security.md#denial-of-service).
+
 ### `payments.mpp`
 
 MPP accepts the `USDC` currency label on the local chain `eip155:31337`, Base

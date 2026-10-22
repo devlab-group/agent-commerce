@@ -149,7 +149,9 @@ export async function runDoctor(
   // 5-7. Protocols, AP2, payments and storage
   checks.push(...protocolChecks(config, wellKnown));
   checks.push(...ap2Checks(config));
-  checks.push(...paymentChecks(config, wellKnown, gatewayUrl, chainDeploy));
+  checks.push(
+    ...(await paymentChecks(config, wellKnown, gatewayUrl, chainDeploy, deps.loadViemAccounts)),
+  );
   checks.push(...(await storageChecks(config, createStore)));
 
   // 8. Protocol versions

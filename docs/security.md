@@ -21,7 +21,8 @@ page describes the gateway's trust boundaries, controls, and known limits.
 Agent input is untrusted. Configuration and environment variables are trusted
 operator input, so only they may select backend URLs. The payment flow needs
 no buyer or merchant key; local facilitator mode holds a separate key that pays
-gas and broadcasts transactions.
+gas and broadcasts transactions. ERC-8409 quotes require a separate, unfunded
+signing key. Signing quotes does not transfer funds.
 
 ## Secret handling
 
@@ -231,6 +232,9 @@ Available bounds include:
   is logged only when it matches `[A-Za-z0-9._:-]{1,64}`
 - an 8192-byte `Agent-Authorization` header cap, checked before decoding;
   MCP and A2A authorization carriers use the request body cap instead
+- a cache of up to 1024 signed ERC-8409 quotes per provider, reused while a
+  full payment window remains; each cache miss requires a signature per EVM
+  offer
 
 Rate limiting, per-agent quotas, and adaptive backpressure are not implemented.
 Add them at the edge for public deployments.
@@ -257,7 +261,9 @@ Shared x402 deployment checks reject a well-known Anvil recipient on a
 non-local deployment and reject the zero address. Config validation and x402
 provider construction both run these checks. The separate well-known Anvil
 signer-key check runs only when a local x402 provider is constructed, where it
-rejects that key against a non-local RPC.
+rejects that key against a non-local RPC. For quote signing keys, the x402
+provider rejects well-known Anvil keys when the offers use non-local networks,
+regardless of the RPC host.
 
 The MPP provider builds its x402 settlement provider from its own options, so
 configured and direct MPP construction both run these checks.
@@ -319,6 +325,11 @@ real funds.
 | **a proof of the other transfer method, or one carrying both an EIP-3009 and a Permit2 authorization**                                  | `unsupported_scheme` before the facilitator is called, which would settle the Permit2 one                                                                                                                                                       | `tests/unit/payments-x402/provider-remote-facilitator.test.ts`, `tests/unit/payments-x402/provider.test.ts`                                                                   |
 | **an EIP-3009 authorization whose value, time bounds or nonce are not in canonical form**                                               | `invalid_payload` before the facilitator is called: amounts and times must be decimal, the nonce 32 bytes of hex                                                                                                                                | `tests/unit/payments-x402/provider.test.ts`                                                                                                                                   |
 | **a gas-sponsoring extension in a Permit2 payload**                                                                                     | not forwarded: the facilitator receives no `extensions`                                                                                                                                                                                         | `tests/unit/payments-x402/provider-remote-facilitator.test.ts`                                                                                                                |
+| **an ERC-8409 quote altered after signing, or signed by another key**                                                                   | a buyer that verifies the signature against the published issuer rejects it                                                                                                                                                                    | `tests/unit/payments-x402/quote.test.ts`, `tests/integration/x402-quotes.test.ts`                                                                                             |
+| **an altered ERC-8409 quote echoed in a payment**                                                                                       | ignored: verification and settlement use the offer and payer authorization; the facilitator receives no `extensions`                                                                                                                           | `tests/integration/x402-quotes.test.ts`                                                                                                                                       |
+| **a leaked quote signing key**                                                                                                          | its holder can sign quotes as the merchant. Keep the key unfunded. Rotation changes the published issuer after a restart; `doctor` detects a gateway still using the old key                                                                   | `tests/integration/x402-quotes.test.ts`, `tests/unit/cli/doctor.test.ts`                                                                                                      |
+| **unpaid requests that vary the input to force quote signing**                                                                          | each cache miss requires a signature per EVM offer; repeated input reuses a cached quote while a full payment window remains                                                                                                                    | `tests/unit/payments-x402/quote.test.ts`                                                                                                                                      |
+| **a quote signing key that controls an EVM `payTo`, or a well-known Anvil key outside the local chain**                                  | `CONFIG_INVALID` during provider construction; the message omits the key                                                                                                                                                                        | `tests/unit/payments-x402/quote.test.ts`                                                                                                                                      |
 | **one Permit2 authorization on two requests at once**                                                                                   | settles once; the other gets 409 `PAYMENT_REPLAYED`. The key is chain, Permit2, owner and nonce                                                                                                                                                 | `tests/e2e/payment/x402-permit2.e2e.test.ts`                                                                                                                                  |
 | **a Permit2 offer on a network without Permit2 or its x402 proxy**                                                                      | health fails, naming the missing contract                                                                                                                                                                                                       | `tests/e2e/payment/x402-permit2.e2e.test.ts`                                                                                                                                  |
 | **a Solana transaction paying another wallet or a smaller amount, presented as the offer**                                              | the facilitator refuses it: `invalid_exact_svm_payload_recipient_mismatch` or `invalid_exact_svm_payload_amount_mismatch`; balances unchanged                                                                                                   | `tests/e2e/payment/x402-solana.e2e.test.ts`                                                                                                                                   |

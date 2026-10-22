@@ -34,8 +34,9 @@ Agent Commerce Gateway is **not** a payment processor, wallet, exchange or
 custodian.
 
 - The payment flow does not require a merchant or buyer private key or seed
-  phrase. Local facilitator mode does accept a configured gas-paying signer key;
-  do not reuse a merchant or buyer key for it.
+  phrase. Local facilitator mode uses a configured key to pay gas, and
+  experimental ERC-8409 quotes use a dedicated, unfunded signing key. Do not
+  reuse a merchant or buyer key for either purpose.
 - The merchant settlement destination is plain configuration
   (`payments.x402.payTo: ${MERCHANT_WALLET}`), an address the merchant
   controls. It is never a gateway-owned wallet.

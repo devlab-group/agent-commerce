@@ -125,6 +125,12 @@ payments:
     payTo: ${MERCHANT_WALLET}
     # Seconds a payment challenge stays valid
     maxTimeoutSeconds: 120
+    # Experimental ERC-8409 quotes for EVM offers in x402 challenges.
+    # Use a dedicated, unfunded key, never the merchant's. See
+    # docs/configuration.md#erc-8409-quotes.
+    # quote:
+    #   enabled: true
+    #   signerPrivateKey: ${X402_QUOTE_SIGNER_KEY}
     # Settlement order: authorization (the default) calls the backend first
     # and settles only if it succeeds; upfront settles first. A paid resource
     # can set its own paymentFlow, which applies to the rail that serves it.
@@ -136,8 +142,8 @@ payments:
     #               on mainnet, and a well-known Anvil key is refused against
     #               any RPC that is not local or private.
     #
-    # mode: remote  an HTTP facilitator does the signing; this gateway holds no
-    #               signing key. Requires https, except on a local or private
+    # mode: remote  an HTTP facilitator handles settlement; the gateway holds no
+    #               facilitator signing key. Requires https, except on a local or private
     #               host off mainnet, and on mainnet a credential unless
     #               allowUnauthenticatedFacilitator is set.
     facilitator:

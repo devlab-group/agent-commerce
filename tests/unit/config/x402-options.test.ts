@@ -660,3 +660,45 @@ describe('resource offers (x402.accepts)', () => {
     );
   });
 });
+
+describe('payments.x402.quote', () => {
+  // Test-only key, never funded
+  const QUOTE_KEY = `0x${'33'.repeat(32)}`;
+  const quoteOf = (quote: Record<string, unknown>) =>
+    parseConfig(withX402({ ...validX402(), quote }), {}).payments.x402?.quote;
+
+  it('passes the key on when quotes are enabled, including through an env string', () => {
+    expect(quoteOf({ enabled: true, signerPrivateKey: QUOTE_KEY })).toEqual({
+      signerPrivateKey: QUOTE_KEY,
+    });
+    expect(quoteOf({ enabled: 'true', signerPrivateKey: QUOTE_KEY })).toEqual({
+      signerPrivateKey: QUOTE_KEY,
+    });
+  });
+
+  it('drops a disabled block, which needs no key', () => {
+    expect(quoteOf({ enabled: false, signerPrivateKey: QUOTE_KEY })).toBeUndefined();
+    expect(quoteOf({ enabled: false })).toBeUndefined();
+    expect(parseConfig(withX402(validX402()), {}).payments.x402).not.toHaveProperty('quote');
+  });
+
+  it('refuses enabled quotes without a key, naming the path', () => {
+    const error = refusal(withX402({ ...validX402(), quote: { enabled: true } }));
+    expect(pathOf(error)).toBe('payments.x402.quote.signerPrivateKey');
+  });
+
+  it('refuses an unknown field, without echoing the key', () => {
+    const error = refusal(
+      withX402({ ...validX402(), quote: { enabled: true, signerPrivateKey: QUOTE_KEY, ttl: 60 } }),
+    );
+    expect(error.message).toContain('ttl');
+    expect(JSON.stringify({ message: error.message, details: error.details })).not.toContain(
+      QUOTE_KEY,
+    );
+  });
+});
+
+// Complete x402 block from the config fixture
+function validX402(): Record<string, unknown> {
+  return { ...(validRawConfig()['payments'] as { x402: Record<string, unknown> }).x402 };
+}

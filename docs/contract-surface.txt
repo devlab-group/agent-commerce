@@ -302,6 +302,7 @@ interface PaymentChallenge {
 interface PaymentContext {
     readonly amount: string;
     readonly currency: string;
+    readonly input?: unknown;
     readonly metadata?: Readonly<Record<string, unknown>>;
     readonly requestId: string;
     readonly requestedAt: string;

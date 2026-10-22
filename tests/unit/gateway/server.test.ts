@@ -20,6 +20,7 @@ import {
 } from '../../../src/core';
 import { MOUNT_BODY_LIMIT_BYTES } from '../../../src/gateway/adapters';
 import { createGateway, type GatewayInstance } from '../../../src/gateway/server';
+import type { X402PaymentProvider } from '../../../src/payments/x402/provider';
 import { PACKAGE_VERSION } from '../../../src/version';
 import {
   createFakeHttpAdapter,
@@ -357,6 +358,35 @@ describe('createGateway HTTP surface', () => {
     expect(res.json().payments.x402.network).toBeDefined();
     expect(res.json().payments.x402.asset).toBeDefined();
     expect(res.json().payments.x402.payTo).toBeDefined();
+  });
+
+  it('publishes the quote issuer of the x402 provider, and nothing when it signs no quotes', async () => {
+    const quote = {
+      issuer: '0x5555555555555555555555555555555555555555',
+      requestScheme: 'agent-commerce/request/v1',
+      extension: 'erc-8409',
+    } as const;
+    // The key is in config but never published; the issuer comes from the provider
+    const base = makeGatewayConfig();
+    const x402 = base.payments.x402 as NonNullable<typeof base.payments.x402>;
+    const config = makeGatewayConfig({
+      payments: { x402: { ...x402, quote: { signerPrivateKey: '0xQUOTE_SECRET_KEY' } } },
+    });
+    const wellKnown = async (provider: X402PaymentProvider) => {
+      const gateway = await buildGateway({ config, paymentProviders: [provider] });
+      return (
+        await gateway.server.inject({ method: 'GET', url: '/.well-known/agent-commerce' })
+      ).json();
+    };
+
+    const signing = await wellKnown({ ...createFakePaymentProvider(), quote });
+    expect(signing.payments.x402.quote).toEqual({ ...quote, status: 'experimental' });
+    // Quote metadata from another rail must not appear under x402
+    const other = await wellKnown({ ...createFakePaymentProvider({ name: 'mpp' }), quote });
+    expect(other.payments.x402).not.toHaveProperty('quote');
+    const plain = await wellKnown(createFakePaymentProvider());
+    expect(plain.payments.x402).not.toHaveProperty('quote');
+    expect(JSON.stringify([signing, other, plain])).not.toContain('QUOTE_SECRET_KEY');
   });
 
   it("publishes each option's offer terms on /.well-known, never its RPC URL", async () => {

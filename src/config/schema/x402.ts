@@ -251,6 +251,19 @@ export function normalizeX402(raw: RawX402, resources: RawConfig['resources']): 
     Object.entries(resourceTerms).map(([id, terms]) => [id, terms.options]),
   );
 
+  // The provider validates the private key and derives the issuer at construction,
+  // keeping viem out of config loading
+  let quote: X402Config['quote'];
+  if (raw.quote !== undefined && toBoolean(raw.quote.enabled, `${at}.quote.enabled`)) {
+    if (raw.quote.signerPrivateKey === undefined) {
+      throw x402Invalid(
+        `${at}.quote.signerPrivateKey is required when quotes are enabled`,
+        `${at}.quote.signerPrivateKey`,
+      );
+    }
+    quote = { signerPrivateKey: raw.quote.signerPrivateKey };
+  }
+
   const config: X402Config = {
     enabled: toBoolean(raw.enabled, `${at}.enabled`),
     ...first,
@@ -262,6 +275,7 @@ export function normalizeX402(raw: RawX402, resources: RawConfig['resources']): 
     ...(networks !== undefined ? { networks } : {}),
     options,
     ...(Object.keys(resourceOptions).length > 0 ? { resourceOptions } : {}),
+    ...(quote !== undefined ? { quote } : {}),
   };
 
   return { config, ...rail, resources: resourceTerms };

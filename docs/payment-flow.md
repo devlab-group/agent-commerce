@@ -67,6 +67,8 @@ the reserved `_payment` input field. MCP also accepts the selected rail's
 `_meta` carrier; see [Payment over MCP](protocols/mcp.md#payment-over-mcp). A2A
 also accepts the x402 extension's task metadata; see
 [x402 extension](protocols/a2a.md#x402-extension).
+With [ERC-8409 quotes](protocols/x402.md#erc-8409-signed-quotes) enabled, the
+challenge also carries a signed quote for each EVM offer.
 
 ### MPP
 

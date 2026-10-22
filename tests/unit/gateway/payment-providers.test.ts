@@ -1,7 +1,9 @@
+import { privateKeyToAccount } from 'viem/accounts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { GatewayConfig } from '../../../src/config';
 import { NOOP_LOGGER } from '../../../src/core';
 import { createConfiguredPaymentProviders } from '../../../src/gateway/payment-providers';
+import type { X402PaymentProvider } from '../../../src/payments/x402/provider';
 import { makeGatewayConfig } from './helpers';
 
 type Payments = GatewayConfig['payments'];
@@ -167,5 +169,38 @@ describe('createConfiguredPaymentProviders', () => {
 
     const envelope = requirement.challenge.envelope as { resource: Record<string, unknown> };
     expect(envelope.resource['mimeType']).toBe('text/csv');
+  });
+
+  it('passes quote to the x402 provider, which publishes its issuer and signs challenges with it', async () => {
+    const resource = makeGatewayConfig().resources.find((r) => r.id === 'market_report');
+    if (resource === undefined) throw new Error('fixture missing');
+    // Test-only key, never funded
+    const key = `0x${'33'.repeat(32)}` as const;
+    const issuer = privateKeyToAccount(key).address;
+    const [provider] = await createConfiguredPaymentProviders(
+      { x402: { ...MAINNET_X402, quote: { signerPrivateKey: key } } },
+      NOOP_LOGGER,
+    );
+    if (provider === undefined) throw new Error('no provider');
+    const requirement = await provider.createRequirement({
+      requestId: 'req-1',
+      resource,
+      amount: '0.01',
+      currency: 'USDC',
+      requestedAt: '2026-01-01T00:00:00.000Z',
+      input: {},
+    });
+
+    expect((provider as X402PaymentProvider).quote).toEqual({
+      issuer,
+      requestScheme: 'agent-commerce/request/v1',
+      extension: 'erc-8409',
+    });
+    const envelope = requirement.challenge.envelope as {
+      extensions: Record<string, { info: { quotes: unknown[] } }>;
+    };
+    expect(envelope.extensions['erc-8409']?.info.quotes).toEqual([
+      expect.objectContaining({ quote: expect.objectContaining({ issuer }) }),
+    ]);
   });
 });

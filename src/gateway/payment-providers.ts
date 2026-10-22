@@ -64,6 +64,9 @@ export async function createConfiguredPaymentProviders(
           ? { allowUnauthenticatedFacilitator: x402.allowUnauthenticatedFacilitator }
           : {}),
         ...(x402.networks !== undefined ? { customNetworks: x402.networks } : {}),
+        // Pass quote settings only to x402; MPP builds a separate settlement
+        // provider without quotes
+        ...(x402.quote !== undefined ? { quote: x402.quote } : {}),
         logger,
       }),
     );

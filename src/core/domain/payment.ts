@@ -105,6 +105,12 @@ export interface PaymentContext {
   readonly amount: DecimalAmount;
   readonly currency: string;
   readonly requestedAt: IsoTimestamp;
+  /**
+   * Validated resource input used to build the backend request. The pipeline
+   * sets this field on every createRequirement call. A rail may bind its
+   * challenge to the input but must not send it to a third party.
+   */
+  readonly input?: unknown;
   readonly metadata?: Readonly<Record<string, unknown>>;
 }
 
