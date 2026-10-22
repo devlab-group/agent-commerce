@@ -945,6 +945,140 @@ describe('runDoctor: several x402 options', () => {
   });
 });
 
+describe('runDoctor: ERC-8409 quotes', () => {
+  // Test-only key, never funded; ISSUER was checked with Foundry's `cast wallet address`
+  const QUOTE_KEY = `0x${'33'.repeat(32)}`;
+  const ISSUER = '0x5CbDd86a2FA8Dc4bDdd8a8f69dBa48572EeC07FB';
+  const QUOTE = {
+    issuer: ISSUER,
+    requestScheme: 'agent-commerce/request/v1',
+    extension: 'erc-8409',
+    status: 'experimental',
+  };
+  const withQuote = (quote: unknown) => {
+    const body = wellKnownBody();
+    return { ...body, payments: { x402: { ...body.payments.x402, quote } } };
+  };
+  const doctor = async (
+    key: string | undefined,
+    body?: unknown,
+    loadViemAccounts?: () => Promise<never>,
+  ) =>
+    runDoctor(
+      { gatewayUrl: GATEWAY },
+      {
+        // No body: the gateway is unreachable
+        fetchImpl:
+          body === undefined
+            ? createFakeFetch({})
+            : healthyFetch({ [`${GATEWAY}/.well-known/agent-commerce`]: () => jsonResponse(body) }),
+        loadConfig: async () =>
+          makeGatewayConfig({
+            payments: {
+              x402: {
+                ...X402_CONFIG,
+                ...(key !== undefined ? { quote: { signerPrivateKey: key } } : {}),
+              },
+            },
+          }),
+        createStore: () => makeFakeReceiptStore(),
+        ...(loadViemAccounts !== undefined ? { loadViemAccounts } : {}),
+      },
+    );
+  const quoteCheck = async (...args: Parameters<typeof doctor>) =>
+    (await doctor(...args)).checks.find((c) => c.name === 'Payments (quotes)');
+
+  it("passes when the gateway's issuer is the local key's address, naming it masked", async () => {
+    const report = await doctor(QUOTE_KEY, withQuote(QUOTE));
+
+    expect(report.checks.find((c) => c.name === 'Payments (quotes)')).toEqual({
+      name: 'Payments (quotes)',
+      status: 'PASS',
+      detail:
+        'ERC-8409 quotes (experimental) - issuer=0x5CbD…07FB, requestScheme=agent-commerce/request/v1, extension=erc-8409',
+    });
+    expect(JSON.stringify(report)).not.toContain(QUOTE_KEY.slice(2));
+  });
+
+  it('compares the issuers without regard to case', async () => {
+    const check = await quoteCheck(
+      QUOTE_KEY,
+      withQuote({ ...QUOTE, issuer: ISSUER.toLowerCase() }),
+    );
+    expect(check?.status).toBe('PASS');
+  });
+
+  it('fails when the gateway signs with another key, as after a rotation without a restart', async () => {
+    const other = '0x5555555555555555555555555555555555555555';
+    const check = await quoteCheck(QUOTE_KEY, withQuote({ ...QUOTE, issuer: other }));
+    expect(check?.status).toBe('FAIL');
+    expect(check?.detail).toContain(
+      'signs ERC-8409 quotes as 0x5555…5555, but quote.signerPrivateKey belongs to 0x5CbD…07FB',
+    );
+    expect(check?.detail).toContain('restart it');
+  });
+
+  it.each([
+    ['the gateway is unreachable', undefined],
+    ['the gateway publishes an issuer', withQuote(QUOTE)],
+  ])('fails on a key start would refuse, without echoing it, when %s', async (_label, body) => {
+    const key = '0xnot-a-private-key';
+    const report = await doctor(key, body);
+    expect(report.checks.find((c) => c.name === 'Payments (quotes)')).toEqual({
+      name: 'Payments (quotes)',
+      status: 'FAIL',
+      detail:
+        'quote.signerPrivateKey is not a valid private key (expected "0x" followed by 64 hex characters), so start refuses it',
+    });
+    expect(JSON.stringify(report)).not.toContain('not-a-private-key');
+  });
+
+  it("passes on the gateway's issuer alone, and says so, when viem cannot be loaded", async () => {
+    const missing = async () => {
+      throw new Error("Cannot find package 'viem'");
+    };
+    const check = await quoteCheck(QUOTE_KEY, withQuote(QUOTE), missing);
+    expect(check).toEqual({
+      name: 'Payments (quotes)',
+      status: 'PASS',
+      detail:
+        'ERC-8409 quotes (experimental) - issuer=0x5CbD…07FB as the gateway publishes it (viem could not be loaded to check it against the local key), requestScheme=agent-commerce/request/v1, extension=erc-8409',
+    });
+  });
+
+  it('fails when local config enables quotes and the gateway publishes no issuer', async () => {
+    const check = await quoteCheck(QUOTE_KEY, wellKnownBody());
+    expect(check?.status).toBe('FAIL');
+    expect(check?.detail).toContain(`the gateway at ${GATEWAY} publishes no quote issuer`);
+    expect(check?.detail).toContain('restart it');
+  });
+
+  it('fails when the gateway signs quotes that local config does not enable', async () => {
+    const check = await quoteCheck(undefined, withQuote(QUOTE));
+    expect(check?.status).toBe('FAIL');
+    expect(check?.detail).toContain('signs ERC-8409 quotes as 0x5CbD…07FB');
+  });
+
+  it('adds no check while quotes are off on both sides', async () => {
+    expect(await quoteCheck(undefined, wellKnownBody())).toBeUndefined();
+    expect(await quoteCheck(undefined)).toBeUndefined();
+  });
+
+  it.each([
+    ['the gateway is unreachable', undefined],
+    ['the gateway reports x402 disabled', wellKnownBody({ enabled: false })],
+    ['the quote block is not an object', withQuote('erc-8409')],
+    ['the issuer is missing', withQuote({ ...QUOTE, issuer: undefined })],
+  ])("reports INFO with the local key's issuer when %s", async (_label, body) => {
+    expect(await quoteCheck(QUOTE_KEY, body)).toEqual({
+      name: 'Payments (quotes)',
+      status: 'INFO',
+      detail:
+        "ERC-8409 quotes enabled (experimental), issuer=0x5CbD…07FB from the local key; the gateway's issuer could not be read",
+    });
+  });
+});
+
 describe('printDoctorReport', () => {
   it('emits machine-readable JSON with --json', async () => {
     const report = await runDoctor(

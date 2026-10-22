@@ -3,6 +3,7 @@ import type { ReceiptStore } from '../../../core';
 import type { ConfigLoader } from '../../lib/config-client';
 import type { FetchJsonResult, FetchLike } from '../../lib/http';
 import type { ManifestEnvFill } from '../../lib/manifest-env';
+import type { LoadViemAccounts } from './payments';
 
 export type CheckStatus = 'PASS' | 'WARN' | 'FAIL' | 'INFO';
 
@@ -29,6 +30,7 @@ export interface DoctorDeps {
   readonly createStore?: (path: string) => ReceiptStore;
   readonly fillEnvFromManifest?: (env: NodeJS.ProcessEnv) => ManifestEnvFill;
   readonly hasChainDeployScript?: () => boolean;
+  readonly loadViemAccounts?: LoadViemAccounts;
 }
 
 export type WellKnownResult = FetchJsonResult<Record<string, unknown>>;

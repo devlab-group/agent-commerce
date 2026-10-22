@@ -322,13 +322,126 @@ function offerHealthCheck(
   };
 }
 
+// What the running gateway publishes about its ERC-8409 quotes
+interface LiveQuote {
+  readonly issuer: string;
+  readonly requestScheme: string;
+  readonly extension: string;
+}
+
+// `undefined` for a missing block; `unreadable` for an invalid shape or field type
+function extractLiveQuote(
+  body: Record<string, unknown> | undefined,
+): LiveQuote | 'unreadable' | undefined {
+  const payments = body?.['payments'];
+  const x402 = isRecord(payments) ? payments['x402'] : undefined;
+  const quote = isRecord(x402) ? x402['quote'] : undefined;
+  if (quote === undefined) return undefined;
+  if (!isRecord(quote)) return 'unreadable';
+  const { issuer, requestScheme, extension } = quote;
+  return typeof issuer === 'string' &&
+    typeof requestScheme === 'string' &&
+    typeof extension === 'string'
+    ? { issuer, requestScheme, extension }
+    : 'unreadable';
+}
+
+/** Loads the viem account module used to derive the quote issuer */
+export type LoadViemAccounts = () => Promise<
+  Pick<typeof import('viem/accounts'), 'privateKeyToAccount'>
+>;
+
+// Derive the local issuer; return `invalid` if viem rejects the key, or
+// `undefined` if its account module cannot be loaded
+async function localQuoteIssuer(
+  signerPrivateKey: string,
+  loadAccounts: LoadViemAccounts,
+): Promise<string | 'invalid' | undefined> {
+  let accounts: Awaited<ReturnType<LoadViemAccounts>>;
+  try {
+    accounts = await loadAccounts();
+  } catch {
+    return undefined;
+  }
+  try {
+    return accounts.privateKeyToAccount(signerPrivateKey as `0x${string}`).address;
+  } catch {
+    return 'invalid';
+  }
+}
+
+// Compare quote enablement, then issuer addresses when local derivation succeeds
+function quoteCheck(
+  enabled: boolean,
+  local: string | 'invalid' | undefined,
+  live: LiveRailResult,
+  body: Record<string, unknown> | undefined,
+  gatewayUrl: string,
+  stale: string,
+): DoctorCheck | undefined {
+  const name = 'Payments (quotes)';
+  if (enabled && local === 'invalid') {
+    // The message never echoes the key
+    return {
+      name,
+      status: 'FAIL',
+      detail:
+        'quote.signerPrivateKey is not a valid private key (expected "0x" followed by 64 hex characters), so start refuses it',
+    };
+  }
+  const localIssuer = local === undefined ? undefined : maskMiddle(local);
+  // Read quote metadata only after discovery yields an enabled x402 rail
+  const quote = live === undefined || live === 'disabled' ? 'unreadable' : extractLiveQuote(body);
+  if (quote === 'unreadable') {
+    return enabled
+      ? {
+          name,
+          status: 'INFO',
+          detail: `ERC-8409 quotes enabled (experimental)${localIssuer !== undefined ? `, issuer=${localIssuer} from the local key` : ''}; the gateway's issuer could not be read`,
+        }
+      : undefined;
+  }
+  if (quote === undefined) {
+    return enabled
+      ? {
+          name,
+          status: 'FAIL',
+          detail: `Local config enables ERC-8409 quotes, but the gateway at ${gatewayUrl} publishes no quote issuer${stale}`,
+        }
+      : undefined;
+  }
+  const issuer = maskMiddle(quote.issuer);
+  if (!enabled) {
+    return {
+      name,
+      status: 'FAIL',
+      detail: `The gateway at ${gatewayUrl} signs ERC-8409 quotes as ${issuer}, but local config does not enable them${stale}`,
+    };
+  }
+  // A key rotated without a restart leaves the gateway signing with the old one
+  if (local !== undefined && local.toLowerCase() !== quote.issuer.toLowerCase()) {
+    return {
+      name,
+      status: 'FAIL',
+      detail: `The gateway at ${gatewayUrl} signs ERC-8409 quotes as ${issuer}, but quote.signerPrivateKey belongs to ${localIssuer}${stale}`,
+    };
+  }
+  return {
+    name,
+    status: 'PASS',
+    detail: `ERC-8409 quotes (experimental) - issuer=${issuer}${local === undefined ? ' as the gateway publishes it (viem could not be loaded to check it against the local key)' : ''}, requestScheme=${quote.requestScheme}, extension=${quote.extension}`,
+  };
+}
+
 // x402 and MPP, each compared with what the running gateway reports
-export function paymentChecks(
+export async function paymentChecks(
   config: GatewayConfig | undefined,
   wellKnown: WellKnownResult | undefined,
   gatewayUrl: string,
   chainDeploy = false,
-): DoctorCheck[] {
+  // Load this optional peer only when local x402 quote signing is enabled
+  loadAccounts: LoadViemAccounts = () => import('viem/accounts'),
+): Promise<DoctorCheck[]> {
   const checks: DoctorCheck[] = [];
   // Suggest the repository deployment script only when the caller found it
   const stale = `; the gateway may be running against an older deployment - restart it${chainDeploy ? ' or re-run chain:deploy' : ''}`;
@@ -407,6 +520,17 @@ export function paymentChecks(
       const offerHealth = offerHealthCheck(live, named);
       if (offerHealth !== undefined) checks.push(offerHealth);
     }
+    const quotes = quoteCheck(
+      x402.quote !== undefined,
+      x402.quote !== undefined
+        ? await localQuoteIssuer(x402.quote.signerPrivateKey, loadAccounts)
+        : undefined,
+      live,
+      wellKnown?.ok ? wellKnown.body : undefined,
+      gatewayUrl,
+      stale,
+    );
+    if (quotes !== undefined) checks.push(quotes);
     if (mode === 'mainnet') {
       checks.push(
         mainnetSafetyCheck('Mainnet safety', 'payTo', x402.facilitator, [
