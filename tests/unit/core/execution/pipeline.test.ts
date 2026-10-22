@@ -199,6 +199,46 @@ describe('createExecutionPipeline', () => {
     expect(createRequirementCalled).toBe(false);
   });
 
+  it('passes the validated input to createRequirement, so a rail can bind its challenge to it', async () => {
+    const resource = makeResource({
+      id: 'res-1',
+      pricing: { type: 'fixed', amount: '0.01', currency: 'USDC' },
+      paymentMethods: ['x402'],
+      inputSchema: { type: 'object', properties: { city: { type: 'string' } } },
+    });
+    const inputs: unknown[] = [];
+    const provider = createFakePaymentProvider({
+      createRequirement: async (ctx) => {
+        inputs.push(ctx.input);
+        return {
+          id: 'r',
+          requestId: ctx.requestId,
+          resourceId: ctx.resource.id,
+          provider: 'x402',
+          amount: ctx.amount,
+          currency: ctx.currency,
+          challenge: { provider: 'x402', version: '1', accepts: [] },
+        };
+      },
+    });
+    const store = createFakeStore();
+    const pipeline = createExecutionPipeline({
+      resources: createResourceRegistry([resource]),
+      paymentProviders: [provider],
+      store,
+      backend: createFakeBackendExecutor(),
+      events: store,
+      logger: createCapturingLogger(),
+      clock: createFakeClock(),
+      ids: createFakeIdGenerator(),
+    });
+
+    const outcome = await pipeline.execute(makeRequest({ input: { city: 'Paris' } }));
+
+    expect(outcome.kind).toBe('payment-required');
+    expect(inputs).toEqual([{ city: 'Paris' }]);
+  });
+
   it('throws INPUT_INVALID for input that fails the resource schema', async () => {
     const resource = makeResource({
       id: 'res-1',

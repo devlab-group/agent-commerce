@@ -17,6 +17,7 @@ import { DEFAULT_IDS, DEFAULT_MAX_TIMEOUT_SECONDS, X402_VERSION } from './consta
 import { createSvmFeePayerSource } from './fee-payer';
 import { createHealthCheck } from './health';
 import { resolveOffers } from './offers';
+import { createQuoteIssuer } from './quote';
 import { createRequirementBuilders } from './requirement';
 import { createSettle } from './settle';
 import type {
@@ -63,6 +64,16 @@ export function createX402PaymentProvider(
   const logger = options.logger ?? NOOP_LOGGER;
   const maxTimeoutSeconds = options.maxTimeoutSeconds ?? DEFAULT_MAX_TIMEOUT_SECONDS;
 
+  const quotes = options.quote
+    ? createQuoteIssuer({
+        signerPrivateKey: options.quote.signerPrivateKey,
+        offers,
+        deploymentMode,
+        clock,
+        maxTimeoutSeconds,
+      })
+    : undefined;
+
   const evmOffers = offers.filter((offer): offer is EvmOffer => offer.family === 'evm');
   const hasSvm = offers.some((offer) => offer.family === 'svm');
   const hasNear = offers.some((offer) => offer.family === 'near');
@@ -87,6 +98,7 @@ export function createX402PaymentProvider(
       'authorization-flow',
       'upfront-flow',
       ...(severalOffers ? ['multiple-offers'] : []),
+      ...(quotes ? ['erc-8409-quotes'] : []),
     ],
     status: 'stable',
     unsupported: [
@@ -126,6 +138,7 @@ export function createX402PaymentProvider(
     ids,
     logger,
     maxTimeoutSeconds,
+    quotes,
     svm,
     near,
   };

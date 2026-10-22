@@ -175,6 +175,10 @@ persistence must not fail the commerce flow.
   envelope fields are deprecated: read individual offers in `accepts`. With
   `strictNullChecks`, callers passing either `destination` as a required
   `string` must now handle `undefined`.
+- Optional `PaymentContext.input` carries validated resource input to
+  `createRequirement`, allowing a rail to bind its challenge to the request.
+  x402's ERC-8409 quotes hash this input with the resource ID. A rail must not
+  send the input to a third party. Providers that ignore the field are unaffected.
 
 ### Protocols and gateway
 
@@ -434,6 +438,8 @@ export interface X402ProviderOptions extends X402OfferOptions {
   readonly customNetworks?: Readonly<
     Record<string, { readonly kind: 'testnet' | 'mainnet'; readonly displayName: string }>
   >;
+  /** Experimental: signs ERC-8409 quotes for EVM offers with a dedicated key when request data can be canonicalized */
+  readonly quote?: { readonly signerPrivateKey: string };
   readonly logger?: Logger;
   readonly clock?: Clock;
   readonly ids?: IdGenerator;

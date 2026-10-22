@@ -31,9 +31,9 @@ export function declaredX402Version(payloadBase64: string): unknown {
  * The payload as sent to a facilitator. `resource` is optional in v2 and
  * verify() has already matched it against the offer; hosted facilitators have
  * settled payloads without it, and none has been shown to accept this
- * gateway's `resource://` URL. `extensions` is dropped because the gateway
- * advertises none, and the SDK facilitator would act on a gas-sponsoring
- * extension in a Permit2 payload.
+ * gateway's `resource://` URL. `extensions` is dropped because quote echoes
+ * are not used to verify payment, and a gas-sponsoring extension in a Permit2
+ * payload would activate unsupported SDK facilitator behavior.
  */
 export function forFacilitator<T extends PaymentPayload>(
   payload: T,

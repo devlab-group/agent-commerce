@@ -99,6 +99,14 @@ export function createRequirementBuilders(
       })),
     );
     const single = offers.length === 1 ? offers[0] : undefined;
+    const extensions = await ctx.quotes?.extensionsFor(
+      context.resource.id,
+      context.input,
+      offers.flatMap((offer, index) => {
+        const accepted = accepts[index];
+        return offer.family === 'evm' && accepted ? [{ offer, amount: accepted.amount }] : [];
+      }),
+    );
 
     // The v2 challenge document as sent on the wire. The HTTP adapter
     // base64-encodes it into `PAYMENT-REQUIRED` and MCP passes it through, so
@@ -120,6 +128,7 @@ export function createRequirementBuilders(
         mimeType: options.resourceMimeTypes?.[context.resource.id] ?? DEFAULT_MIME_TYPE,
       },
       accepts,
+      ...(extensions !== undefined ? { extensions } : {}),
     };
 
     const expiresAt = new Date(clock.now().getTime() + maxTimeoutSeconds * 1000).toISOString();

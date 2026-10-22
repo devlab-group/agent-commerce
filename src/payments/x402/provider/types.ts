@@ -7,6 +7,7 @@ import type { X402FacilitatorConfig } from '../guardrails';
 import type { CustomNetworks, DeploymentMode, X402Network } from '../networks';
 import type { X402AssetTransferMethod } from '../options';
 import type { X402PaymentFlow } from '../payment-flow';
+import type { QuoteIssuer } from './quote';
 
 /** A single offer and the settings every offer shares */
 export interface X402ProviderOptions extends X402OfferOptions {
@@ -45,6 +46,12 @@ export interface X402ProviderOptions extends X402OfferOptions {
    * its `kind` determines mainnet guardrails
    */
   readonly customNetworks?: CustomNetworks;
+  /**
+   * Experimental. Signs an ERC-8409 quote for each EVM offer when the request
+   * data can be canonicalized. Use a dedicated key that holds no funds.
+   * Never use a merchant's or buyer's wallet key.
+   */
+  readonly quote?: { readonly signerPrivateKey: string };
   readonly logger?: Logger;
   readonly clock?: Clock;
   readonly ids?: IdGenerator;
@@ -141,6 +148,8 @@ export interface ProviderContext {
   readonly ids: IdGenerator;
   readonly logger: Logger;
   readonly maxTimeoutSeconds: number;
+  /** Present when the provider issues ERC-8409 quotes */
+  readonly quotes: QuoteIssuer | undefined;
   /** The Solana inspection module; rejects when no Solana offer is configured */
   readonly svm: () => Promise<typeof import('../svm')>;
   /** The NEAR inspection module; rejects when no NEAR offer is configured */
