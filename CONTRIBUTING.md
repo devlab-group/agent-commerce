@@ -34,7 +34,8 @@ npm run demo:agent
 ```
 
 Requirements: Node >= 22, npm 10, Docker, and [Foundry](https://getfoundry.sh)
-(`anvil`, `forge`, `cast`) for the chain work. On Linux, if your user is not
+(`anvil`, `forge`, `cast`) for the chain work. `npm run build` uses tsup 9,
+which supports Node 22.18 or later, 24.11 or later, and 26 and up. On Linux, if your user is not
 UID/GID 1000, see the note in the [README](README.md#quickstart) before
 `docker compose up`.
 
