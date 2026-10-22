@@ -16,5 +16,6 @@ export {
   createX402PaymentProvider,
   type X402MultiOfferProviderOptions,
   type X402OfferOptions,
+  type X402PaymentProvider,
   type X402ProviderOptions,
 } from './provider';

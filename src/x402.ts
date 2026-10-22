@@ -33,5 +33,6 @@ export {
   type X402MultiOfferProviderOptions,
   type X402OfferOptions,
   type X402PaymentFlow,
+  type X402PaymentProvider,
   type X402ProviderOptions,
 } from './payments/x402';

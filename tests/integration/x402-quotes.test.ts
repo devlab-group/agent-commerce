@@ -281,16 +281,7 @@ describe('ERC-8409 quotes over the gateway', () => {
   });
 
   it('settles an SDK payment that echoes the extension, and keeps it from the facilitator', async () => {
-    const challenged = await invokeHttp();
-    const payments = new x402Client();
-    registerExactEvmScheme(payments, { signer: buyer, networks: ['eip155:31337'] });
-    // The test token is not in the SDK's spend-control asset list
-    payments.setSpendControls(false);
-    const httpClient = new x402HTTPClient(payments);
-    const required = httpClient.getPaymentRequiredResponse(
-      (name) => challenged.headers[name.toLowerCase()] as string | undefined,
-    );
-    const payload = await httpClient.createPaymentPayload(required);
+    const { httpClient, required, payload } = await sdkPayment();
     expect(quotesOf(payload)).toEqual(quotesOf(required));
 
     const paid = await invokeHttp(httpClient.encodePaymentSignatureHeader(payload));
@@ -304,4 +295,38 @@ describe('ERC-8409 quotes over the gateway', () => {
       expect(sent).not.toHaveProperty('extensions');
     }
   });
+
+  it('settles on the offer alone when the echoed quotes were altered, since payment never reads them', async () => {
+    const { httpClient, payload } = await sdkPayment();
+    const [echoed] = quotesOf(payload);
+    if (echoed === undefined) throw new Error('no echoed quote');
+    const altered = {
+      ...payload,
+      extensions: {
+        'erc-8409': {
+          info: { quotes: [{ ...echoed, quote: { ...echoed.quote, amount: '1' } }] },
+        },
+      },
+    };
+
+    const paid = await invokeHttp(httpClient.encodePaymentSignatureHeader(altered));
+
+    expect(paid.statusCode).toBe(200);
+    expect(facilitator.settle).toHaveBeenCalledTimes(1);
+    expect(facilitator.settle.mock.calls[0]?.[0]).toMatchObject({ payload: payload.payload });
+  });
 });
+
+// Request an HTTP challenge and sign the payment with the x402 SDK client
+async function sdkPayment() {
+  const challenged = await invokeHttp();
+  const payments = new x402Client();
+  registerExactEvmScheme(payments, { signer: buyer, networks: ['eip155:31337'] });
+  // The test token is not in the SDK's spend-control asset list
+  payments.setSpendControls(false);
+  const httpClient = new x402HTTPClient(payments);
+  const required = httpClient.getPaymentRequiredResponse(
+    (name) => challenged.headers[name.toLowerCase()] as string | undefined,
+  );
+  return { httpClient, required, payload: await httpClient.createPaymentPayload(required) };
+}

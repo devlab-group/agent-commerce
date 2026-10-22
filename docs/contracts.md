@@ -262,6 +262,16 @@ persistence must not fail the commerce flow.
   `<network> <asset> <payTo>` with lowercase EVM addresses. Any failing offer
   fails the provider. `/.well-known` copies statuses into `options` and
   `resourceOptions`; `/ready` is unchanged.
+- Experimental ERC-8409 quotes on x402 EVM offers. Without `quote`, challenges
+  are unchanged.
+  - `X402ProviderOptions.quote` enables signing.
+    `GatewayConfig.payments.x402.quote` is present only when
+    `payments.x402.quote.enabled` is true.
+  - `createX402PaymentProvider` returns `X402PaymentProvider`, a
+    `PaymentProvider` whose optional `quote` describes the issuer, request scheme
+    and extension key. The descriptor gains the capability `erc-8409-quotes`.
+  - `/.well-known` publishes `payments.x402.quote` (`WellKnownX402Quote`), read
+    from the signing provider.
 
 - `ProtocolName` gained `a2a` and `acp`; `PROTOCOL_NAMES` is the runtime list
   used by validation. It is derived from a record keyed by the union, so a
@@ -460,9 +470,18 @@ export interface X402MultiOfferProviderOptions
   readonly offers: readonly X402OfferOptions[];
 }
 
+/** Experimental `quote`: present when the provider signs ERC-8409 quotes */
+export interface X402PaymentProvider extends PaymentProvider {
+  readonly quote?: {
+    readonly issuer: `0x${string}`;
+    readonly requestScheme: string; // 'agent-commerce/request/v1'
+    readonly extension: string; // 'erc-8409', the PaymentRequired.extensions key
+  };
+}
+
 export function createX402PaymentProvider(
   options: X402ProviderOptions | X402MultiOfferProviderOptions,
-): PaymentProvider;
+): X402PaymentProvider;
 
 export type DeploymentMode = 'local' | 'testnet' | 'mainnet';
 export const SUPPORTED_NETWORK_IDS: readonly string[];
@@ -784,6 +803,8 @@ export interface GatewayConfig {
       readonly options?: readonly X402OptionConfig[]; // the fields above mirror the first
       // Each resource's own offers, replacing `options` for it
       readonly resourceOptions?: Readonly<Record<string, readonly X402OptionConfig[]>>;
+      // Experimental; present only when `payments.x402.quote.enabled` is true
+      readonly quote?: { readonly signerPrivateKey: string };
     };
     readonly mpp?: {
       readonly enabled: boolean;

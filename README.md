@@ -279,16 +279,17 @@ See [docs/configuration.md](docs/configuration.md).
 
 ## Protocol support
 
-| Protocol | Status       | Pinned revision                                                                                              |
-| -------- | ------------ | ------------------------------------------------------------------------------------------------------------ |
-| **HTTP** | Supported    | native routes                                                                                                |
-| **MCP**  | Supported    | `2026-07-28` and `2025-11-25`, `@modelcontextprotocol/server@2.3.0`                                          |
-| **x402** | Supported    | x402 v2 (`@x402/core`, `@x402/evm`, `@x402/svm`, `@x402/near`), scheme `exact`, EVM and Solana; NEAR partial |
-| **MPP**  | Experimental | `mppx@0.13.1`, `charge` + `evm` + EIP-3009, USDC on Base Sepolia and Base                                    |
-| **A2A**  | Experimental | A2A v1.0.1, binding `JSONRPC`, method `SendMessage`, x402 extension                                          |
-| **ACP**  | Experimental | ACP `2026-04-17`, REST checkout + discovery                                                                  |
-| **AP2**  | Experimental | AP2 `v0.2.0`, Direct Checkout Mandate verification                                                           |
-| UCP      | Planned      | no implementation                                                                                            |
+| Protocol     | Status       | Pinned revision                                                                                              |
+| ------------ | ------------ | ------------------------------------------------------------------------------------------------------------ |
+| **HTTP**     | Supported    | native routes                                                                                                |
+| **MCP**      | Supported    | `2026-07-28` and `2025-11-25`, `@modelcontextprotocol/server@2.3.0`                                          |
+| **x402**     | Supported    | x402 v2 (`@x402/core`, `@x402/evm`, `@x402/svm`, `@x402/near`), scheme `exact`, EVM and Solana; NEAR partial |
+| **MPP**      | Experimental | `mppx@0.13.1`, `charge` + `evm` + EIP-3009, USDC on Base Sepolia and Base                                    |
+| **A2A**      | Experimental | A2A v1.0.1, binding `JSONRPC`, method `SendMessage`, x402 extension                                          |
+| **ACP**      | Experimental | ACP `2026-04-17`, REST checkout + discovery                                                                  |
+| **AP2**      | Experimental | AP2 `v0.2.0`, Direct Checkout Mandate verification                                                           |
+| **ERC-8409** | Experimental | draft `SergeevDmitry/ERCs@0ee33230`: signed quotes on x402 EVM offers                                        |
+| UCP          | Planned      | no implementation                                                                                            |
 
 [AP2](docs/protocols/ap2.md) is an authorization method, not a transport. It verifies a
 mandate before a paid resource settles; the gateway does not issue the mandate
@@ -296,7 +297,8 @@ or its Checkout Receipt.
 
 The experimental entries above ship off by default with documented subsets:
 [A2A](docs/protocols/a2a.md), [ACP](docs/protocols/acp.md),
-[AP2](docs/protocols/ap2.md#not-implemented) and [MPP](docs/protocols/mpp.md). Supported
+[AP2](docs/protocols/ap2.md#not-implemented), [MPP](docs/protocols/mpp.md) and
+[ERC-8409 quotes](docs/protocols/x402.md#erc-8409-signed-quotes). Supported
 [MCP](docs/protocols/mcp.md) and [x402](docs/protocols/x402.md) are also scoped.
 ACP exposes only its five checkout operations; merchant `payment_data` is never
 converted into a gateway payment proof.
@@ -308,7 +310,8 @@ prints the `unsupported` lists for A2A, ACP and AP2 when they are enabled.
 ### Versioning
 
 Minor releases may break experimental configurations, integrations or types.
-This applies to MPP, A2A, ACP, AP2 and `agent-commerce import openapi`.
+This applies to MPP, A2A, ACP, AP2, ERC-8409 quotes and
+`agent-commerce import openapi`.
 Runtime adapters and providers report `status: experimental` in
 `GET /.well-known/agent-commerce`. Pin an exact version and test upgrades
 before deploying them. Since 2.1, some supported x402 behavior and types
@@ -318,7 +321,8 @@ differ from 2.0; see [Upgrading from 2.0 to 2.x](docs/migration-2.1.md).
 
 - **Non-custodial.** Buyer payments go directly to the merchant address in
   `payTo` (`recipient` for MPP). The gateway does not require buyer or merchant
-  private keys. Local facilitator mode does hold a separate gas-paying signer.
+  private keys. Local facilitator mode uses a separate key to pay gas.
+  Experimental ERC-8409 quotes use a dedicated, unfunded signing key.
 - **Fail closed.** Missing, malformed, expired, replayed, wrong-amount,
   wrong-recipient, wrong-network and wrong-asset payments are rejected.
 - **Replay-safe twice over.** The EIP-3009 or Permit2 nonce stops a double
