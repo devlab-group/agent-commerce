@@ -11,6 +11,7 @@
  * `authorization` it follows a successful one. The drafts require a confirmed
  * transaction before a `Payment-Receipt`.
  */
+import { PERMIT2_ADDRESS } from '@x402/evm';
 import { Challenge, type Credential, Method, Receipt } from 'mppx';
 import { Methods, type Types } from 'mppx/evm';
 import { charge } from 'mppx/evm/server';
@@ -191,6 +192,8 @@ export function createMppProviderWithSettlement(
         chainId,
         decimals: MPP_PROFILE.assetDecimals,
         credentialTypes: [MPP_PROFILE.credentialType],
+        // Required by draft-evm-charge-00 for every credential type
+        permit2Address: PERMIT2_ADDRESS,
       },
     });
     return {

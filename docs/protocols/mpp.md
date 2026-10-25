@@ -16,7 +16,9 @@ remains experimental.
 
 The implemented profile is `charge` intent, `evm` method and EIP-3009
 `authorization` credential, using USDC on Base Sepolia or Base. The challenge
-is HMAC-bound to the resource and terms. The credential is verified locally,
+is HMAC-bound to the resource and terms. It includes the canonical Permit2
+address in `methodDetails.permit2Address`, as `draft-evm-charge-00` requires
+for every credential type. The credential is verified locally,
 then checked by the x402 settlement provider. Both checks run in `verify`,
 before replay reservation; settlement broadcasts later.
 

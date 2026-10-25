@@ -1,3 +1,4 @@
+import { PERMIT2_ADDRESS } from '@x402/evm';
 import { Challenge, Credential, Method } from 'mppx';
 import { Methods, Types } from 'mppx/evm';
 import { charge as clientCharge } from 'mppx/evm/client';
@@ -56,6 +57,7 @@ vi.mock('mppx', async (importOriginal) => {
 const ASSET = '0x1111111111111111111111111111111111111111' as const;
 const OTHER_ASSET = '0x2222222222222222222222222222222222222222' as const;
 const BASE_USDC = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913' as const;
+const BASE_SEPOLIA_USDC = '0x036CbD53842c5426634e7929541eC2318f3dCF7e' as const;
 const AUTHORIZATION = { name: 'MockUSDC', version: '2' };
 const SECRET = 's'.repeat(32);
 const recipient = privateKeyToAccount(generatePrivateKey()).address;
@@ -69,7 +71,7 @@ interface ChargeRequest {
   readonly amount: string;
   readonly currency: `0x${string}`;
   readonly recipient: `0x${string}`;
-  readonly methodDetails: { readonly chainId: number };
+  readonly methodDetails: { readonly chainId: number; readonly permit2Address?: string };
 }
 
 function movableClock(start = Date.now()): Clock & { advance(ms: number): void } {
@@ -325,20 +327,32 @@ describe('MPP createRequirement', () => {
     );
   });
 
-  it('issues the challenge for the configured network', async () => {
-    const provider = makeProvider({
-      network: 'eip155:8453',
-      rpcUrl: 'https://base.example',
-      asset: BASE_USDC,
-      assetName: 'USD Coin',
-      allowMainnet: true,
-      allowUnauthenticatedFacilitator: true,
-    });
-    const requirement = await requirementFor(provider);
-    const request = issuedChallenge(requirement).request as unknown as ChargeRequest;
-    expect(requirement.network).toBe('eip155:8453');
-    expect(request.methodDetails.chainId).toBe(8453);
-  });
+  it.each<[string, number, Partial<MppProviderOptions>]>([
+    [
+      'eip155:84532',
+      84532,
+      { rpcUrl: 'https://sepolia.base.example', asset: BASE_SEPOLIA_USDC, assetName: 'USDC' },
+    ],
+    [
+      'eip155:8453',
+      8453,
+      {
+        rpcUrl: 'https://base.example',
+        asset: BASE_USDC,
+        assetName: 'USD Coin',
+        allowMainnet: true,
+        allowUnauthenticatedFacilitator: true,
+      },
+    ],
+  ])(
+    'issues the challenge for %s with the canonical Permit2 address',
+    async (network, chainId, overrides) => {
+      const requirement = await requirementFor(makeProvider({ network, ...overrides }));
+      const request = issuedChallenge(requirement).request as unknown as ChargeRequest;
+      expect(requirement.network).toBe(network);
+      expect(request.methodDetails).toMatchObject({ chainId, permit2Address: PERMIT2_ADDRESS });
+    },
+  );
 
   function withExtra(r: PaymentRequirement, patch: Record<string, unknown>): PaymentRequirement {
     const accepted = r.challenge.accepts[0] as Record<string, unknown>;
@@ -685,6 +699,13 @@ describe('MPP verify', () => {
         { splits: [{ amount: '1', recipient: stranger.address }] },
         'unsupported_credential',
       ],
+      // Older challenges may omit permit2Address
+      [
+        'no Permit2 address',
+        'gateway.test',
+        { permit2Address: undefined },
+        'unsupported_credential',
+      ],
       ['an external id', 'gateway.test', { externalId: 'order-1' }, 'wrong_terms'],
     ])(
       'checks a challenge from a gateway sharing the secret, with %s',
@@ -701,6 +722,7 @@ describe('MPP verify', () => {
             chainId: 31337,
             decimals: 6,
             credentialTypes: ['authorization'],
+            permit2Address: PERMIT2_ADDRESS,
             ...request,
           },
         });

@@ -9,6 +9,7 @@
  * The chain is an ephemeral Anvil this file spawns. The merchant backend is
  * stubbed, because everything in front of it is under test.
  */
+import { PERMIT2_ADDRESS } from '@x402/evm';
 import { Challenge, Credential, Receipt } from 'mppx';
 import { charge as clientCharge } from 'mppx/evm/client';
 import { createTestClient, http, type LocalAccount } from 'viem';
@@ -242,6 +243,10 @@ describe('MPP settlement - real local chain', () => {
   it('1. a credential from the mppx client settles on chain, delivers once and returns a Payment-Receipt', async () => {
     const { gateway, store } = await startGateway();
     const credential = await mppCredential(gateway);
+    const { request } = Credential.deserialize(credential).challenge;
+    expect((request as MutableCredential['challenge']['request']).methodDetails).toMatchObject({
+      permit2Address: PERMIT2_ADDRESS,
+    });
     const before = await balances();
     const callsBefore = backendCalls;
 
