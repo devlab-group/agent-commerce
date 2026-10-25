@@ -18,7 +18,7 @@ Two things are structurally different from the local and testnet examples:
 
 |                                    |                                                                                                                                                          |
 | ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `MERCHANT_WALLET`                  | your wallet. Address only: the gateway never takes a merchant key.                                                                                       |
+| `MERCHANT_WALLET`                  | your wallet. Address only: the gateway never takes a merchant key. See [Paying into a contract](#paying-into-a-contract-address).                        |
 | `ALLOW_X402_MAINNET=true`          | the explicit opt-in. Never a default.                                                                                                                    |
 | CDP credentials, or a bearer token | `cdp` requires the optional `@coinbase/x402` peer and CDP's URL, already configured. `bearer` needs no extra package; set its facilitator's https `url`. |
 | `ADMIN_TOKEN`                      | required here: it guards the receipt routes, which carry your ledger.                                                                                    |
@@ -26,6 +26,25 @@ Two things are structurally different from the local and testnet examples:
 
 To run without a facilitator credential, see [base-mainnet-payai](../base-mainnet-payai/),
 which sets `allowUnauthenticatedFacilitator`.
+
+## Paying into a contract address
+
+`MERCHANT_WALLET` sets the x402 `payTo` address, which can be a contract such
+as a revenue splitter on Base. USDC's EIP-3009 `transferWithAuthorization`
+transfers tokens without invoking a recipient callback, so the contract needs
+no receive handler.
+
+Before using a contract:
+
+- Confirm it can send USDC onward, for example through its `distribute`
+  function. Otherwise, the funds stay at that address.
+- Verify its deployment on each offer's network. A contract exists only on the
+  chain where it was deployed, while an EOA's key controls its address on every
+  EVM chain. Do not reuse the address on another network unless the intended
+  contract is also deployed there.
+  [`docs/configuration.md`](../../docs/configuration.md) reuses
+  `${MERCHANT_WALLET}` for Base and Polygon offers. Setting it to a Base
+  contract would send Polygon payments to an address nobody controls there.
 
 ## Validate before anything else
 
