@@ -12,7 +12,16 @@ import type {
   IsoTimestamp,
   PaymentMethodName,
 } from './common';
+import type { PaymentAttempt } from './receipt';
 import type { CommerceResource } from './resource';
+
+/**
+ * `PaymentResult.metadata` key for public coordinates returned by `verify`
+ * for later provider reconciliation. Core must store the value unchanged and
+ * interpret only `expiresAt`. Never include signatures, payloads or
+ * transaction bytes. Experimental: may change in a minor release.
+ */
+export const RECONCILIATION_METADATA_KEY = 'reconciliation';
 
 /**
  * Provider-native payment challenge, opaque to core. For x402 the `accepts`
@@ -127,6 +136,32 @@ export interface PaymentSettlementContext extends PaymentVerificationContext {
   readonly verification: PaymentResult;
 }
 
+/** Input to {@link PaymentProvider.reconcile}. Experimental: may change in a minor release */
+export interface PaymentReconciliationContext {
+  readonly attempt: PaymentAttempt;
+  /** Coordinates from `verify`; optional for compatibility with pre-2.5.0 attempts */
+  readonly locator?: Readonly<Record<string, unknown>>;
+  readonly now: IsoTimestamp;
+}
+
+/** Chain evidence for resolving an attempt. Experimental: may change in a minor release */
+export interface PaymentReconciliationResult {
+  /**
+   * Report `settled` only with a final transfer record for this authorization.
+   * Report `not-settled` only when a state read proves it unused after it can
+   * no longer land; missing logs or receipts are insufficient. Otherwise,
+   * report `unknown`.
+   */
+  readonly outcome: 'settled' | 'not-settled' | 'unknown';
+  /** A machine-readable token, such as `not_final` */
+  readonly reason: string;
+  readonly externalReference?: string;
+  /** Public chain facts only */
+  readonly evidence?: Readonly<Record<string, unknown>>;
+  /** For `unknown`, the earliest time a different answer is possible, if known */
+  readonly retryAfter?: IsoTimestamp;
+}
+
 /**
  * Contract every payment rail implements. Implementations must be
  * non-custodial: they orchestrate an external payment protocol and never hold
@@ -164,6 +199,13 @@ export interface PaymentProvider {
    * returned result; the pipeline records any throw as settlement-uncertain.
    */
   settle(context: PaymentSettlementContext): Promise<PaymentResult>;
+
+  /**
+   * Read chain evidence for an attempt with an unknown outcome. Implementations
+   * must not write, broadcast or call a facilitator. Providers without this
+   * hook require manual resolution. Experimental: may change in a minor release.
+   */
+  reconcile?(context: PaymentReconciliationContext): Promise<PaymentReconciliationResult>;
 
   health(): Promise<AdapterHealth>;
 }

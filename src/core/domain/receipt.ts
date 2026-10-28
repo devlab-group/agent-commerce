@@ -6,6 +6,8 @@ import type { PaymentResult } from './payment';
 export interface CommerceReceipt {
   readonly id: string;
   readonly requestId: string;
+  /** Optional for compatibility with rows written before 2.5.0 */
+  readonly transactionId?: string;
   readonly resourceId: string;
   /** Absent for free resources */
   readonly payment?: PaymentResult;
@@ -26,6 +28,8 @@ export interface CommerceReceipt {
 export interface PaymentAttempt {
   readonly id: string;
   readonly requestId: string;
+  /** Optional for compatibility with rows written before 2.5.0 */
+  readonly transactionId?: string;
   readonly resourceId: string;
   readonly provider: string;
   /** Unique across the store; see `PaymentResult.replayKey` */
@@ -57,6 +61,21 @@ export interface PaymentAttempt {
   readonly payee?: string;
   readonly externalReference?: string;
   readonly rejectionReason?: string;
+  /** Records how an unresolved attempt became `settled` or `rejected` after its request ended */
+  readonly resolution?: PaymentAttemptResolution;
   readonly createdAt: IsoTimestamp;
   readonly updatedAt: IsoTimestamp;
+}
+
+/** Who resolved an attempt, manually or by reconciliation, and why */
+export interface PaymentAttemptResolution {
+  readonly method: 'reconcile' | 'manual';
+  /** Caller-supplied identity; the admin token does not identify an individual */
+  readonly actor: string;
+  readonly reason: string;
+  readonly at: IsoTimestamp;
+  /** For `manual`, an unverified reference supplied by the operator */
+  readonly externalReference?: string;
+  /** Public chain facts only */
+  readonly evidence?: Readonly<Record<string, unknown>>;
 }

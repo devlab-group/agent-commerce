@@ -179,6 +179,25 @@ persistence must not fail the commerce flow.
   `createRequirement`, allowing a rail to bind its challenge to the request.
   x402's ERC-8409 quotes hash this input with the resource ID. A rail must not
   send the input to a third party. Providers that ignore the field are unaffected.
+- The 2.5.0 transaction contracts are optional. Existing 2.4 stores and payment
+  providers do not need to implement the journal or reconciliation hooks.
+  - `transactionId` is optional on `CommerceEvent`, `CommerceReceipt`,
+    `PaymentAttempt`, `DeliveredOutcome` and `PaymentRequiredOutcome`.
+  - `DeliveredOutcome.persistenceFailures` lists failed store writes that did
+    not prevent delivery. A `receipt` entry makes `toDeliverySummary` add
+    `receiptCommitted: false`; other entries leave the summary unchanged.
+  - For an attempt resolved after its request ends, `PaymentAttempt.resolution`
+    records the actor, reason, any evidence and the method (reconciliation or
+    manual action).
+  - `TransactionState` and `PersistenceFailure` accept unlisted string values,
+    so consumers must handle new values introduced by later releases.
+  - These APIs are experimental and may change in a minor release:
+    `Transaction`, its states and `transactionState()`; the optional
+    `ReceiptStore` journal methods, their argument types and
+    `PaymentAttemptReservation.transaction`; and `PaymentProvider.reconcile`,
+    its context and result, and `RECONCILIATION_METADATA_KEY`.
+  - The 3.0.0 migration plan makes `transactionId` and the journal methods
+    required; see [Upgrading from 2.x to 3.0](migration-3.0.md).
 
 ### Protocols and gateway
 
@@ -845,7 +864,7 @@ unset `adminToken` makes operator routes return 404; an empty
 | `POST /api/resources/:id/invoke`  | Invokes the HTTP surface. Payment and authorization use their defined headers; an unpaid request returns 402. A delivery relays the backend's status, body and text `Content-Type`; see [security.md](security.md#backend-response-relay). |
 | `GET /api/receipts?limit=`        | Lists recent receipts behind the operator-token gate; `undelivered=true` filters for failed deliveries.                                                                                                                                    |
 | `GET /api/events?limit=`          | Lists recent events through the operator-token gate.                                                                                                                                                                                       |
-| `GET /api/payment-attempts`       | Lists recent payment attempts behind the operator-token gate. `limit=` bounds the result size; `uncertain=true` selects `settlement-uncertain` and legacy `failed` attempts for reconciliation. |
+| `GET /api/payment-attempts`       | Lists recent payment attempts behind the operator-token gate. `limit=` bounds the result size; `uncertain=true` selects `settlement-uncertain` and legacy `failed` attempts for reconciliation.                                            |
 | Adapter mounts and fixed routes   | Delegated to enabled protocol adapters, with collision checks and per-mount limits.                                                                                                                                                        |
 
 Without `server.adminToken`, the operator routes return 404. With a token,

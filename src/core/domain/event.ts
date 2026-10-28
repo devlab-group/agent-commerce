@@ -27,6 +27,8 @@ export interface CommerceEvent {
   readonly id: string;
   readonly type: CommerceEventType;
   readonly requestId: string;
+  /** Links events from one execution; optional for compatibility with pre-2.5.0 rows */
+  readonly transactionId?: string;
   readonly resourceId?: string;
   readonly at: IsoTimestamp;
   /** Protocol adapter that originated the request, e.g. 'mcp' or 'http' */
