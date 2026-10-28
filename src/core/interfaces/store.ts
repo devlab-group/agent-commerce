@@ -91,6 +91,10 @@ export interface TransactionListOptions extends ListOptions {
 /** Transactions in newest-first order. Experimental: may change in a minor release */
 export interface TransactionPage {
   readonly transactions: readonly Transaction[];
+  /**
+   * Continue with this cursor even when filtering returns fewer than `limit`
+   * transactions, including an empty page. Pagination ends when it is absent.
+   */
   readonly nextCursor?: string;
 }
 

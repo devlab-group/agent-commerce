@@ -127,12 +127,9 @@ describe('schema lifecycle', () => {
   });
 
   it('reads a receipt written before the authorization column existed', async () => {
-    // Build a v1 file: the current schema minus the column migration 2 adds
     const path = join(dir, 'receipts.db');
     const v1 = new Database(path);
-    migrate(v1);
-    v1.exec('ALTER TABLE receipts DROP COLUMN authorization_json');
-    v1.pragma('user_version = 1');
+    migrate(v1, 1);
     v1.prepare(
       `INSERT INTO receipts (id, request_id, resource_id, delivered_at, backend_status)
        VALUES ('r_legacy', 'req_legacy', 'resource.report', '2026-01-01T00:00:00.000Z', 200)`,
