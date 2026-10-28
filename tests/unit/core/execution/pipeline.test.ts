@@ -1808,7 +1808,11 @@ describe('createExecutionPipeline', () => {
     expect(outcome.kind).toBe('delivered');
     expect(logger.errors).toEqual([
       {
-        obj: { err: { message: 'disk full', name: 'Error' }, requestId: 'req-1' },
+        obj: {
+          err: { message: 'disk full', name: 'Error' },
+          requestId: 'req-1',
+          transactionId: 'txn-1',
+        },
         msg: 'Persistence failed: saveReceipt',
       },
     ]);

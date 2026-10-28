@@ -1,6 +1,7 @@
 // Settles a verified, reserved payment, or records that the backend failed before it could
 import type { PaymentRequirement, PaymentResult } from '../../domain/payment';
 import { CommerceError, isCommerceError } from '../../errors';
+import { failuresOf } from '../journal';
 import { retryChallenge } from './challenge';
 import type { PipelineContext, SettleArgs } from './context';
 
@@ -12,13 +13,23 @@ export interface Settlement {
 }
 
 export function createSettlement(ctx: PipelineContext): Settlement {
-  const { options, safeEmit, safePersist, buildEvent } = ctx;
+  const { options, safeEmit, safePersist, recordStep, finalizeHold, buildEvent } = ctx;
 
   // Settle a verified, reserved payment and finalize its authorization.
   // Rejected or uncertain settlement throws before any response is delivered.
   async function settle(args: SettleArgs): Promise<PaymentResult> {
-    const { request, resource, provider, requirement, payment, verification, replayKey, hold } =
-      args;
+    const {
+      flow,
+      request,
+      resource,
+      provider,
+      requirement,
+      payment,
+      verification,
+      replayKey,
+      hold,
+    } = args;
+    await recordStep(flow, { kind: 'settling' });
     let settlement: PaymentResult;
     try {
       settlement = await provider.settle({
@@ -33,8 +44,9 @@ export function createSettlement(ctx: PipelineContext): Settlement {
       // it for retry and report the provider failure.
       const notSubmitted = notSubmittedReason(error);
       if (notSubmitted !== undefined) {
-        await hold?.finalize('release');
+        await finalizeHold(flow, hold, 'release');
         await safePersist(
+          flow,
           () =>
             options.store.updatePaymentAttempt({
               replayKey,
@@ -42,17 +54,20 @@ export function createSettlement(ctx: PipelineContext): Settlement {
               rejectionReason: notSubmitted,
             }),
           'updatePaymentAttempt(not-submitted)',
-          request.requestId,
+          'payment-attempt',
         );
         await safeEmit(
-          buildEvent({
+          buildEvent(flow, {
             type: 'payment.rejected',
-            requestId: request.requestId,
             resourceId: resource.id,
             adapter: request.protocol,
             paymentProvider: provider.name,
             status: 'error',
-            data: { reason: 'settlement-not-submitted', providerReason: notSubmitted },
+            data: {
+              reason: 'settlement-not-submitted',
+              providerReason: notSubmitted,
+              ...failuresOf(flow),
+            },
           }),
         );
         throw new CommerceError(
@@ -65,8 +80,9 @@ export function createSettlement(ctx: PipelineContext): Settlement {
       // broadcast before losing its response, even without a transaction
       // hash. Keep the authorization uncertain so it cannot be spent again.
       const txHash = settlementTxHash(error);
-      await hold?.finalize('markUncertain');
+      await finalizeHold(flow, hold, 'markUncertain');
       await safePersist(
+        flow,
         () =>
           options.store.updatePaymentAttempt({
             replayKey,
@@ -75,12 +91,11 @@ export function createSettlement(ctx: PipelineContext): Settlement {
             ...(error instanceof Error ? { rejectionReason: error.message } : {}),
           }),
         'updatePaymentAttempt(settlement-uncertain)',
-        request.requestId,
+        'payment-attempt',
       );
       await safeEmit(
-        buildEvent({
+        buildEvent(flow, {
           type: 'payment.rejected',
-          requestId: request.requestId,
           resourceId: resource.id,
           adapter: request.protocol,
           paymentProvider: provider.name,
@@ -88,6 +103,7 @@ export function createSettlement(ctx: PipelineContext): Settlement {
           data: {
             reason: 'settlement-uncertain',
             ...(txHash !== undefined ? { transactionHash: txHash } : {}),
+            ...failuresOf(flow),
           },
         }),
       );
@@ -106,8 +122,9 @@ export function createSettlement(ctx: PipelineContext): Settlement {
     }
 
     if (settlement.status !== 'settled') {
-      await hold?.finalize('release');
+      await finalizeHold(flow, hold, 'release');
       await safePersist(
+        flow,
         () =>
           options.store.updatePaymentAttempt({
             replayKey,
@@ -120,17 +137,19 @@ export function createSettlement(ctx: PipelineContext): Settlement {
               : {}),
           }),
         'updatePaymentAttempt(rejected)',
-        request.requestId,
+        'payment-attempt',
       );
       await safeEmit(
-        buildEvent({
+        buildEvent(flow, {
           type: 'payment.rejected',
-          requestId: request.requestId,
           resourceId: resource.id,
           adapter: request.protocol,
           paymentProvider: provider.name,
           status: 'error',
-          data: settlement.rejectionReason ? { reason: settlement.rejectionReason } : {},
+          data: {
+            ...(settlement.rejectionReason ? { reason: settlement.rejectionReason } : {}),
+            ...failuresOf(flow),
+          },
         }),
       );
       // A returned rejection confirms no settlement. Both rails return 402.
@@ -150,8 +169,9 @@ export function createSettlement(ctx: PipelineContext): Settlement {
       );
     }
 
-    await hold?.finalize('consume');
+    await finalizeHold(flow, hold, 'consume');
     await safePersist(
+      flow,
       () =>
         options.store.updatePaymentAttempt({
           replayKey,
@@ -161,12 +181,11 @@ export function createSettlement(ctx: PipelineContext): Settlement {
             : {}),
         }),
       'updatePaymentAttempt(settled)',
-      request.requestId,
+      'payment-attempt',
     );
     await safeEmit(
-      buildEvent({
+      buildEvent(flow, {
         type: 'payment.settled',
-        requestId: request.requestId,
         resourceId: resource.id,
         adapter: request.protocol,
         paymentProvider: provider.name,
@@ -181,9 +200,10 @@ export function createSettlement(ctx: PipelineContext): Settlement {
   // hold. Rails with reuse metadata can reserve the unspent replay key again,
   // as after any rejection.
   async function abandonSettlement(args: SettleArgs, backendErrorCode: string): Promise<void> {
-    const { request, resource, provider, replayKey, hold } = args;
-    await hold?.finalize('release');
+    const { flow, request, resource, provider, replayKey, hold } = args;
+    await finalizeHold(flow, hold, 'release');
     await safePersist(
+      flow,
       () =>
         options.store.updatePaymentAttempt({
           replayKey,
@@ -191,17 +211,16 @@ export function createSettlement(ctx: PipelineContext): Settlement {
           rejectionReason: 'backend_failed',
         }),
       'updatePaymentAttempt(backend-failed)',
-      request.requestId,
+      'payment-attempt',
     );
     await safeEmit(
-      buildEvent({
+      buildEvent(flow, {
         type: 'payment.rejected',
-        requestId: request.requestId,
         resourceId: resource.id,
         adapter: request.protocol,
         paymentProvider: provider.name,
         status: 'error',
-        data: { reason: 'backend-failed', backendErrorCode },
+        data: { reason: 'backend-failed', backendErrorCode, ...failuresOf(flow) },
       }),
     );
   }

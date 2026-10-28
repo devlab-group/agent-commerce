@@ -5,6 +5,7 @@ import type { PaymentRequirement } from '../../domain/payment';
 import type { CanonicalRequest } from '../../domain/request';
 import type { CommerceResource } from '../../domain/resource';
 import { CommerceError, describeError, isCommerceError } from '../../errors';
+import type { Flow } from '../journal';
 import type { AuthorizationHold, PipelineContext } from './context';
 
 // The provider for each method a resource requires, in the resource's order.
@@ -30,6 +31,7 @@ export function resolveAuthorizationProviders(
 }
 
 export type AuthorizeAndReserve = (
+  flow: Flow,
   request: CanonicalRequest,
   resource: CommerceResource,
   providers: readonly AuthorizationProvider[],
@@ -44,6 +46,7 @@ export function createAuthorizeAndReserve(ctx: PipelineContext): AuthorizeAndRes
   // none. Runs after payment verification, which has no side effect, so a bad
   // payment proof cannot burn a reservation.
   async function authorizeAndReserve(
+    flow: Flow,
     request: CanonicalRequest,
     resource: CommerceResource,
     providers: readonly AuthorizationProvider[],
@@ -60,9 +63,8 @@ export function createAuthorizeAndReserve(ctx: PipelineContext): AuthorizeAndRes
 
     if (submission === undefined || provider === undefined || unmet.length > 0) {
       await safeEmit(
-        buildEvent({
+        buildEvent(flow, {
           type: 'authorization.rejected',
-          requestId: request.requestId,
           resourceId: resource.id,
           adapter: request.protocol,
           status: 'error',
@@ -104,9 +106,8 @@ export function createAuthorizeAndReserve(ctx: PipelineContext): AuthorizeAndRes
             },
           );
       await safeEmit(
-        buildEvent({
+        buildEvent(flow, {
           type: 'authorization.rejected',
-          requestId: request.requestId,
           resourceId: resource.id,
           adapter: request.protocol,
           status: 'error',
@@ -117,9 +118,8 @@ export function createAuthorizeAndReserve(ctx: PipelineContext): AuthorizeAndRes
     }
 
     await safeEmit(
-      buildEvent({
+      buildEvent(flow, {
         type: 'authorization.verified',
-        requestId: request.requestId,
         resourceId: resource.id,
         adapter: request.protocol,
         status: 'ok',
@@ -134,9 +134,11 @@ export function createAuthorizeAndReserve(ctx: PipelineContext): AuthorizeAndRes
         reference: verification.reference,
         ...(verification.metadata !== undefined ? { metadata: verification.metadata } : {}),
       },
+      reservationId: verification.reservationId,
       async finalize(action) {
         try {
           await provider[action](verification.reservationId, context);
+          return true;
         } catch (error) {
           // A failure leaves the reservation reserved, which is still
           // unspendable, so the caller's outcome stands
@@ -144,6 +146,7 @@ export function createAuthorizeAndReserve(ctx: PipelineContext): AuthorizeAndRes
             { err: describeError(error), requestId: request.requestId, action },
             'Authorization finalization failed; the reservation stays reserved',
           );
+          return false;
         }
       },
     };

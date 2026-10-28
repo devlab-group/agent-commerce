@@ -5,6 +5,7 @@ import type { PaymentProvider, PaymentRequirement, PaymentResult } from '../../d
 import type { CanonicalRequest, PaymentRequiredOutcome } from '../../domain/request';
 import type { CommerceResource, Pricing } from '../../domain/resource';
 import { CommerceError, isCommerceError, toCommerceError } from '../../errors';
+import { type Flow, newTransaction } from '../journal';
 import { REUSE_REJECTED_AUTHORIZATION_METADATA_KEY } from '../settlement-order';
 import { type AuthorizeAndReserve, resolveAuthorizationProviders } from './authorization';
 import { replayError, retryChallenge } from './challenge';
@@ -17,6 +18,7 @@ export interface AdmittedPayment {
 }
 
 export type AdmitPayment = (
+  flow: Flow,
   request: CanonicalRequest,
   resource: CommerceResource,
   pricing: Extract<Pricing, { type: 'fixed' }>,
@@ -34,7 +36,7 @@ export function createPaymentAdmission(
 ): AdmitPayment {
   const { options, safeEmit, buildEvent } = ctx;
 
-  return async function admitPayment(request, resource, pricing, validInput) {
+  return async function admitPayment(flow, request, resource, pricing, validInput) {
     const provider = pickProvider(options.paymentProviders, resource.paymentMethods);
     if (!provider) {
       throw new CommerceError(
@@ -80,9 +82,8 @@ export function createPaymentAdmission(
 
     if (!request.payment) {
       await safeEmit(
-        buildEvent({
+        buildEvent(flow, {
           type: 'payment.required',
-          requestId: request.requestId,
           resourceId: resource.id,
           adapter: request.protocol,
           paymentProvider: provider.name,
@@ -91,6 +92,7 @@ export function createPaymentAdmission(
       return {
         kind: 'payment-required',
         requestId: request.requestId,
+        transactionId: flow.transactionId,
         resourceId: resource.id,
         requirement,
         ...(authProviders.length > 0
@@ -132,9 +134,8 @@ export function createPaymentAdmission(
             ...retryChallenge(requirement),
           });
       await safeEmit(
-        buildEvent({
+        buildEvent(flow, {
           type: 'payment.rejected',
-          requestId: request.requestId,
           resourceId: resource.id,
           adapter: request.protocol,
           paymentProvider: provider.name,
@@ -147,9 +148,8 @@ export function createPaymentAdmission(
 
     if (verification.status !== 'verified') {
       await safeEmit(
-        buildEvent({
+        buildEvent(flow, {
           type: 'payment.rejected',
-          requestId: request.requestId,
           resourceId: resource.id,
           adapter: request.protocol,
           paymentProvider: provider.name,
@@ -170,9 +170,8 @@ export function createPaymentAdmission(
 
     if (!verification.replayKey) {
       await safeEmit(
-        buildEvent({
+        buildEvent(flow, {
           type: 'payment.rejected',
-          requestId: request.requestId,
           resourceId: resource.id,
           adapter: request.protocol,
           paymentProvider: provider.name,
@@ -188,6 +187,7 @@ export function createPaymentAdmission(
     const replayKey = verification.replayKey;
 
     const hold = await authorizeAndReserve(
+      flow,
       request,
       resource,
       authProviders,
@@ -196,7 +196,7 @@ export function createPaymentAdmission(
     );
 
     try {
-      await options.store.reservePaymentAttempt({
+      const attempt = await options.store.reservePaymentAttempt({
         requestId: request.requestId,
         resourceId: resource.id,
         provider: provider.name,
@@ -208,7 +208,20 @@ export function createPaymentAdmission(
         ...(requirement.metadata?.[REUSE_REJECTED_AUTHORIZATION_METADATA_KEY] === true
           ? { reclaimRejected: true }
           : {}),
+        transaction: newTransaction(
+          flow,
+          resource,
+          requirement,
+          verification,
+          validInput,
+          hold !== undefined ? { ...hold.record, reservationId: hold.reservationId } : undefined,
+        ),
       });
+      // Require a matching transaction ID and recordTransactionStep before enabling
+      // journaling, so legacy stores can ignore the transaction data
+      flow.journaled =
+        attempt.transactionId === flow.transactionId &&
+        options.store.recordTransactionStep !== undefined;
     } catch (error) {
       // A duplicate replayKey arrives as PAYMENT_REPLAYED and is kept. Any
       // other failure (a full disk, a dropped connection) is STORAGE_ERROR,
@@ -220,9 +233,8 @@ export function createPaymentAdmission(
       );
       await hold?.finalize('release');
       await safeEmit(
-        buildEvent({
+        buildEvent(flow, {
           type: 'payment.rejected',
-          requestId: request.requestId,
           resourceId: resource.id,
           adapter: request.protocol,
           paymentProvider: provider.name,
@@ -234,9 +246,8 @@ export function createPaymentAdmission(
     }
 
     await safeEmit(
-      buildEvent({
+      buildEvent(flow, {
         type: 'payment.verified',
-        requestId: request.requestId,
         resourceId: resource.id,
         adapter: request.protocol,
         paymentProvider: provider.name,
@@ -247,6 +258,7 @@ export function createPaymentAdmission(
     return {
       kind: 'admitted',
       settleArgs: {
+        flow,
         request,
         resource,
         provider,
