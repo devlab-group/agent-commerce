@@ -282,6 +282,29 @@ describe('the NEAR locator', () => {
       expect.stringMatching(/did not answer \/supported; the NEAR locator names no relayer/),
     );
   });
+
+  it('returns the verdict within the grace period when /supported hangs, naming no relayer', async () => {
+    getSupportedMock.mockReturnValue(new Promise(() => {}));
+    const warn = vi.fn();
+    const provider = makeProvider({ logger: { ...NOOP_LOGGER, warn } });
+    const { context } = await paidRequest(provider);
+    verifyMock.mockResolvedValueOnce({ isValid: true, payer: BUYER });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const pending = provider.verify(context);
+      await vi.advanceTimersByTimeAsync(1_000);
+      const verification = await pending;
+
+      expect(verification.status).toBe('verified');
+      expect(locatorOf(verification)).not.toHaveProperty('relayers');
+      expect(warn).toHaveBeenCalledWith(
+        { graceMs: 1_000 },
+        expect.stringMatching(/\/supported is slow; the NEAR locator names no relayer/),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('settle()', () => {

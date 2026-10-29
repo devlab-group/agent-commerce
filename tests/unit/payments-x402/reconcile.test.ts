@@ -1,11 +1,17 @@
 // EVM, Solana and NEAR input checks, log-query ranges and proxy calldata
 import { x402ExactPermit2ProxyABI } from '@x402/evm';
-import { encodeFunctionData, getAddress } from 'viem';
-import { describe, expect, it } from 'vitest';
+import { encodeFunctionData, getAddress, type PublicClient } from 'viem';
+import { describe, expect, it, vi } from 'vitest';
 import type { PaymentAttempt, PaymentProvider } from '../../../src/core';
 import { eip3009Locator, permit2Locator } from '../../../src/payments/x402/locator';
 import { createX402PaymentProvider } from '../../../src/payments/x402/provider';
-import { logRanges, proxyCall } from '../../../src/payments/x402/reconcile/evm';
+import {
+  firstBlockAt,
+  logRanges,
+  parseEvmLocator,
+  proxyCall,
+  readEvmEvidence,
+} from '../../../src/payments/x402/reconcile/evm';
 
 const ASSET = '0x036cbd53842c5426634e7929541ec2318f3dcf7e';
 const BUYER = '0x3c44cdddb6a900fa2b585dd299e03d12fa4293bc';
@@ -225,5 +231,137 @@ describe('proxyCall', () => {
     ['calldata the proxy does not define', '0xdeadbeef' as const],
   ])('names nothing for %s', (_label, data) => {
     expect(proxyCall(data)).toBeUndefined();
+  });
+});
+
+// A chain whose block timestamps come from `timeOf`, counting block reads
+function fakeChain(head: bigint, timeOf: (block: bigint) => bigint) {
+  const getBlock = vi.fn(async (args: { blockNumber?: bigint; blockTag?: string }) => {
+    const number = args.blockTag === 'finalized' ? head : (args.blockNumber ?? head);
+    return { number, timestamp: timeOf(number) };
+  });
+  return { getBlock, finalized: { number: head, timestamp: timeOf(head) } };
+}
+
+describe('firstBlockAt', () => {
+  // Reference answer by linear scan
+  const scan = (head: bigint, timeOf: (block: bigint) => bigint, seconds: bigint) => {
+    for (let block = 0n; block <= head; block++) if (timeOf(block) >= seconds) return block;
+    return head + 1n;
+  };
+
+  it.each([
+    ['uniform', (b: bigint) => 1_000n + 2n * b],
+    ['irregular', (b: bigint) => 1_000n + b * b + (b % 7n === 0n ? 3n : 0n)],
+    ['bursts of equal timestamps', (b: bigint) => 1_000n + (b / 10n) * 12n],
+    ['genesis far in the past', (b: bigint) => (b === 0n ? 0n : 1_700_000_000n + b)],
+  ])('matches a linear scan on %s timestamps', async (_label, timeOf) => {
+    const head = 300n;
+    const { getBlock, finalized } = fakeChain(head, timeOf);
+    for (const seconds of [
+      0n,
+      timeOf(1n),
+      timeOf(150n) - 1n,
+      timeOf(150n),
+      timeOf(head),
+      timeOf(head) + 1n,
+    ]) {
+      expect(await firstBlockAt({ getBlock } as unknown as PublicClient, seconds, finalized)).toBe(
+        scan(head, timeOf, seconds),
+      );
+    }
+  });
+
+  it('finds a block on a long uniform chain in a few reads', async () => {
+    const timeOf = (b: bigint) => 1_600_000_000n + 2n * b;
+    const { getBlock, finalized } = fakeChain(37_000_000n, timeOf);
+
+    const block = await firstBlockAt(
+      { getBlock } as unknown as PublicClient,
+      timeOf(30_000_000n) - 1n,
+      finalized,
+    );
+
+    expect(block).toBe(30_000_000n);
+    expect(getBlock.mock.calls.length).toBeLessThanOrEqual(6);
+  });
+});
+
+describe('readEvmEvidence search window', () => {
+  const timeOf = (b: bigint) => 1_600_000_000n + 2n * b;
+  const head = 40_000_000n;
+  // 900 s of clock margin at 2 s per block
+  const fromBlock = 30_000_000n - 450n;
+  const lastSearched = fromBlock + 200_000n - 1n;
+
+  // Search for a used nonce with no matching log, from an attempt created at
+  // block 30,000,000, for an authorization valid before `validBefore`
+  async function searchUntil(validBefore: bigint) {
+    const { getBlock } = fakeChain(head, timeOf);
+    const getLogs = vi.fn(async (_range: { fromBlock: bigint; toBlock: bigint }) => []);
+    const client = {
+      getChainId: async () => 8453,
+      getBlock,
+      // The nonce is used
+      readContract: async () => true,
+      getLogs,
+    } as unknown as PublicClient;
+    const locator = parseEvmLocator(
+      eip3009Locator('eip155:8453', ASSET, {
+        from: BUYER,
+        to: MERCHANT,
+        value: '10000',
+        validAfter: '0',
+        validBefore: String(validBefore),
+        nonce: `0x${'ab'.repeat(32)}`,
+      }),
+    );
+    const createdAt = new Date(Number(timeOf(30_000_000n)) * 1000).toISOString();
+    if (locator === undefined) throw new Error('the locator did not parse');
+    const result = await readEvmEvidence({
+      client,
+      chainId: 8453,
+      locator,
+      attempt: { ...ATTEMPT, createdAt },
+    });
+    return { result, getLogs };
+  }
+
+  it('searches the first blocks after creation for a long-lived authorization', async () => {
+    // Far beyond the finalized head
+    const { result, getLogs } = await searchUntil(99_999_999_999n);
+
+    expect(result).toMatchObject({
+      outcome: 'unknown',
+      reason: 'search_window_too_wide',
+      evidence: {
+        fromBlock: String(fromBlock),
+        toBlock: String(lastSearched),
+        endBlock: String(head),
+      },
+    });
+    expect(getLogs).toHaveBeenCalledTimes(20);
+    expect(getLogs.mock.calls.at(-1)?.[0]).toMatchObject({ toBlock: lastSearched });
+  });
+
+  it('reports the nonce used without a record when the validity ends at the search cap', async () => {
+    // The last block before validBefore is the last block searched
+    const { result } = await searchUntil(timeOf(lastSearched + 1n));
+
+    expect(result).toMatchObject({
+      outcome: 'unknown',
+      reason: 'used_without_record',
+      evidence: { fromBlock: String(fromBlock), toBlock: String(lastSearched) },
+    });
+  });
+
+  it('reports the window too wide when the validity ends one block past the cap', async () => {
+    const { result } = await searchUntil(timeOf(lastSearched + 2n));
+
+    expect(result).toMatchObject({
+      outcome: 'unknown',
+      reason: 'search_window_too_wide',
+      evidence: { toBlock: String(lastSearched), endBlock: String(lastSearched + 1n) },
+    });
   });
 });

@@ -22,6 +22,7 @@ import {
   TransactionReceiptNotFoundError,
 } from 'viem';
 import type { PaymentAttempt, PaymentReconciliationResult } from '../../../core';
+import { isoFromSeconds } from '../locator';
 
 const EVENTS = parseAbi([
   'event AuthorizationUsed(address indexed authorizer, bytes32 indexed nonce)',
@@ -156,9 +157,10 @@ export async function readEvmEvidence(
     return unknown('chain_mismatch', { chainId: reported, expectedChainId: chainId });
   }
   const finalized = await client.getBlock({ blockTag: 'finalized' });
+  const finalizedAt = isoFromSeconds(String(finalized.timestamp));
   const finality = {
     finalizedBlock: String(finalized.number),
-    finalizedAt: isoSeconds(finalized.timestamp),
+    ...(finalizedAt !== undefined ? { finalizedAt } : {}),
   };
   const method = locator.method === 'eip3009' ? eip3009(client, locator) : permit2(client, locator);
   const settled = (hash: Hash, block: bigint): PaymentReconciliationResult =>
@@ -192,21 +194,23 @@ export async function readEvmEvidence(
     };
   }
 
-  // The nonce is used at finality. Search its validity window, allowing for
-  // clock skew around the attempt's creation time.
+  // Start at the later of validAfter and the attempt time minus the clock
+  // margin, covering at most MAX_WINDOW_BLOCKS. If no match is found in a
+  // truncated range, return search_window_too_wide.
   const createdAt = BigInt(Math.floor(Date.parse(attempt.createdAt) / 1000));
   const fromSeconds = max(method.validAfter, createdAt - CLOCK_MARGIN_SECONDS);
   const fromBlock = await firstBlockAt(client, fromSeconds, finalized);
-  const toBlock = (await firstBlockAt(client, method.endsAt, finalized)) - 1n;
+  const endBlock = (await firstBlockAt(client, method.endsAt, finalized)) - 1n;
+  const toBlock = min(endBlock, fromBlock + MAX_WINDOW_BLOCKS - 1n);
   const window = { fromBlock: String(fromBlock), toBlock: String(toBlock), ...finality };
-  if (toBlock - fromBlock + 1n > MAX_WINDOW_BLOCKS) {
-    return unknown('search_window_too_wide', window);
-  }
   for (const [start, end] of logRanges(fromBlock, toBlock)) {
     for (const hash of await method.candidates(start, end)) {
       const block = await method.carries(hash);
       if (block !== undefined) return settled(hash, block);
     }
+  }
+  if (toBlock < endBlock) {
+    return unknown('search_window_too_wide', { ...window, endBlock: String(endBlock) });
   }
   // A cancelled authorization or invalidated nonce, a transfer through another
   // contract, or logs the RPC no longer serves
@@ -355,23 +359,36 @@ export function logRanges(fromBlock: bigint, toBlock: bigint): [bigint, bigint][
   return ranges;
 }
 
-// The lowest block number at or below the finalized block whose timestamp is
-// at least `seconds`, or the block after it when there is none
-async function firstBlockAt(
-  client: PublicClient,
+/**
+ * Returns the first block number up to the finalized head whose timestamp
+ * reaches `seconds`, or the number after that head if none does. Alternates
+ * timestamp interpolation with bisection to bound the search.
+ */
+export async function firstBlockAt(
+  client: Pick<PublicClient, 'getBlock'>,
   seconds: bigint,
   finalized: { readonly number: bigint; readonly timestamp: bigint },
 ): Promise<bigint> {
   if (seconds > finalized.timestamp) return finalized.number + 1n;
+  const timestampOf = async (blockNumber: bigint) =>
+    (await client.getBlock({ blockNumber })).timestamp;
   let low = 0n;
+  let lowTime = await timestampOf(low);
+  if (lowTime >= seconds) return 0n;
+  // Keep low before the target timestamp and high at or after it
   let high = finalized.number;
-  while (low < high) {
-    const middle = (low + high) / 2n;
-    const { timestamp } = await client.getBlock({ blockNumber: middle });
-    if (timestamp >= seconds) high = middle;
-    else low = middle + 1n;
+  let highTime = finalized.timestamp;
+  for (let step = 0; high - low > 1n; step++) {
+    let middle = (low + high) / 2n;
+    if (step % 2 === 0 && highTime > lowTime) {
+      const guess = low + ((seconds - lowTime) * (high - low)) / (highTime - lowTime);
+      middle = min(max(guess, low + 1n), high - 1n);
+    }
+    const timestamp = await timestampOf(middle);
+    if (timestamp >= seconds) [high, highTime] = [middle, timestamp];
+    else [low, lowTime] = [middle, timestamp];
   }
-  return low;
+  return high;
 }
 
 /** An `unknown` answer with its reason and optional evidence */
@@ -380,10 +397,6 @@ export function unknown(
   evidence?: Readonly<Record<string, unknown>>,
 ): PaymentReconciliationResult {
   return { outcome: 'unknown', reason, ...(evidence !== undefined ? { evidence } : {}) };
-}
-
-function isoSeconds(seconds: bigint): string {
-  return new Date(Number(seconds) * 1000).toISOString();
 }
 
 const max = (a: bigint, b: bigint) => (a > b ? a : b);

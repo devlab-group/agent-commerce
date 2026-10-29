@@ -510,6 +510,10 @@ the run fails to complete.
 
 Each family needs its own evidence:
 
+- **EVM**: uses the recorded transaction hash or searches logs for a used nonce
+  near the attempt's creation time, within its validity bounds. The log search
+  covers at most 200,000 blocks. If no match is found and part of the candidate
+  range remains unsearched, it returns `unknown` (`search_window_too_wide`).
 - **Solana**: uses the recorded transaction signature or searches a known
   payer's history near the attempt's creation time. Only successful finalized
   transactions count. A search that reaches its page cap returns `unknown`

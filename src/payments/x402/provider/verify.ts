@@ -13,6 +13,10 @@ import { acceptedMatchesOffer, offerIndexOf } from './requirement';
 import { readTransfer, type Transfer } from './transfer';
 import type { NearOffer, ProviderContext } from './types';
 
+// Additional time to await optional NEAR relayers from `/supported` after
+// a successful verification verdict
+const RELAYER_GRACE_MS = 1_000;
+
 /** Builds the provider's `verify`, which never moves funds */
 export function createVerify(
   ctx: ProviderContext,
@@ -204,7 +208,7 @@ export function createVerify(
         ? sdkResult.payer
         : undefined);
     if (offer.family === 'svm' && payer !== undefined) locator = { ...locator, payer };
-    const relayerIds = (await relayers) ?? [];
+    const relayerIds = relayers !== undefined ? await withinGrace(relayers) : [];
     if (relayerIds.length > 0) locator = { ...locator, relayers: relayerIds };
     return {
       status: 'verified',
@@ -221,4 +225,20 @@ export function createVerify(
   }
 
   return verify;
+
+  async function withinGrace(relayers: Promise<readonly string[]>): Promise<readonly string[]> {
+    let timer: NodeJS.Timeout | undefined;
+    const late = new Promise<undefined>((resolve) => {
+      timer = setTimeout(() => resolve(undefined), RELAYER_GRACE_MS);
+      timer.unref();
+    });
+    const ids = await Promise.race([relayers, late]).finally(() => clearTimeout(timer));
+    if (ids === undefined) {
+      logger.warn(
+        { graceMs: RELAYER_GRACE_MS },
+        'x402 verify(): /supported is slow; the NEAR locator names no relayer',
+      );
+    }
+    return ids ?? [];
+  }
 }
