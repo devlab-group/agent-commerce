@@ -25,10 +25,12 @@ import {
   type PaymentResult,
   type PaymentSettlementContext,
   type PaymentVerificationContext,
+  RECONCILIATION_METADATA_KEY,
   systemClock,
 } from '../../core';
 import { SETTLE_AFTER_BACKEND_METADATA_KEY } from '../../core/execution/settlement-order';
 import { parseCanonicalAmount } from '../x402/amount';
+import { eip3009Locator } from '../x402/locator';
 import { createX402PaymentProvider, DEFAULT_IDS } from '../x402/provider';
 import { computeReplayKey } from '../x402/replay-key';
 import {
@@ -261,17 +263,16 @@ export function createMppProviderWithSettlement(
       return rejected(requirement, verificationReason(error));
     }
 
+    const authorization = credential.payload as Types.AuthorizationPayload;
     // validateCredential proved it equals the 32-byte challenge hash
-    const nonce = (credential.payload as Types.AuthorizationPayload).nonce as `0x${string}`;
+    const nonce = authorization.nonce as `0x${string}`;
     // Match x402's key so the same authorization collides across both rails
     const replayKey = computeReplayKey({ chainId, asset, from: payer, nonce });
 
     // The facilitator check runs before the pipeline reserves the replay key,
     // so an outage throws the x402 provider's retryable error and uses up
     // nothing, and a refusal is an ordinary rejection
-    const x402Verification = await settlement.verify(
-      await toX402Context(context, credential.payload as Types.AuthorizationPayload),
-    );
+    const x402Verification = await settlement.verify(await toX402Context(context, authorization));
     if (x402Verification.status !== 'verified') {
       // A spent challenge-hash nonce means the challenge was used. Check
       // the token when the facilitator reports only a simulation failure;
@@ -300,6 +301,8 @@ export function createMppProviderWithSettlement(
       network,
       asset,
       replayKey,
+      // Share x402's locator builder so both rails identify the same authorization
+      metadata: { [RECONCILIATION_METADATA_KEY]: eip3009Locator(network, asset, authorization) },
     };
   }
 
@@ -385,7 +388,18 @@ export function createMppProviderWithSettlement(
     return settlement.health();
   }
 
-  return { name: 'mpp', descriptor: MPP_DESCRIPTOR, createRequirement, verify, settle, health };
+  // Reuse the settlement provider's reconciliation for the credential's
+  // EIP-3009 authorization
+  const reconcile = settlement.reconcile?.bind(settlement);
+  return {
+    name: 'mpp',
+    descriptor: MPP_DESCRIPTOR,
+    createRequirement,
+    verify,
+    settle,
+    ...(reconcile !== undefined ? { reconcile } : {}),
+    health,
+  };
 }
 
 export type { MppProviderOptions, NonceUsedReader } from './options';

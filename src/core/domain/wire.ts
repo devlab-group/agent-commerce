@@ -104,13 +104,19 @@ export interface PaymentRequiredEnvelope {
     readonly amount: DecimalAmount;
     readonly currency: string;
     /**
-     * @deprecated Read each offer's `payTo` in `accepts`. Absent when the
-     * challenge offers several destinations.
+     * @deprecated Read `accepts`: x402 offers use `payTo`; MPP challenges use
+     * `request.recipient`. Omitted for multi-offer x402 challenges.
      */
     readonly destination?: string;
-    /** @deprecated Read each offer's `network` in `accepts` */
+    /**
+     * @deprecated Read `accepts`: x402 offers use `network`; MPP challenges use
+     * the numeric `request.methodDetails.chainId`
+     */
     readonly network?: string;
-    /** @deprecated Read each offer's `asset` in `accepts` */
+    /**
+     * @deprecated Read `accepts`: x402 offers use `asset`; MPP challenges use
+     * `request.currency`
+     */
     readonly asset?: string;
     readonly expiresAt?: IsoTimestamp;
     /** Provider-native requirement objects, passed through verbatim */
@@ -154,6 +160,8 @@ export interface DeliverySummary {
   readonly requestId: string;
   readonly resourceId: string;
   readonly receiptId: string;
+  /** `false` marks a failed receipt write; do not treat `receiptId` as proof of persistence */
+  readonly receiptCommitted?: false;
   readonly deliveredAt: IsoTimestamp;
   readonly payment?: {
     readonly status: 'verified' | 'settled' | 'rejected';
@@ -172,6 +180,7 @@ export function toDeliverySummary(outcome: DeliveredOutcome): DeliverySummary {
     requestId: outcome.requestId,
     resourceId: outcome.resourceId,
     receiptId: outcome.receipt.id,
+    ...(outcome.persistenceFailures?.includes('receipt') ? { receiptCommitted: false } : {}),
     deliveredAt: outcome.receipt.deliveredAt,
     ...(p !== undefined
       ? {

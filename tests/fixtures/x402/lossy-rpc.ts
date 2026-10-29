@@ -43,6 +43,52 @@ export async function startLossyRpc(
   };
 }
 
+export interface RecordingRpc extends LossyRpc {
+  /** Call methods and parameters recorded before forwarding */
+  readonly calls: readonly { readonly method: string; readonly params: unknown }[];
+}
+
+/**
+ * Forwards JSON-RPC calls to `upstream` and records each method and parameters.
+ * `answers` transforms method results so local test chains can report the
+ * network identity named by an offer.
+ */
+export async function startRecordingRpc(
+  upstream: string,
+  answers: Readonly<Record<string, (result: unknown) => unknown>> = {},
+): Promise<RecordingRpc> {
+  const calls: { method: string; params: unknown }[] = [];
+  const server = createServer(async (request, response) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(chunk as Buffer);
+    const body = Buffer.concat(chunks).toString('utf8');
+    const call = JSON.parse(body) as { method: string; params: unknown };
+    calls.push({ method: call.method, params: call.params });
+    const forwarded = await fetch(upstream, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body,
+    });
+    const reply = (await forwarded.json()) as { result?: unknown };
+    const answer = answers[call.method];
+    response.setHeader('content-type', 'application/json');
+    response.end(
+      JSON.stringify(
+        answer !== undefined && 'result' in reply
+          ? { ...reply, result: answer(reply.result) }
+          : reply,
+      ),
+    );
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address() as AddressInfo;
+  return {
+    url: `http://127.0.0.1:${port}`,
+    calls,
+    close: () => new Promise((resolve) => server.close(() => resolve())),
+  };
+}
+
 // A loopback RPC URL that refuses connections. The OS picks a free port and
 // the listener closes again, so the test does not depend on a fixed port that
 // another suite may bind, such as an Anvil chain.

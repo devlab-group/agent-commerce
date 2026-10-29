@@ -105,19 +105,70 @@ const MIGRATIONS: readonly Migration[] = [
       `);
     },
   },
+  {
+    version: 4,
+    up(db) {
+      // Join payment status from the attempt through attempt_id; cache only
+      // the derived transaction state for filtering. New columns on existing
+      // rows remain NULL, and no journal entries are backfilled.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS transactions (
+          seq                        INTEGER PRIMARY KEY AUTOINCREMENT,
+          id                         TEXT NOT NULL UNIQUE,
+          request_id                 TEXT NOT NULL,
+          resource_id                TEXT NOT NULL,
+          protocol                   TEXT NOT NULL,
+          state                      TEXT NOT NULL,
+          provider                   TEXT NOT NULL,
+          attempt_id                 TEXT NOT NULL,
+          replay_key                 TEXT NOT NULL,
+          network                    TEXT,
+          asset                      TEXT,
+          authorization_json         TEXT,
+          reservation_id             TEXT,
+          locator_json               TEXT,
+          expires_at                 TEXT,
+          input_digest               TEXT,
+          config_digest              TEXT NOT NULL,
+          settling_at                TEXT,
+          backend_dispatched_at      TEXT,
+          backend_deadline_at        TEXT,
+          backend_status             INTEGER,
+          backend_error_code         TEXT,
+          receipt_id                 TEXT,
+          persistence_failures_json  TEXT,
+          completed_at               TEXT,
+          created_at                 TEXT NOT NULL,
+          updated_at                 TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_transactions_state_seq ON transactions(state, seq);
+        CREATE INDEX IF NOT EXISTS idx_transactions_request_id ON transactions(request_id);
+        CREATE INDEX IF NOT EXISTS idx_transactions_replay_key ON transactions(replay_key);
+
+        ALTER TABLE receipts ADD COLUMN transaction_id TEXT;
+        ALTER TABLE events ADD COLUMN transaction_id TEXT;
+        ALTER TABLE payment_attempts ADD COLUMN transaction_id TEXT;
+        ALTER TABLE payment_attempts ADD COLUMN resolution_json TEXT;
+        ALTER TABLE payment_attempt_history ADD COLUMN transaction_id TEXT;
+        ALTER TABLE payment_attempt_history ADD COLUMN resolution_json TEXT;
+        CREATE INDEX IF NOT EXISTS idx_payment_attempt_history_id ON payment_attempt_history(id);
+      `);
+    },
+  },
 ];
 
 /** Target schema version: the version of the last migration */
 export const SCHEMA_VERSION = MIGRATIONS.at(-1)?.version ?? 0;
 
 /**
- * Brings `db` up to {@link SCHEMA_VERSION}, one transaction per migration.
- * On an already-migrated file it only reads `PRAGMA user_version`.
+ * Apply pending migrations through `target`, defaulting to {@link SCHEMA_VERSION},
+ * with one transaction per migration. At or above the target version, read
+ * `PRAGMA user_version` without changing the database.
  */
-export function migrate(db: Database.Database): void {
+export function migrate(db: Database.Database, target = SCHEMA_VERSION): void {
   const current = db.pragma('user_version', { simple: true }) as number;
   for (const migration of MIGRATIONS) {
-    if (migration.version <= current) continue;
+    if (migration.version <= current || migration.version > target) continue;
     const apply = db.transaction(() => {
       migration.up(db);
       db.pragma(`user_version = ${migration.version}`);

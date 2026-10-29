@@ -264,6 +264,16 @@ only released rows. A crash between settlement and the final replay-state
 update leaves the row reserved, favoring a refused retry over a possible second
 payment.
 
+After payment resolution, `agent-commerce reconcile` and manual resolution
+(`agent-commerce resolve` or `POST /api/payment-attempts/:id/resolve`) can move
+pending `reserved` or `uncertain` holds to `consumed` for a settled payment or
+`released` for a rejected one. These updates leave `consumed` and `released`
+rows unchanged; a released mandate can still be reserved again. Both paths
+pass the reserving request ID, so a late release cannot change a later
+request's reservation. If a request stops before recording its payment
+attempt and journal entry, these commands cannot discover its hold; it
+remains reserved.
+
 ## Receipt data
 
 A receipt stores a digest and reconciliation identifiers:

@@ -20,12 +20,13 @@ import type { AuthorizationRecord } from '../../domain/authorization';
 import type { PaymentResult } from '../../domain/payment';
 import type { CommerceReceipt } from '../../domain/receipt';
 import type { CanonicalRequest, ExecutionOutcome, ExecutionPipeline } from '../../domain/request';
-import type { CommerceResource } from '../../domain/resource';
+import { type CommerceResource, DEFAULT_BACKEND_TIMEOUT_MS } from '../../domain/resource';
 import { RESERVED_INPUT_FIELDS } from '../../domain/wire';
 import { CommerceError, toCommerceError } from '../../errors';
 import type { BackendResponse } from '../../interfaces/backend';
 import { isRecord } from '../../is-record';
 import { validateBackendRequestShape } from '../backend-request';
+import { createFlow, type Flow, failuresOf } from '../journal';
 import { SETTLE_AFTER_BACKEND_METADATA_KEY } from '../settlement-order';
 import { compileJsonSchema, type Validator } from '../validation';
 import { createPaymentAdmission } from './admission';
@@ -53,7 +54,7 @@ export function createExecutionPipeline(
   }
 
   const ctx = createPipelineContext(options);
-  const { safeEmit, safePersist, buildEvent } = ctx;
+  const { safeEmit, safePersist, recordStep, buildEvent } = ctx;
   const { settle, abandonSettlement } = createSettlement(ctx);
   const admitPayment = createPaymentAdmission(ctx, createAuthorizeAndReserve(ctx));
 
@@ -75,10 +76,14 @@ export function createExecutionPipeline(
       );
     }
 
+    // Allocate one ID per resolved execution for events, returned outcomes and
+    // receipts. Only paid executions that reach replay reservation can open a
+    // journal row.
+    const flow = createFlow(request, options.ids.next('txn'));
+
     await safeEmit(
-      buildEvent({
+      buildEvent(flow, {
         type: 'resource.requested',
-        requestId: request.requestId,
         resourceId: resource.id,
         adapter: request.protocol,
       }),
@@ -135,15 +140,35 @@ export function createExecutionPipeline(
       );
     }
 
-    let paymentResult: PaymentResult | undefined;
-    let authorization: AuthorizationRecord | undefined;
-    let deferredSettlement: SettleArgs | undefined;
-
+    let settleArgs: SettleArgs | undefined;
     if (resource.pricing.type === 'fixed') {
-      const admission = await admitPayment(request, resource, resource.pricing, validInput);
+      const admission = await admitPayment(flow, request, resource, resource.pricing, validInput);
       if (admission.kind === 'payment-required') return admission;
-      const { settleArgs } = admission;
-      authorization = settleArgs.hold?.record;
+      settleArgs = admission.settleArgs;
+    }
+
+    try {
+      return await settleAndDeliver(flow, resource, validInput, settleArgs, pipelineStart);
+    } finally {
+      // Attempt the final journal step after settleAndDeliver returns or throws.
+      // A failure is logged after the outcome and event snapshots are built, so
+      // it cannot appear in those snapshots.
+      await recordStep(flow, { kind: 'completed', ...failuresOf(flow) });
+    }
+  }
+
+  async function settleAndDeliver(
+    flow: Flow,
+    resource: CommerceResource,
+    validInput: unknown,
+    settleArgs: SettleArgs | undefined,
+    pipelineStart: number,
+  ): Promise<ExecutionOutcome> {
+    const { request } = flow;
+    const authorization: AuthorizationRecord | undefined = settleArgs?.hold?.record;
+    let paymentResult: PaymentResult | undefined;
+    let deferredSettlement: SettleArgs | undefined;
+    if (settleArgs !== undefined) {
       if (settleArgs.requirement.metadata?.[SETTLE_AFTER_BACKEND_METADATA_KEY] === true) {
         deferredSettlement = settleArgs;
       } else {
@@ -152,6 +177,10 @@ export function createExecutionPipeline(
     }
 
     // 6. call backend
+    await recordStep(flow, {
+      kind: 'backend-dispatched',
+      deadlineAt: backendDeadline(options.clock.now(), resource),
+    });
     const backendStart = options.clock.monotonicMs();
     let backendResponse: BackendResponse;
     try {
@@ -164,27 +193,34 @@ export function createExecutionPipeline(
       });
     } catch (error) {
       const commerceError = toCommerceError(error, 'BACKEND_ERROR', 'Backend call failed');
-      await safeEmit(
-        buildEvent({
-          type: 'backend.failed',
-          requestId: request.requestId,
-          resourceId: resource.id,
-          adapter: request.protocol,
-          status: 'error',
-          durationMs: Math.round(options.clock.monotonicMs() - backendStart),
-          data: { code: commerceError.code },
-        }),
-      );
+      await recordStep(flow, {
+        kind: 'backend-result',
+        status: backendErrorStatus(commerceError),
+        errorCode: commerceError.code,
+      });
+      const backendFailed = (data: Record<string, unknown> = {}) =>
+        safeEmit(
+          buildEvent(flow, {
+            type: 'backend.failed',
+            resourceId: resource.id,
+            adapter: request.protocol,
+            status: 'error',
+            durationMs: Math.round(options.clock.monotonicMs() - backendStart),
+            data: { code: commerceError.code, ...data },
+          }),
+        );
 
       if (deferredSettlement !== undefined) {
+        await backendFailed();
         await abandonSettlement(deferredSettlement, commerceError.code);
         throw commerceError;
       }
 
       if (paymentResult !== undefined) {
-        // The payment settled and the backend then failed. Record an
-        // undelivered receipt for the merchant and tell the buyer what they
-        // paid, including the settlement reference.
+        // Payment settled before the backend failed. Include its details and
+        // any settlement reference in the buyer's error. Attempt to save the
+        // merchant's undelivered receipt before backend.failed so that event
+        // can report a failed save.
         const failedReceipt: CommerceReceipt = {
           id: options.ids.next('receipt'),
           requestId: request.requestId,
@@ -195,12 +231,10 @@ export function createExecutionPipeline(
           payment: paymentResult,
           ...(authorization !== undefined ? { authorization } : {}),
           metadata: { delivered: false, backendErrorCode: commerceError.code },
+          transactionId: flow.transactionId,
         };
-        await safePersist(
-          () => options.store.saveReceipt(failedReceipt),
-          'saveReceipt(backend-failed-after-settlement)',
-          request.requestId,
-        );
+        await saveReceipt(flow, failedReceipt, 'saveReceipt(backend-failed-after-settlement)');
+        await backendFailed(failuresOf(flow));
 
         throw new CommerceError(
           'BACKEND_ERROR',
@@ -232,13 +266,14 @@ export function createExecutionPipeline(
         );
       }
 
+      await backendFailed();
       throw commerceError;
     }
+    await recordStep(flow, { kind: 'backend-result', status: backendResponse.status });
 
     await safeEmit(
-      buildEvent({
+      buildEvent(flow, {
         type: 'backend.called',
-        requestId: request.requestId,
         resourceId: resource.id,
         adapter: request.protocol,
         status: 'ok',
@@ -264,26 +299,29 @@ export function createExecutionPipeline(
       protocol: request.protocol,
       ...(paymentResult !== undefined ? { payment: paymentResult } : {}),
       ...(authorization !== undefined ? { authorization } : {}),
+      transactionId: flow.transactionId,
     };
 
-    await safePersist(() => options.store.saveReceipt(receipt), 'saveReceipt', request.requestId);
+    await saveReceipt(flow, receipt, 'saveReceipt');
 
     const totalDurationMs = Math.round(options.clock.monotonicMs() - pipelineStart);
+    const failures = failuresOf(flow);
 
     await safeEmit(
-      buildEvent({
+      buildEvent(flow, {
         type: 'resource.delivered',
-        requestId: request.requestId,
         resourceId: resource.id,
         adapter: request.protocol,
         status: 'ok',
         durationMs: totalDurationMs,
+        ...(failures.persistenceFailures !== undefined ? { data: failures } : {}),
       }),
     );
 
     return {
       kind: 'delivered',
       requestId: request.requestId,
+      transactionId: flow.transactionId,
       resourceId: resource.id,
       backendStatus: backendResponse.status,
       body: backendResponse.body,
@@ -291,10 +329,26 @@ export function createExecutionPipeline(
       ...(paymentResult !== undefined ? { payment: paymentResult } : {}),
       receipt,
       durationMs: totalDurationMs,
+      ...failures,
     };
   }
 
+  async function saveReceipt(flow: Flow, receipt: CommerceReceipt, label: string): Promise<void> {
+    if (await safePersist(flow, () => options.store.saveReceipt(receipt), label, 'receipt')) {
+      await recordStep(flow, { kind: 'receipt', receiptId: receipt.id });
+    }
+  }
+
   return { execute };
+}
+
+// Add a scheduling margin to the backend timeout when setting the journal's
+// waiting deadline; a missing result before then may still be in progress
+const BACKEND_DEADLINE_MARGIN_MS = 5_000;
+
+function backendDeadline(dispatchedAt: Date, resource: CommerceResource): string {
+  const timeoutMs = resource.handler.timeoutMs ?? DEFAULT_BACKEND_TIMEOUT_MS;
+  return new Date(dispatchedAt.getTime() + timeoutMs + BACKEND_DEADLINE_MARGIN_MS).toISOString();
 }
 
 // The status the backend returned, which backend-http.ts puts on

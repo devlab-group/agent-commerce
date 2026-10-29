@@ -22,10 +22,13 @@ import {
   parseAuthorizationHeader,
   type ReceiptStore,
   type ResourceRegistry,
+  TRANSACTION_STATES,
+  type Transaction,
   toCommerceError,
   toErrorEnvelope,
   toPaymentRequiredEnvelope,
 } from '../core';
+import { journalOf, resolveManually } from '../core/execution/reconcile';
 import { isRecord } from '../core/is-record';
 import { mppProblem, mppProblemDetail } from '../payments/mpp/problems';
 import { CONTENT_DIGEST_METADATA_KEY, contentDigest } from '../payments/mpp/transport';
@@ -44,6 +47,18 @@ import { buildWellKnownDocument } from './well-known';
 
 // Legacy x402 proof header; this gateway accepts v2 only
 const X402_V1_PAYMENT_HEADER = 'x-payment';
+
+// Bound resolve JSON separately from core's per-field text limits
+const RESOLVE_BODY_LIMIT_BYTES = 4096;
+const RESOLVE_FIELDS: readonly string[] = [
+  'status',
+  'actor',
+  'reason',
+  'externalReference',
+  'confirmExpired',
+];
+// Maximum events returned with a transaction, newest first
+const TRANSACTION_EVENT_LIMIT = 50;
 
 export interface RegisterRoutesOptions {
   readonly server: FastifyInstance;
@@ -135,6 +150,127 @@ export function registerRoutes(options: RegisterRoutesOptions): void {
       ),
     ),
   );
+
+  const { store, clock } = options;
+  const journal = () => journalOf(store);
+  const withAge = (transaction: Transaction) => ({
+    ...transaction,
+    ageSeconds: Math.max(
+      0,
+      Math.floor((clock.now().getTime() - Date.parse(transaction.createdAt)) / 1000),
+    ),
+  });
+
+  server.get(
+    '/api/transactions',
+    { onRequest: tokenHook },
+    operatorHandler(async (request) => {
+      const query = request.query as Record<string, unknown>;
+      const limit = parseLimit(query['limit']);
+      const state = parseText(query['state']);
+      if (state !== undefined && !(TRANSACTION_STATES as readonly string[]).includes(state)) {
+        throw new CommerceError('INPUT_INVALID', `Unknown transaction state "${state}"`, {
+          details: { field: 'state' },
+        });
+      }
+      const requestId = parseText(query['requestId']);
+      const cursor = parseText(query['cursor']);
+      const page = await journal().listTransactions({
+        ...(limit !== undefined ? { limit } : {}),
+        ...(parseFlag(query['unresolved'], 'unresolved') ? { unresolved: true } : {}),
+        ...(state !== undefined ? { state } : {}),
+        ...(requestId !== undefined ? { requestId } : {}),
+        ...(cursor !== undefined ? { cursor } : {}),
+      });
+      return {
+        transactions: page.transactions.map(withAge),
+        ...(page.nextCursor !== undefined ? { nextCursor: page.nextCursor } : {}),
+      };
+    }),
+  );
+
+  server.get(
+    '/api/transactions/:id',
+    { onRequest: tokenHook },
+    operatorHandler(async (request) => {
+      const id = (request.params as { id: string }).id;
+      const transaction = await journal().getTransaction(id);
+      if (transaction === undefined) {
+        throw new CommerceError('RESOURCE_NOT_FOUND', `Transaction "${id}" was not found`);
+      }
+      // Reclaimed attempts may be archived; getPaymentAttempt searches both tables
+      const [attempt, receipt, events] = await Promise.all([
+        journal().getPaymentAttempt(transaction.payment.attemptId),
+        transaction.receiptId !== undefined ? store.getReceipt(transaction.receiptId) : undefined,
+        store.listEvents({ requestId: transaction.requestId, limit: TRANSACTION_EVENT_LIMIT }),
+      ]);
+      return {
+        transaction: withAge(transaction),
+        ...(attempt !== undefined ? { attempt } : {}),
+        ...(receipt !== undefined ? { receipt } : {}),
+        events,
+      };
+    }),
+  );
+
+  server.post(
+    '/api/payment-attempts/:id/resolve',
+    { onRequest: tokenHook, bodyLimit: RESOLVE_BODY_LIMIT_BYTES },
+    operatorHandler(async (request) => {
+      const result = await resolveManually({
+        store,
+        authorizationProviders: options.authorizationProviders,
+        clock,
+        logger: options.logger,
+        attemptId: (request.params as { id: string }).id,
+        ...parseResolveBody(request.body),
+      });
+      if (!result.resolved) {
+        // The attempt's current state conflicts with the request
+        throw new CommerceError('INPUT_INVALID', result.message, {
+          httpStatus: 409,
+          details: { reason: result.refusal, attemptStatus: result.attempt.status },
+        });
+      }
+      return {
+        attempt: result.attempt,
+        ...(result.hold !== undefined ? { hold: result.hold } : {}),
+      };
+    }),
+  );
+}
+
+// Reject unknown fields and invalid types; core validates field values
+function parseResolveBody(body: unknown): {
+  status: string;
+  actor: string;
+  reason: string;
+  externalReference?: string;
+  confirmExpired?: boolean;
+} {
+  if (!isRecord(body)) {
+    throw new CommerceError('INPUT_INVALID', 'The request body must be a JSON object');
+  }
+  const field = (name: string, type: 'string' | 'boolean', required: boolean) => {
+    const value = body[name];
+    if ((value === undefined && required) || (value !== undefined && typeof value !== type)) {
+      throw new CommerceError('INPUT_INVALID', `Field "${name}" must be a ${type}`, {
+        details: { field: name },
+      });
+    }
+  };
+  const unknownField = Object.keys(body).find((name) => !RESOLVE_FIELDS.includes(name));
+  if (unknownField !== undefined) {
+    throw new CommerceError('INPUT_INVALID', `Unknown field "${unknownField}"`, {
+      details: { field: unknownField },
+    });
+  }
+  field('status', 'string', true);
+  field('actor', 'string', true);
+  field('reason', 'string', true);
+  field('externalReference', 'string', false);
+  field('confirmExpired', 'boolean', false);
+  return body as ReturnType<typeof parseResolveBody>;
 }
 
 // Keep a digest of each invoke body's original bytes through parsing.
@@ -155,23 +291,32 @@ function digestingStream(request: FastifyRequest): Transform {
   });
 }
 
-// Return one page from an operator ledger: receipts, events or payment attempts
-function ledgerHandler<K extends string>(
-  key: K,
-  list: (options: { limit?: number }, query: Record<string, unknown>) => Promise<unknown>,
-): (request: FastifyRequest, reply: FastifyReply) => Promise<Record<K, unknown> | undefined> {
+// Convert thrown errors to error envelopes with their mapped HTTP status
+function operatorHandler<T>(
+  handle: (request: FastifyRequest, reply: FastifyReply) => Promise<T>,
+): (request: FastifyRequest, reply: FastifyReply) => Promise<T | undefined> {
   return async (request, reply) => {
     try {
-      const query = request.query as Record<string, unknown>;
-      const limit = parseLimit(query['limit']);
-      const page = await list(limit !== undefined ? { limit } : {}, query);
-      return { [key]: page } as Record<K, unknown>;
+      return await handle(request, reply);
     } catch (error) {
       const commerceError = toCommerceError(error);
       reply.status(commerceError.httpStatus).send(toErrorEnvelope(commerceError));
       return undefined;
     }
   };
+}
+
+// List one page of receipts, events or payment attempts
+function ledgerHandler<K extends string>(
+  key: K,
+  list: (options: { limit?: number }, query: Record<string, unknown>) => Promise<unknown>,
+): (request: FastifyRequest, reply: FastifyReply) => Promise<Record<K, unknown> | undefined> {
+  return operatorHandler(async (request) => {
+    const query = request.query as Record<string, unknown>;
+    const limit = parseLimit(query['limit']);
+    const page = await list(limit !== undefined ? { limit } : {}, query);
+    return { [key]: page } as Record<K, unknown>;
+  });
 }
 
 async function handleInvoke(
@@ -444,6 +589,12 @@ function parseLimit(value: unknown): number | undefined {
     );
   }
   return n;
+}
+
+// The first value of a query parameter, or undefined when absent or empty
+function parseText(value: unknown): string | undefined {
+  if (Array.isArray(value)) return parseText(value[0]);
+  return typeof value === 'string' && value !== '' ? value : undefined;
 }
 
 // Reject invalid flags with INPUT_INVALID rather than returning an unfiltered list

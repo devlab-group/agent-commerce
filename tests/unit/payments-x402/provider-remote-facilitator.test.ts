@@ -8,6 +8,7 @@
 import { x402Client } from '@x402/core/client';
 import { FacilitatorResponseError } from '@x402/core/http';
 import { type PaymentRequired, SettleError, VerifyError } from '@x402/core/types';
+import { x402ExactPermit2ProxyAddress } from '@x402/evm';
 import { registerExactEvmScheme } from '@x402/evm/exact/client';
 import { privateKeyToAccount } from 'viem/accounts';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -19,6 +20,7 @@ import {
   type X402ProviderOptions,
 } from '../../../src/payments/x402/provider';
 import { computePermit2ReplayKey } from '../../../src/payments/x402/replay-key';
+import { expectStoredLocator, locatorOf } from '../../fixtures/x402/locator';
 
 const verifyMock = vi.fn();
 const settleMock = vi.fn();
@@ -190,6 +192,37 @@ describe('provider - remote facilitator', () => {
     await expect(provider.settle({ ...context, verification })).rejects.toSatisfy(
       (err: unknown) => isCommerceError(err) && err.code === 'PAYMENT_PROVIDER_UNAVAILABLE',
     );
+  });
+
+  it('locates an EIP-3009 authorization and expires it at validBefore', async () => {
+    const provider = makeProvider({ type: 'none' });
+    const { requirement, payload } = await proofFor(provider);
+    const { authorization } = JSON.parse(Buffer.from(payload, 'base64').toString('utf8')).payload;
+    verifyMock.mockResolvedValueOnce({ isValid: true });
+
+    const locator = locatorOf(
+      await provider.verify({
+        requestId: 'req-1',
+        resource: RESOURCE,
+        requirement,
+        submission: { method: 'x402', payload },
+      }),
+    );
+
+    expect(locator).toStrictEqual({
+      v: 1,
+      network: 'eip155:31337',
+      method: 'eip3009',
+      asset: ASSET,
+      from: '0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC',
+      to: PAY_TO,
+      value: '10000',
+      nonce: authorization.nonce.toLowerCase(),
+      validAfter: authorization.validAfter,
+      validBefore: authorization.validBefore,
+      expiresAt: new Date(Number(authorization.validBefore) * 1000).toISOString(),
+    });
+    await expectStoredLocator(locator, 'eip3009');
   });
 
   it('treats a facilitator that produced no verdict as unavailable, not as a bad payment', async () => {
@@ -796,8 +829,9 @@ describe('provider - Permit2 offers', () => {
         from: string;
         spender: string;
         nonce: string;
+        deadline: string;
         permitted: { token: string; amount: string };
-        witness: { to: string };
+        witness: { to: string; validAfter: string };
       };
     };
     extensions?: Record<string, unknown>;
@@ -981,6 +1015,38 @@ describe('provider - Permit2 offers', () => {
         rejectionReason: errorReason,
       });
     }
+  });
+
+  it('locates a Permit2 transfer through the x402 proxy and expires it at the deadline', async () => {
+    const provider = makePermit2Provider();
+    const { requirement, proof } = await signedProof(provider);
+    const auth = proof.payload.permit2Authorization;
+    verifyMock.mockResolvedValueOnce({ isValid: true });
+
+    const locator = locatorOf(
+      await provider.verify({
+        requestId: 'req-1',
+        resource: RESOURCE,
+        requirement,
+        submission: submission(proof),
+      }),
+    );
+
+    expect(locator).toStrictEqual({
+      v: 1,
+      network: 'eip155:31337',
+      method: 'permit2',
+      asset: ASSET,
+      owner: buyer.address,
+      to: PAY_TO,
+      amount: '10000',
+      nonce: auth.nonce,
+      deadline: auth.deadline,
+      validAfter: auth.witness.validAfter,
+      proxy: x402ExactPermit2ProxyAddress,
+      expiresAt: new Date(Number(auth.deadline) * 1000).toISOString(),
+    });
+    await expectStoredLocator(locator, 'permit2');
   });
 
   it('refuses an EIP-3009 payload for a Permit2 offer', async () => {

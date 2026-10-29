@@ -5,4 +5,5 @@ export * from './payment';
 export * from './receipt';
 export * from './request';
 export * from './resource';
+export * from './transaction';
 export * from './wire';

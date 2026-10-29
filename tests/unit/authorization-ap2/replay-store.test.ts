@@ -144,11 +144,52 @@ describe('finalizing', () => {
     expect(store.stateOf('sha256:AAAA')).toBe('consumed');
   });
 
-  it('never lets an uncertain mandate be released', () => {
+  it.each([
+    ['consume', 'consumed'],
+    ['release', 'released'],
+  ] as const)('lets reconciliation %s an uncertain mandate', (action, state) => {
     store.reserve(request());
     store.markUncertain('sha256:AAAA');
+    store[action]('sha256:AAAA');
+    expect(store.stateOf('sha256:AAAA')).toBe(state);
+  });
+
+  it('never lets a released mandate be marked uncertain', () => {
+    store.reserve(request());
     store.release('sha256:AAAA');
-    expect(store.stateOf('sha256:AAAA')).toBe('uncertain');
+    store.markUncertain('sha256:AAAA');
+    expect(store.stateOf('sha256:AAAA')).toBe('released');
+  });
+
+  it('ignores a late release naming a request whose reservation was replaced', () => {
+    // req-1 released the mandate, then req-2 reserved it again
+    store.reserve(request());
+    store.release('sha256:AAAA', 'req-1');
+    store.reserve(request({ requestId: 'req-2' }));
+    store.release('sha256:AAAA', 'req-1');
+    store.consume('sha256:AAAA', 'req-1');
+    expect(store.stateOf('sha256:AAAA')).toBe('reserved');
+    store.consume('sha256:AAAA', 'req-2');
+    expect(store.stateOf('sha256:AAAA')).toBe('consumed');
+  });
+
+  it('reports whether each transition left the reservation in the requested state', () => {
+    store.reserve(request());
+    expect(store.consume('sha256:AAAA', 'req-1')).toBe(true);
+    // A repeat finds the row already consumed
+    expect(store.consume('sha256:AAAA', 'req-1')).toBe(true);
+    expect(store.release('sha256:AAAA', 'req-1')).toBe(false);
+    expect(store.markUncertain('sha256:AAAA')).toBe(false);
+    expect(store.consume('sha256:NEVER')).toBe(false);
+  });
+
+  it('reports a release as applied once another request holds the row, and a consume as not', () => {
+    store.reserve(request());
+    store.release('sha256:AAAA', 'req-1');
+    store.reserve(request({ requestId: 'req-2' }));
+    expect(store.release('sha256:AAAA', 'req-1')).toBe(true);
+    expect(store.consume('sha256:AAAA', 'req-1')).toBe(false);
+    expect(store.stateOf('sha256:AAAA')).toBe('reserved');
   });
 
   it('never lets a released mandate be consumed without a fresh reservation', () => {

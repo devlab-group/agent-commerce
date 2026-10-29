@@ -14,10 +14,15 @@ import type { AdapterDescriptor } from '../../../core';
 import { CommerceError, NOOP_LOGGER, systemClock } from '../../../core';
 import { PACKAGE_VERSION } from '../../../version';
 import { DEFAULT_IDS, DEFAULT_MAX_TIMEOUT_SECONDS, X402_VERSION } from './constants';
-import { createSvmFeePayerSource } from './fee-payer';
+import {
+  createNearRelayerSource,
+  createSupportedSource,
+  createSvmFeePayerSource,
+} from './fee-payer';
 import { createHealthCheck } from './health';
 import { resolveOffers } from './offers';
 import { createQuoteIssuer, QUOTE_EXTENSION, QUOTE_REQUEST_SCHEME } from './quote';
+import { createReconcile } from './reconcile';
 import { createRequirementBuilders } from './requirement';
 import { createSettle } from './settle';
 import type {
@@ -148,11 +153,12 @@ export function createX402PaymentProvider(
     svm,
     near,
   };
+  const supported = createSupportedSource(ctx);
   const { createRequirement, selectRequirement } = createRequirementBuilders(
     ctx,
-    createSvmFeePayerSource(ctx),
+    createSvmFeePayerSource(supported),
   );
-  const verify = createVerify(ctx);
+  const verify = createVerify(ctx, createNearRelayerSource(supported, logger));
   const settle = createSettle(ctx);
   const health = createHealthCheck(ctx);
 
@@ -164,6 +170,7 @@ export function createX402PaymentProvider(
     ...(severalOffers ? { selectRequirement } : {}),
     verify,
     settle,
+    reconcile: createReconcile(ctx),
     health,
     ...(quotes
       ? {

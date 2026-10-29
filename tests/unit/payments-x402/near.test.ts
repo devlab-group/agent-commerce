@@ -16,16 +16,28 @@ const inspect = (signedDelegateAction: unknown, terms = TERMS) =>
   inspectNearPayload({ signedDelegateAction }, terms);
 
 describe('inspectNearPayload', () => {
-  it('reads the payer and keys the payment by sender, key and nonce', async () => {
+  it('reads the payer, keys the payment by sender, key and nonce, and locates the delegate', async () => {
     const { signedDelegateAction, keyPair } = await buildSignedDelegate();
-    expect(inspect(signedDelegateAction)).toEqual({
+    const publicKey = keyPair.getPublicKey().toString();
+    expect(inspect(signedDelegateAction)).toStrictEqual({
       payer: DELEGATE_DEFAULTS.senderId,
       replayKey: computeNearReplayKey({
         network: 'near:testnet',
         senderId: DELEGATE_DEFAULTS.senderId,
-        publicKey: keyPair.getPublicKey().toString(),
+        publicKey,
         nonce: DELEGATE_DEFAULTS.nonce,
       }),
+      locator: {
+        v: 1,
+        network: 'near:testnet',
+        senderId: 'buyer.testnet',
+        publicKey,
+        nonce: '5',
+        maxBlockHeight: '1060',
+        asset: '3e2210e1184b45b64c8a434c0a7e7b23cc04ea7eb7a6c3c32520d03d4afcb8af',
+        receiver: 'merchant.testnet',
+        amount: '10000',
+      },
     });
   });
 

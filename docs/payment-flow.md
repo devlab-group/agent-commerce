@@ -157,6 +157,72 @@ reservation, in its own database and on its own key. It is claimed before the
 payment replay key and released only by a failure that provably moved no money.
 See [AP2](protocols/ap2.md#replay-states).
 
+## Transactions
+
+After `execute()` resolves a resource, core allocates a `transactionId` for the
+call and includes it in events, returned outcomes and receipts. With SQLite,
+a paid call reaching replay reservation also gets a payment attempt and journal
+row with that ID. Both are inserted in one transaction; a failed journal insert
+ends the call with `STORAGE_ERROR` before settlement. Free calls, 402 challenges
+and refused replays carry the ID without a journal row.
+
+The row links the payment attempt, any authorization hold, the backend call
+and receipt. Its timestamps and results reflect the steps saved so far.
+Core stores an input digest when the input can be canonicalized, rather than
+the body. Journal fields must not contain payment proofs, signatures,
+mandates or secrets. Payment status comes from the attempt; the transaction
+state is derived from the recorded facts when the row is read:
+
+| State                 | Meaning                                                                                                           |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `payment-pending`     | Reserved, with no settlement verdict recorded                                                                     |
+| `payment-failed`      | The payment attempt is recorded as rejected                                                                       |
+| `payment-uncertain`   | `settlement-uncertain` or legacy `failed`: funds may have moved                                                   |
+| `delivery-started`    | Before the backend deadline, with no completion recorded; the call or a settled 2xx flow may still be in progress |
+| `delivery-unknown`    | Settled; the backend ended without a response, or its deadline passed without confirmed delivery                  |
+| `settled-undelivered` | Settled, with no backend call recorded or a recorded non-2xx response                                             |
+| `delivered`           | Settled, with a recorded 2xx backend result and pipeline completion                                               |
+
+Once the backend deadline passes, an unfinished `delivery-started` transaction
+is read as `delivery-unknown` if settled or `payment-pending` otherwise. No
+write is needed for this change. Consumers must handle new state names added
+by later releases.
+
+After reservation, failed store writes preserve delivery or the original
+commerce error and are logged at `error`. Delivered outcomes and terminal
+events include the `persistenceFailures` known when they are created. The
+final journal write stores the list if it succeeds; a failed `completed`
+step adds no detail to earlier snapshots. Thrown errors do not carry the list.
+A failed receipt write adds `receiptCommitted: false` to the MCP and A2A
+delivery summary.
+
+Operators list rows with `GET /api/transactions?unresolved=true` and read one
+with its attempt, receipt and events at `GET /api/transactions/:id`
+([routes](contracts.md#gateway-http-surface)). The `Transaction` type, the
+journal store methods and this response shape are experimental and may change
+in a minor release.
+
+### Reconciliation
+
+`agent-commerce reconcile` asks payment providers for chain evidence to resolve
+uncertain attempts. The built-in providers use read-only RPC calls without
+contacting facilitators. The command records local resolutions and hold
+updates without broadcasting, refunding or retrying delivery.
+
+- **settled** requires a final transfer matching the authorization.
+- **not settled** requires final chain state showing the authorization unused
+  after its last valid moment. Missing logs, receipts or history entries alone
+  do not prove nonpayment. Solana reconciliation does not return this result.
+- Inconclusive evidence stays **unknown**, with a reason, for a later run or
+  operator investigation followed by `agent-commerce resolve`.
+
+Resolutions record method, actor, reason, time and any available evidence.
+The write requires the attempt's expected status and no existing resolution,
+so competing resolvers cannot overwrite each other. Later runs skip resolved
+payments but, with AP2 enabled, can retry pending mandate consume or release
+updates. The [README](../README.md#agent-commerce-reconcile) covers the flags
+and the evidence each chain family needs.
+
 ## Amounts
 
 Canonical amounts are decimal strings in display units, such as `"0.01"`, never

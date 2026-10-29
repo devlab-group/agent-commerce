@@ -1,28 +1,23 @@
-// The Solana fee payer an offer names, read from the facilitator's `/supported`
+// Solana fee payers and NEAR relayers from the facilitator's `/supported`
 import type { SupportedResponse } from '@x402/core/types';
-import { CommerceError } from '../../../core';
+import { CommerceError, type Logger } from '../../../core';
+import { redactedErrorText } from '../../../core/errors';
 import { normalizeAddress } from '../addresses';
 import type { FacilitatorBinding } from '../facilitator';
 import { X402_VERSION } from './constants';
-import type { ProviderContext, SvmOffer } from './types';
+import type { NearOffer, ProviderContext, SvmOffer } from './types';
 
-// How long a `/supported` snapshot names the Solana fee payer of new offers
+// Cache lifetime for `/supported` responses shared by Solana and NEAR
 const SUPPORTED_TTL_MS = 60_000;
 
-/** Returns the fee payer lookup, with its `/supported` snapshot, for one provider */
-export function createSvmFeePayerSource(
-  ctx: ProviderContext,
-): (offer: SvmOffer) => Promise<string> {
-  const { clock, remoteBinding } = ctx;
+export type SupportedSource = () => Promise<SupportedResponse>;
 
-  // A Solana offer carries the fee payer the facilitator names in `/supported`.
-  // A snapshot lasts SUPPORTED_TTL_MS, and a refresh keeps the previous fee
-  // payer while the facilitator still lists it, so a challenge and the retry
-  // that pays it agree.
+/** Creates a provider's shared `/supported` cache, refreshed on reads after expiry */
+export function createSupportedSource(ctx: ProviderContext): SupportedSource {
+  const { clock, remoteBinding } = ctx;
   let supportedSnapshot:
     | { readonly at: number; readonly response: Promise<SupportedResponse> }
     | undefined;
-  const feePayers = new Map<string, string>();
 
   function currentSupported(): Promise<SupportedResponse> {
     const now = clock.monotonicMs();
@@ -33,12 +28,23 @@ export function createSvmFeePayerSource(
     const response = remote.supported();
     const snapshot = { at: now, response };
     supportedSnapshot = snapshot;
-    // A failed fetch is not kept; the next challenge asks again
+    // Discard failed requests so the next read retries
     response.catch(() => {
       if (supportedSnapshot === snapshot) supportedSnapshot = undefined;
     });
     return response;
   }
+
+  return currentSupported;
+}
+
+/** Creates a Solana fee payer lookup for one provider */
+export function createSvmFeePayerSource(
+  currentSupported: SupportedSource,
+): (offer: SvmOffer) => Promise<string> {
+  // Keep each network's previous fee payer while `/supported` still lists it,
+  // so refreshing the cache does not needlessly change challenge terms
+  const feePayers = new Map<string, string>();
 
   async function svmFeePayer(offer: SvmOffer): Promise<string> {
     let supported: SupportedResponse;
@@ -73,4 +79,30 @@ export function createSvmFeePayerSource(
   }
 
   return svmFeePayer;
+}
+
+/**
+ * Creates a lookup of NEAR relayer accounts for later transaction lookup.
+ * A failed `/supported` read logs a warning and returns no relayers, allowing
+ * an otherwise valid payment to verify.
+ */
+export function createNearRelayerSource(
+  currentSupported: SupportedSource,
+  logger: Logger,
+): (offer: NearOffer) => Promise<readonly string[]> {
+  return async (offer) => {
+    let supported: SupportedResponse;
+    try {
+      supported = await currentSupported();
+    } catch (err) {
+      logger.warn(
+        { err: redactedErrorText(err) },
+        `x402 verify(): facilitator ${offer.binding.describe} did not answer /supported; the NEAR locator names no relayer`,
+      );
+      return [];
+    }
+    // Accept both network-specific and CAIP-family signer entries
+    const { signers } = supported;
+    return [...new Set([...(signers[offer.network] ?? []), ...(signers['near:*'] ?? [])])];
+  };
 }

@@ -9,6 +9,7 @@ import type { AuthorizationRequirement, AuthorizationSubmission } from './author
 import type { IsoTimestamp, ProtocolName } from './common';
 import type { PaymentRequirement, PaymentResult, PaymentSubmission } from './payment';
 import type { CommerceReceipt } from './receipt';
+import type { PersistenceFailure } from './transaction';
 
 export interface CanonicalRequest {
   /** Correlation id for the entire flow, generated at ingress. A client never chooses it */
@@ -41,6 +42,7 @@ export interface CanonicalRequest {
 export interface DeliveredOutcome {
   readonly kind: 'delivered';
   readonly requestId: string;
+  readonly transactionId?: string;
   readonly resourceId: string;
   readonly backendStatus: number;
   readonly body: unknown;
@@ -48,12 +50,18 @@ export interface DeliveredOutcome {
   readonly payment?: PaymentResult;
   readonly receipt: CommerceReceipt;
   readonly durationMs: number;
+  /**
+   * Failed store writes that did not prevent delivery. A `receipt` entry
+   * marks `receipt.id` as uncommitted.
+   */
+  readonly persistenceFailures?: readonly PersistenceFailure[];
 }
 
 /** The resource costs money and the request carried no payment proof */
 export interface PaymentRequiredOutcome {
   readonly kind: 'payment-required';
   readonly requestId: string;
+  readonly transactionId?: string;
   readonly resourceId: string;
   readonly requirement: PaymentRequirement;
   /** Authorization the buyer must also present on the retry, when the resource requires one */

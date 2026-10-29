@@ -52,10 +52,18 @@ A replayed proof whose attempt already settled or was rejected gets a 402 with
 a new challenge. Every other replay gets 409 without one, because a second
 challenge could lead to a second payment.
 
-A 502 `PAYMENT_SETTLEMENT_FAILED` leaves no receipt. To reconcile the payment,
-use `GET /api/payment-attempts?uncertain=true`, which lists `settlement-uncertain`
-and legacy `failed` attempts with transaction hashes when available. This route
-requires the same operator token as `/api/receipts` and `/api/events`.
+A 502 `PAYMENT_SETTLEMENT_FAILED` means settlement was not confirmed and no
+receipt was created. Use
+`npx --no -- agent-commerce reconcile --env-file .env --dry-run` to report
+chain evidence without recording resolutions or hold updates; omit `--dry-run`
+to apply them. Retry `unknown` results later, or investigate on chain before
+recording an operator verdict with `npx --no -- agent-commerce resolve`.
+
+To inspect first, `GET /api/transactions?unresolved=true` lists unresolved
+purchases. `GET /api/payment-attempts?uncertain=true` lists
+`settlement-uncertain` and legacy `failed` attempts, with transaction IDs when
+available. Both routes require the same operator token as `/api/receipts` and
+`/api/events`.
 
 If an upfront payment settled before the backend failed, the response is
 502 `BACKEND_ERROR`, including for a backend timeout. It carries the settled

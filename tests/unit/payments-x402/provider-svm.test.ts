@@ -5,6 +5,7 @@
  */
 import { generateKeyPairSigner, type KeyPairSigner } from '@solana/kit';
 import type { PaymentRequirements, SupportedResponse } from '@x402/core/types';
+import { decodeTransactionFromPayload, transactionMessageHash } from '@x402/svm';
 import { ExactSvmScheme } from '@x402/svm/exact/server';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
@@ -19,9 +20,10 @@ import {
   createX402PaymentProvider,
   type X402MultiOfferProviderOptions,
 } from '../../../src/payments/x402/provider';
-import { svmReplayKey } from '../../../src/payments/x402/svm';
+import { inspectSvmPayload } from '../../../src/payments/x402/svm';
+import { expectStoredLocator, locatorOf } from '../../fixtures/x402/locator';
 import { mintAccount } from '../../fixtures/x402/solana-validator';
-import { buildSvmPayment } from '../../fixtures/x402/svm-transaction';
+import { BLOCKHASH, buildSvmPayment } from '../../fixtures/x402/svm-transaction';
 
 const verifyMock = vi.fn();
 const settleMock = vi.fn();
@@ -284,9 +286,36 @@ describe('verify()', () => {
       amount: '0.01',
       network: DEVNET,
       asset: USDC,
-      replayKey: (svmReplayKey({ transaction }, DEVNET) as { replayKey: string }).replayKey,
+      replayKey: (inspectSvmPayload({ transaction }, DEVNET) as { replayKey: string }).replayKey,
     });
     expect(verifyMock.mock.calls[0]?.[0]).toMatchObject({ payload: { transaction } });
+  });
+
+  it('locates the message, with the payer the facilitator reported', async () => {
+    const provider = makeProvider();
+    const { context, transaction } = await paidRequest(provider);
+    verifyMock.mockResolvedValueOnce({ isValid: true, payer: buyer.address });
+
+    const locator = locatorOf(await provider.verify(context));
+
+    expect(locator).toStrictEqual({
+      v: 1,
+      network: DEVNET,
+      messageHash: transactionMessageHash(decodeTransactionFromPayload({ transaction })),
+      recentBlockhash: BLOCKHASH,
+      payer: buyer.address,
+    });
+    await expectStoredLocator(locator, 'svm');
+  });
+
+  it('leaves the payer out of the locator when the facilitator names none', async () => {
+    const provider = makeProvider();
+    const { context } = await paidRequest(provider);
+    verifyMock.mockResolvedValueOnce({ isValid: true });
+
+    const locator = locatorOf(await provider.verify(context));
+
+    expect(Object.keys(locator).sort()).toEqual(['messageHash', 'network', 'recentBlockhash', 'v']);
   });
 
   it('reads Solana addresses with their case', async () => {

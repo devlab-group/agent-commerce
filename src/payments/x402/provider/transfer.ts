@@ -1,8 +1,9 @@
-// What an EVM payload authorizes: payer, payee, amount and replay key
+// EVM transfer terms, replay identity and reconciliation coordinates
 
 import type { PaymentPayload } from '@x402/core/types';
 import { x402ExactPermit2ProxyAddress } from '@x402/evm';
 import { getAddress, isAddress } from 'viem';
+import { eip3009Locator, permit2Locator } from '../locator';
 import { hasEip3009Fields, isExactEvmPayload, isExactPermit2Payload } from '../payload';
 import { computePermit2ReplayKey, computeReplayKey } from '../replay-key';
 import type { EvmOffer } from './types';
@@ -13,6 +14,7 @@ export interface Transfer {
   readonly to: `0x${string}`;
   readonly value: string;
   readonly replayKey: string;
+  readonly locator: Readonly<Record<string, unknown>>;
   readonly recipientMismatch: string;
   readonly amountMismatch: string;
 }
@@ -43,12 +45,14 @@ export function readTransfer(payload: PaymentPayload, offer: EvmOffer): Transfer
         from: getAddress(from),
         nonce,
       }),
+      locator: eip3009Locator(offer.network, offer.asset, authorization),
       recipientMismatch: 'invalid_exact_evm_payload_recipient_mismatch',
       amountMismatch: 'invalid_exact_evm_payload_authorization_value_mismatch',
     };
   }
   if (!isExactPermit2Payload(payload)) return 'unsupported_scheme';
-  const { from, spender, permitted, witness, nonce } = payload.payload.permit2Authorization;
+  const { from, spender, permitted, witness, nonce, deadline } =
+    payload.payload.permit2Authorization;
   // Permit2 lets the spender move the permitted tokens anywhere; only the x402
   // proxy binds the transfer to the signed witness recipient
   if (getAddress(spender) !== getAddress(x402ExactPermit2ProxyAddress)) {
@@ -60,6 +64,16 @@ export function readTransfer(payload: PaymentPayload, offer: EvmOffer): Transfer
     to: getAddress(witness.to),
     value: permitted.amount,
     replayKey: computePermit2ReplayKey({ chainId, owner: getAddress(from), nonce }),
+    locator: permit2Locator(offer.network, {
+      asset: permitted.token,
+      owner: from,
+      to: witness.to,
+      amount: permitted.amount,
+      nonce,
+      deadline,
+      validAfter: witness.validAfter,
+      proxy: spender,
+    }),
     recipientMismatch: 'invalid_permit2_recipient_mismatch',
     amountMismatch: 'permit2_amount_mismatch',
   };

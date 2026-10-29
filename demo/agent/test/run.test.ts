@@ -200,6 +200,19 @@ describe('runDemoAgent: happy path', () => {
     expect(text).toContain('settlementTx=0xtxhash');
   });
 
+  it('completes when the summary marks a receipt the gateway could not save', async () => {
+    const { deps, lines } = makeHappyDeps({
+      paidResult: {
+        ...DEFAULT_PAID_RESULT,
+        _meta: {
+          [DELIVERY_SUMMARY_META_KEY]: { ...makeDeliverySummary(), receiptCommitted: false },
+        },
+      },
+    });
+    expect(await runDemoAgent(deps)).toBe(0);
+    expect(lines.join('\n')).toContain('id=r_new');
+  });
+
   it('signs the challenge it checked with the buyer key and retries with that proof', async () => {
     const { deps, paidCalls, proofRequests } = makeHappyDeps();
     expect(await runDemoAgent(deps)).toBe(0);

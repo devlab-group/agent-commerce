@@ -44,10 +44,15 @@ export function createFakeClock(startIso = '2026-01-01T00:00:00.000Z'): Clock {
   };
 }
 
+/** Each prefix has its own counter, keeping different ID sequences independent */
 export function createFakeIdGenerator(): IdGenerator {
-  let n = 0;
+  const counters = new Map<string, number>();
   return {
-    next: (prefix?: string) => `${prefix ?? 'id'}-${++n}`,
+    next: (prefix = 'id') => {
+      const n = (counters.get(prefix) ?? 0) + 1;
+      counters.set(prefix, n);
+      return `${prefix}-${n}`;
+    },
   };
 }
 

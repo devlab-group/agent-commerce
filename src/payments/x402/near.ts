@@ -1,8 +1,8 @@
 /**
- * NEAR `exact` payload inspection: bounded decoding of the NEP-366 signed
- * delegate action, the transfer it authorizes and its replay identity. The
- * provider loads this module only for a NEAR offer, so other deployments never
- * import `@x402/near`.
+ * NEAR `exact` payload inspection with bounded decoding of the NEP-366 signed
+ * delegate action, transfer checks, replay identity and reconciliation
+ * coordinates. The provider loads this module, including its `@x402/near`
+ * import, when a NEAR offer is configured.
  *
  * The facilitator checks the signature, the access key and its nonce, the
  * delegate window and chain state. The gateway checks the transfer the buyer
@@ -10,6 +10,7 @@
  */
 import { decodeSignedDelegateB64, parseFtTransferArgs } from '@x402/near';
 import { isRecord } from '../../core/is-record';
+import { LOCATOR_VERSION } from './locator';
 import { computeNearReplayKey } from './replay-key';
 
 // One `ft_transfer` delegate is a few hundred bytes; this bounds the decoder
@@ -27,13 +28,20 @@ export interface NearTransferTerms {
 }
 
 /**
- * Returns the payer and replay key if the NEAR `exact` payload matches the
- * offer, or a refusal reason using the SDK facilitator's codes.
+ * Returns the payer, replay key and locator for a NEAR `exact` payload that
+ * matches the offer, or an SDK refusal reason. The provider adds relayers from
+ * the facilitator's `/supported` response.
  */
 export function inspectNearPayload(
   payload: unknown,
   terms: NearTransferTerms,
-): { readonly payer: string; readonly replayKey: string } | string {
+):
+  | {
+      readonly payer: string;
+      readonly replayKey: string;
+      readonly locator: Readonly<Record<string, unknown>>;
+    }
+  | string {
   const encoded = isRecord(payload) ? payload['signedDelegateAction'] : undefined;
   if (typeof encoded !== 'string' || encoded.length > MAX_SIGNED_DELEGATE_BASE64) {
     return 'invalid_exact_near_payload_shape';
@@ -69,6 +77,17 @@ export function inspectNearPayload(
       publicKey: delegate.publicKey,
       nonce: delegate.nonce,
     }),
+    locator: {
+      v: LOCATOR_VERSION,
+      network: terms.network,
+      senderId: delegate.senderId,
+      publicKey: delegate.publicKey,
+      nonce: delegate.nonce.toString(),
+      maxBlockHeight: delegate.maxBlockHeight.toString(),
+      asset: delegate.receiverId,
+      receiver: args.receiver_id,
+      amount: args.amount,
+    },
   };
 }
 

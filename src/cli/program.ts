@@ -5,6 +5,8 @@ import { runDemo } from './commands/demo';
 import { printDoctorReport, runDoctor } from './commands/doctor';
 import { runImportOpenApi } from './commands/import-openapi';
 import { runInit } from './commands/init';
+import { runReconcileCommand } from './commands/reconcile';
+import { runResolveCommand } from './commands/resolve';
 import { formatConfigError, runValidate } from './commands/validate';
 import { runVersion } from './commands/version';
 import { type Io, processIo } from './lib/io';
@@ -24,7 +26,9 @@ export function buildProgram(io: Io = processIo): Command {
 
   program
     .name('agent-commerce')
-    .description('CLI for the Agent Commerce Gateway: init, import, validate, start, doctor, demo.')
+    .description(
+      'CLI for the Agent Commerce Gateway: init, import, validate, start, doctor, reconcile, demo.',
+    )
     // `--version` prints the CLI version only; the `version` subcommand also
     // lists the pinned protocol/SDK versions. Both read `readVersionReport()`,
     // so they cannot disagree.
@@ -109,6 +113,87 @@ export function buildProgram(io: Io = processIo): Command {
       printDoctorReport(report, io, opts.json === true);
       process.exitCode = report.exitCode;
     });
+
+  program
+    .command('reconcile')
+    .description(
+      'Resolve uncertain payment attempts using chain evidence. Never settles or refunds.',
+    )
+    .option('--config <path>', `path to ${DEFAULT_CONFIG_FILENAME}`)
+    .option('--env-file <path>', ENV_FILE_HELP)
+    .option('--dry-run', 'read evidence and report without recording resolutions', false)
+    .option('--json', 'emit machine-readable JSON instead of a formatted report', false)
+    .option('--actor <name>', 'who ran it, stored with each resolution (default: the OS user)')
+    .option(
+      '--min-age <duration>',
+      'skip reserved attempts younger than this, such as 30s, 15m or 2h (default: 15m)',
+    )
+    .option('--limit <n>', 'check at most this many attempts, and update at most this many holds')
+    .action(
+      async (opts: {
+        config?: string;
+        dryRun: boolean;
+        json: boolean;
+        actor?: string;
+        minAge?: string;
+        limit?: string;
+      }) => {
+        process.exitCode = await runReconcileCommand(
+          {
+            ...(opts.config !== undefined ? { configPath: opts.config } : {}),
+            dryRun: opts.dryRun,
+            json: opts.json,
+            ...(opts.actor !== undefined ? { actor: opts.actor } : {}),
+            ...(opts.minAge !== undefined ? { minAge: opts.minAge } : {}),
+            ...(opts.limit !== undefined ? { limit: opts.limit } : {}),
+          },
+          io,
+        );
+      },
+    );
+
+  program
+    .command('resolve <attemptId>')
+    .description(
+      'Record a verdict on one unresolved payment attempt and align its hold. Never settles or refunds.',
+    )
+    .requiredOption('--status <status>', 'settled or rejected')
+    .requiredOption('--reason <text>', 'why, stored with the resolution')
+    .option('--reference <ref>', 'transaction reference, stored as your unchecked claim')
+    .option('--actor <name>', 'who resolved it, stored with the resolution (default: the OS user)')
+    .option(
+      '--confirm-expired',
+      'confirm that an authorization with no recorded expiry can no longer land',
+      false,
+    )
+    .option('--config <path>', `path to ${DEFAULT_CONFIG_FILENAME}`)
+    .option('--env-file <path>', ENV_FILE_HELP)
+    .action(
+      async (
+        attemptId: string,
+        opts: {
+          config?: string;
+          status: string;
+          reason: string;
+          reference?: string;
+          actor?: string;
+          confirmExpired: boolean;
+        },
+      ) => {
+        process.exitCode = await runResolveCommand(
+          attemptId,
+          {
+            ...(opts.config !== undefined ? { configPath: opts.config } : {}),
+            status: opts.status,
+            reason: opts.reason,
+            ...(opts.reference !== undefined ? { reference: opts.reference } : {}),
+            ...(opts.actor !== undefined ? { actor: opts.actor } : {}),
+            confirmExpired: opts.confirmExpired,
+          },
+          io,
+        );
+      },
+    );
 
   program
     .command('init')

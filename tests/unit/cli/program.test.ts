@@ -52,12 +52,21 @@ describe('agent-commerce --help', () => {
     const text = io.out.join('\n');
     expect(exitCode).toBe(0);
     expect(text).toContain('Usage: agent-commerce');
-    for (const command of ['version', 'validate', 'start', 'doctor', 'init', 'import', 'demo']) {
+    for (const command of [
+      'version',
+      'validate',
+      'start',
+      'doctor',
+      'reconcile',
+      'init',
+      'import',
+      'demo',
+    ]) {
       expect(text).toMatch(new RegExp(`^  ${command}\\b`, 'm'));
     }
   });
 
-  it.each(['version', 'validate', 'start', 'doctor', 'init', 'demo'])(
+  it.each(['version', 'validate', 'start', 'doctor', 'reconcile', 'init', 'demo'])(
     '%s --help exits 0 and prints its usage',
     async (command) => {
       const { exitCode, io } = await run([command, '--help']);
@@ -159,7 +168,7 @@ payments: {}
   });
 
   // In a real process Node refuses an unreadable path first; see packaging.test.ts
-  it.each(['validate', 'doctor', 'start'])(
+  it.each(['validate', 'doctor', 'start', 'reconcile'])(
     '%s exits 1 naming an env file that cannot be read, before doing anything else',
     async (command) => {
       const { exitCode, io } = await run([command, '--env-file', '/does/not/exist.env']);

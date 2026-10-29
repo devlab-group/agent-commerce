@@ -6,12 +6,13 @@ import { KeyPair } from '@near-js/crypto';
 import type { SupportedResponse } from '@x402/core/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CommerceError, CommerceResource, PaymentContext } from '../../../src/core';
-import { isCommerceError } from '../../../src/core';
+import { isCommerceError, NOOP_LOGGER } from '../../../src/core';
 import {
   createX402PaymentProvider,
   type X402MultiOfferProviderOptions,
 } from '../../../src/payments/x402/provider';
 import { computeNearReplayKey } from '../../../src/payments/x402/replay-key';
+import { expectStoredLocator, locatorOf } from '../../fixtures/x402/locator';
 import { buildSignedDelegate } from '../../fixtures/x402/near-delegate';
 
 const verifyMock = vi.fn();
@@ -219,6 +220,90 @@ describe('verify()', () => {
     expect((await provider.verify(context)).rejectionReason).toBe(
       'invalid_exact_near_payload_delegate_action_nonce_already_used',
     );
+  });
+});
+
+describe('the NEAR locator', () => {
+  it('locates the delegate and names each relayer /supported lists, once', async () => {
+    getSupportedMock.mockResolvedValue({
+      ...supported(),
+      signers: {
+        [NETWORK]: ['relayer.testnet', 'relayer2.testnet'],
+        'near:*': ['relayer.testnet'],
+      },
+    });
+    const provider = makeProvider();
+    const { context, keyPair } = await paidRequest(provider);
+    verifyMock.mockResolvedValueOnce({ isValid: true, payer: BUYER });
+
+    const locator = locatorOf(await provider.verify(context));
+
+    expect(locator).toStrictEqual({
+      v: 1,
+      network: NETWORK,
+      senderId: BUYER,
+      publicKey: keyPair.getPublicKey().toString(),
+      nonce: '5',
+      maxBlockHeight: '1060',
+      asset: USDC,
+      receiver: PAY_TO,
+      amount: '10000',
+      relayers: ['relayer.testnet', 'relayer2.testnet'],
+    });
+    await expectStoredLocator(locator, 'near');
+  });
+
+  it('reads /supported once per snapshot, and again after a failed read', async () => {
+    getSupportedMock.mockRejectedValueOnce(new Error('facilitator down'));
+    verifyMock.mockResolvedValue({ isValid: true, payer: BUYER });
+    const provider = makeProvider();
+    const relayersOf = async () =>
+      locatorOf(await provider.verify((await paidRequest(provider)).context))['relayers'];
+
+    expect(await relayersOf()).toBeUndefined();
+    expect(await relayersOf()).toEqual(['relayer.testnet']);
+    expect(await relayersOf()).toEqual(['relayer.testnet']);
+    expect(getSupportedMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('still verifies when /supported fails, recording no relayer and warning', async () => {
+    getSupportedMock.mockRejectedValue(new Error('facilitator down'));
+    const warn = vi.fn();
+    const provider = makeProvider({ logger: { ...NOOP_LOGGER, warn } });
+    const { context } = await paidRequest(provider);
+    verifyMock.mockResolvedValueOnce({ isValid: true, payer: BUYER });
+
+    const verification = await provider.verify(context);
+
+    expect(verification.status).toBe('verified');
+    expect(locatorOf(verification)).not.toHaveProperty('relayers');
+    expect(warn).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.stringMatching(/did not answer \/supported; the NEAR locator names no relayer/),
+    );
+  });
+
+  it('returns the verdict within the grace period when /supported hangs, naming no relayer', async () => {
+    getSupportedMock.mockReturnValue(new Promise(() => {}));
+    const warn = vi.fn();
+    const provider = makeProvider({ logger: { ...NOOP_LOGGER, warn } });
+    const { context } = await paidRequest(provider);
+    verifyMock.mockResolvedValueOnce({ isValid: true, payer: BUYER });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const pending = provider.verify(context);
+      await vi.advanceTimersByTimeAsync(1_000);
+      const verification = await pending;
+
+      expect(verification.status).toBe('verified');
+      expect(locatorOf(verification)).not.toHaveProperty('relayers');
+      expect(warn).toHaveBeenCalledWith(
+        { graceMs: 1_000 },
+        expect.stringMatching(/\/supported is slow; the NEAR locator names no relayer/),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

@@ -109,10 +109,15 @@ export function createAp2AuthorizationProvider(
     reservationId: string,
     context: AuthorizationFinalizeContext,
   ): void => {
+    let applied: ReturnType<Ap2ReplayStore[typeof action]>;
     try {
-      replay[action](reservationId);
+      applied = replay[action](reservationId, context.requestId);
     } catch (cause) {
       throw ap2Unavailable(`replay store could not record ${action}`, { ...context, cause });
+    }
+    // Reject an explicit false so callers do not record an unconfirmed hold update
+    if (applied === false) {
+      throw ap2Unavailable(`replay store holds no matching reservation to ${action}`, context);
     }
   };
 

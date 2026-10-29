@@ -70,8 +70,8 @@ agent-commerce doctor
 ```
 
 Requires **Node >= 22**. The package includes the `agent-commerce` CLI
-(`init`, `validate`, `start`, `doctor`, `demo`, `import openapi`, `version`) and
-a library for embedding the gateway.
+(`init`, `validate`, `start`, `doctor`, `reconcile`, `resolve`, `demo`,
+`import openapi`, `version`) and a library for embedding the gateway.
 The default install excludes optional protocol, payment and authorization
 peers. The OpenAPI parser is a regular dependency because import is part of the
 CLI.
@@ -84,9 +84,10 @@ agent-commerce start --config config.yaml --env-file .env
 Install the optional peers for the features you enable, listed below. Missing
 startup imports stop the gateway with an error naming the package; missing
 Solana, NEAR or CDP peers fail provider health checks or payment requests.
-`start`, `validate` and `doctor` accept `--env-file <path>` to load environment
-variables before reading the config. Variables already set in the environment
-take precedence. To embed the gateway in your own process, use the library:
+`start`, `validate`, `doctor`, `reconcile` and `resolve` accept `--env-file <path>` to
+load environment variables before reading the config. Variables already set in
+the environment take precedence. To embed the gateway in your own process, use
+the library:
 
 ```ts
 import { createGateway, loadConfig, receipts } from '@devlab.group/agent-commerce';
@@ -309,12 +310,17 @@ prints the `unsupported` lists for A2A, ACP and AP2 when they are enabled.
 
 ### Versioning
 
-Minor releases may break experimental configurations, integrations or types.
-This applies to MPP, A2A, ACP, AP2, ERC-8409 quotes and
-`agent-commerce import openapi`.
-Runtime adapters and providers report `status: experimental` in
-`GET /.well-known/agent-commerce`. Pin an exact version and test upgrades
-before deploying them. Since 2.1, some supported x402 behavior and types
+Minor releases may break experimental configurations, integrations or types:
+MPP, A2A, ACP, AP2, ERC-8409 quotes, `agent-commerce import openapi`, the
+journal's `Transaction` type, `ReceiptStore` journal methods,
+`PaymentProvider.reconcile` and the `/api/transactions` response shape.
+The `transactionId` fields, `receiptCommitted`, and the flags accepted by
+`reconcile` and `resolve` are supported.
+
+Experimental runtime adapters and providers identify themselves with
+`status: experimental` in `GET /.well-known/agent-commerce`. Pin experimental
+integrations to an exact version and test upgrades before deployment.
+Since 2.1, some supported x402 behavior and types
 differ from 2.0; see [Upgrading from 2.0 to 2.x](docs/migration-2.1.md).
 
 ## Payment model
@@ -461,7 +467,7 @@ INFO  ACP                  disabled
 INFO  AP2                  disabled
 PASS  Payments             x402 v2 (scheme=exact) enabled - LOCAL dev chain (eip155:31337), destination=0x7099…79C8, facilitator=local (in-process), paymentFlow=authorization
 INFO  Payments (MPP)       MPP not configured
-PASS  Storage              sqlite schema v3 writable; receipts=2
+PASS  Storage              sqlite schema v4 writable; receipts=2
 PASS  Protocol versions    reported by gateway /.well-known/agent-commerce
 
 Score: 7/7 checks passed
@@ -473,6 +479,98 @@ and payment flows when published. Mismatches fail the check. It also names
 failing offers when health is published; reasons appear in gateway debug logs.
 
 Exits non-zero if anything fails. `--json` for machines.
+
+### `agent-commerce reconcile`
+
+```bash
+npm run agent-commerce -- reconcile --config config.yaml --dry-run
+```
+
+Resolves attempts whose settlement outcome the gateway did not learn:
+`settlement-uncertain` and legacy `failed` attempts, plus `reserved` attempts in
+the journal at least `--min-age` old (default `15m`). The payment provider
+checks chain evidence and returns:
+
+- **settled**: a final transfer matches the authorization. The attempt becomes
+  `settled` with its transaction ID.
+- **not settled**: final chain state shows the authorization unused after its
+  last valid second on EVM or its `maxBlockHeight` on NEAR. The attempt becomes
+  `rejected` with reason `not_settled`. Solana reconciliation does not return
+  this result: blockhash expiry alone does not prove nonpayment.
+- **unknown**: the evidence is inconclusive. The report includes a reason and,
+  when available, a time to try again. The attempt remains unresolved.
+
+The command builds payment providers as `start` does without starting a
+listener. It does not call a facilitator, broadcast, refund or retry delivery.
+Each resolution records `--actor` (default: the OS user) and the evidence.
+`--dry-run` checks evidence without recording resolutions; it still opens and
+initializes the receipt database. `--json` prints the report for machines.
+`--limit` caps payment checks and hold updates separately. Journal entries are
+checked by state: `payment-uncertain`, `payment-pending`, then
+`delivery-started`, newest first within each group. Only eligible payment
+attempts are considered. A capped batch of attempts without journal entries
+follows.
+It exits 0 after a completed run, even if attempts remain unresolved, and 1 if
+the run fails to complete.
+
+Each family needs its own evidence:
+
+- **EVM**: uses the recorded transaction hash or searches logs for a used nonce
+  near the attempt's creation time, within its validity bounds. The log search
+  covers at most 200,000 blocks. If no match is found and part of the candidate
+  range remains unsearched, it returns `unknown` (`search_window_too_wide`).
+- **Solana**: uses the recorded transaction signature or searches a known
+  payer's history near the attempt's creation time. Only successful finalized
+  transactions count. A search that reaches its page cap returns `unknown`
+  (`history_too_long`). Otherwise, a missing match gives `not_expired` while
+  the blockhash is valid at `confirmed` commitment, then `blockhash_expired`.
+- **NEAR**: uses the recorded transaction hash and relayer IDs from the
+  facilitator's `/supported`. Both are needed to prove `settled`. Without
+  them, final access-key state can still prove `not-settled` after expiry;
+  other cases remain `unknown`.
+
+Coverage is partial: EVM reconciliation (x402 EIP-3009 and Permit2, and MPP)
+is tested on Anvil, Solana on `solana-test-validator` and NEAR on a local
+sandbox. Public-network validation is pending. EVM and NEAR can report
+`not_final` while a referenced transaction awaits finality.
+
+With `authorization.ap2` enabled, reconciliation also updates AP2 holds on
+resolved payments: `settled` consumes the mandate; `rejected` releases it.
+It opens the AP2 replay database for these updates without verifying mandates.
+The report's `holds` list (`--json`) covers pending holds whose payments are
+resolved in the database. Dry runs report those holds without writing
+resolutions or hold changes. Both databases are still opened and initialized.
+Later runs can retry holds left pending after earlier payment resolutions,
+including those recorded by `resolve` while AP2 was disabled.
+
+### `agent-commerce resolve`
+
+```bash
+npm run agent-commerce -- resolve <attemptId> --status settled --reason "transfer seen in explorer" --reference 0x...
+```
+
+Records an operator's verdict on one unresolved payment attempt, including
+one `reconcile` left `unknown`. Only `reserved`, `settlement-uncertain` and
+legacy `failed` attempts can be resolved, once each:
+
+- `--status settled` has no expiry check. `--reference` records an unchecked
+  operator claim in the resolution; it does not replace the attempt's recorded
+  transaction ID.
+- A `reserved` attempt younger than 15 minutes is refused (`too_recent`),
+  because the gateway may still be settling it.
+- `--status rejected` is refused while the recorded expiry is in the future.
+  Without a valid recorded expiry, `--confirm-expired` is required. This
+  includes Solana and NEAR attempts and those written before the journal.
+
+`--actor` is a caller-supplied label and defaults to the OS user. The command
+opens the receipt database directly and works with the gateway running or
+stopped. With AP2 enabled, it attempts the same hold update as `reconcile`.
+If the provider is disabled, its call fails, or the hold's journal write fails,
+the command reports the update as pending with a warning. A later `reconcile`
+run can retry it.
+`POST /api/payment-attempts/:id/resolve` applies the same rules over HTTP;
+the admin token controls access without identifying the operator. Exit 0
+means the resolution was written; 1 means a refusal or error.
 
 ### `agent-commerce version`
 
@@ -493,9 +591,11 @@ reachable by anyone else, know the split:
 - **Agent routes** (`/api/resources/:id/invoke`, `/mcp`, the A2A mount) are
   unauthenticated by design - paid resources are protected by payment, not by a
   password. ACP is the exception: its checkout routes require a bearer token.
-- **Operator routes** (`/api/receipts`, `/api/events`, `/api/payment-attempts`)
-  expose the merchant's commerce ledger: payer addresses, amounts and settlement
-  hashes. They require `server.adminToken` and return **404** if none is configured.
+- **Operator routes** (`/api/receipts`, `/api/events`, `/api/payment-attempts`,
+  `/api/transactions`) expose the merchant's commerce ledger: payer addresses,
+  amounts and settlement hashes. `POST /api/payment-attempts/:id/resolve`
+  records a resolution. They require `server.adminToken` and return **404** if
+  none is configured.
 - **Browsers** are governed by `server.allowedOrigins`, an explicit allowlist
   that defaults to empty.
 - **There is no rate limiting.** A free resource is an unauthenticated proxy to

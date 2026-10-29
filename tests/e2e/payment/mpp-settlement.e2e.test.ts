@@ -452,14 +452,18 @@ describe('MPP settlement - real local chain', () => {
       uncertain = await invoke(gateway, { authorization: credential });
       pending = await balances();
     } finally {
-      // Re-enabling automine also mines what is pending
       await chain.setAutomine(true);
+      // Mine the pending broadcast now rather than rely on the automine switch
+      await chain.mine({ blocks: 1 });
     }
 
     expect(uncertain.statusCode).toBe(502);
     expect(uncertain.body['code']).toBe('PAYMENT_SETTLEMENT_FAILED');
     const details = uncertain.body['details'] as Record<string, unknown>;
     expect(details['settlementUncertain']).toBe(true);
+    // A throw before anything was sent is also uncertain; this case needs the broadcast
+    const txHash = details['transactionHash'];
+    expect(txHash).toMatch(/^0x[0-9a-f]{64}$/);
     // The default upfront flow settles first, so the backend never ran
     expect(backendCalls).toBe(callsBefore);
     expect(uncertain.body).not.toHaveProperty('report');
@@ -475,7 +479,7 @@ describe('MPP settlement - real local chain', () => {
       before,
       after: await balances(),
       amountBaseUnits: ONE_USDC,
-      txHash: details['transactionHash'] as string,
+      txHash: txHash as string,
     });
   }, 150_000);
 

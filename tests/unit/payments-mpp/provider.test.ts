@@ -22,6 +22,7 @@ import {
 } from '../../../src/payments/mpp/provider';
 import { createX402PaymentProvider } from '../../../src/payments/x402/provider';
 import { computeReplayKey } from '../../../src/payments/x402/replay-key';
+import { expectStoredLocator, locatorOf } from '../../fixtures/x402/locator';
 import {
   createCapturingLogger,
   createFakeBackendExecutor,
@@ -488,6 +489,36 @@ describe('MPP verify', () => {
     expect(facilitator.verify).toHaveBeenCalledTimes(1);
     expect(facilitator.settle).not.toHaveBeenCalled();
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('locates the authorization exactly as the x402 provider does for it', async () => {
+    const x402 = x402Settlement();
+    const seen: PaymentResult[] = [];
+    const provider = withSettlement({
+      ...x402,
+      async verify(context) {
+        const result = await x402.verify(context);
+        seen.push(result);
+        return result;
+      },
+    });
+    const requirement = await requirementFor(provider);
+    const credential = await clientCredential(requirement);
+    const { nonce } = Credential.deserialize(credential).payload as { nonce: string };
+
+    const locator = locatorOf(await verifyWith(provider, requirement, credential));
+
+    expect(seen).toHaveLength(1);
+    expect(locator).toStrictEqual(locatorOf(seen[0] as PaymentResult));
+    expect(locator).toMatchObject({
+      network: 'eip155:31337',
+      method: 'eip3009',
+      asset: ASSET,
+      from: buyer.address,
+      to: recipient,
+      nonce: nonce.toLowerCase(),
+    });
+    await expectStoredLocator(locator, 'eip3009');
   });
 
   it('throws the retryable PAYMENT_PROVIDER_UNAVAILABLE when the facilitator cannot be reached', async () => {

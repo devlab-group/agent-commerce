@@ -38,14 +38,21 @@ export type {
   PaymentChallenge,
   PaymentContext,
   PaymentProvider,
+  PaymentReconciliationContext,
+  PaymentReconciliationResult,
   PaymentRequirement,
   PaymentResult,
   PaymentSettlementContext,
   PaymentSubmission,
   PaymentVerificationContext,
 } from './domain/payment';
+export { RECONCILIATION_METADATA_KEY } from './domain/payment';
 
-export type { CommerceReceipt, PaymentAttempt } from './domain/receipt';
+export type {
+  CommerceReceipt,
+  PaymentAttempt,
+  PaymentAttemptResolution,
+} from './domain/receipt';
 export type {
   CanonicalRequest,
   DeliveredOutcome,
@@ -61,6 +68,14 @@ export type {
   ResourceRegistry,
 } from './domain/resource';
 export { DEFAULT_BACKEND_TIMEOUT_MS } from './domain/resource';
+export type {
+  AuthorizationHoldState,
+  PersistenceFailure,
+  Transaction,
+  TransactionFacts,
+  TransactionState,
+} from './domain/transaction';
+export { TRANSACTION_STATES, transactionState } from './domain/transaction';
 export type {
   DeliverySummary,
   ErrorEnvelope,
@@ -111,9 +126,14 @@ export type { Clock, IdGenerator } from './interfaces/runtime';
 export { systemClock } from './interfaces/runtime';
 export type {
   ListOptions,
+  NewTransaction,
   PaymentAttemptListOptions,
   PaymentAttemptReservation,
+  PaymentAttemptResolveRequest,
   PaymentAttemptUpdate,
   ReceiptListOptions,
   ReceiptStore,
+  TransactionListOptions,
+  TransactionPage,
+  TransactionStep,
 } from './interfaces/store';
