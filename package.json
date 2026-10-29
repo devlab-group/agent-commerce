@@ -1,6 +1,6 @@
 {
   "name": "@devlab.group/agent-commerce",
-  "version": "2.4.1",
+  "version": "2.5.0",
   "description": "Open-source, self-hosted, non-custodial commerce and payment orchestration gateway for AI agents.",
   "license": "Apache-2.0",
   "type": "module",
