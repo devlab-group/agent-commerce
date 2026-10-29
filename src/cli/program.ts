@@ -128,7 +128,7 @@ export function buildProgram(io: Io = processIo): Command {
       '--min-age <duration>',
       'skip reserved attempts younger than this, such as 30s, 15m or 2h (default: 15m)',
     )
-    .option('--limit <n>', 'check at most this many attempts')
+    .option('--limit <n>', 'check at most this many attempts, and update at most this many holds')
     .action(
       async (opts: {
         config?: string;
