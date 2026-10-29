@@ -2,8 +2,12 @@ import { generateKeyPairSigner } from '@solana/kit';
 import { decodeTransactionFromPayload, transactionMessageHash } from '@x402/svm';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { computeSvmReplayKey } from '../../../src/payments/x402/replay-key';
-import { associatedTokenAccount, svmReplayKey } from '../../../src/payments/x402/svm';
-import { buildSvmPayment, withSignatureBytes } from '../../fixtures/x402/svm-transaction';
+import { associatedTokenAccount, inspectSvmPayload } from '../../../src/payments/x402/svm';
+import {
+  BLOCKHASH,
+  buildSvmPayment,
+  withSignatureBytes,
+} from '../../fixtures/x402/svm-transaction';
 
 const DEVNET = 'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1';
 const MAINNET = 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp';
@@ -26,7 +30,8 @@ beforeAll(async () => {
   other = await buildSvmPayment({ ...input, memo: 'another payment' });
 });
 
-const keyOf = (value: string, network = DEVNET) => svmReplayKey({ transaction: value }, network);
+const keyOf = (value: string, network = DEVNET) =>
+  inspectSvmPayload({ transaction: value }, network);
 
 // Expected values from `findAssociatedTokenPda` in @solana-program/token and
 // token-2022, the helper the SDK client uses to address the payee
@@ -41,11 +46,12 @@ describe('associatedTokenAccount', () => {
   });
 });
 
-describe('svmReplayKey', () => {
-  it('hashes the message bytes the SDK hashes, under the network', () => {
+describe('inspectSvmPayload', () => {
+  it('hashes the message bytes the SDK hashes, under the network, and locates the message', () => {
     const messageHash = transactionMessageHash(decodeTransactionFromPayload({ transaction }));
-    expect(keyOf(transaction)).toEqual({
+    expect(keyOf(transaction)).toStrictEqual({
       replayKey: computeSvmReplayKey({ network: DEVNET, messageHash }),
+      locator: { v: 1, network: DEVNET, messageHash, recentBlockhash: BLOCKHASH },
     });
   });
 
@@ -62,8 +68,8 @@ describe('svmReplayKey', () => {
   });
 
   it('refuses a payload that is not one bounded, decodable transaction', () => {
-    expect(svmReplayKey('x', DEVNET)).toBe('invalid_exact_svm_payload_transaction');
-    expect(svmReplayKey({}, DEVNET)).toBe('invalid_exact_svm_payload_transaction');
+    expect(inspectSvmPayload('x', DEVNET)).toBe('invalid_exact_svm_payload_transaction');
+    expect(inspectSvmPayload({}, DEVNET)).toBe('invalid_exact_svm_payload_transaction');
     expect(keyOf('A'.repeat(1645))).toBe('invalid_exact_svm_payload_transaction');
     expect(keyOf('not base64 at all!')).toBe(
       'invalid_exact_svm_payload_transaction_could_not_be_decoded',

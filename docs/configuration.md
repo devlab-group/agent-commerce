@@ -459,6 +459,10 @@ payments:
 - Health checks that the RPC's `status` names the network's chain, that the
   token has code and the configured decimals, and that the facilitator lists
   the network.
+- Verification adds relayer accounts from the facilitator's `/supported` to
+  the payment's reconciliation metadata. Each provider reuses the response
+  for 60 seconds. If the lookup fails, the gateway logs a warning and omits
+  relayers; verification can still succeed.
 - The signed delegate names no chain. The offer's network and the RPC the
   facilitator uses keep a proof on one network; use separate buyer keys for
   mainnet and testnet.

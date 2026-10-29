@@ -2,7 +2,7 @@
 import type { PaymentRequired, PaymentRequirements, VerifyResponse } from '@x402/core/types';
 import { formatUnits, getAddress } from 'viem';
 import type { PaymentResult, PaymentVerificationContext } from '../../../core';
-import { CommerceError } from '../../../core';
+import { CommerceError, RECONCILIATION_METADATA_KEY } from '../../../core';
 import { redactedErrorText } from '../../../core/errors';
 import { normalizeAddress, sameAddress } from '../addresses';
 import { declaredX402Version, decodePaymentSubmission, forFacilitator } from '../payload';
@@ -11,11 +11,12 @@ import { offerCurrency } from './offers';
 import { isProviderUnavailableError, NO_VERDICT_REASONS, sanitizeReason } from './reasons';
 import { acceptedMatchesOffer, offerIndexOf } from './requirement';
 import { readTransfer, type Transfer } from './transfer';
-import type { ProviderContext } from './types';
+import type { NearOffer, ProviderContext } from './types';
 
 /** Builds the provider's `verify`, which never moves funds */
 export function createVerify(
   ctx: ProviderContext,
+  nearRelayers: (offer: NearOffer) => Promise<readonly string[]>,
 ): (context: PaymentVerificationContext) => Promise<PaymentResult> {
   const { offersFor, clock, logger, svm, near } = ctx;
 
@@ -90,11 +91,13 @@ export function createVerify(
     // NEAR: the delegate names the transfer, checked here against the offer.
     let transfer: Transfer | undefined;
     let replayKey: string;
+    let locator: Readonly<Record<string, unknown>>;
     let derivedPayer: string | undefined;
     if (offer.family === 'svm') {
-      const identity = (await svm()).svmReplayKey(payload.payload, offer.network);
-      if (typeof identity === 'string') return rejected(identity);
-      replayKey = identity.replayKey;
+      const inspected = (await svm()).inspectSvmPayload(payload.payload, offer.network);
+      if (typeof inspected === 'string') return rejected(inspected);
+      replayKey = inspected.replayKey;
+      locator = inspected.locator;
     } else if (offer.family === 'near') {
       const inspected = (await near()).inspectNearPayload(payload.payload, {
         network: offer.network,
@@ -104,12 +107,14 @@ export function createVerify(
       });
       if (typeof inspected === 'string') return rejected(inspected);
       replayKey = inspected.replayKey;
+      locator = inspected.locator;
       derivedPayer = inspected.payer;
     } else {
       const read = readTransfer(payload, offer);
       if (typeof read === 'string') return rejected(read);
       transfer = read;
       replayKey = read.replayKey;
+      locator = read.locator;
       derivedPayer = read.from;
     }
     // Reject a different network before calling the facilitator. NEAR's
@@ -148,6 +153,8 @@ export function createVerify(
       }
     }
 
+    // Fetch NEAR relayers alongside verification; failed `/supported` reads yield none
+    const relayers = offer.family === 'near' ? nearRelayers(offer) : undefined;
     const scope = offer.binding.open();
     let sdkResult: VerifyResponse;
     try {
@@ -196,6 +203,9 @@ export function createVerify(
       (sdkResult.payer !== undefined && normalizeAddress(offer.profile, sdkResult.payer)
         ? sdkResult.payer
         : undefined);
+    if (offer.family === 'svm' && payer !== undefined) locator = { ...locator, payer };
+    const relayerIds = (await relayers) ?? [];
+    if (relayerIds.length > 0) locator = { ...locator, relayers: relayerIds };
     return {
       status: 'verified',
       provider: 'x402',
@@ -206,6 +216,7 @@ export function createVerify(
       network: payload.accepted.network,
       asset: offer.family === 'evm' ? getAddress(requirements.asset) : offer.asset,
       replayKey,
+      metadata: { [RECONCILIATION_METADATA_KEY]: locator },
     };
   }
 

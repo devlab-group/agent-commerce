@@ -23,7 +23,7 @@ import { associatedTokenAddress, TOKEN_PROGRAM } from './solana-validator';
 const COMPUTE_BUDGET_PROGRAM = 'ComputeBudget111111111111111111111111111111';
 const MEMO_PROGRAM = 'MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr';
 // Any well-formed blockhash: nothing here reaches a cluster
-const BLOCKHASH = 'EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG';
+export const BLOCKHASH = 'EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG';
 
 function u32(value: number): Uint8Array {
   const bytes = new Uint8Array(4);
