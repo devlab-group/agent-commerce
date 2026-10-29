@@ -221,6 +221,21 @@ describe('parseInvocation: legal A2A this adapter does not serve', () => {
     expectRejected(envelope({ resource: 'ping' }, overrides), 'PROTOCOL_UNSUPPORTED', a2aErrorCode);
   });
 
+  // A 256 KiB body holds about 128k such elements. Validating each would build an issue per element
+  it.each([
+    ['parts', { parts: Array.from({ length: 100_000 }, () => 0) }],
+    ['referenceTaskIds', { referenceTaskIds: Array.from({ length: 100_000 }, () => 0) }],
+  ])('refuses 100,000 invalid %s by count, without validating each', (_label, overrides) => {
+    expectRejected(envelope({ resource: 'ping' }, overrides), 'PROTOCOL_UNSUPPORTED');
+  });
+
+  it.each([
+    ['a number', 0],
+    ['null', null],
+  ])('rejects a single part that is %s', (_label, part) => {
+    expectRejected(envelope({ resource: 'ping' }, { parts: [part] }), 'INPUT_INVALID');
+  });
+
   it('accepts an empty referenceTaskIds array, which continues nothing', () => {
     expect(
       parseInvocation(envelope({ resource: 'ping' }, { referenceTaskIds: [] })).resourceId,

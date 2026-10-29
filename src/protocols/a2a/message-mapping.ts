@@ -56,18 +56,18 @@ export interface A2aInvocation {
 
 /**
  * Shape only; every semantic rule is checked below, where the failure can name
- * itself. Parts stay untyped records: zod would collapse a file part and a
- * malformed one into the same union failure.
+ * itself. Array elements stay `unknown`, checked after the length rules. Zod 3
+ * builds one issue per failing element, so typed elements would let a body of
+ * many bad elements allocate an issue for each. Every array past its first
+ * element is refused anyway.
  */
-const UnknownRecord = z.record(z.string(), z.unknown());
-
 const MessageSchema = z.object({
   role: z.string(),
   messageId: z.string().optional(),
-  parts: z.array(UnknownRecord),
+  parts: z.array(z.unknown()),
   taskId: z.string().optional(),
   contextId: z.string().optional(),
-  referenceTaskIds: z.array(z.string()).optional(),
+  referenceTaskIds: z.array(z.unknown()).optional(),
 });
 
 const ParamsSchema = z.object({
@@ -179,6 +179,7 @@ export function parseInvocation(rawParams: unknown): A2aInvocation {
 
   const part = message.parts[0];
   if (part === undefined) throw invalid('Message carries no parts.');
+  if (!isRecord(part)) throw invalid('Message part must be a JSON object.');
   assertSupportedPart(part);
 
   const data = part['data'];
