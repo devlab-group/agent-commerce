@@ -1,6 +1,17 @@
 // EVM, Solana and NEAR input checks, log-query ranges and proxy calldata
 import { x402ExactPermit2ProxyABI } from '@x402/evm';
-import { encodeFunctionData, getAddress, type PublicClient } from 'viem';
+import {
+  type Address,
+  encodeAbiParameters,
+  encodeEventTopics,
+  encodeFunctionData,
+  getAddress,
+  type Hash,
+  type Hex,
+  type PublicClient,
+  parseAbi,
+  TransactionReceiptNotFoundError,
+} from 'viem';
 import { describe, expect, it, vi } from 'vitest';
 import type { PaymentAttempt, PaymentProvider } from '../../../src/core';
 import { eip3009Locator, permit2Locator } from '../../../src/payments/x402/locator';
@@ -362,6 +373,322 @@ describe('readEvmEvidence search window', () => {
       outcome: 'unknown',
       reason: 'search_window_too_wide',
       evidence: { toBlock: String(lastSearched), endBlock: String(lastSearched + 1n) },
+    });
+  });
+});
+
+describe('readEvmEvidence verdicts', () => {
+  const FINAL = 1_000n;
+  const timeAt = (b: bigint) => 1_700_000_000n + 2n * b;
+  const iso = (seconds: bigint) => new Date(Number(seconds) * 1000).toISOString();
+  const TX: Hash = `0x${'cd'.repeat(32)}`;
+  const OTHER: Hash = `0x${'ef'.repeat(32)}`;
+  const NONCE: Hex = `0x${'ab'.repeat(32)}`;
+  // The standard events a token emits for an EIP-3009 transfer
+  const EVENTS = parseAbi([
+    'event AuthorizationUsed(address indexed authorizer, bytes32 indexed nonce)',
+    'event Transfer(address indexed from, address indexed to, uint256 value)',
+  ]);
+  const usedLog = (authorizer: Address, nonce: Hex, address: Address = ASSET) => ({
+    address,
+    topics: encodeEventTopics({
+      abi: EVENTS,
+      eventName: 'AuthorizationUsed',
+      args: { authorizer, nonce },
+    }),
+    data: '0x' as Hex,
+  });
+  const transferLog = (from: Address, to: Address, value: bigint, address: Address = ASSET) => ({
+    address,
+    topics: encodeEventTopics({ abi: EVENTS, eventName: 'Transfer', args: { from, to } }),
+    data: encodeAbiParameters([{ type: 'uint256' }], [value]),
+  });
+
+  interface Receipt {
+    readonly status: 'success' | 'reverted';
+    readonly blockNumber: bigint;
+    readonly to?: Address;
+    readonly logs: readonly ReturnType<typeof usedLog>[];
+  }
+  interface Chain {
+    readonly chainId?: number;
+    // Nonce state at the finalized block, and at the latest block when it differs
+    readonly used?: boolean;
+    readonly usedLatest?: boolean;
+    readonly logs?: readonly Hash[];
+    readonly receipts?: Readonly<Record<Hash, Receipt | Error>>;
+    readonly inputs?: Readonly<Record<Hash, Hex>>;
+  }
+
+  // A chain finalized at block 1000, two seconds per block
+  function chain(state: Chain) {
+    const { getBlock } = fakeChain(FINAL, timeAt);
+    const usedAt = (blockNumber?: bigint) =>
+      blockNumber === undefined ? (state.usedLatest ?? state.used ?? false) : (state.used ?? false);
+    const getLogs = vi.fn(async () =>
+      (state.logs ?? []).map((transactionHash) => ({ transactionHash })),
+    );
+    const client = {
+      getChainId: async () => state.chainId ?? 8453,
+      getBlock,
+      readContract: async (args: { functionName: string; blockNumber?: bigint }) =>
+        args.functionName === 'nonceBitmap'
+          ? // Permit2 nonce 7 is bit 7 of word 0
+            usedAt(args.blockNumber)
+            ? 1n << 7n
+            : 1n << 6n
+          : usedAt(args.blockNumber),
+      getLogs,
+      getTransactionReceipt: async ({ hash }: { hash: Hash }) => {
+        const receipt = state.receipts?.[hash];
+        if (receipt === undefined) throw new TransactionReceiptNotFoundError({ hash });
+        if (receipt instanceof Error) throw receipt;
+        return receipt;
+      },
+      getTransaction: async ({ hash }: { hash: Hash }) => ({ input: state.inputs?.[hash] ?? '0x' }),
+    } as unknown as PublicClient;
+    return { client, getLogs };
+  }
+
+  const eip3009 = (validBefore: bigint) => {
+    const locator = parseEvmLocator(
+      eip3009Locator('eip155:8453', ASSET, {
+        from: BUYER,
+        to: MERCHANT,
+        value: '10000',
+        validAfter: '0',
+        validBefore: String(validBefore),
+        nonce: NONCE,
+      }),
+    );
+    if (locator === undefined) throw new Error('the locator did not parse');
+    return locator;
+  };
+  const permit2 = (deadline: bigint) => {
+    const locator = parseEvmLocator(
+      permit2Locator('eip155:8453', {
+        asset: ASSET,
+        owner: BUYER,
+        to: MERCHANT,
+        amount: '10000',
+        nonce: '7',
+        deadline: String(deadline),
+        validAfter: '0',
+        proxy: PROXY,
+      }),
+    );
+    if (locator === undefined) throw new Error('the locator did not parse');
+    return locator;
+  };
+  // Created at block 400, so the search starts at genesis after the clock margin
+  const attempt = (externalReference?: string): PaymentAttempt => ({
+    ...ATTEMPT,
+    createdAt: iso(timeAt(400n)),
+    ...(externalReference !== undefined ? { externalReference } : {}),
+  });
+  const read = (state: Chain, locator: ReturnType<typeof eip3009>, ref?: string) =>
+    readEvmEvidence({ client: chain(state).client, chainId: 8453, locator, attempt: attempt(ref) });
+
+  const paid = (
+    blockNumber: bigint,
+    logs = [usedLog(BUYER, NONCE), transferLog(BUYER, MERCHANT, 10_000n)],
+  ) => ({ status: 'success', blockNumber, logs }) as const;
+  const finality = { finalizedBlock: '1000', finalizedAt: iso(timeAt(FINAL)) };
+
+  it('reports a chain mismatch before reading any evidence', async () => {
+    const { client, getLogs } = chain({ chainId: 1 });
+
+    const result = await readEvmEvidence({
+      client,
+      chainId: 8453,
+      locator: eip3009(timeAt(900n)),
+      attempt: attempt(),
+    });
+
+    expect(result).toEqual({
+      outcome: 'unknown',
+      reason: 'chain_mismatch',
+      evidence: { chainId: 1, expectedChainId: 8453 },
+    });
+    expect(getLogs).not.toHaveBeenCalled();
+  });
+
+  it('settles from the recorded transaction when its receipt is final', async () => {
+    const result = await read(
+      { used: true, receipts: { [TX]: paid(990n) } },
+      eip3009(timeAt(900n)),
+      TX,
+    );
+
+    expect(result).toEqual({
+      outcome: 'settled',
+      reason: 'transfer_final',
+      externalReference: TX,
+      evidence: { transactionHash: TX, blockNumber: '990', ...finality },
+    });
+  });
+
+  it('waits on a matching transfer in a block after the finalized one', async () => {
+    const result = await read(
+      { used: true, receipts: { [TX]: paid(1_001n) } },
+      eip3009(timeAt(900n)),
+      TX,
+    );
+
+    expect(result).toEqual({
+      outcome: 'unknown',
+      reason: 'not_final',
+      evidence: { transactionHash: TX, blockNumber: '1001', ...finality },
+    });
+  });
+
+  it('does not settle from a reverted recorded transaction', async () => {
+    const result = await read(
+      { used: false, receipts: { [TX]: { ...paid(990n), status: 'reverted' } } },
+      eip3009(timeAt(FINAL)),
+      TX,
+    );
+
+    expect(result).toMatchObject({ outcome: 'not-settled', reason: 'expired_unused' });
+  });
+
+  it('answers not settled once the finalized block reaches validBefore with the nonce unused', async () => {
+    const result = await read({ used: false }, eip3009(timeAt(FINAL)));
+
+    expect(result).toEqual({
+      outcome: 'not-settled',
+      reason: 'expired_unused',
+      evidence: { nonceUsed: false, ...finality },
+    });
+  });
+
+  it('waits one second before validBefore, naming the expiry as the retry time', async () => {
+    const validBefore = timeAt(FINAL) + 1n;
+
+    const result = await read({ used: false }, eip3009(validBefore));
+
+    expect(result).toEqual({
+      outcome: 'unknown',
+      reason: 'not_expired',
+      evidence: finality,
+      retryAfter: iso(validBefore),
+    });
+  });
+
+  it('waits when the nonce is used only after the finalized block, before expiry', async () => {
+    const result = await read({ used: false, usedLatest: true }, eip3009(timeAt(FINAL) + 1n));
+
+    expect(result).toEqual({ outcome: 'unknown', reason: 'not_final', evidence: finality });
+  });
+
+  it('settles from a transfer the log search finds', async () => {
+    const result = await read(
+      { used: true, logs: [TX], receipts: { [TX]: paid(500n) } },
+      eip3009(timeAt(900n)),
+    );
+
+    expect(result).toMatchObject({ outcome: 'settled', externalReference: TX });
+  });
+
+  it.each([
+    ['pays another recipient', [usedLog(BUYER, NONCE), transferLog(BUYER, BUYER, 10_000n)]],
+    ['pays another amount', [usedLog(BUYER, NONCE), transferLog(BUYER, MERCHANT, 9_999n)]],
+    ['transfers without using the nonce', [transferLog(BUYER, MERCHANT, 10_000n)]],
+    [
+      'uses another nonce',
+      [usedLog(BUYER, `0x${'ac'.repeat(32)}`), transferLog(BUYER, MERCHANT, 10_000n)],
+    ],
+    [
+      'emits the events from another contract',
+      [usedLog(BUYER, NONCE, MERCHANT), transferLog(BUYER, MERCHANT, 10_000n, MERCHANT)],
+    ],
+  ])('does not settle from a transaction that %s', async (_label, logs) => {
+    const result = await read(
+      { used: true, logs: [TX], receipts: { [TX]: paid(500n, logs) } },
+      eip3009(timeAt(900n)),
+    );
+
+    expect(result).toMatchObject({ outcome: 'unknown', reason: 'used_without_record' });
+  });
+
+  it('skips a candidate whose receipt the RPC cannot find', async () => {
+    const result = await read(
+      { used: true, logs: [OTHER, TX], receipts: { [TX]: paid(500n) } },
+      eip3009(timeAt(900n)),
+    );
+
+    expect(result).toMatchObject({ outcome: 'settled', externalReference: TX });
+  });
+
+  it('fails the read on any other receipt error', async () => {
+    await expect(
+      read(
+        { used: true, logs: [TX], receipts: { [TX]: new Error('rpc down') } },
+        eip3009(timeAt(900n)),
+      ),
+    ).rejects.toThrow('rpc down');
+  });
+
+  describe('Permit2', () => {
+    const permit = { permitted: { token: getAddress(ASSET), amount: 10_000n }, deadline: 9n };
+    const witness = { to: getAddress(MERCHANT), validAfter: 0n };
+    const signature = `0x${'11'.repeat(65)}` as const;
+    const settleCall = (nonce: bigint) =>
+      encodeFunctionData({
+        abi: x402ExactPermit2ProxyABI,
+        functionName: 'settle',
+        args: [{ ...permit, nonce }, getAddress(BUYER), witness, signature],
+      });
+    const proxied = (to: Address = PROXY) =>
+      ({
+        status: 'success',
+        blockNumber: 500n,
+        to,
+        logs: [transferLog(BUYER, MERCHANT, 10_000n)],
+      }) as const;
+    const readPermit2 = (state: Chain, deadline = timeAt(900n)) =>
+      readEvmEvidence({
+        client: chain(state).client,
+        chainId: 8453,
+        locator: permit2(deadline),
+        attempt: attempt(),
+      });
+
+    it('settles from a proxy call that names the nonce', async () => {
+      const result = await readPermit2({
+        used: true,
+        logs: [TX],
+        receipts: { [TX]: proxied() },
+        inputs: { [TX]: settleCall(7n) },
+      });
+
+      expect(result).toMatchObject({ outcome: 'settled', externalReference: TX });
+    });
+
+    it.each([
+      ['names another nonce', proxied(), settleCall(8n)],
+      ['was not sent to the proxy', proxied(getAddress(MERCHANT)), settleCall(7n)],
+    ])('does not settle from a transfer whose transaction %s', async (_label, receipt, input) => {
+      const result = await readPermit2({
+        used: true,
+        logs: [TX],
+        receipts: { [TX]: receipt },
+        inputs: { [TX]: input },
+      });
+
+      expect(result).toMatchObject({ outcome: 'unknown', reason: 'used_without_record' });
+    });
+
+    it('waits while the finalized block is at the deadline, which Permit2 still accepts', async () => {
+      const result = await readPermit2({ used: false }, timeAt(FINAL));
+
+      expect(result).toMatchObject({ outcome: 'unknown', reason: 'not_expired' });
+    });
+
+    it('answers not settled one second after the deadline with the nonce unused', async () => {
+      const result = await readPermit2({ used: false }, timeAt(FINAL) - 1n);
+
+      expect(result).toMatchObject({ outcome: 'not-settled', reason: 'expired_unused' });
     });
   });
 });
