@@ -1,4 +1,4 @@
-// Reconciliation input checks, log-query ranges and proxy calldata
+// EVM, Solana and NEAR input checks, log-query ranges and proxy calldata
 import { x402ExactPermit2ProxyABI } from '@x402/evm';
 import { encodeFunctionData, getAddress } from 'viem';
 import { describe, expect, it } from 'vitest';
@@ -57,6 +57,27 @@ const PERMIT2 = permit2Locator('eip155:8453', {
   proxy: PROXY,
 });
 
+// Solana and NEAR locator shapes from payment verification
+const SOLANA = {
+  v: 1,
+  network: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
+  messageHash: `${'A'.repeat(43)}=`,
+  recentBlockhash: '4sGjMW1sUnHzSxGspuhpqLDx6wiyjNtZAMdL4VZHirAn',
+  payer: '9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM',
+};
+const NEAR = {
+  v: 1,
+  network: 'near:mainnet',
+  senderId: 'buyer.near',
+  publicKey: 'ed25519:47unvknMVQJ87USpHGn1uxXMQXZKEi9Wjnzvw18FAph6',
+  nonce: '4000001',
+  maxBlockHeight: '42',
+  asset: '17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1',
+  receiver: 'merchant.near',
+  amount: '1000000',
+  relayers: ['relayer.near'],
+};
+
 function reconcile(locator: Readonly<Record<string, unknown>> | undefined, from = provider) {
   const read = (from as PaymentProvider).reconcile;
   if (read === undefined) throw new Error('the provider has no reconcile');
@@ -79,26 +100,25 @@ describe('x402 reconcile gates', () => {
     });
   });
 
-  it('answers unsupported_family for a Solana locator', async () => {
-    expect(
-      await reconcile({
-        v: 1,
-        network: 'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1',
-        messageHash: 'x',
-      }),
-    ).toEqual({ outcome: 'unknown', reason: 'unsupported_family' });
+  it.each([
+    ['another chain family', { v: 1, network: 'cosmos:cosmoshub-4' }],
+    ['a locator without a network', { v: 1 }],
+  ])('answers unsupported_family for %s', async (_label, locator) => {
+    expect(await reconcile(locator)).toEqual({ outcome: 'unknown', reason: 'unsupported_family' });
   });
 
   it.each([
     ['EIP-3009', EIP3009],
     ['Permit2', PERMIT2],
+    ['Solana', SOLANA],
+    ['NEAR', NEAR],
   ])(
     'reads a %s locator as verify writes it, then needs its network configured',
     async (_label, locator) => {
       expect(await reconcile(locator)).toEqual({
         outcome: 'unknown',
         reason: 'network_not_configured',
-        evidence: { network: 'eip155:8453' },
+        evidence: { network: locator['network'] },
       });
     },
   );
@@ -113,6 +133,16 @@ describe('x402 reconcile gates', () => {
     ['a hex Permit2 nonce', { ...PERMIT2, nonce: '0x07' }],
     ['a malformed proxy', { ...PERMIT2, proxy: '0x1234' }],
     ['a missing deadline', { ...PERMIT2, deadline: undefined }],
+    ['a Solana message hash that is not base64 SHA-256', { ...SOLANA, messageHash: 'abc' }],
+    ['a short Solana blockhash', { ...SOLANA, recentBlockhash: '1111' }],
+    ['a Solana payer outside base58', { ...SOLANA, payer: `0${'1'.repeat(43)}` }],
+    ['a missing NEAR sender', { ...NEAR, senderId: undefined }],
+    ['an empty NEAR public key', { ...NEAR, publicKey: '' }],
+    ['a hex NEAR nonce', { ...NEAR, nonce: '0x10' }],
+    ['a negative NEAR amount', { ...NEAR, amount: '-1' }],
+    ['a NEAR maxBlockHeight past 20 digits', { ...NEAR, maxBlockHeight: '1'.repeat(21) }],
+    ['NEAR relayers that are not a list', { ...NEAR, relayers: 'relayer.near' }],
+    ['a NEAR relayer that is not a string', { ...NEAR, relayers: [7] }],
   ])('answers invalid_locator for %s', async (_label, locator) => {
     expect(await reconcile(locator)).toEqual({ outcome: 'unknown', reason: 'invalid_locator' });
   });

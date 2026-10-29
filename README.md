@@ -486,10 +486,12 @@ Resolves attempts whose settlement outcome the gateway did not learn:
 the journal at least `--min-age` old (default `15m`). The payment provider
 checks chain evidence and returns:
 
-- **settled**: a finalized transfer matches the authorization. The attempt
-  becomes `settled` with its transaction hash.
-- **not settled**: the authorization is unused at the `finalized` block after its
-  last valid second. The attempt becomes `rejected` with reason `not_settled`.
+- **settled**: a final transfer matches the authorization. The attempt becomes
+  `settled` with its transaction ID.
+- **not settled**: final chain state shows the authorization unused after its
+  last valid second on EVM or its `maxBlockHeight` on NEAR. The attempt becomes
+  `rejected` with reason `not_settled`. Solana reconciliation does not return
+  this result: blockhash expiry alone does not prove nonpayment.
 - **unknown**: the evidence is inconclusive. The report includes a reason and,
   when available, a time to try again. The attempt remains unresolved.
 
@@ -503,10 +505,22 @@ entries newest first, then a capped batch of attempts without journal entries.
 It exits 0 after a completed run, even if attempts remain unresolved, and 1 if
 the run fails to complete.
 
+Each family needs its own evidence:
+
+- **Solana**: uses the recorded transaction signature or searches a known
+  payer's history near the attempt's creation time. Only successful finalized
+  transactions count. A search that reaches its page cap returns `unknown`
+  (`history_too_long`). Otherwise, a missing match gives `not_expired` while
+  the blockhash is valid at `confirmed` commitment, then `blockhash_expired`.
+- **NEAR**: uses the recorded transaction hash and relayer IDs from the
+  facilitator's `/supported`. Both are needed to prove `settled`. Without
+  them, final access-key state can still prove `not-settled` after expiry;
+  other cases remain `unknown`.
+
 Coverage is partial: EVM reconciliation (x402 EIP-3009 and Permit2, and MPP)
-has local Anvil coverage; public-network validation is pending. Solana and
-NEAR attempts return `unknown`. A recent transfer returns `not_final` until
-its block is finalized.
+is tested on Anvil, Solana on `solana-test-validator` and NEAR on a local
+sandbox. Public-network validation is pending. EVM and NEAR can report
+`not_final` while a referenced transaction awaits finality.
 
 ### `agent-commerce version`
 

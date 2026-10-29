@@ -9,6 +9,7 @@ import { isRecord } from '../../../core/is-record';
 import { normalizeAddress } from '../addresses';
 import type { createLocalPublicClient } from '../chain';
 import type { FacilitatorBinding } from '../facilitator';
+import { jsonRpc } from '../json-rpc';
 import { describeDeploymentMode } from '../networks';
 import { x402OfferName } from '../options';
 import { HEALTH_TIMEOUT_MS, X402_VERSION } from './constants';
@@ -125,7 +126,7 @@ export function createHealthCheck(ctx: ProviderContext): () => Promise<AdapterHe
     const { profile, rpcOrigin, binding } = offer;
     // A missing Solana peer fails readiness, not the first paid request
     const svmModule = await svm();
-    const genesis = await jsonRpc(offer.rpcUrl, 'getGenesisHash', []);
+    const genesis = await rpc(offer.rpcUrl, 'getGenesisHash', []);
     const cluster = typeof genesis === 'string' ? `solana:${genesis.slice(0, 32)}` : undefined;
     if (cluster !== offer.network) {
       return {
@@ -133,10 +134,7 @@ export function createHealthCheck(ctx: ProviderContext): () => Promise<AdapterHe
         detail: `RPC at ${rpcOrigin} serves ${cluster ?? 'an unknown cluster'}, expected ${offer.network} (${profile.displayName})`,
       };
     }
-    const mint = await jsonRpc(offer.rpcUrl, 'getAccountInfo', [
-      offer.asset,
-      { encoding: 'base64' },
-    ]);
+    const mint = await rpc(offer.rpcUrl, 'getAccountInfo', [offer.asset, { encoding: 'base64' }]);
     const mintInfo = readMint(mint);
     if (mintInfo === undefined) {
       return {
@@ -158,7 +156,7 @@ export function createHealthCheck(ctx: ProviderContext): () => Promise<AdapterHe
       offer.asset,
       tokenProgram,
     );
-    const account = await jsonRpc(offer.rpcUrl, 'getAccountInfo', [
+    const account = await rpc(offer.rpcUrl, 'getAccountInfo', [
       payeeAccount,
       { encoding: 'base64' },
     ]);
@@ -202,7 +200,7 @@ export function createHealthCheck(ctx: ProviderContext): () => Promise<AdapterHe
     const { profile, rpcOrigin, binding, rpcUrl } = offer;
     // A missing NEAR peer fails readiness, not the first paid request
     await near();
-    const status = await jsonRpc(rpcUrl, 'status', []);
+    const status = await rpc(rpcUrl, 'status', []);
     const chainId = isRecord(status) ? status['chain_id'] : undefined;
     const expected = offer.network.slice('near:'.length);
     if (chainId !== expected) {
@@ -211,7 +209,7 @@ export function createHealthCheck(ctx: ProviderContext): () => Promise<AdapterHe
         detail: `RPC at ${rpcOrigin} serves chain ${String(chainId ?? 'unknown')}, expected ${expected} (${profile.displayName})`,
       };
     }
-    const token = await jsonRpc(rpcUrl, 'query', {
+    const token = await rpc(rpcUrl, 'query', {
       request_type: 'view_account',
       finality: 'final',
       account_id: offer.asset,
@@ -370,22 +368,8 @@ function readMint(
 }
 
 // One JSON-RPC call for health(), bounded like the EVM client's
-async function jsonRpc(rpcUrl: string, method: string, params: unknown): Promise<unknown> {
-  const response = await fetch(rpcUrl, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
-    signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS),
-  });
-  const body = (await response.json()) as { result?: unknown; error?: unknown };
-  if (body.error !== undefined) {
-    throw new CommerceError(
-      'PAYMENT_PROVIDER_UNAVAILABLE',
-      `RPC ${method} failed: ${JSON.stringify(body.error)}`,
-    );
-  }
-  return body.result;
-}
+const rpc = (rpcUrl: string, method: string, params: unknown) =>
+  jsonRpc(rpcUrl, method, params, HEALTH_TIMEOUT_MS);
 
 // A NEAR contract view call at final finality, its result parsed as JSON
 async function nearView(
@@ -394,7 +378,7 @@ async function nearView(
   method: string,
   args: Record<string, unknown>,
 ): Promise<unknown> {
-  const result = await jsonRpc(rpcUrl, 'query', {
+  const result = await rpc(rpcUrl, 'query', {
     request_type: 'call_function',
     finality: 'final',
     account_id: accountId,

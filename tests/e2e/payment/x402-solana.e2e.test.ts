@@ -3,7 +3,8 @@
  * client and served over HTTP by its facilitator. Solana uses the gateway's
  * remote path only. The validator holds a USDC-style mint at the devnet USDC
  * address and uses the devnet CAIP-2 id; the SDK accepts only known cluster
- * ids. Balances come from the validator's token accounts.
+ * ids. Balances come from the validator's token accounts. Shorter slots speed
+ * up finality and blockhash-expiry checks.
  */
 import { generateKeyPairSigner, type KeyPairSigner } from '@solana/kit';
 import { x402Client, x402HTTPClient } from '@x402/core/client';
@@ -11,16 +12,24 @@ import type { PaymentRequired } from '@x402/core/types';
 import { ExactSvmScheme } from '@x402/svm/exact/client';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { type GatewayConfig, parseConfig } from '../../../src/config';
-import { type BackendExecutor, isCommerceError, NOOP_LOGGER } from '../../../src/core';
+import {
+  type BackendExecutor,
+  isCommerceError,
+  NOOP_LOGGER,
+  type PaymentAttempt,
+  type PaymentProvider,
+  type PaymentReconciliationResult,
+} from '../../../src/core';
 import { createGateway, type GatewayInstance } from '../../../src/gateway';
 import { createConfiguredPaymentProviders } from '../../../src/gateway/payment-providers';
 import { createX402PaymentProvider } from '../../../src/payments/x402';
 import { createSqliteReceiptStore } from '../../../src/storage/receipts';
+import { locatorOf } from '../../fixtures/x402/locator';
 import {
   type LoopbackFacilitator,
   startLoopbackFacilitator,
 } from '../../fixtures/x402/loopback-facilitator';
-import { startLossyRpc } from '../../fixtures/x402/lossy-rpc';
+import { type RecordingRpc, startLossyRpc, startRecordingRpc } from '../../fixtures/x402/lossy-rpc';
 import { assertTransferOnChain } from '../../fixtures/x402/smoke/evidence';
 import {
   associatedTokenAddress,
@@ -36,6 +45,7 @@ import {
 import { withSignatureBytes } from '../../fixtures/x402/svm-transaction';
 
 const DEVNET = 'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1';
+const DEVNET_GENESIS = 'EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG';
 const USDC = '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU';
 const RPC_PORT = 18899;
 const RESOURCE_ID = 'market_report';
@@ -130,6 +140,7 @@ beforeAll(async () => {
   merchant = (await generateKeyPairSigner()).address;
   validator = await startSolanaValidator({
     rpcPort: RPC_PORT,
+    ticksPerSlot: 8,
     accounts: [
       mintAccount(USDC, 6, 100_000_000n),
       await tokenAccount(buyer.address, USDC, 100_000_000n),
@@ -360,5 +371,223 @@ describeWithValidator('x402 Solana settlement on a local validator', () => {
     expect(health?.detail).toContain(
       `serves solana:${genesis.slice(0, 32)}, expected ${DEVNET} (Solana Devnet)`,
     );
+  });
+});
+
+// Poll the chain until the check passes
+async function until(check: () => Promise<boolean>, what: string): Promise<void> {
+  const deadline = Date.now() + 30_000;
+  while (!(await check())) {
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+}
+
+// The payer's finalized history, newest first
+async function finalizedHistory(owner: string): Promise<{ signature: string; slot: number }[]> {
+  return solanaRpc(validator.rpcUrl, 'getSignaturesForAddress', [
+    owner,
+    { commitment: 'finalized' },
+  ]);
+}
+
+async function blockhashValid(blockhash: unknown): Promise<boolean> {
+  const answer = await solanaRpc<{ value: boolean }>(validator.rpcUrl, 'isBlockhashValid', [
+    blockhash,
+    { commitment: 'confirmed' },
+  ]);
+  return answer.value;
+}
+
+interface VerifiedPayment {
+  readonly context: Parameters<PaymentProvider['settle']>[0];
+  readonly locator: Readonly<Record<string, unknown>>;
+  readonly attempt: PaymentAttempt;
+}
+
+// Build an SDK-signed, verified payment and its reconciliation attempt data
+async function verifiedPayment(provider: PaymentProvider): Promise<VerifiedPayment> {
+  const resource = config.resources[0] as (typeof config.resources)[number];
+  const requestId = `req-${Math.random().toString(36).slice(2)}`;
+  const createdAt = new Date().toISOString();
+  const requirement = await provider.createRequirement({
+    requestId,
+    resource,
+    amount: '1.00',
+    currency: 'USDC',
+    requestedAt: createdAt,
+  });
+  const proof = await sign(requirement.challenge.envelope as unknown as PaymentRequired);
+  const context = {
+    requestId,
+    resource,
+    requirement,
+    submission: { method: 'x402' as const, payload: header(proof)['payment-signature'] },
+  };
+  const verification = await provider.verify(context);
+  expect(verification.status).toBe('verified');
+  return {
+    context: { ...context, verification },
+    locator: locatorOf(verification),
+    attempt: {
+      id: `pa_${requestId}`,
+      requestId,
+      resourceId: resource.id,
+      provider: 'x402',
+      replayKey: verification.replayKey ?? 'replay',
+      status: 'settlement-uncertain',
+      amount: '1.00',
+      currency: 'USDC',
+      createdAt,
+      updatedAt: createdAt,
+    },
+  };
+}
+
+function reconcile(
+  provider: PaymentProvider,
+  payment: VerifiedPayment,
+  attempt: Partial<PaymentAttempt> = {},
+): Promise<PaymentReconciliationResult> {
+  const read = provider.reconcile;
+  if (read === undefined) throw new Error('the provider has no reconcile');
+  return read({
+    attempt: { ...payment.attempt, ...attempt },
+    locator: payment.locator,
+    now: new Date().toISOString(),
+  });
+}
+
+describeWithValidator('x402 Solana reconciliation on a local validator', () => {
+  let rpc: RecordingRpc;
+  let provider: PaymentProvider;
+  const methodsSince = (from: number) => new Set(rpc.calls.slice(from).map((call) => call.method));
+
+  beforeAll(async () => {
+    // Report the offer's devnet genesis hash so these cases reach evidence checks
+    rpc = await startRecordingRpc(validator.rpcUrl, { getGenesisHash: () => DEVNET_GENESIS });
+    provider = createX402PaymentProvider({
+      network: DEVNET,
+      rpcUrl: rpc.url,
+      asset: USDC,
+      assetDecimals: 6,
+      payTo: merchant,
+      facilitator: { mode: 'remote', url: facilitator.url, auth: { type: 'none' } },
+    });
+  });
+
+  afterAll(async () => {
+    await rpc?.close();
+  });
+
+  it('resolves settled from the recorded transaction id once it is finalized', async () => {
+    const payment = await verifiedPayment(provider);
+    const settled = await provider.settle(payment.context);
+    expect(settled.status).toBe('settled');
+    const id = settled.externalReference as string;
+    let slot: number | undefined;
+    await until(async () => {
+      slot = (await finalizedHistory(buyer.address)).find((entry) => entry.signature === id)?.slot;
+      return slot !== undefined;
+    }, 'the settlement to finalize');
+    const [calls, requests] = [rpc.calls.length, facilitator.requests.length];
+
+    expect(await reconcile(provider, payment, { externalReference: id })).toEqual({
+      outcome: 'settled',
+      reason: 'transfer_final',
+      externalReference: id,
+      evidence: { transactionId: id, slot: String(slot) },
+    });
+    expect(methodsSince(calls)).toEqual(new Set(['getGenesisHash', 'getTransaction']));
+    expect(facilitator.requests.slice(requests)).toEqual([]);
+  });
+
+  it("finds a transfer whose broadcast response was lost in the payer's history", async () => {
+    const lossy = await startLossyRpc(validator.rpcUrl, 'sendTransaction');
+    const lossyFacilitator = await startLoopbackFacilitator({
+      svm: { network: DEVNET, rpcUrl: lossy.url, feePayer },
+    });
+    try {
+      const uncertain = createX402PaymentProvider({
+        network: DEVNET,
+        rpcUrl: rpc.url,
+        asset: USDC,
+        assetDecimals: 6,
+        payTo: merchant,
+        facilitator: { mode: 'remote', url: lossyFacilitator.url, auth: { type: 'none' } },
+      });
+      const known = new Set((await finalizedHistory(buyer.address)).map((e) => e.signature));
+      const payment = await verifiedPayment(uncertain);
+      expect(payment.locator['payer']).toBe(buyer.address);
+      await expect(uncertain.settle(payment.context)).rejects.toSatisfy(
+        (err: unknown) => isCommerceError(err) && err.code === 'PAYMENT_PROVIDER_UNAVAILABLE',
+      );
+      let landed: { signature: string; slot: number } | undefined;
+      await until(async () => {
+        landed = (await finalizedHistory(buyer.address)).find((e) => !known.has(e.signature));
+        return landed !== undefined;
+      }, 'the lost broadcast to finalize');
+      const [calls, requests] = [rpc.calls.length, lossyFacilitator.requests.length];
+
+      expect(await reconcile(uncertain, payment)).toEqual({
+        outcome: 'settled',
+        reason: 'transfer_final',
+        externalReference: landed?.signature,
+        evidence: { transactionId: landed?.signature, slot: String(landed?.slot) },
+      });
+      expect(methodsSince(calls)).toEqual(
+        new Set(['getGenesisHash', 'getSignaturesForAddress', 'getTransaction']),
+      );
+      expect(lossyFacilitator.requests.slice(requests)).toEqual([]);
+    } finally {
+      await lossyFacilitator.close();
+      await lossy.close();
+    }
+  });
+
+  it('leaves a transaction that never landed unknown, and reports its blockhash once expired', async () => {
+    // Another finalized payment by the same payer, for the same amount
+    const other = await provider.settle((await verifiedPayment(provider)).context);
+    const otherId = other.externalReference as string;
+    await until(
+      async () => (await finalizedHistory(buyer.address)).some((e) => e.signature === otherId),
+      'the other payment to finalize',
+    );
+    const payment = await verifiedPayment(provider);
+    const answer = () => reconcile(provider, payment, { externalReference: otherId });
+
+    expect(await answer()).toEqual({
+      outcome: 'unknown',
+      reason: 'not_expired',
+      evidence: { payerSearched: true },
+    });
+    await until(
+      async () => !(await blockhashValid(payment.locator['recentBlockhash'])),
+      'the blockhash to expire',
+    );
+    expect(await answer()).toEqual({
+      outcome: 'unknown',
+      reason: 'blockhash_expired',
+      evidence: { payerSearched: true },
+    });
+  });
+
+  it('answers chain_mismatch when the RPC is not the cluster the locator names', async () => {
+    const direct = createX402PaymentProvider({
+      network: DEVNET,
+      rpcUrl: validator.rpcUrl,
+      asset: USDC,
+      assetDecimals: 6,
+      payTo: merchant,
+      facilitator: { mode: 'remote', url: facilitator.url, auth: { type: 'none' } },
+    });
+    const payment = await verifiedPayment(direct);
+    const genesis = await solanaRpc<string>(validator.rpcUrl, 'getGenesisHash', []);
+
+    expect(await reconcile(direct, payment)).toEqual({
+      outcome: 'unknown',
+      reason: 'chain_mismatch',
+      evidence: { network: `solana:${genesis.slice(0, 32)}`, expectedNetwork: DEVNET },
+    });
   });
 });

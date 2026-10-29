@@ -12,16 +12,24 @@ import { createClientNearSigner, decodeSignedDelegateB64 } from '@x402/near';
 import { ExactNearScheme } from '@x402/near/exact/client';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { type GatewayConfig, parseConfig } from '../../../src/config';
-import { type BackendExecutor, isCommerceError, NOOP_LOGGER } from '../../../src/core';
+import {
+  type BackendExecutor,
+  isCommerceError,
+  NOOP_LOGGER,
+  type PaymentAttempt,
+  type PaymentProvider,
+  type PaymentReconciliationResult,
+} from '../../../src/core';
 import { createGateway, type GatewayInstance } from '../../../src/gateway';
 import { createConfiguredPaymentProviders } from '../../../src/gateway/payment-providers';
 import { createX402PaymentProvider } from '../../../src/payments/x402';
 import { createSqliteReceiptStore } from '../../../src/storage/receipts';
+import { locatorOf } from '../../fixtures/x402/locator';
 import {
   type LoopbackFacilitator,
   startLoopbackFacilitator,
 } from '../../fixtures/x402/loopback-facilitator';
-import { startLossyRpc } from '../../fixtures/x402/lossy-rpc';
+import { type RecordingRpc, startLossyRpc, startRecordingRpc } from '../../fixtures/x402/lossy-rpc';
 import { buildSignedDelegate } from '../../fixtures/x402/near-delegate';
 import {
   createNearAccount,
@@ -520,5 +528,261 @@ describeWithSandbox('x402 NEAR settlement on a local sandbox', () => {
     expect(health?.detail).toContain(
       `serves chain ${status.chain_id}, expected testnet (NEAR Testnet)`,
     );
+  });
+});
+
+async function finalHeight(): Promise<bigint> {
+  const block = await nearRpc<{ header: { height: number } }>(sandbox.rpcUrl, 'block', {
+    finality: 'final',
+  });
+  return BigInt(block.header.height);
+}
+
+// Build a buyer delegate expiring `blocks` above the final height
+async function delegateProof(
+  offered: PaymentRequired,
+  options: { keyPair?: KeyPair; blocks: bigint },
+) {
+  const keyPair = options.keyPair ?? buyer.keyPair;
+  const nonce = (await finalNonceOf(buyer.accountId, keyPair.getPublicKey().toString())) + 1n;
+  const { signedDelegateAction } = await buildSignedDelegate({
+    keyPair,
+    senderId: buyer.accountId,
+    receiverId: NEAR_TESTNET_USDC,
+    ftReceiver: merchant.accountId,
+    amount: PRICE.toString(),
+    nonce,
+    maxBlockHeight: (await finalHeight()) + options.blocks,
+  });
+  return { x402Version: 2, accepted: offered.accepts[0], payload: { signedDelegateAction } };
+}
+
+interface VerifiedPayment {
+  readonly context: Parameters<PaymentProvider['settle']>[0];
+  readonly locator: Readonly<Record<string, unknown>>;
+  readonly attempt: PaymentAttempt;
+}
+
+// Build a verified payment and attempt data, using the SDK signer by default.
+// Pass `build` to supply a custom proof.
+async function verifiedPayment(
+  provider: PaymentProvider,
+  build: (offered: PaymentRequired) => Promise<unknown> = sign,
+): Promise<VerifiedPayment> {
+  const resource = config.resources[0] as (typeof config.resources)[number];
+  const requestId = `req-${Math.random().toString(36).slice(2)}`;
+  const createdAt = new Date().toISOString();
+  const requirement = await provider.createRequirement({
+    requestId,
+    resource,
+    amount: '1.00',
+    currency: 'USDC',
+    requestedAt: createdAt,
+  });
+  const proof = await build(requirement.challenge.envelope as unknown as PaymentRequired);
+  const context = {
+    requestId,
+    resource,
+    requirement,
+    submission: { method: 'x402' as const, payload: header(proof)['payment-signature'] },
+  };
+  const verification = await provider.verify(context);
+  expect(verification.status).toBe('verified');
+  return {
+    context: { ...context, verification },
+    locator: locatorOf(verification),
+    attempt: {
+      id: `pa_${requestId}`,
+      requestId,
+      resourceId: resource.id,
+      provider: 'x402',
+      replayKey: verification.replayKey ?? 'replay',
+      status: 'settlement-uncertain',
+      amount: '1.00',
+      currency: 'USDC',
+      createdAt,
+      updatedAt: createdAt,
+    },
+  };
+}
+
+function reconcile(
+  provider: PaymentProvider,
+  payment: VerifiedPayment,
+  attempt: Partial<PaymentAttempt> = {},
+): Promise<PaymentReconciliationResult> {
+  const read = provider.reconcile;
+  if (read === undefined) throw new Error('the provider has no reconcile');
+  return read({
+    attempt: { ...payment.attempt, ...attempt },
+    locator: payment.locator,
+    now: new Date().toISOString(),
+  });
+}
+
+describeWithSandbox('x402 NEAR reconciliation on a local sandbox', () => {
+  let rpc: RecordingRpc;
+  let provider: PaymentProvider;
+
+  beforeAll(async () => {
+    // Report the offer's testnet chain ID so these cases reach evidence checks
+    rpc = await startRecordingRpc(sandbox.rpcUrl, {
+      status: (result) => ({ ...(result as object), chain_id: 'testnet' }),
+    });
+    provider = createX402PaymentProvider({
+      network: NETWORK,
+      rpcUrl: rpc.url,
+      asset: NEAR_TESTNET_USDC,
+      assetDecimals: 6,
+      payTo: merchant.accountId,
+      facilitator: { mode: 'remote', url: facilitator.url, auth: { type: 'none' } },
+    });
+  });
+
+  afterAll(async () => {
+    await rpc?.close();
+  });
+
+  // Settles a payment through `provider` and waits for its final status
+  async function settledHash(payment: VerifiedPayment): Promise<string> {
+    const settled = await provider.settle(payment.context);
+    expect(settled.status).toBe('settled');
+    const hash = settled.externalReference as string;
+    await waitForFinal(
+      async () =>
+        (
+          await nearRpc<{ final_execution_status: string }>(
+            sandbox.rpcUrl,
+            'EXPERIMENTAL_tx_status',
+            { tx_hash: hash, sender_account_id: relayer.accountId, wait_until: 'NONE' },
+          )
+        ).final_execution_status === 'FINAL',
+    );
+    return hash;
+  }
+
+  it('resolves settled from the relayer transaction, looked up with the relayer as sender', async () => {
+    const payment = await verifiedPayment(provider);
+    expect(payment.locator['relayers']).toEqual([relayer.accountId]);
+    const hash = await settledHash(payment);
+    const [calls, requests] = [rpc.calls.length, facilitator.requests.length];
+
+    expect(await reconcile(provider, payment, { externalReference: hash })).toEqual({
+      outcome: 'settled',
+      reason: 'transfer_final',
+      externalReference: hash,
+      evidence: { transactionHash: hash, relayer: relayer.accountId },
+    });
+    // Check that the transaction lookup uses the relayer's account ID
+    expect(rpc.calls.slice(calls)).toEqual([
+      { method: 'status', params: [] },
+      {
+        method: 'EXPERIMENTAL_tx_status',
+        params: { tx_hash: hash, sender_account_id: relayer.accountId, wait_until: 'NONE' },
+      },
+    ]);
+    expect(facilitator.requests.slice(requests)).toEqual([]);
+  });
+
+  it("does not take another delegate's transaction as proof", async () => {
+    const otherHash = await settledHash(await verifiedPayment(provider));
+    const payment = await verifiedPayment(provider);
+
+    expect(await reconcile(provider, payment, { externalReference: otherHash })).toEqual({
+      outcome: 'unknown',
+      reason: 'not_expired',
+      evidence: {
+        maxBlockHeight: payment.locator['maxBlockHeight'],
+        keyNonce: expect.any(String),
+        finalBlock: expect.any(String),
+      },
+    });
+  });
+
+  it('resolves not-settled once the final block passes maxBlockHeight with the nonce unused', async () => {
+    const payment = await verifiedPayment(provider, (offered) =>
+      delegateProof(offered, { blocks: 10n }),
+    );
+    const nonce = BigInt(payment.locator['nonce'] as string);
+    const maxBlockHeight = BigInt(payment.locator['maxBlockHeight'] as string);
+    expect(await reconcile(provider, payment)).toMatchObject({
+      outcome: 'unknown',
+      reason: 'not_expired',
+    });
+
+    await waitForFinal(async () => (await finalHeight()) > maxBlockHeight);
+    const result = await reconcile(provider, payment);
+    expect(result).toEqual({
+      outcome: 'not-settled',
+      reason: 'expired_unused',
+      evidence: { keyNonce: String(nonce - 1n), finalBlock: expect.any(String) },
+    });
+    expect(BigInt(result.evidence?.['finalBlock'] as string)).toBeGreaterThan(maxBlockHeight);
+  });
+
+  it('leaves a delegate unknown when another transaction used its nonce', async () => {
+    const payment = await verifiedPayment(provider);
+    const nonce = BigInt(payment.locator['nonce'] as string);
+    // A transaction signed by the same key advances its nonce
+    await sandbox
+      .account(buyer.accountId, buyer.keyPair)
+      .addFullAccessKey(KeyPair.fromRandom('ed25519').getPublicKey());
+    const publicKey = buyer.keyPair.getPublicKey().toString();
+    await waitForFinal(async () => (await finalNonceOf(buyer.accountId, publicKey)) >= nonce);
+
+    expect(await reconcile(provider, payment)).toEqual({
+      outcome: 'unknown',
+      reason: 'used_without_record',
+      evidence: {
+        keyNonce: String(await finalNonceOf(buyer.accountId, publicKey)),
+        finalBlock: expect.any(String),
+      },
+    });
+  });
+
+  it('leaves a delegate unknown when its access key was deleted', async () => {
+    const spare = KeyPair.fromRandom('ed25519');
+    const account = sandbox.account(buyer.accountId, buyer.keyPair);
+    await account.addFullAccessKey(spare.getPublicKey());
+    const publicKey = spare.getPublicKey().toString();
+    await waitForFinal(async () => (await finalNonceOf(buyer.accountId, publicKey)) > 0n);
+    const payment = await verifiedPayment(provider, (offered) =>
+      delegateProof(offered, { keyPair: spare, blocks: 30n }),
+    );
+    await account.deleteKey(spare.getPublicKey());
+    await waitForFinal(async () => {
+      const key = await nearRpc<{ error?: string }>(sandbox.rpcUrl, 'query', {
+        request_type: 'view_access_key',
+        finality: 'final',
+        account_id: buyer.accountId,
+        public_key: publicKey,
+      });
+      return key.error !== undefined;
+    });
+
+    expect(await reconcile(provider, payment)).toEqual({
+      outcome: 'unknown',
+      reason: 'access_key_missing',
+      evidence: { finalBlock: expect.any(String) },
+    });
+  });
+
+  it('answers chain_mismatch when the RPC is not the chain the locator names', async () => {
+    const direct = createX402PaymentProvider({
+      network: NETWORK,
+      rpcUrl: sandbox.rpcUrl,
+      asset: NEAR_TESTNET_USDC,
+      assetDecimals: 6,
+      payTo: merchant.accountId,
+      facilitator: { mode: 'remote', url: facilitator.url, auth: { type: 'none' } },
+    });
+    const payment = await verifiedPayment(direct);
+    const status = await nearRpc<{ chain_id: string }>(sandbox.rpcUrl, 'status', []);
+
+    expect(await reconcile(direct, payment)).toEqual({
+      outcome: 'unknown',
+      reason: 'chain_mismatch',
+      evidence: { chainId: status.chain_id, expectedChainId: 'testnet' },
+    });
   });
 });

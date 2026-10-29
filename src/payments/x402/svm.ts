@@ -71,3 +71,15 @@ export function inspectSvmPayload(
     locator: { v: LOCATOR_VERSION, network, messageHash, recentBlockhash },
   };
 }
+
+/**
+ * Returns the message hash of base64 transaction bytes using the same decoder
+ * as payment inspection, or undefined if decoding or hashing fails
+ */
+export function messageHashOf(transaction: string): string | undefined {
+  try {
+    return transactionMessageHash(decodeTransactionFromPayload({ transaction }));
+  } catch {
+    return undefined;
+  }
+}

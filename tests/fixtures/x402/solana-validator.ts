@@ -94,6 +94,8 @@ export function walletAccount(address_: string, sol: bigint): PreloadedAccount {
 export async function startSolanaValidator(options: {
   readonly rpcPort: number;
   readonly accounts: readonly PreloadedAccount[];
+  /** Lower values shorten slots for finality and blockhash-expiry tests */
+  readonly ticksPerSlot?: number;
 }): Promise<SolanaValidator> {
   const dir = await mkdtemp(join(tmpdir(), 'x402-solana-'));
   const args = [
@@ -111,6 +113,9 @@ export async function startSolanaValidator(options: {
     String(options.rpcPort + 3),
     '--dynamic-port-range',
     `${options.rpcPort + 10}-${options.rpcPort + 60}`,
+    ...(options.ticksPerSlot !== undefined
+      ? ['--ticks-per-slot', String(options.ticksPerSlot)]
+      : []),
   ];
   for (const [index, account] of options.accounts.entries()) {
     const file = join(dir, `account-${index}.json`);
