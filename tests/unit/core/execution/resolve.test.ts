@@ -385,7 +385,6 @@ describe('resolveManually', () => {
       attempt: expect.objectContaining({
         id: attempt.id,
         status: 'settled',
-        externalReference: '0xfeed',
         resolution: {
           method: 'manual',
           actor: 'alice@ops',
@@ -589,5 +588,58 @@ describe('resolveManually', () => {
 
   it('answers RESOURCE_NOT_FOUND for an unknown attempt', async () => {
     expect(await codeOf(() => resolve({ attemptId: 'pa_missing' }))).toBe('RESOURCE_NOT_FOUND');
+  });
+});
+
+describe('resolution guards', () => {
+  it('keeps a resolution when the pipeline writes late', async () => {
+    const { attempt } = await seed(1, { status: 'reserved', mandate: false });
+    await resolve({ attemptId: attempt.id });
+
+    const code = await codeOf(() =>
+      store.updatePaymentAttempt({
+        replayKey: attempt.replayKey,
+        status: 'settlement-uncertain',
+        externalReference: '0xlate',
+      }),
+    );
+
+    expect(code).toBe('STORAGE_ERROR');
+    const stored = await store.getPaymentAttempt?.(attempt.id);
+    expect(stored).toMatchObject({ status: 'settled', resolution: { method: 'manual' } });
+    expect(stored).not.toHaveProperty('externalReference');
+    expect((await store.getTransaction?.('txn_1'))?.payment.status).toBe('settled');
+  });
+
+  it('keeps the stored chain reference when an operator names another', async () => {
+    const { attempt } = await seed(1);
+    await store.updatePaymentAttempt({
+      replayKey: attempt.replayKey,
+      status: 'settlement-uncertain',
+      externalReference: '0xabc',
+    });
+
+    const result = await resolve({ attemptId: attempt.id, externalReference: '0xtypo' });
+
+    expect(result).toMatchObject({
+      resolved: true,
+      attempt: { externalReference: '0xabc', resolution: { externalReference: '0xtypo' } },
+    });
+  });
+
+  it('lists only transactions whose hold is pending', async () => {
+    await seed(1);
+    await seed(2, { mandate: false });
+    await seed(3, { status: 'settled' });
+    await store.recordTransactionStep?.({
+      transactionId: 'txn_3',
+      at: T0,
+      kind: 'hold',
+      hold: 'consumed',
+    });
+
+    const page = await store.listTransactions?.({ pendingHold: true });
+
+    expect(page?.transactions.map((t) => t.id)).toEqual(['txn_1']);
   });
 });

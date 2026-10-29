@@ -151,6 +151,7 @@ const MIGRATIONS: readonly Migration[] = [
         ALTER TABLE payment_attempts ADD COLUMN resolution_json TEXT;
         ALTER TABLE payment_attempt_history ADD COLUMN transaction_id TEXT;
         ALTER TABLE payment_attempt_history ADD COLUMN resolution_json TEXT;
+        CREATE INDEX IF NOT EXISTS idx_payment_attempt_history_id ON payment_attempt_history(id);
       `);
     },
   },

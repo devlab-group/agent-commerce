@@ -125,11 +125,18 @@ describe('runResolveCommand', () => {
 
     expect(code).toBe(0);
     expect(io.out).toEqual([`RESOLVED  ${attempt.id} status=settled`]);
-    expect((await read()).attempt).toMatchObject({
+    const { attempt: resolved } = await read();
+    expect(resolved).toMatchObject({
       status: 'settled',
-      externalReference: '0xfeed',
-      resolution: { method: 'manual', actor: 'alice@ops', reason: 'found it' },
+      resolution: {
+        method: 'manual',
+        actor: 'alice@ops',
+        reason: 'found it',
+        externalReference: '0xfeed',
+      },
     });
+    // The operator's reference is unverified, so it is not the attempt's chain reference
+    expect(resolved).not.toHaveProperty('externalReference');
   });
 
   it('exits 1 naming --confirm-expired when no expiry is recorded, then rejects once confirmed', async () => {

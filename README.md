@@ -541,8 +541,9 @@ Records an operator's verdict on one unresolved payment attempt, including
 one `reconcile` left `unknown`. Only `reserved`, `settlement-uncertain` and
 legacy `failed` attempts can be resolved, once each:
 
-- `--status settled` has no expiry check. `--reference` records your claim
-  without checking it on chain.
+- `--status settled` has no expiry check. `--reference` records an unchecked
+  operator claim in the resolution; it does not replace the attempt's recorded
+  transaction ID.
 - `--status rejected` is refused while the recorded expiry is in the future.
   Without a valid recorded expiry, `--confirm-expired` is required. This
   includes Solana and NEAR attempts and those written before the journal.

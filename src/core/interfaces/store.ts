@@ -86,6 +86,8 @@ export interface TransactionListOptions extends ListOptions {
   readonly state?: TransactionState;
   /** When true, exclude `delivered` and `payment-failed` states */
   readonly unresolved?: boolean;
+  /** When true, filter for `reserved` or `uncertain` authorization holds */
+  readonly pendingHold?: boolean;
 }
 
 /** Transactions in newest-first order. Experimental: may change in a minor release */
@@ -154,6 +156,7 @@ export interface ReceiptStore {
    */
   reservePaymentAttempt(reservation: PaymentAttemptReservation): Promise<PaymentAttempt>;
 
+  /** Must not change an attempt that has a resolution; the SQLite store throws `STORAGE_ERROR` */
   updatePaymentAttempt(update: PaymentAttemptUpdate): Promise<void>;
 
   saveReceipt(receipt: CommerceReceipt): Promise<void>;

@@ -516,6 +516,7 @@ interface Transaction {
 interface TransactionListOptions {
     readonly cursor?: string;
     readonly limit?: number;
+    readonly pendingHold?: boolean;
     readonly requestId?: string;
     readonly state?: TransactionState;
     readonly unresolved?: boolean;

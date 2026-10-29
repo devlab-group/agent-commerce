@@ -89,10 +89,10 @@ const TRANSACTION_SELECT = `
     WHERE replay_key = t.replay_key AND id = t.attempt_id
   )`;
 
-// Rows cached as delivery-started can change state when their deadline passes,
-// without a database write. Include them as filter candidates, then check their
-// derived state.
-const TIME_DEPENDENT_STATE = 'delivery-started';
+// Rows without completedAt can change state when backend.deadlineAt passes.
+// Include them as filter candidates; transactionState recomputes their state
+// on read without a database write.
+const TIME_DEPENDENT = 't.backend_deadline_at IS NOT NULL AND t.completed_at IS NULL';
 const RESOLVED_STATES = ['delivered', 'payment-failed'] as const;
 
 const CURSOR_PATTERN = /^[1-9][0-9]{0,15}$/;
@@ -186,17 +186,17 @@ export function createSqliteReceiptStore(options: SqliteReceiptStoreOptions): Re
      WHERE replay_key = @replay_key AND provider = @provider AND status = 'rejected'
      RETURNING *`,
   );
-  // COALESCE: an omitted field (bound as NULL by updatePaymentAttempt) keeps
-  // its stored value. A status-only update must not erase external_reference,
-  // which holds the tx hash of a settlement-uncertain attempt: the record that
-  // the buyer's funds may have moved. Clearing a value would need an explicit
-  // sentinel, not `undefined`.
+  // Omitted fields bind as NULL, so COALESCE preserves stored values. A
+  // status-only update must retain external_reference: it may identify funds
+  // that already moved. Clearing a field would need an explicit sentinel
+  // rather than undefined. Rows with recorded resolutions reject later
+  // pipeline updates.
   const updatePaymentAttemptStmt = db.prepare(
     `UPDATE payment_attempts SET status = @status,
        external_reference = COALESCE(@external_reference, external_reference),
        rejection_reason = COALESCE(@rejection_reason, rejection_reason),
        updated_at = @updated_at
-     WHERE replay_key = @replay_key`,
+     WHERE replay_key = @replay_key AND resolution_json IS NULL`,
   );
   const listPaymentAttemptsStmt = db.prepare<[number], PaymentAttemptRow>(
     'SELECT * FROM payment_attempts ORDER BY created_at DESC, seq DESC LIMIT ?',
@@ -213,9 +213,10 @@ export function createSqliteReceiptStore(options: SqliteReceiptStoreOptions): Re
   const countUncertainPaymentAttemptsStmt = db.prepare<[], { count: number }>(
     `SELECT COUNT(*) AS count FROM payment_attempts WHERE ${UNCERTAIN}`,
   );
-  const paymentAttemptStatusStmt = db.prepare<[string], Pick<PaymentAttemptRow, 'status'>>(
-    'SELECT status FROM payment_attempts WHERE replay_key = ?',
-  );
+  const paymentAttemptStatusStmt = db.prepare<
+    [string],
+    Pick<PaymentAttemptRow, 'id' | 'status' | 'resolution_json'>
+  >('SELECT id, status, resolution_json FROM payment_attempts WHERE replay_key = ?');
   const insertTransactionStmt = db.prepare(
     `INSERT INTO transactions (id, request_id, resource_id, protocol, state, provider, attempt_id, replay_key, network, asset, authorization_json, reservation_id, locator_json, expires_at, input_digest, config_digest, created_at, updated_at)
      VALUES (@id, @request_id, @resource_id, @protocol, @state, @provider, @attempt_id, @replay_key, @network, @asset, @authorization_json, @reservation_id, @locator_json, @expires_at, @input_digest, @config_digest, @created_at, @created_at)`,
@@ -272,8 +273,9 @@ export function createSqliteReceiptStore(options: SqliteReceiptStoreOptions): Re
   const getArchivedPaymentAttemptStmt = db.prepare<[string], PaymentAttemptRow>(
     'SELECT * FROM payment_attempt_history WHERE id = ? ORDER BY seq DESC LIMIT 1',
   );
-  // Check status and missing resolution in the UPDATE itself so only one
-  // competing resolver can succeed
+  // Check status and missing resolution in the UPDATE so only one resolver
+  // succeeds. Only reconciliation may replace the attempt's reference; manual
+  // references belong in resolution_json.
   const resolvePaymentAttemptStmt = db.prepare(
     `UPDATE payment_attempts SET status = @status,
        rejection_reason = COALESCE(@rejection_reason, rejection_reason),
@@ -400,7 +402,11 @@ export function createSqliteReceiptStore(options: SqliteReceiptStoreOptions): Re
         expected_status: request.expectedStatus,
         status: request.status,
         rejection_reason: request.rejectionReason ?? null,
-        external_reference: request.resolution.externalReference ?? null,
+        // An operator's reference is unverified; it stays in resolution_json only
+        external_reference:
+          request.resolution.method === 'reconcile'
+            ? (request.resolution.externalReference ?? null)
+            : null,
         resolution_json: JSON.stringify(redact(request.resolution)),
         updated_at: now,
       });
@@ -492,6 +498,25 @@ export function createSqliteReceiptStore(options: SqliteReceiptStoreOptions): Re
     async updatePaymentAttempt(update: PaymentAttemptUpdate): Promise<void> {
       try {
         if (updateAttempt(update, clock.nowIso()) === 0) {
+          const existing = paymentAttemptStatusStmt.get(update.replayKey);
+          if (existing?.resolution_json != null) {
+            // Log the rejected update at warn level while preserving the resolution
+            logger.warn(
+              {
+                attemptId: existing.id,
+                resolvedStatus: existing.status,
+                status: update.status,
+                ...(update.externalReference !== undefined
+                  ? { externalReference: update.externalReference }
+                  : {}),
+              },
+              'receipt-store: payment attempt already resolved; update not applied',
+            );
+            throw new CommerceError(
+              'STORAGE_ERROR',
+              `Payment attempt ${existing.id} is already resolved; the update was not applied`,
+            );
+          }
           throw new CommerceError(
             'STORAGE_ERROR',
             `No payment attempt found for replayKey=${update.replayKey}`,
@@ -587,7 +612,7 @@ export function createSqliteReceiptStore(options: SqliteReceiptStoreOptions): Re
     },
 
     async listTransactions(listOptions: TransactionListOptions = {}): Promise<TransactionPage> {
-      const { cursor, state, unresolved, requestId } = listOptions;
+      const { cursor, state, unresolved, pendingHold, requestId } = listOptions;
       if (cursor !== undefined && !CURSOR_PATTERN.test(cursor)) {
         throw new CommerceError('INPUT_INVALID', 'Malformed transaction list cursor');
       }
@@ -603,8 +628,11 @@ export function createSqliteReceiptStore(options: SqliteReceiptStoreOptions): Re
         params.push(requestId);
       }
       if (state !== undefined) {
-        where.push('t.state IN (?, ?)');
-        params.push(state, TIME_DEPENDENT_STATE);
+        where.push(`(t.state = ? OR (${TIME_DEPENDENT}))`);
+        params.push(state);
+      }
+      if (pendingHold === true) {
+        where.push("json_extract(t.authorization_json, '$.hold') IN ('reserved', 'uncertain')");
       }
       if (unresolved === true) {
         where.push(`t.state NOT IN (${RESOLVED_STATES.map(() => '?').join(', ')})`);
