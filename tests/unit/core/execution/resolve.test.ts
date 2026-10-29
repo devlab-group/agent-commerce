@@ -592,6 +592,14 @@ describe('resolveManually', () => {
 });
 
 describe('resolution guards', () => {
+  const resolvedBy = (attemptId: string) =>
+    store.resolvePaymentAttempt?.({
+      attemptId,
+      expectedStatus: 'settlement-uncertain',
+      status: 'settled',
+      resolution: { method: 'reconcile', actor: 'ops', reason: 'transfer_final', at: T0 },
+    });
+
   it('keeps a resolution when the pipeline writes late', async () => {
     const { attempt } = await seed(1, { status: 'reserved', mandate: false });
     await resolve({ attemptId: attempt.id });
@@ -627,6 +635,99 @@ describe('resolution guards', () => {
     });
   });
 
+  it('refuses a reserved attempt younger than the minimum age', async () => {
+    const { attempt } = await seed(1, { status: 'reserved', mandate: false });
+    clock.set('2026-10-28T12:14:59.000Z');
+
+    const result = await resolveManually({
+      store,
+      authorizationProviders: [],
+      clock,
+      attemptId: attempt.id,
+      status: 'settled',
+      actor: 'alice@ops',
+      reason: 'looks paid',
+    });
+
+    expect(result).toMatchObject({
+      resolved: false,
+      refusal: 'too_recent',
+      attempt: { status: 'reserved' },
+    });
+  });
+
+  it('refuses not_resolvable when the pipeline moves the attempt between the read and the update', async () => {
+    const { attempt } = await seed(1, { mandate: false });
+    const racing: ReceiptStore = {
+      ...store,
+      async resolvePaymentAttempt(request) {
+        await store.updatePaymentAttempt({ replayKey: attempt.replayKey, status: 'settled' });
+        return (await store.resolvePaymentAttempt?.(request)) ?? false;
+      },
+    };
+
+    const result = await resolve({ attemptId: attempt.id, store: racing });
+
+    expect(result).toMatchObject({
+      resolved: false,
+      refusal: 'not_resolvable',
+      attempt: { status: 'settled' },
+    });
+    expect(result.attempt.resolution).toBeUndefined();
+  });
+
+  it('reports a hold whose journal write failed after the provider applied it', async () => {
+    const { attempt, reference } = await seed(1);
+    const failing: ReceiptStore = {
+      ...store,
+      async recordTransactionStep() {
+        throw new Error('database is locked');
+      },
+    };
+
+    const result = await resolve({ attemptId: attempt.id, store: failing });
+
+    expect(result).toMatchObject({
+      resolved: true,
+      hold: { hold: 'consumed', written: false, reason: 'journal_error' },
+    });
+    expect(replay.stateOf(reference)).toBe('consumed');
+  });
+
+  it('keeps reporting the run after one resolution write fails', async () => {
+    await seed(1, { mandate: false });
+    await seed(2, { mandate: false });
+    const flaky: ReceiptStore = {
+      ...store,
+      async resolvePaymentAttempt(request) {
+        if (
+          request.attemptId === (await store.listPaymentAttempts({ requestId: 'req_2' }))[0]?.id
+        ) {
+          throw new Error('database is locked');
+        }
+        return (await store.resolvePaymentAttempt?.(request)) ?? false;
+      },
+    };
+    clock.set(RUN_AT);
+
+    const report = await runReconcile({
+      store: flaky,
+      providers: [
+        fakePayments({
+          req_1: { outcome: 'settled', reason: 'transfer_final' },
+          req_2: { outcome: 'settled', reason: 'transfer_final' },
+        }),
+      ],
+      clock,
+      actor: 'ops@example',
+    });
+
+    expect(report.entries).toEqual([
+      expect.objectContaining({ requestId: 'req_2', written: false, error: 'storage_error' }),
+      expect.objectContaining({ requestId: 'req_1', written: true }),
+    ]);
+  });
+
   it('lists only transactions whose hold is pending', async () => {
     await seed(1);
     await seed(2, { mandate: false });
@@ -641,5 +742,26 @@ describe('resolution guards', () => {
     const page = await store.listTransactions?.({ pendingHold: true });
 
     expect(page?.transactions.map((t) => t.id)).toEqual(['txn_1']);
+  });
+
+  it('stops the hold scan at the run limit', async () => {
+    for (const n of [1, 2]) {
+      const { attempt } = await seed(n);
+      await resolvedBy(attempt.id);
+    }
+    const { provider, calls } = holdProvider(replay);
+    clock.set(RUN_AT);
+
+    const report = await runReconcile({
+      store,
+      providers: [],
+      authorizationProviders: [provider],
+      clock,
+      actor: 'ops@example',
+      limit: 1,
+    });
+
+    expect(report.holds).toEqual([expect.objectContaining({ transactionId: 'txn_2' })]);
+    expect(calls).toHaveLength(1);
   });
 });

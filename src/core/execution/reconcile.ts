@@ -33,7 +33,7 @@ export interface ReconcileRunOptions {
   /** Check provider evidence and report without recording resolutions */
   readonly dryRun?: boolean;
   readonly minAgeMs?: number;
-  /** Maximum number of candidates to check */
+  /** Separate caps on payment candidates checked and hold updates attempted */
   readonly limit?: number;
   /** Providers for hold updates; an omitted or empty list skips the hold scan */
   readonly authorizationProviders?: readonly AuthorizationProvider[];
@@ -52,6 +52,8 @@ export interface ReconcileEntry {
   readonly reason: string;
   /** True when this run saved the attempt's resolution */
   readonly written: boolean;
+  /** Set when saving the resolution throws */
+  readonly error?: 'storage_error';
   readonly externalReference?: string;
   readonly retryAfter?: string;
 }
@@ -65,8 +67,11 @@ export interface HoldEntry {
   readonly hold: 'consumed' | 'released';
   /** True when the provider call succeeded and the journal hold was recorded */
   readonly written: boolean;
-  /** Why the hold was not aligned */
-  readonly reason?: 'provider_not_enabled' | 'provider_error';
+  /**
+   * Why the journal hold remains pending; `journal_error` means the provider
+   * call succeeded but the journal write failed
+   */
+  readonly reason?: 'provider_not_enabled' | 'provider_error' | 'journal_error';
 }
 
 export interface ReconcileReport {
@@ -81,8 +86,8 @@ interface Candidate {
   readonly locator?: Readonly<Record<string, unknown>>;
 }
 
-// The journal methods reconciliation and manual resolution need
-type Journal = Required<
+/** Store methods required by reconciliation, manual resolution and the operator view */
+export type Journal = Required<
   Pick<
     ReceiptStore,
     | 'listTransactions'
@@ -93,7 +98,8 @@ type Journal = Required<
   >
 >;
 
-function journalOf(store: ReceiptStore): Journal {
+/** Binds the required journal methods to the store, or throws `STORAGE_ERROR` if one is missing */
+export function journalOf(store: ReceiptStore): Journal {
   const {
     listTransactions,
     getTransaction,
@@ -108,7 +114,7 @@ function journalOf(store: ReceiptStore): Journal {
     !resolvePaymentAttempt ||
     !recordTransactionStep
   ) {
-    throw new CommerceError('STORAGE_ERROR', 'The receipt store does not support reconciliation');
+    throw new CommerceError('STORAGE_ERROR', 'The receipt store has no transaction journal');
   }
   return {
     listTransactions: listTransactions.bind(store),
@@ -130,23 +136,33 @@ export async function runReconcile(options: ReconcileRunOptions): Promise<Reconc
     const provider = providers.find((candidate) => candidate.name === attempt.provider);
     const result = await ask(provider, attempt, locator, clock, logger);
     let written = false;
+    let error: ReconcileEntry['error'];
     if (!dryRun && result.outcome !== 'unknown') {
-      written = await journal.resolvePaymentAttempt({
-        attemptId: attempt.id,
-        expectedStatus: attempt.status,
-        status: result.outcome === 'settled' ? 'settled' : 'rejected',
-        ...(result.outcome === 'not-settled' ? { rejectionReason: 'not_settled' } : {}),
-        resolution: {
-          method: 'reconcile',
-          actor,
-          reason: result.reason,
-          at: clock.nowIso(),
-          ...(result.externalReference !== undefined
-            ? { externalReference: result.externalReference }
-            : {}),
-          ...(result.evidence !== undefined ? { evidence: result.evidence } : {}),
-        },
-      });
+      // Report a failed resolution write and continue with the remaining candidates
+      try {
+        written = await journal.resolvePaymentAttempt({
+          attemptId: attempt.id,
+          expectedStatus: attempt.status,
+          status: result.outcome === 'settled' ? 'settled' : 'rejected',
+          ...(result.outcome === 'not-settled' ? { rejectionReason: 'not_settled' } : {}),
+          resolution: {
+            method: 'reconcile',
+            actor,
+            reason: result.reason,
+            at: clock.nowIso(),
+            ...(result.externalReference !== undefined
+              ? { externalReference: result.externalReference }
+              : {}),
+            ...(result.evidence !== undefined ? { evidence: result.evidence } : {}),
+          },
+        });
+      } catch (err) {
+        logger?.warn(
+          { attemptId: attempt.id, err: redactedErrorText(err) },
+          'reconcile: could not save the resolution',
+        );
+        error = 'storage_error';
+      }
     }
     entries.push({
       attemptId: attempt.id,
@@ -157,6 +173,7 @@ export async function runReconcile(options: ReconcileRunOptions): Promise<Reconc
       outcome: result.outcome,
       reason: result.reason,
       written,
+      ...(error !== undefined ? { error } : {}),
       ...(result.externalReference !== undefined
         ? { externalReference: result.externalReference }
         : {}),
@@ -166,17 +183,21 @@ export async function runReconcile(options: ReconcileRunOptions): Promise<Reconc
 
   const authorizationProviders = options.authorizationProviders ?? [];
   const holds: HoldEntry[] = [];
-  // Scan resolved payments too, so later runs can retry pending hold updates
-  // ponytail: filter by pending holds if scanning every journal page becomes costly
+  const limit = options.limit ?? Number.POSITIVE_INFINITY;
+  // Include pending holds left by earlier runs. Hold updates have no age
+  // filter: the pipeline attempts finalization before recording a settled or
+  // rejected payment status.
   let cursor: string | undefined;
-  while (authorizationProviders.length > 0) {
+  scan: while (authorizationProviders.length > 0) {
     const page = await journal.listTransactions({
+      pendingHold: true,
       limit: PAGE,
       ...(cursor !== undefined ? { cursor } : {}),
     });
     for (const transaction of page.transactions) {
       const target = holdTarget(transaction);
       if (target === undefined) continue;
+      if (holds.length >= limit) break scan;
       holds.push(
         dryRun
           ? holdEntry(transaction, target, false)
@@ -215,6 +236,7 @@ export interface ManualResolveOptions {
 export type ManualResolveRefusal =
   | 'already_resolved'
   | 'not_resolvable'
+  | 'too_recent'
   | 'not_expired'
   | 'expiry_unknown';
 
@@ -235,6 +257,8 @@ export type ManualResolveResult =
 const REFUSAL_MESSAGES: Record<ManualResolveRefusal, string> = {
   already_resolved: 'The payment attempt already has a resolution',
   not_resolvable: 'Only reserved, settlement-uncertain and failed payment attempts can be resolved',
+  too_recent:
+    'The payment attempt is reserved and may still be in flight; retry once it is 15 minutes old',
   not_expired: 'The recorded authorization expiry is still in the future',
   expiry_unknown: 'No expiry is recorded for this authorization; confirm that it has expired',
 };
@@ -252,7 +276,9 @@ const RESOLVABLE: readonly PaymentAttempt['status'][] = [
 
 /**
  * Record an operator's verdict on an unresolved payment attempt, then try to
- * update its pending authorization hold. A `rejected` verdict is refused while
+ * update its pending authorization hold. A `reserved` attempt younger than
+ * {@link DEFAULT_RECONCILE_MIN_AGE_MS} is refused because the gateway may still
+ * be settling it. A `rejected` verdict is refused while
  * the recorded expiry is in the future. Without a valid expiry, `confirmExpired`
  * is required. Throws `INPUT_INVALID` for invalid input and
  * `RESOURCE_NOT_FOUND` for an unknown attempt.
@@ -281,6 +307,12 @@ export async function resolveManually(options: ManualResolveOptions): Promise<Ma
   });
   if (attempt.resolution !== undefined) return refuse('already_resolved');
   if (!RESOLVABLE.includes(attempt.status)) return refuse('not_resolvable');
+  if (
+    attempt.status === 'reserved' &&
+    !(clock.now().getTime() - Date.parse(attempt.createdAt) >= DEFAULT_RECONCILE_MIN_AGE_MS)
+  ) {
+    return refuse('too_recent');
+  }
 
   const transaction =
     attempt.transactionId !== undefined
@@ -308,8 +340,13 @@ export async function resolveManually(options: ManualResolveOptions): Promise<Ma
     },
   });
   const current = (await journal.getPaymentAttempt(attemptId)) ?? attempt;
-  // The conditional update lost a race with another attempt update
-  if (!written) return refuse('already_resolved', current);
+  // The conditional update lost a race; use the current attempt to classify it
+  if (!written) {
+    return refuse(
+      current.resolution !== undefined ? 'already_resolved' : 'not_resolvable',
+      current,
+    );
+  }
 
   const resolved =
     transaction !== undefined ? await journal.getTransaction(transaction.id) : undefined;
@@ -394,12 +431,22 @@ async function alignHold(
     );
     return holdEntry(transaction, target, false, 'provider_error');
   }
-  await deps.journal.recordTransactionStep({
-    transactionId: transaction.id,
-    at: deps.clock.nowIso(),
-    kind: 'hold',
-    hold: target,
-  });
+  // If the provider call succeeded but journaling fails, report the pending
+  // journal update so a later run can retry both calls
+  try {
+    await deps.journal.recordTransactionStep({
+      transactionId: transaction.id,
+      at: deps.clock.nowIso(),
+      kind: 'hold',
+      hold: target,
+    });
+  } catch (err) {
+    deps.logger?.warn(
+      { transactionId: transaction.id, err: redactedErrorText(err) },
+      'reconcile: could not record the hold update',
+    );
+    return holdEntry(transaction, target, false, 'journal_error');
+  }
   return holdEntry(transaction, target, true);
 }
 
@@ -422,30 +469,34 @@ async function collectCandidates(
 
   const candidates: Candidate[] = [];
   const seen = new Set<string>();
-  let cursor: string | undefined;
-  do {
-    const page = await journal.listTransactions({
-      unresolved: true,
-      limit: PAGE,
-      ...(cursor !== undefined ? { cursor } : {}),
-    });
-    for (const transaction of page.transactions) {
-      if (candidates.length >= limit) return candidates;
-      const { attemptId, status, locator } = transaction.payment;
-      if (status !== 'settlement-uncertain' && status !== 'failed' && status !== 'reserved') {
-        continue;
-      }
-      const attempt = await journal.getPaymentAttempt(attemptId);
-      if (attempt === undefined || !eligible(attempt) || seen.has(attempt.id)) continue;
-      seen.add(attempt.id);
-      candidates.push({
-        attempt,
-        transactionId: transaction.id,
-        ...(locator !== undefined ? { locator } : {}),
+  // Scan states that can contain unresolved payments. delivery-started also
+  // includes settled payments, which the attempt-status check below skips.
+  for (const state of ['payment-uncertain', 'payment-pending', 'delivery-started'] as const) {
+    let cursor: string | undefined;
+    do {
+      const page = await journal.listTransactions({
+        state,
+        limit: PAGE,
+        ...(cursor !== undefined ? { cursor } : {}),
       });
-    }
-    cursor = page.nextCursor;
-  } while (cursor !== undefined);
+      for (const transaction of page.transactions) {
+        if (candidates.length >= limit) return candidates;
+        const { attemptId, status, locator } = transaction.payment;
+        if (status !== 'settlement-uncertain' && status !== 'failed' && status !== 'reserved') {
+          continue;
+        }
+        const attempt = await journal.getPaymentAttempt(attemptId);
+        if (attempt === undefined || !eligible(attempt) || seen.has(attempt.id)) continue;
+        seen.add(attempt.id);
+        candidates.push({
+          attempt,
+          transactionId: transaction.id,
+          ...(locator !== undefined ? { locator } : {}),
+        });
+      }
+      cursor = page.nextCursor;
+    } while (cursor !== undefined);
+  }
 
   // ponytail: attempts without journal entries are capped at one page; paginate for larger legacy stores
   for (const attempt of await store.listPaymentAttempts({ uncertain: true, limit: 500 })) {

@@ -178,6 +178,7 @@ function printReport(report: ReconcileReport, io: Io, json: boolean): void {
         `reason=${entry.reason}`,
         ...(entry.externalReference !== undefined ? [`reference=${entry.externalReference}`] : []),
         ...(entry.retryAfter !== undefined ? [`retryAfter=${entry.retryAfter}`] : []),
+        ...(entry.error !== undefined ? [`error=${entry.error}`] : []),
         ...(entry.written ? ['resolved'] : []),
       ].join(' '),
     );

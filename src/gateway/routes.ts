@@ -28,7 +28,7 @@ import {
   toErrorEnvelope,
   toPaymentRequiredEnvelope,
 } from '../core';
-import { resolveManually } from '../core/execution/reconcile';
+import { journalOf, resolveManually } from '../core/execution/reconcile';
 import { isRecord } from '../core/is-record';
 import { mppProblem, mppProblemDetail } from '../payments/mpp/problems';
 import { CONTENT_DIGEST_METADATA_KEY, contentDigest } from '../payments/mpp/transport';
@@ -152,17 +152,7 @@ export function registerRoutes(options: RegisterRoutesOptions): void {
   );
 
   const { store, clock } = options;
-  const journal = () => {
-    const { listTransactions, getTransaction, getPaymentAttempt } = store;
-    if (!listTransactions || !getTransaction || !getPaymentAttempt) {
-      throw new CommerceError('STORAGE_ERROR', 'The receipt store has no transaction journal');
-    }
-    return {
-      listTransactions: listTransactions.bind(store),
-      getTransaction: getTransaction.bind(store),
-      getPaymentAttempt: getPaymentAttempt.bind(store),
-    };
-  };
+  const journal = () => journalOf(store);
   const withAge = (transaction: Transaction) => ({
     ...transaction,
     ageSeconds: Math.max(
@@ -226,7 +216,7 @@ export function registerRoutes(options: RegisterRoutesOptions): void {
   server.post(
     '/api/payment-attempts/:id/resolve',
     { onRequest: tokenHook, bodyLimit: RESOLVE_BODY_LIMIT_BYTES },
-    operatorHandler(async (request, reply) => {
+    operatorHandler(async (request) => {
       const result = await resolveManually({
         store,
         authorizationProviders: options.authorizationProviders,
@@ -236,13 +226,11 @@ export function registerRoutes(options: RegisterRoutesOptions): void {
         ...parseResolveBody(request.body),
       });
       if (!result.resolved) {
-        reply.status(409);
-        return {
-          status: 'error',
-          code: 'CONFLICT',
-          message: result.message,
+        // The attempt's current state conflicts with the request
+        throw new CommerceError('INPUT_INVALID', result.message, {
+          httpStatus: 409,
           details: { reason: result.refusal, attemptStatus: result.attempt.status },
-        };
+        });
       }
       return {
         attempt: result.attempt,

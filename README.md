@@ -500,8 +500,11 @@ listener. It does not call a facilitator, broadcast, refund or retry delivery.
 Each resolution records `--actor` (default: the OS user) and the evidence.
 `--dry-run` checks evidence without recording resolutions; it still opens and
 initializes the receipt database. `--json` prints the report for machines.
-`--limit` caps the number of attempts checked. The command processes journal
-entries newest first, then a capped batch of attempts without journal entries.
+`--limit` caps payment checks and hold updates separately. Journal entries are
+checked by state: `payment-uncertain`, `payment-pending`, then
+`delivery-started`, newest first within each group. Only eligible payment
+attempts are considered. A capped batch of attempts without journal entries
+follows.
 It exits 0 after a completed run, even if attempts remain unresolved, and 1 if
 the run fails to complete.
 
@@ -544,6 +547,8 @@ legacy `failed` attempts can be resolved, once each:
 - `--status settled` has no expiry check. `--reference` records an unchecked
   operator claim in the resolution; it does not replace the attempt's recorded
   transaction ID.
+- A `reserved` attempt younger than 15 minutes is refused (`too_recent`),
+  because the gateway may still be settling it.
 - `--status rejected` is refused while the recorded expiry is in the future.
   Without a valid recorded expiry, `--confirm-expired` is required. This
   includes Solana and NEAR attempts and those written before the journal.
@@ -551,8 +556,9 @@ legacy `failed` attempts can be resolved, once each:
 `--actor` is a caller-supplied label and defaults to the OS user. The command
 opens the receipt database directly and works with the gateway running or
 stopped. With AP2 enabled, it attempts the same hold update as `reconcile`.
-If the provider is disabled or its call fails, a pending hold is reported
-with a warning for a later `reconcile` run to retry.
+If the provider is disabled, its call fails, or the hold's journal write fails,
+the command reports the update as pending with a warning. A later `reconcile`
+run can retry it.
 `POST /api/payment-attempts/:id/resolve` applies the same rules over HTTP;
 the admin token controls access without identifying the operator. Exit 0
 means the resolution was written; 1 means a refusal or error.

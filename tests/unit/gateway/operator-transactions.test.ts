@@ -432,8 +432,9 @@ describe('POST /api/payment-attempts/:id/resolve', () => {
     expect(again.statusCode).toBe(409);
     expect(again.json()).toEqual({
       status: 'error',
-      code: 'CONFLICT',
+      code: 'INPUT_INVALID',
       message: 'The payment attempt already has a resolution',
+      retryable: false,
       details: { reason: 'already_resolved', attemptStatus: 'settled' },
     });
   });
