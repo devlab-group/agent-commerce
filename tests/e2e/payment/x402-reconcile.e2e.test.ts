@@ -11,7 +11,6 @@ import { join } from 'node:path';
 import { x402Client } from '@x402/core/client';
 import { PERMIT2_ADDRESS } from '@x402/evm';
 import { registerExactEvmScheme } from '@x402/evm/exact/client';
-import Database from 'better-sqlite3';
 import { Challenge } from 'mppx';
 import { charge as clientCharge } from 'mppx/evm/client';
 import {
@@ -49,6 +48,7 @@ import { createPaymentProof } from '../../../src/payments/x402';
 import { createX402PaymentProvider } from '../../../src/payments/x402/provider';
 import { type AnvilHandle, deployLocalChain, startAnvil } from '../../../src/payments/x402/testing';
 import { createSqliteReceiptStore } from '../../../src/storage/receipts';
+import { dumpTables as dump } from '../../fixtures/sqlite-dump';
 import { locatorOf } from '../../fixtures/x402/locator';
 import {
   type LoopbackFacilitator,
@@ -552,24 +552,6 @@ describe('agent-commerce reconcile through the gateway', () => {
     await lossy?.close();
     if (dir !== undefined) rmSync(dir, { recursive: true, force: true });
   });
-
-  // Snapshot all SQLite tables to check that a run leaves stored rows unchanged
-  function dump(path: string): Record<string, unknown[]> {
-    const db = new Database(path, { readonly: true });
-    try {
-      const tables = db
-        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
-        .all() as { name: string }[];
-      return Object.fromEntries(
-        tables.map(({ name }) => [
-          name,
-          db.prepare(`SELECT * FROM "${name}" ORDER BY rowid`).all(),
-        ]),
-      );
-    } finally {
-      db.close();
-    }
-  }
 
   it('resolves an uncertain x402 attempt and an uncertain MPP attempt in one run', async () => {
     const dbPath = join(dir, 'receipts.sqlite');
