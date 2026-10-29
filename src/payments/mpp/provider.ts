@@ -388,7 +388,18 @@ export function createMppProviderWithSettlement(
     return settlement.health();
   }
 
-  return { name: 'mpp', descriptor: MPP_DESCRIPTOR, createRequirement, verify, settle, health };
+  // Reuse the settlement provider's reconciliation for the credential's
+  // EIP-3009 authorization
+  const reconcile = settlement.reconcile?.bind(settlement);
+  return {
+    name: 'mpp',
+    descriptor: MPP_DESCRIPTOR,
+    createRequirement,
+    verify,
+    settle,
+    ...(reconcile !== undefined ? { reconcile } : {}),
+    health,
+  };
 }
 
 export type { MppProviderOptions, NonceUsedReader } from './options';

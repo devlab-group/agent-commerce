@@ -70,8 +70,8 @@ agent-commerce doctor
 ```
 
 Requires **Node >= 22**. The package includes the `agent-commerce` CLI
-(`init`, `validate`, `start`, `doctor`, `demo`, `import openapi`, `version`) and
-a library for embedding the gateway.
+(`init`, `validate`, `start`, `doctor`, `reconcile`, `demo`, `import openapi`,
+`version`) and a library for embedding the gateway.
 The default install excludes optional protocol, payment and authorization
 peers. The OpenAPI parser is a regular dependency because import is part of the
 CLI.
@@ -84,9 +84,10 @@ agent-commerce start --config config.yaml --env-file .env
 Install the optional peers for the features you enable, listed below. Missing
 startup imports stop the gateway with an error naming the package; missing
 Solana, NEAR or CDP peers fail provider health checks or payment requests.
-`start`, `validate` and `doctor` accept `--env-file <path>` to load environment
-variables before reading the config. Variables already set in the environment
-take precedence. To embed the gateway in your own process, use the library:
+`start`, `validate`, `doctor` and `reconcile` accept `--env-file <path>` to
+load environment variables before reading the config. Variables already set in
+the environment take precedence. To embed the gateway in your own process, use
+the library:
 
 ```ts
 import { createGateway, loadConfig, receipts } from '@devlab.group/agent-commerce';
@@ -473,6 +474,39 @@ and payment flows when published. Mismatches fail the check. It also names
 failing offers when health is published; reasons appear in gateway debug logs.
 
 Exits non-zero if anything fails. `--json` for machines.
+
+### `agent-commerce reconcile`
+
+```bash
+npm run agent-commerce -- reconcile --config config.yaml --dry-run
+```
+
+Resolves attempts whose settlement outcome the gateway did not learn:
+`settlement-uncertain` and legacy `failed` attempts, plus `reserved` attempts in
+the journal at least `--min-age` old (default `15m`). The payment provider
+checks chain evidence and returns:
+
+- **settled**: a finalized transfer matches the authorization. The attempt
+  becomes `settled` with its transaction hash.
+- **not settled**: the authorization is unused at the `finalized` block after its
+  last valid second. The attempt becomes `rejected` with reason `not_settled`.
+- **unknown**: the evidence is inconclusive. The report includes a reason and,
+  when available, a time to try again. The attempt remains unresolved.
+
+The command builds payment providers as `start` does without starting a
+listener. It does not call a facilitator, broadcast, refund or retry delivery.
+Each resolution records `--actor` (default: the OS user) and the evidence.
+`--dry-run` checks evidence without recording resolutions; it still opens and
+initializes the receipt database. `--json` prints the report for machines.
+`--limit` caps the number of attempts checked. The command processes journal
+entries newest first, then a capped batch of attempts without journal entries.
+It exits 0 after a completed run, even if attempts remain unresolved, and 1 if
+the run fails to complete.
+
+Coverage is partial: EVM reconciliation (x402 EIP-3009 and Permit2, and MPP)
+has local Anvil coverage; public-network validation is pending. Solana and
+NEAR attempts return `unknown`. A recent transfer returns `not_final` until
+its block is finalized.
 
 ### `agent-commerce version`
 

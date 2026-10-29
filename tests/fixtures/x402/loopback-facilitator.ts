@@ -28,6 +28,8 @@ export interface LoopbackChain {
 
 export interface LoopbackFacilitator {
   readonly url: string;
+  /** Requests received as `METHOD URL`, including any query string */
+  readonly requests: readonly string[];
   close(): Promise<void>;
 }
 
@@ -96,7 +98,9 @@ export async function startLoopbackFacilitator(options: {
     );
   }
 
+  const requests: string[] = [];
   const handle = (req: IncomingMessage, res: ServerResponse) => {
+    requests.push(`${req.method} ${req.url}`);
     const reply = (status: number, body: unknown) => {
       res.statusCode = status;
       res.setHeader('content-type', 'application/json');
@@ -155,6 +159,7 @@ export async function startLoopbackFacilitator(options: {
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   return {
     url: `${options.tls ? 'https' : 'http'}://127.0.0.1:${(server.address() as AddressInfo).port}`,
+    requests,
     close: () => new Promise<void>((resolve) => server.close(() => resolve())),
   };
 }

@@ -22,6 +22,7 @@ import {
 import { createHealthCheck } from './health';
 import { resolveOffers } from './offers';
 import { createQuoteIssuer, QUOTE_EXTENSION, QUOTE_REQUEST_SCHEME } from './quote';
+import { createReconcile } from './reconcile';
 import { createRequirementBuilders } from './requirement';
 import { createSettle } from './settle';
 import type {
@@ -169,6 +170,7 @@ export function createX402PaymentProvider(
     ...(severalOffers ? { selectRequirement } : {}),
     verify,
     settle,
+    reconcile: createReconcile(ctx),
     health,
     ...(quotes
       ? {

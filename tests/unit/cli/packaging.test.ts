@@ -310,7 +310,16 @@ describe.skipIf(!built)('built executable', () => {
 
   it('offers every documented command', () => {
     const help = run('--help');
-    for (const command of ['init', 'import', 'validate', 'start', 'doctor', 'demo', 'version']) {
+    for (const command of [
+      'init',
+      'import',
+      'validate',
+      'start',
+      'doctor',
+      'reconcile',
+      'demo',
+      'version',
+    ]) {
       expect(help).toContain(command);
     }
   });
@@ -322,6 +331,43 @@ describe.skipIf(!built)('built executable', () => {
     const help = run('import', 'openapi', '--help');
     expect(help).toContain('--expose');
     expect(help).toContain('--base-url');
+  });
+
+  it('runs reconcile from the built binary against an empty receipt database', () => {
+    // Exercise reconcile's dynamic imports in the built CLI to catch missing chunks
+    const dir = mkdtempSync(join(tmpdir(), 'agent-commerce-reconcile-'));
+    try {
+      const configPath = join(dir, 'config.yaml');
+      writeFileSync(
+        configPath,
+        JSON.stringify({
+          version: 1,
+          merchant: { id: 'reconcile-smoke', name: 'Reconcile', publicBaseUrl: 'http://localhost' },
+          server: { port: 0, host: '127.0.0.1' },
+          storage: { receipts: { driver: 'sqlite', path: join(dir, 'receipts.sqlite') } },
+          protocols: { http: { enabled: true }, mcp: { enabled: false, mountPath: '/mcp' } },
+          resources: {
+            hello: {
+              name: 'Hello',
+              backend: { type: 'http', method: 'GET', url: 'http://127.0.0.1:1/hello' },
+              pricing: { type: 'free' },
+              expose: ['http'],
+            },
+          },
+          payments: {},
+        }),
+      );
+      const result = spawnSync(process.execPath, [distEntry, 'reconcile', '--config', configPath], {
+        encoding: 'utf8',
+      });
+      expect(result.stderr).toBe('');
+      expect(result.status).toBe(0);
+      expect(result.stdout.trim()).toBe(
+        'reconcile: 0 candidates, 0 settled, 0 not settled, 0 unknown, 0 resolved',
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('resolves its own version without reading a manifest by relative path', () => {
