@@ -48,18 +48,32 @@ export type Ap2ReservationResult =
   /** Already reserved, consumed or uncertain; refuse this reservation */
   | { readonly kind: 'replayed'; readonly state: Ap2AuthorizationState };
 
+// A store written against 2.4 returns nothing, which counts as applied; only an
+// explicit false is a refusal
+// biome-ignore lint/suspicious/noConfusingVoidType: keeps void-returning stores assignable
+type TransitionResult = boolean | void;
+
 export interface Ap2ReplayStore {
   /** Atomically claim a mandate, or report that something already holds it */
   reserve(request: Ap2ReservationRequest): Ap2ReservationResult;
   /**
-   * Mark the mandate permanently spent. When `requestId` is supplied, update
-   * only that request's reservation, as with `release` and `markUncertain`.
+   * Mark the mandate permanently spent, targeting only the supplied
+   * `requestId` when present. Returns true when the matching reservation is
+   * consumed, including on a repeated call, and false otherwise.
    */
-  consume(reference: string, requestId?: string): void;
-  /** Nothing happened: hand it back so a corrected retry can use it */
-  release(reference: string, requestId?: string): void;
-  /** Settlement outcome unknown. Not reusable, and flagged for a human */
-  markUncertain(reference: string, requestId?: string): void;
+  consume(reference: string, requestId?: string): TransitionResult;
+  /**
+   * Release a reservation for reuse. Returns true if it is released or the
+   * supplied `requestId` differs from the current holder; a different holder
+   * is left unchanged. Returns false otherwise.
+   */
+  release(reference: string, requestId?: string): TransitionResult;
+  /**
+   * Record an unknown settlement outcome for operator review and block reuse.
+   * Returns true when the matching reservation is uncertain, including on a
+   * repeated call, and false otherwise.
+   */
+  markUncertain(reference: string, requestId?: string): TransitionResult;
   /** Current state, for tests and diagnostics */
   stateOf(reference: string): Ap2AuthorizationState | undefined;
   close(): void;
@@ -118,6 +132,9 @@ export function createAp2ReplayStore(options: Ap2ReplayStoreOptions): Ap2ReplayS
       WHERE reference = @reference AND state IN ('reserved', 'uncertain')
         AND (@request_id IS NULL OR request_id = @request_id)`,
   );
+  const selectHolder = db.prepare<[string], StateRow & { request_id: string }>(
+    'SELECT state, request_id FROM ap2_authorizations WHERE reference = ?',
+  );
 
   const reserveTx = db.transaction((request: Ap2ReservationRequest): Ap2ReservationResult => {
     const at = new Date(now()).toISOString();
@@ -151,13 +168,20 @@ export function createAp2ReplayStore(options: Ap2ReplayStoreOptions): Ap2ReplayS
     return { kind: 'reserved' };
   });
 
-  const move = (reference: string, state: Ap2AuthorizationState, requestId?: string): void => {
-    transition.run({
+  const move = (reference: string, state: Ap2AuthorizationState, requestId?: string): boolean => {
+    const { changes } = transition.run({
       reference,
       state,
       request_id: requestId ?? null,
       at: new Date(now()).toISOString(),
     });
+    if (changes > 0) return true;
+    const row = selectHolder.get(reference);
+    if (row === undefined) return false;
+    // A different holder can follow a release and re-reservation; acknowledge
+    // an old release without changing the current reservation
+    if (requestId !== undefined && row.request_id !== requestId) return state === 'released';
+    return row.state === state;
   };
 
   let closed = false;
@@ -166,13 +190,13 @@ export function createAp2ReplayStore(options: Ap2ReplayStoreOptions): Ap2ReplayS
       return reserveTx(request);
     },
     consume(reference, requestId) {
-      move(reference, 'consumed', requestId);
+      return move(reference, 'consumed', requestId);
     },
     release(reference, requestId) {
-      move(reference, 'released', requestId);
+      return move(reference, 'released', requestId);
     },
     markUncertain(reference, requestId) {
-      move(reference, 'uncertain', requestId);
+      return move(reference, 'uncertain', requestId);
     },
     stateOf(reference) {
       return selectByReference.get(reference)?.state as Ap2AuthorizationState | undefined;

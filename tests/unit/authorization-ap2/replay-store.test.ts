@@ -173,6 +173,25 @@ describe('finalizing', () => {
     expect(store.stateOf('sha256:AAAA')).toBe('consumed');
   });
 
+  it('reports whether each transition left the reservation in the requested state', () => {
+    store.reserve(request());
+    expect(store.consume('sha256:AAAA', 'req-1')).toBe(true);
+    // A repeat finds the row already consumed
+    expect(store.consume('sha256:AAAA', 'req-1')).toBe(true);
+    expect(store.release('sha256:AAAA', 'req-1')).toBe(false);
+    expect(store.markUncertain('sha256:AAAA')).toBe(false);
+    expect(store.consume('sha256:NEVER')).toBe(false);
+  });
+
+  it('reports a release as applied once another request holds the row, and a consume as not', () => {
+    store.reserve(request());
+    store.release('sha256:AAAA', 'req-1');
+    store.reserve(request({ requestId: 'req-2' }));
+    expect(store.release('sha256:AAAA', 'req-1')).toBe(true);
+    expect(store.consume('sha256:AAAA', 'req-1')).toBe(false);
+    expect(store.stateOf('sha256:AAAA')).toBe('reserved');
+  });
+
   it('never lets a released mandate be consumed without a fresh reservation', () => {
     store.reserve(request());
     store.release('sha256:AAAA');

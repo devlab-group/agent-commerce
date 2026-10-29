@@ -41,7 +41,10 @@ function holdProvider(replay: Ap2ReplayStore, fail = false) {
     async (reservationId: string, context: { requestId: string; resourceId: string }) => {
       calls.push(`${action} ${reservationId} ${context.requestId} ${context.resourceId}`);
       if (fail) throw new Error('replay database locked');
-      replay[action](reservationId, context.requestId);
+      // Match the AP2 provider's refusal when the replay store returns false
+      if (replay[action](reservationId, context.requestId) === false) {
+        throw new Error('no matching reservation');
+      }
     };
   const provider = {
     name: 'ap2',
@@ -674,6 +677,25 @@ describe('resolution guards', () => {
       attempt: { status: 'settled' },
     });
     expect(result.attempt.resolution).toBeUndefined();
+  });
+
+  it('reports a hold the replay store did not apply, and keeps the journal hold', async () => {
+    const { attempt, reference } = await seed(1);
+    // The pipeline consumed the mandate, then failed to record the hold step
+    replay.consume(reference, 'req_1');
+
+    const result = await resolve({
+      attemptId: attempt.id,
+      status: 'rejected',
+      confirmExpired: true,
+    });
+
+    expect(result).toMatchObject({
+      resolved: true,
+      hold: { hold: 'released', written: false, reason: 'provider_error' },
+    });
+    expect(replay.stateOf(reference)).toBe('consumed');
+    expect(await holdOf(1)).toBe('uncertain');
   });
 
   it('reports a hold whose journal write failed after the provider applied it', async () => {
