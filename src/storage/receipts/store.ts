@@ -250,8 +250,12 @@ export function createSqliteReceiptStore(options: SqliteReceiptStoreOptions): Re
       `UPDATE transactions SET backend_dispatched_at = @at, backend_deadline_at = @deadline_at, updated_at = @at
        WHERE id = @id`,
     ),
+    // Preserve a backend result even when the dispatch step was not saved:
+    // use the result time for missing dispatch and deadline timestamps
     'backend-result': db.prepare(
-      `UPDATE transactions SET backend_status = @status, backend_error_code = @error_code, updated_at = @at
+      `UPDATE transactions SET backend_status = @status, backend_error_code = @error_code,
+         backend_dispatched_at = COALESCE(backend_dispatched_at, @at),
+         backend_deadline_at = COALESCE(backend_deadline_at, @at), updated_at = @at
        WHERE id = @id`,
     ),
     receipt: db.prepare(

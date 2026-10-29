@@ -314,6 +314,50 @@ describe('transaction journal', () => {
       expect(transaction).not.toHaveProperty('persistenceFailures');
     });
 
+    it('derives delivered from a result whose dispatch step was never written', async () => {
+      await store.reservePaymentAttempt(reservation(1));
+      await store.updatePaymentAttempt({ replayKey: 'replay_1', status: 'settled' });
+      await store.recordTransactionStep({
+        transactionId: 'txn_1',
+        at: T2,
+        kind: 'backend-result',
+        status: 200,
+      });
+      await store.recordTransactionStep({
+        transactionId: 'txn_1',
+        at: T3,
+        kind: 'completed',
+        persistenceFailures: ['journal'],
+      });
+
+      expect(await store.getTransaction('txn_1')).toMatchObject({
+        state: 'delivered',
+        backend: { dispatchedAt: T2, deadlineAt: T2, status: 200 },
+      });
+    });
+
+    it('keeps the dispatch time and deadline a later result finds', async () => {
+      await store.reservePaymentAttempt(reservation(1));
+      await store.recordTransactionStep({
+        transactionId: 'txn_1',
+        at: T1,
+        kind: 'backend-dispatched',
+        deadlineAt: DEADLINE,
+      });
+      await store.recordTransactionStep({
+        transactionId: 'txn_1',
+        at: T2,
+        kind: 'backend-result',
+        status: 200,
+      });
+
+      expect((await store.getTransaction('txn_1'))?.backend).toStrictEqual({
+        dispatchedAt: T1,
+        deadlineAt: DEADLINE,
+        status: 200,
+      });
+    });
+
     it('refuses a step for an unknown transaction with STORAGE_ERROR', async () => {
       await expect(
         store.recordTransactionStep({ transactionId: 'txn_missing', at: T1, kind: 'settling' }),
