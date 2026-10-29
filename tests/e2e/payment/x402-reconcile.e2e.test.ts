@@ -714,6 +714,7 @@ describe('agent-commerce reconcile through the gateway', () => {
       notSettled: 0,
       unknown: 0,
       resolved: 0,
+      holdsAligned: 0,
     });
     expect(dump(dbPath)).toEqual(untouched);
 

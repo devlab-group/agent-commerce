@@ -1360,7 +1360,7 @@ describe('runDoctor: additional derivation and error-recovery branches', () => {
     const storage = report.checks.find((c) => c.name === 'Storage');
     expect(storage?.status).toBe('PASS');
     expect(storage?.detail).toContain(
-      '3 payment(s) with unknown settlement outcome, see GET /api/payment-attempts?uncertain=true',
+      '3 payment(s) with unknown settlement outcome, see GET /api/transactions?unresolved=true or run agent-commerce reconcile',
     );
   });
 

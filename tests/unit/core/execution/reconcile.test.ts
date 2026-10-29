@@ -122,6 +122,7 @@ describe('runReconcile writes', () => {
           externalReference: HASH,
         },
       ],
+      holds: [],
     });
     expect(await store.getPaymentAttempt?.(attempt.id)).toMatchObject({
       status: 'settled',

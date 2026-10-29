@@ -117,7 +117,14 @@ describe('runReconcileCommand report', () => {
 
     expect(JSON.parse(io.out.join('\n'))).toEqual({
       dryRun: true,
-      counts: { candidates: 1, settled: 0, notSettled: 0, unknown: 1, resolved: 0 },
+      counts: {
+        candidates: 1,
+        settled: 0,
+        notSettled: 0,
+        unknown: 1,
+        resolved: 0,
+        holdsAligned: 0,
+      },
       entries: [
         {
           attemptId: attempt.id,
@@ -130,6 +137,7 @@ describe('runReconcileCommand report', () => {
           written: false,
         },
       ],
+      holds: [],
     });
   });
 

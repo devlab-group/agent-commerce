@@ -70,8 +70,8 @@ agent-commerce doctor
 ```
 
 Requires **Node >= 22**. The package includes the `agent-commerce` CLI
-(`init`, `validate`, `start`, `doctor`, `reconcile`, `demo`, `import openapi`,
-`version`) and a library for embedding the gateway.
+(`init`, `validate`, `start`, `doctor`, `reconcile`, `resolve`, `demo`,
+`import openapi`, `version`) and a library for embedding the gateway.
 The default install excludes optional protocol, payment and authorization
 peers. The OpenAPI parser is a regular dependency because import is part of the
 CLI.
@@ -84,7 +84,7 @@ agent-commerce start --config config.yaml --env-file .env
 Install the optional peers for the features you enable, listed below. Missing
 startup imports stop the gateway with an error naming the package; missing
 Solana, NEAR or CDP peers fail provider health checks or payment requests.
-`start`, `validate`, `doctor` and `reconcile` accept `--env-file <path>` to
+`start`, `validate`, `doctor`, `reconcile` and `resolve` accept `--env-file <path>` to
 load environment variables before reading the config. Variables already set in
 the environment take precedence. To embed the gateway in your own process, use
 the library:
@@ -522,6 +522,40 @@ is tested on Anvil, Solana on `solana-test-validator` and NEAR on a local
 sandbox. Public-network validation is pending. EVM and NEAR can report
 `not_final` while a referenced transaction awaits finality.
 
+With `authorization.ap2` enabled, reconciliation also updates AP2 holds on
+resolved payments: `settled` consumes the mandate; `rejected` releases it.
+It opens the AP2 replay database for these updates without verifying mandates.
+The report's `holds` list (`--json`) covers pending holds whose payments are
+resolved in the database. Dry runs report those holds without writing
+resolutions or hold changes. Both databases are still opened and initialized.
+Later runs can retry holds left pending after earlier payment resolutions,
+including those recorded by `resolve` while AP2 was disabled.
+
+### `agent-commerce resolve`
+
+```bash
+npm run agent-commerce -- resolve <attemptId> --status settled --reason "transfer seen in explorer" --reference 0x...
+```
+
+Records an operator's verdict on one unresolved payment attempt, including
+one `reconcile` left `unknown`. Only `reserved`, `settlement-uncertain` and
+legacy `failed` attempts can be resolved, once each:
+
+- `--status settled` has no expiry check. `--reference` records your claim
+  without checking it on chain.
+- `--status rejected` is refused while the recorded expiry is in the future.
+  Without a valid recorded expiry, `--confirm-expired` is required. This
+  includes Solana and NEAR attempts and those written before the journal.
+
+`--actor` is a caller-supplied label and defaults to the OS user. The command
+opens the receipt database directly and works with the gateway running or
+stopped. With AP2 enabled, it attempts the same hold update as `reconcile`.
+If the provider is disabled or its call fails, a pending hold is reported
+with a warning for a later `reconcile` run to retry.
+`POST /api/payment-attempts/:id/resolve` applies the same rules over HTTP;
+the admin token controls access without identifying the operator. Exit 0
+means the resolution was written; 1 means a refusal or error.
+
 ### `agent-commerce version`
 
 ```bash
@@ -541,9 +575,11 @@ reachable by anyone else, know the split:
 - **Agent routes** (`/api/resources/:id/invoke`, `/mcp`, the A2A mount) are
   unauthenticated by design - paid resources are protected by payment, not by a
   password. ACP is the exception: its checkout routes require a bearer token.
-- **Operator routes** (`/api/receipts`, `/api/events`, `/api/payment-attempts`)
-  expose the merchant's commerce ledger: payer addresses, amounts and settlement
-  hashes. They require `server.adminToken` and return **404** if none is configured.
+- **Operator routes** (`/api/receipts`, `/api/events`, `/api/payment-attempts`,
+  `/api/transactions`) expose the merchant's commerce ledger: payer addresses,
+  amounts and settlement hashes. `POST /api/payment-attempts/:id/resolve`
+  records a resolution. They require `server.adminToken` and return **404** if
+  none is configured.
 - **Browsers** are governed by `server.allowedOrigins`, an explicit allowlist
   that defaults to empty.
 - **There is no rate limiting.** A free resource is an unauthenticated proxy to

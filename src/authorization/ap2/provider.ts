@@ -110,7 +110,7 @@ export function createAp2AuthorizationProvider(
     context: AuthorizationFinalizeContext,
   ): void => {
     try {
-      replay[action](reservationId);
+      replay[action](reservationId, context.requestId);
     } catch (cause) {
       throw ap2Unavailable(`replay store could not record ${action}`, { ...context, cause });
     }

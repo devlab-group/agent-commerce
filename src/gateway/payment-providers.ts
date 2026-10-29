@@ -4,6 +4,7 @@
  * `enabled` flag, not resource prices: an enabled rail needs its peers even
  * when every resource is free.
  */
+import type { Ap2AuthorizationProvider } from '../authorization/ap2';
 import type { GatewayConfig } from '../config';
 import type { X402OptionConfig } from '../config/schema';
 import type { Logger, PaymentProvider } from '../core';
@@ -103,4 +104,21 @@ export async function createConfiguredPaymentProviders(
     );
   }
   return providers;
+}
+
+/**
+ * Builds enabled authorization providers for CLI hold updates.
+ * Each opens a replay database that the caller must close.
+ */
+export async function createConfiguredAuthorizationProviders(
+  authorization: GatewayConfig['authorization'],
+  logger: Logger,
+): Promise<Ap2AuthorizationProvider[]> {
+  const ap2 = authorization?.ap2;
+  if (!ap2?.enabled) return [];
+  const { createAp2AuthorizationProvider } = await importOptionalPeer(
+    'authorization.ap2',
+    () => import('../authorization/ap2'),
+  );
+  return [createAp2AuthorizationProvider({ config: ap2, logger })];
 }

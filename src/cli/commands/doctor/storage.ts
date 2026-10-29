@@ -112,7 +112,7 @@ export async function storageChecks(
           : '';
       const uncertainSuffix =
         uncertainCount !== undefined && uncertainCount > 0
-          ? `; ${uncertainCount} payment(s) with unknown settlement outcome, see GET /api/payment-attempts?uncertain=true`
+          ? `; ${uncertainCount} payment(s) with unknown settlement outcome, see GET /api/transactions?unresolved=true or run agent-commerce reconcile`
           : '';
       checks.push({
         name: 'Storage',

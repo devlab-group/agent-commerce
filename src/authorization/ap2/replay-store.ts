@@ -8,19 +8,19 @@
  * deleting a `consumed` row makes that mandate spendable again. If the table
  * ever needs bounding, archive `released` rows and leave the rest.
  *
- * Settlement and a local commit are not one transaction. If the process dies
- * between them the row stays `reserved` and that mandate is refused from then
- * on: a refused retry costs a round trip, the other direction costs a second
- * payment.
+ * Settlement and replay-state updates are separate transactions. A crash
+ * between them leaves the mandate `reserved`, blocking retries until its
+ * payment is resolved and the hold is updated. This favors a refused retry
+ * over a possible second payment.
  */
 import type { Database } from 'better-sqlite3';
 import { type Logger, NOOP_LOGGER } from '../../core';
 import { openSqliteDatabase } from '../../storage/sqlite';
 
 /**
- * `released` is "nothing happened" and the only state a mandate can be
- * presented from again. `uncertain` is a settlement whose outcome we never
- * learned: not reusable, but findable by an operator reconciling by hand.
+ * `released` permits another reservation; other states block reuse.
+ * `uncertain` records an unknown settlement outcome and stays blocked until
+ * payment resolution is followed by a consume or release update.
  */
 export type Ap2AuthorizationState = 'reserved' | 'consumed' | 'released' | 'uncertain';
 
@@ -45,18 +45,21 @@ export interface Ap2ReservationRequest {
 
 export type Ap2ReservationResult =
   | { readonly kind: 'reserved' }
-  /** Already reserved, consumed, or of uncertain outcome. Never re-spendable */
+  /** Already reserved, consumed or uncertain; refuse this reservation */
   | { readonly kind: 'replayed'; readonly state: Ap2AuthorizationState };
 
 export interface Ap2ReplayStore {
   /** Atomically claim a mandate, or report that something already holds it */
   reserve(request: Ap2ReservationRequest): Ap2ReservationResult;
-  /** Settlement succeeded: spend it permanently */
-  consume(reference: string): void;
+  /**
+   * Mark the mandate permanently spent. When `requestId` is supplied, update
+   * only that request's reservation, as with `release` and `markUncertain`.
+   */
+  consume(reference: string, requestId?: string): void;
   /** Nothing happened: hand it back so a corrected retry can use it */
-  release(reference: string): void;
+  release(reference: string, requestId?: string): void;
   /** Settlement outcome unknown. Not reusable, and flagged for a human */
-  markUncertain(reference: string): void;
+  markUncertain(reference: string, requestId?: string): void;
   /** Current state, for tests and diagnostics */
   stateOf(reference: string): Ap2AuthorizationState | undefined;
   close(): void;
@@ -106,11 +109,14 @@ export function createAp2ReplayStore(options: Ap2ReplayStoreOptions): Ap2ReplayS
         SET state = 'reserved', request_id = @request_id, updated_at = @at
       WHERE reference = @reference AND state = 'released'`,
   );
-  // Guarded on `reserved`: releasing a `consumed` row would hand back a
-  // mandate whose money has already moved
+  // These updates leave consumed and released rows unchanged; a consumed
+  // mandate must not become reusable. reserve() can claim released rows again.
+  // When supplied, requestId prevents a late update from changing another
+  // request's reservation.
   const transition = db.prepare(
     `UPDATE ap2_authorizations SET state = @state, updated_at = @at
-      WHERE reference = @reference AND state = 'reserved'`,
+      WHERE reference = @reference AND state IN ('reserved', 'uncertain')
+        AND (@request_id IS NULL OR request_id = @request_id)`,
   );
 
   const reserveTx = db.transaction((request: Ap2ReservationRequest): Ap2ReservationResult => {
@@ -145,8 +151,13 @@ export function createAp2ReplayStore(options: Ap2ReplayStoreOptions): Ap2ReplayS
     return { kind: 'reserved' };
   });
 
-  const move = (reference: string, state: Ap2AuthorizationState): void => {
-    transition.run({ reference, state, at: new Date(now()).toISOString() });
+  const move = (reference: string, state: Ap2AuthorizationState, requestId?: string): void => {
+    transition.run({
+      reference,
+      state,
+      request_id: requestId ?? null,
+      at: new Date(now()).toISOString(),
+    });
   };
 
   let closed = false;
@@ -154,14 +165,14 @@ export function createAp2ReplayStore(options: Ap2ReplayStoreOptions): Ap2ReplayS
     reserve(request) {
       return reserveTx(request);
     },
-    consume(reference) {
-      move(reference, 'consumed');
+    consume(reference, requestId) {
+      move(reference, 'consumed', requestId);
     },
-    release(reference) {
-      move(reference, 'released');
+    release(reference, requestId) {
+      move(reference, 'released', requestId);
     },
-    markUncertain(reference) {
-      move(reference, 'uncertain');
+    markUncertain(reference, requestId) {
+      move(reference, 'uncertain', requestId);
     },
     stateOf(reference) {
       return selectByReference.get(reference)?.state as Ap2AuthorizationState | undefined;

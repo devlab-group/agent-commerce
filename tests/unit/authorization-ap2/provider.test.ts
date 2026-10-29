@@ -288,6 +288,23 @@ describe('createAp2AuthorizationProvider', () => {
       provider.close();
     });
 
+    it('finalizes only the reservation made by the named request', async () => {
+      const store = createAp2ReplayStore({ path: ':memory:' });
+      const provider = makeProvider(store);
+      const presentation = await validMandate();
+      const first = await provider.verifyAndReserve(context(presentation));
+      await provider.release(first.reservationId, { requestId: 'req-1', resourceId: RESOURCE_ID });
+      await provider.verifyAndReserve(context(presentation, 'req-2'));
+
+      // A late release for req-1 must not free req-2's reservation
+      await provider.release(first.reservationId, { requestId: 'req-1', resourceId: RESOURCE_ID });
+      expect(store.stateOf(first.reference)).toBe('reserved');
+
+      await provider.consume(first.reservationId, { requestId: 'req-2', resourceId: RESOURCE_ID });
+      expect(store.stateOf(first.reference)).toBe('consumed');
+      provider.close();
+    });
+
     it('reports a store failure during finalization as unavailable', async () => {
       const provider = makeProvider(throwingStore());
 

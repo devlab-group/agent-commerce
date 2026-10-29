@@ -6,6 +6,7 @@ import { printDoctorReport, runDoctor } from './commands/doctor';
 import { runImportOpenApi } from './commands/import-openapi';
 import { runInit } from './commands/init';
 import { runReconcileCommand } from './commands/reconcile';
+import { runResolveCommand } from './commands/resolve';
 import { formatConfigError, runValidate } from './commands/validate';
 import { runVersion } from './commands/version';
 import { type Io, processIo } from './lib/io';
@@ -145,6 +146,49 @@ export function buildProgram(io: Io = processIo): Command {
             ...(opts.actor !== undefined ? { actor: opts.actor } : {}),
             ...(opts.minAge !== undefined ? { minAge: opts.minAge } : {}),
             ...(opts.limit !== undefined ? { limit: opts.limit } : {}),
+          },
+          io,
+        );
+      },
+    );
+
+  program
+    .command('resolve <attemptId>')
+    .description(
+      'Record a verdict on one unresolved payment attempt and align its hold. Never settles or refunds.',
+    )
+    .requiredOption('--status <status>', 'settled or rejected')
+    .requiredOption('--reason <text>', 'why, stored with the resolution')
+    .option('--reference <ref>', 'transaction reference, stored as your unchecked claim')
+    .option('--actor <name>', 'who resolved it, stored with the resolution (default: the OS user)')
+    .option(
+      '--confirm-expired',
+      'confirm that an authorization with no recorded expiry can no longer land',
+      false,
+    )
+    .option('--config <path>', `path to ${DEFAULT_CONFIG_FILENAME}`)
+    .option('--env-file <path>', ENV_FILE_HELP)
+    .action(
+      async (
+        attemptId: string,
+        opts: {
+          config?: string;
+          status: string;
+          reason: string;
+          reference?: string;
+          actor?: string;
+          confirmExpired: boolean;
+        },
+      ) => {
+        process.exitCode = await runResolveCommand(
+          attemptId,
+          {
+            ...(opts.config !== undefined ? { configPath: opts.config } : {}),
+            status: opts.status,
+            reason: opts.reason,
+            ...(opts.reference !== undefined ? { reference: opts.reference } : {}),
+            ...(opts.actor !== undefined ? { actor: opts.actor } : {}),
+            confirmExpired: opts.confirmExpired,
           },
           io,
         );

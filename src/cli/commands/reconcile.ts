@@ -3,12 +3,20 @@
  * evidence from their providers.
  *
  * It builds providers as `start` does and initializes the receipt database
- * without starting a listener. Dry runs skip resolution writes. Reconciliation
- * does not settle, broadcast, refund or retry delivery. Exit 0 means the run
- * completed, even with unresolved attempts; 1 means it failed to complete.
+ * without starting a listener. Enabled AP2 providers update holds on resolved
+ * payments without verifying mandates. Dry runs skip resolution and hold
+ * writes. Reconciliation does not settle, broadcast, refund or retry delivery.
+ * Exit 0 means the run completed, even with unresolved attempts; 1 means it
+ * failed to complete.
  */
 import { userInfo } from 'node:os';
-import { type Logger, NOOP_LOGGER, systemClock } from '../../core';
+import {
+  type AuthorizationProvider,
+  type Logger,
+  NOOP_LOGGER,
+  type ReceiptStore,
+  systemClock,
+} from '../../core';
 import { redactedErrorText } from '../../core/errors';
 import type { ReconcileReport } from '../../core/execution/reconcile';
 import { type ConfigLoader, loadConfigDynamic } from '../lib/config-client';
@@ -63,21 +71,16 @@ export async function runReconcileCommand(
   }
 
   try {
-    // Load providers and their optional peers on demand, as start does
-    const [{ createConfiguredPaymentProviders }, { createSqliteReceiptStore }, { runReconcile }] =
-      await Promise.all([
-        import('../../gateway/payment-providers'),
-        import('../../storage/receipts'),
-        import('../../core/execution/reconcile'),
-      ]);
     const logger = stderrLogger(io);
-    const providers = await createConfiguredPaymentProviders(config.payments, logger);
-    const store = createSqliteReceiptStore({ path: config.storage.receipts.path, logger });
-    await store.init();
-    try {
+    const { runReconcile } = await import('../../core/execution/reconcile');
+    const providers = await (
+      await import('../../gateway/payment-providers')
+    ).createConfiguredPaymentProviders(config.payments, logger);
+    await withJournal(config, logger, async (store, authorizationProviders) => {
       const report = await runReconcile({
         store,
         providers,
+        authorizationProviders,
         clock: systemClock,
         actor,
         dryRun: options.dryRun === true,
@@ -86,13 +89,46 @@ export async function runReconcileCommand(
         logger,
       });
       printReport(report, io, options.json === true);
-    } finally {
-      await store.close();
-    }
+    });
     return 0;
   } catch (error) {
     io.stderr(`FAIL  reconcile could not run: ${redactedErrorText(error)}`);
     return 1;
+  }
+}
+
+/**
+ * Runs `fn` with the receipt store and enabled authorization providers,
+ * closing them afterward. Used by `reconcile` and `resolve` with the gateway
+ * running or stopped.
+ */
+export async function withJournal(
+  config: Awaited<ReturnType<ConfigLoader>>,
+  logger: Logger,
+  fn: (
+    store: ReceiptStore,
+    authorizationProviders: readonly AuthorizationProvider[],
+  ) => Promise<void>,
+): Promise<void> {
+  const [{ createConfiguredAuthorizationProviders }, { createSqliteReceiptStore }] =
+    await Promise.all([
+      import('../../gateway/payment-providers'),
+      import('../../storage/receipts'),
+    ]);
+  const authorizationProviders = await createConfiguredAuthorizationProviders(
+    config.authorization,
+    logger,
+  );
+  try {
+    const store = createSqliteReceiptStore({ path: config.storage.receipts.path, logger });
+    try {
+      await store.init();
+      await fn(store, authorizationProviders);
+    } finally {
+      await store.close();
+    }
+  } finally {
+    for (const provider of authorizationProviders) provider.close();
   }
 }
 
@@ -111,15 +147,25 @@ function printReport(report: ReconcileReport, io: Io, json: boolean): void {
     notSettled: count('not-settled'),
     unknown: count('unknown'),
     resolved: report.entries.filter((e) => e.written).length,
+    holdsAligned: report.holds.filter((h) => h.written).length,
   };
   if (json) {
-    io.stdout(JSON.stringify({ dryRun: report.dryRun, counts, entries: report.entries }, null, 2));
+    io.stdout(
+      JSON.stringify(
+        { dryRun: report.dryRun, counts, entries: report.entries, holds: report.holds },
+        null,
+        2,
+      ),
+    );
     return;
   }
   io.stdout(
     `reconcile${report.dryRun ? ' (dry run, no resolutions written)' : ''}: ${counts.candidates} candidates, ` +
       `${counts.settled} settled, ${counts.notSettled} not settled, ${counts.unknown} unknown, ` +
-      `${counts.resolved} resolved`,
+      `${counts.resolved} resolved` +
+      (report.holds.length > 0
+        ? `, ${counts.holdsAligned} of ${report.holds.length} holds aligned`
+        : ''),
   );
   for (const entry of report.entries) {
     io.stdout(
@@ -136,9 +182,23 @@ function printReport(report: ReconcileReport, io: Io, json: boolean): void {
       ].join(' '),
     );
   }
+  for (const hold of report.holds) {
+    io.stdout(
+      [
+        'HOLD'.padEnd(11),
+        hold.transactionId,
+        `attempt=${hold.attemptId}`,
+        `method=${hold.method}`,
+        `hold=${hold.hold}`,
+        ...(hold.reason !== undefined ? [`reason=${hold.reason}`] : []),
+        ...(hold.written ? ['aligned'] : []),
+      ].join(' '),
+    );
+  }
 }
 
-function osUser(): string {
+/** Returns the OS user name for the default `--actor`, or `unknown` if unavailable */
+export function osUser(): string {
   try {
     return userInfo().username;
   } catch {
@@ -146,8 +206,8 @@ function osUser(): string {
   }
 }
 
-// Warnings and errors go to stderr, so --json output stays parseable
-function stderrLogger(io: Io): Logger {
+/** Writes warnings and errors to stderr, so `--json` output stays parseable */
+export function stderrLogger(io: Io): Logger {
   const write = (level: string) => (obj: Record<string, unknown>, msg?: string) =>
     io.stderr(`${level}  ${msg ?? ''} ${JSON.stringify(obj)}`.trimEnd());
   return {
