@@ -13,7 +13,12 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runBackupCommand } from '../../../src/cli/commands/backup';
 import { runReconcileCommand } from '../../../src/cli/commands/reconcile';
 import { type GatewayConfig, parseConfig } from '../../../src/config';
-import { type BackendExecutor, NOOP_LOGGER, PAYMENT_HEADER } from '../../../src/core';
+import {
+  type BackendExecutor,
+  NOOP_LOGGER,
+  PAYMENT_HEADER,
+  PAYMENT_REQUIRED_HEADER,
+} from '../../../src/core';
 import { createGateway } from '../../../src/gateway';
 import { createConfiguredPaymentProviders } from '../../../src/gateway/payment-providers';
 import { createPaymentProof } from '../../../src/payments/x402';
@@ -221,14 +226,24 @@ describe('restoring a backup', () => {
 
     const restored = await openGateway(cfg);
     try {
-      // Every nonce is spent on chain, so verification refuses all three with a
-      // fresh challenge before the replay key is checked. The last proof is
-      // not in the backup and reaches the facilitator again.
+      // Every nonce is spent on chain, so verification refuses all three. The
+      // uncertain attempt is unfinished, so its proof gets 409 and no fresh
+      // challenge. The last proof is not in the backup and reaches the
+      // facilitator again.
+      const replays: [number, unknown, boolean][] = [];
       for (const proof of [settledProof, uncertainProof, laterProof]) {
         const replay = await restored.invoke({ [PAYMENT_HEADER]: proof });
-        expect(replay.statusCode).toBe(402);
-        expect(replay.json()).toMatchObject({ code: 'PAYMENT_INVALID' });
+        replays.push([
+          replay.statusCode,
+          replay.json().code,
+          replay.headers[PAYMENT_REQUIRED_HEADER] !== undefined,
+        ]);
       }
+      expect(replays).toEqual([
+        [402, 'PAYMENT_INVALID', true],
+        [409, 'PAYMENT_REPLAYED', false],
+        [402, 'PAYMENT_INVALID', true],
+      ]);
     } finally {
       await restored.close();
     }

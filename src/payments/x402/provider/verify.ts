@@ -121,10 +121,13 @@ export function createVerify(
       locator = read.locator;
       derivedPayer = read.from;
     }
+    // Each rejection below carries the replay key so the pipeline can look
+    // for an unfinished attempt, even if its transfer has already landed
+    const refused = (reason: string): PaymentResult => ({ ...rejected(reason), replayKey });
     // Reject a different network before calling the facilitator. NEAR's
     // delegate signature itself does not bind the chain.
     if (payload.accepted.network !== offer.network) {
-      return rejected('invalid_network');
+      return refused('invalid_network');
     }
     // The signature omits flow and resource. Check the echoed offer;
     // `resource` is optional, but must match when present.
@@ -134,26 +137,26 @@ export function createVerify(
       !acceptedMatchesOffer(requirements, payload.accepted, offer.profile) ||
       (payload.resource !== undefined && payload.resource.url !== offeredUrl)
     ) {
-      return rejected('invalid_payment_requirements');
+      return refused('invalid_payment_requirements');
     }
     let required: bigint;
     try {
       required = BigInt(requirements.amount);
     } catch {
-      return rejected('invalid_payload');
+      return refused('invalid_payload');
     }
     if (transfer) {
       if (transfer.to !== getAddress(offer.payTo)) {
-        return rejected(transfer.recipientMismatch);
+        return refused(transfer.recipientMismatch);
       }
       let authorizedValue: bigint;
       try {
         authorizedValue = BigInt(transfer.value);
       } catch {
-        return rejected('invalid_payload');
+        return refused('invalid_payload');
       }
       if (authorizedValue !== required) {
-        return rejected(transfer.amountMismatch);
+        return refused(transfer.amountMismatch);
       }
     }
 
@@ -198,7 +201,7 @@ export function createVerify(
           'x402 verify(): facilitator rejection reason',
         );
       }
-      return rejected(sanitizeReason(sdkResult.invalidReason, 'invalid_payment'));
+      return refused(sanitizeReason(sdkResult.invalidReason, 'invalid_payment'));
     }
 
     // The Solana payer is the facilitator's reading of the transaction

@@ -80,6 +80,7 @@ export interface FakeStoreOptions {
   readonly appendEvent?: ReceiptStore['appendEvent'];
   readonly saveReceipt?: ReceiptStore['saveReceipt'];
   readonly updatePaymentAttempt?: ReceiptStore['updatePaymentAttempt'];
+  readonly findPaymentAttemptByReplayKey?: ReceiptStore['findPaymentAttemptByReplayKey'];
 }
 
 export function createFakeStore(options: FakeStoreOptions = {}): FakeStore {
@@ -173,6 +174,8 @@ export function createFakeStore(options: FakeStoreOptions = {}): FakeStore {
     async listPaymentAttempts() {
       return [...attempts.values()];
     },
+    findPaymentAttemptByReplayKey:
+      options.findPaymentAttemptByReplayKey ?? (async (replayKey) => attempts.get(replayKey)),
     descriptor: fakeDescriptor,
     async health() {
       return { status: 'pass', checkedAt: '2026-01-01T00:00:00.000Z' };

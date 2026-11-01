@@ -21,7 +21,7 @@ journal methods to `ReceiptStore`. The 3.0.0 plan changes these contracts:
   will omit the ID. If your client requires `receiptId`, update it to handle a
   summary without one.
 
-## Idempotency claims, holds and pending tasks
+## Store methods added in 2.6.0
 
 The optional `ReceiptStore` methods added in 2.6.0 are planned to become
 required in 3.0.0. Custom stores will need to implement:
@@ -32,6 +32,7 @@ required in 3.0.0. Custom stores will need to implement:
   `transitionAuthorizationHold`, `getAuthorizationHoldState` and
   `listOrphanAuthorizationHolds`.
 - Pending tasks: `putPendingTask`, `getPendingTask` and `takePendingTask`.
+- Payment attempts: `findPaymentAttemptByReplayKey`.
 
 The 3.0.0 plan removes these store settings deprecated in 2.6.0:
 

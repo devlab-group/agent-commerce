@@ -217,6 +217,17 @@ persistence must not fail the commerce flow.
     `AuthorizationHoldReservation.metadata`.
   - These methods and types are experimental and may change in a minor
     release. The 3.0.0 migration plan makes them required.
+- 2.6.0 adds the optional `ReceiptStore.findPaymentAttemptByReplayKey`. It
+  returns the current attempt holding a replay key, excluding attempts
+  replaced by a reclaim.
+  - A `rejected` `PaymentResult` may carry `replayKey`. The x402 provider
+    includes it in every rejection returned after deriving the key.
+  - If the key belongs to an attempt whose status is neither `settled` nor
+    `rejected`, the pipeline returns 409 `PAYMENT_REPLAYED` without a
+    challenge. Otherwise it returns 402 `PAYMENT_INVALID` with a fresh
+    challenge. A lookup failure returns `STORAGE_ERROR` without a challenge;
+    a store without the method keeps the 402 response.
+  - The method is experimental. The 3.0.0 migration plan makes it required.
 
 ### Protocols and gateway
 

@@ -508,6 +508,7 @@ interface ReceiptStore {
     countReceipts: () => Promise<number>;
     countUncertainPaymentAttempts: () => Promise<number>;
     countUndeliveredReceipts: () => Promise<number>;
+    findPaymentAttemptByReplayKey?: (replayKey: string) => Promise<PaymentAttempt | undefined>;
     getAuthorizationHoldState?: (reference: string) => Promise<AuthorizationHoldState | undefined>;
     getPaymentAttempt?: (id: string) => Promise<PaymentAttempt | undefined>;
     getPendingTask?: (id: string) => Promise<PendingTask | undefined>;

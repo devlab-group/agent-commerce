@@ -705,6 +705,31 @@ const REPLAY_CASES: readonly CaseSpec[] = [
       assert.deepEqual(await store.listPaymentAttempts(), [winner]);
     },
   },
+  {
+    name: 'findPaymentAttemptByReplayKey reads the live attempt holding a key',
+    uses: ['findPaymentAttemptByReplayKey'],
+    async run({ store, clock }) {
+      const find = (replayKey: string) =>
+        store.findPaymentAttemptByReplayKey?.(replayKey) ??
+        assert.fail('the store does not implement findPaymentAttemptByReplayKey');
+      const first = await store.reservePaymentAttempt(reservation(1));
+      const second = await store.reservePaymentAttempt(reservation(2));
+      assert.deepEqual(await find('replay_1'), first);
+      assert.deepEqual(await find('replay_2'), second);
+      assert.equal(await find('replay_missing'), undefined);
+
+      clock.advance(1000);
+      await moveTo(store, 'replay_1', 'settlement-uncertain');
+      assert.deepEqual(await find('replay_1'), await attemptFor(store, 'replay_1'));
+
+      // A reclaim returns the replacement attempt, excluding the archived one
+      await moveTo(store, 'replay_2', 'rejected', { rejectionReason: 'backend_failed' });
+      const reclaimed = await store.reservePaymentAttempt(
+        reservation(3, { replayKey: 'replay_2', reclaimRejected: true }),
+      );
+      assert.deepEqual(await find('replay_2'), reclaimed);
+    },
+  },
 ];
 
 // --- reclaim ----------------------------------------------------------------

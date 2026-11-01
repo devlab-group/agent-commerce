@@ -297,6 +297,9 @@ export function createSqliteReceiptStore(options: SqliteReceiptStoreOptions): Sq
   const getArchivedPaymentAttemptStmt = db.prepare<[string], PaymentAttemptRow>(
     'SELECT * FROM payment_attempt_history WHERE id = ? ORDER BY seq DESC LIMIT 1',
   );
+  const paymentAttemptByReplayKeyStmt = db.prepare<[string], PaymentAttemptRow>(
+    'SELECT * FROM payment_attempts WHERE replay_key = ?',
+  );
   // Check status and missing resolution in the UPDATE so only one resolver
   // succeeds. Only reconciliation may replace the attempt's reference; manual
   // references belong in resolution_json.
@@ -724,6 +727,11 @@ export function createSqliteReceiptStore(options: SqliteReceiptStoreOptions): Sq
 
     async getPaymentAttempt(id: string): Promise<PaymentAttempt | undefined> {
       const row = getPaymentAttemptStmt.get(id) ?? getArchivedPaymentAttemptStmt.get(id);
+      return row !== undefined ? rowToPaymentAttempt(row) : undefined;
+    },
+
+    async findPaymentAttemptByReplayKey(replayKey: string): Promise<PaymentAttempt | undefined> {
+      const row = paymentAttemptByReplayKeyStmt.get(replayKey);
       return row !== undefined ? rowToPaymentAttempt(row) : undefined;
     },
 

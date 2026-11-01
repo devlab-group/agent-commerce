@@ -206,6 +206,13 @@ export interface ReceiptStore {
   listTransactions?(options?: TransactionListOptions): Promise<TransactionPage>;
   getPaymentAttempt?(id: string): Promise<PaymentAttempt | undefined>;
   /**
+   * Returns the current attempt holding `replayKey`, excluding attempts
+   * replaced by a reclaim. If a rejected proof carries this key, the pipeline
+   * uses the lookup to return `PAYMENT_REPLAYED` while its attempt is unfinished.
+   * Experimental: may change in a minor release.
+   */
+  findPaymentAttemptByReplayKey?(replayKey: string): Promise<PaymentAttempt | undefined>;
+  /**
    * Compare-and-set: return `false` without writing if the attempt's status
    * differs from `expectedStatus` or it already has a resolution
    */
