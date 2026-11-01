@@ -3,7 +3,9 @@
 // integration suites construct gateways directly with createGateway.
 import { spawn } from 'node:child_process';
 import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:http';
 import * as nodeModule from 'node:module';
+import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
@@ -351,6 +353,52 @@ describe.concurrent('gateway entry points (main.ts and agent-commerce start)', (
       }
     } finally {
       gateway.stop();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it('drains a request on the first SIGTERM and exits 1 at once on the second', async () => {
+    const dir = tempDir();
+    let reached: () => void = () => {};
+    const atBackend = new Promise<void>((resolve) => {
+      reached = resolve;
+    });
+    // Never answers, so the request stays in flight until the gateway exits
+    const backend = createServer(() => reached());
+    await new Promise<void>((resolve) => backend.listen(0, '127.0.0.1', resolve));
+    const config = baseConfig(dir);
+    config.resources['slow_report'] = {
+      name: 'Slow Report',
+      input: { type: 'object', properties: {}, additionalProperties: false },
+      backend: {
+        type: 'http',
+        method: 'GET',
+        url: `http://127.0.0.1:${(backend.address() as AddressInfo).port}/slow`,
+      },
+      pricing: { type: 'free' },
+      expose: ['http'],
+    };
+    const gateway = startMain(dir, config);
+    try {
+      await gateway.printed('"gateway listening"');
+      const pending = fetch(`${gateway.url()}/api/resources/slow_report/invoke`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{}',
+      }).catch(() => 'connection lost');
+      await atBackend;
+
+      gateway.child.kill('SIGTERM');
+      await gateway.printed('"shutting down"');
+      gateway.child.kill('SIGTERM');
+
+      expect(await gateway.exited).toBe(1);
+      expect(gateway.output.stdout).toContain('second signal');
+      expect(await pending).toBe('connection lost');
+    } finally {
+      gateway.stop();
+      backend.closeAllConnections();
+      backend.close();
       rmSync(dir, { recursive: true, force: true });
     }
   }, 30_000);

@@ -109,3 +109,19 @@ or `resolve` to establish its outcome.
 
 A 2.5 gateway refuses a receipt database migrated by 2.6.0. To roll back to
 2.5, restore a backup made before the upgrade.
+
+## Shutdown
+
+On the first SIGTERM or SIGINT, the gateway stops accepting connections and
+waits for in-flight requests without a time limit. It then stops protocol
+adapters, closes authorization providers and the database, and exits 0 on
+success. A shutdown error exits 1.
+
+A second SIGTERM or SIGINT exits immediately with status 1. An orchestrator
+can also send SIGKILL when its grace period expires, terminating the process
+without cleanup. Docker Compose's `stop_grace_period` defaults to 10 s.
+Either forced exit can leave an unfinished purchase, for example an attempt
+marked `reserved` or `settlement-uncertain`. Replays of those attempts return
+409 without a fresh challenge. Run `reconcile` after restart; use `resolve`
+when the available evidence cannot establish the outcome. Set the grace
+period above your slowest settlement plus backend call.

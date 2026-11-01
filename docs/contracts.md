@@ -373,6 +373,11 @@ persistence must not fail the commerce flow.
     the pending-task group, or in memory otherwise. Saved tasks can survive a
     restart until expiry. The adapter keeps the parsed AP2 mandate in memory
     and omits it from the stored task.
+- In 2.6.0, `GatewayInstance.close()` stops accepting connections and drains
+  in-flight requests before stopping adapters. It closes keep-alive sockets
+  as they become idle and resolves after requests and adapters have finished.
+  In 2.5, adapters stopped first and could close a store still in use by a
+  request.
 
 ### Authorization and AP2
 

@@ -9,11 +9,14 @@
  * Held facilitator and RPC responses stop settlement before or after a
  * transfer lands.
  *
- * A separate case uses SIGKILL after a transfer lands, with AP2 disabled.
- * Other cases inject write failures without simulating a crash.
+ * Child-process cases disable AP2. One sends SIGKILL after a transfer lands;
+ * others send SIGTERM during settlement, then SIGKILL after a grace period.
+ * Additional cases inject write failures without simulating a crash.
  */
-import { spawn } from 'node:child_process';
+import { type ChildProcess, spawn } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createTestClient, http } from 'viem';
@@ -30,6 +33,7 @@ import {
   CommerceError,
   NOOP_LOGGER,
   PAYMENT_HEADER,
+  PAYMENT_REQUIRED_HEADER,
   type PaymentAttempt,
   type Transaction,
   type TransactionState,
@@ -94,7 +98,7 @@ const settledUpdate: Point = (method, [update]) =>
 function rawConfig(
   dir: string,
   facilitatorUrl: string,
-  options: { ap2: boolean } = { ap2: true },
+  options: { ap2: boolean; backendUrl?: string } = { ap2: true },
 ): Record<string, unknown> {
   const issuers = (entries: Party['mandateIssuers']) =>
     entries.map((entry) => ({
@@ -113,7 +117,7 @@ function rawConfig(
     backend: {
       type: 'http',
       method: 'GET',
-      url: 'http://merchant.invalid/api/report',
+      url: options.backendUrl ?? 'http://merchant.invalid/api/report',
       timeoutMs: 60_000,
     },
     pricing: { type: 'fixed', amount: AMOUNT, currency: CURRENCY },
@@ -812,63 +816,122 @@ describe('an AP2 hold write failure without a crash', () => {
   });
 });
 
-describe('a child-process gateway killed mid-settlement', () => {
-  it('matches the in-process crash after the transfer lands', async () => {
-    const env = await stack({ ap2: false });
-    const path = join(env.dir, 'config.yaml');
-    writeFileSync(path, JSON.stringify(rawConfig(env.dir, env.front.url, { ap2: false })));
-    const child = spawn(
-      process.execPath,
-      ['--import', 'tsx', 'src/cli/index.ts', 'start', '--config', path],
-      {
-        env: { ...process.env, NODE_ENV: 'production', LOG_LEVEL: 'info' },
-        stdio: ['ignore', 'pipe', 'pipe'],
-      },
-    );
-    const exited = new Promise<NodeJS.Signals | null>((resolve) =>
-      child.once('exit', (_, signal) => resolve(signal)),
-    );
-    cleanups.push(async () => {
-      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
-      await exited;
-    });
-    let stdout = '';
-    let stderr = '';
-    child.stderr.on('data', (chunk: Buffer) => {
-      stderr += chunk.toString('utf8');
-    });
-    const url = await new Promise<string>((resolve, reject) => {
-      child.stdout.on('data', (chunk: Buffer) => {
-        stdout += chunk.toString('utf8');
-        const listening = stdout
+// A child gateway launched through `agent-commerce start` with a local merchant
+interface ChildGateway {
+  readonly url: string;
+  readonly child: ChildProcess;
+  readonly exited: Promise<NodeJS.Signals | null>;
+  invoke(flow: Flow, headers?: Record<string, string>): Promise<ChildInvocation>;
+  // Resolves when the child has logged a line with this message
+  logged(message: string): Promise<void>;
+}
+
+interface ChildInvocation extends Invocation {
+  readonly headers: Headers;
+}
+
+// Start a child on this case's config and receipt database, with its own
+// merchant server and free port so another child can restart after a kill
+async function startChild(env: Env): Promise<ChildGateway> {
+  const merchant = createServer((_, response) => {
+    response.setHeader('content-type', 'application/json');
+    response.end(JSON.stringify({ report: 'ok' }));
+  });
+  await new Promise<void>((resolve) => merchant.listen(0, '127.0.0.1', resolve));
+  const backendUrl = `http://127.0.0.1:${(merchant.address() as AddressInfo).port}/api/report`;
+  cleanups.push(
+    () =>
+      new Promise((resolve) => {
+        merchant.closeAllConnections();
+        merchant.close(() => resolve());
+      }),
+  );
+  const path = join(env.dir, 'config.yaml');
+  writeFileSync(
+    path,
+    JSON.stringify(rawConfig(env.dir, env.front.url, { ap2: false, backendUrl })),
+  );
+  const child = spawn(
+    process.execPath,
+    ['--import', 'tsx', 'src/cli/index.ts', 'start', '--config', path],
+    {
+      env: { ...process.env, NODE_ENV: 'production', LOG_LEVEL: 'info' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    },
+  );
+  const exited = new Promise<NodeJS.Signals | null>((resolve) =>
+    child.once('exit', (_, signal) => resolve(signal)),
+  );
+  cleanups.push(async () => {
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    await exited;
+  });
+  let stdout = '';
+  let stderr = '';
+  const watchers = new Set<() => void>();
+  child.stderr.on('data', (chunk: Buffer) => {
+    stderr += chunk.toString('utf8');
+  });
+  child.stdout.on('data', (chunk: Buffer) => {
+    stdout += chunk.toString('utf8');
+    for (const watcher of watchers) watcher();
+  });
+  const logged = (message: string) =>
+    new Promise<{ msg?: string; url?: string }>((resolve) => {
+      const check = () => {
+        const line = stdout
           .split('\n')
-          .filter((line) => line.startsWith('{') && line.endsWith('}'))
-          .map((line) => JSON.parse(line) as { msg?: string; url?: string })
-          .find((line) => line.msg === 'gateway listening');
-        if (listening?.url !== undefined) resolve(listening.url);
-      });
-      void exited.then(() => reject(new Error(`gateway exited: ${stderr}`)));
+          .filter((entry) => entry.startsWith('{') && entry.endsWith('}'))
+          .map((entry) => JSON.parse(entry) as { msg?: string; url?: string })
+          .find((entry) => entry.msg === message);
+        if (line === undefined) return;
+        watchers.delete(check);
+        resolve(line);
+      };
+      watchers.add(check);
+      check();
     });
-    const invoke = async (headers: Record<string, string> = {}) => {
-      const response = await fetch(`${url}/api/resources/report_upfront/invoke`, {
+  const listening = await Promise.race([
+    logged('gateway listening'),
+    exited.then(() => {
+      throw new Error(`gateway exited: ${stderr}`);
+    }),
+  ]);
+  const url = listening.url as string;
+  return {
+    url,
+    child,
+    exited,
+    invoke: async (flow, headers = {}) => {
+      const response = await fetch(`${url}/api/resources/report_${flow}/invoke`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', ...headers },
         body: JSON.stringify(INPUT),
       });
       const body: unknown = await response.json();
-      return { statusCode: response.status, json: () => body };
-    };
+      return { statusCode: response.status, headers: response.headers, json: () => body };
+    },
+    logged: async (message) => {
+      await logged(message);
+    },
+  };
+}
+
+describe('a child-process gateway killed mid-settlement', () => {
+  it('matches the in-process crash after the transfer lands', async () => {
+    const env = await stack({ ap2: false });
+    const gateway = await startChild(env);
     const before = await balances();
-    const headers = await paymentHeaders(invoke, undefined);
+    const headers = await paymentHeaders((extra) => gateway.invoke('upfront', extra), undefined);
     const landed = env.rpc.hold((_, body) => body.includes('"eth_sendRawTransaction"'), {
       forward: true,
     });
 
-    const paid = invoke(headers).catch(() => 'connection lost');
+    const paid = gateway.invoke('upfront', headers).catch(() => 'connection lost');
     await landed;
-    child.kill('SIGKILL');
+    gateway.child.kill('SIGKILL');
 
-    expect(await exited).toBe('SIGKILL');
+    expect(await gateway.exited).toBe('SIGKILL');
     expect(await paid).toBe('connection lost');
     expect(await balances()).toEqual({
       buyer: before.buyer - ONE_USDC,
@@ -887,5 +950,100 @@ describe('a child-process gateway killed mid-settlement', () => {
     expect((await operatorView(env, PAST_DEADLINE_MS)).transaction.state).toBe(
       'settled-undelivered',
     );
+  });
+});
+
+describe('a child-process gateway stopped by SIGTERM during settlement', () => {
+  // The orchestrator's grace period before it sends SIGKILL
+  const GRACE_MS = 1_000;
+
+  // Hold a paid call at `hold`, send SIGTERM and verify that it keeps draining
+  // until SIGKILL ends the grace period
+  async function termThenKill(env: Env, flow: Flow, hold: 'landed' | 'not-landed') {
+    const gateway = await startChild(env);
+    const before = await balances();
+    const headers = await paymentHeaders((extra) => gateway.invoke(flow, extra), undefined);
+    const held =
+      hold === 'landed'
+        ? env.rpc.hold((_, body) => body.includes('"eth_sendRawTransaction"'), { forward: true })
+        : env.front.hold((path) => path === '/settle', { forward: false });
+    const paid = gateway.invoke(flow, headers).catch(() => 'connection lost');
+    await held;
+
+    const stopping = gateway.logged('shutting down');
+    gateway.child.kill('SIGTERM');
+    await stopping;
+    const afterGrace = await Promise.race([
+      gateway.exited.then(() => 'exited'),
+      new Promise((resolve) => setTimeout(resolve, GRACE_MS, 'draining')),
+    ]);
+    expect(afterGrace).toBe('draining');
+    gateway.child.kill('SIGKILL');
+
+    expect(await gateway.exited).toBe('SIGKILL');
+    expect(await paid).toBe('connection lost');
+    return { before, headers };
+  }
+
+  // Send the same payment to a restarted gateway; it must move no funds
+  async function replayAfterRestart(
+    env: Env,
+    flow: Flow,
+    headers: Record<string, string>,
+    funds: Awaited<ReturnType<typeof balances>>,
+  ) {
+    const replay = await (await startChild(env)).invoke(flow, headers);
+    expect(await balances()).toEqual(funds);
+    return replay;
+  }
+
+  it.each([
+    ['upfront', { settling: true }],
+    ['authorization', { settling: true, backend: 200 }],
+  ] as const)(
+    'a held settlement on the %s flow leaves a reserved attempt that a restart refuses to replay',
+    async (flow, journal) => {
+      const env = await stack({ ap2: false });
+
+      const { before, headers } = await termThenKill(env, flow, 'not-landed');
+
+      expect(await balances()).toEqual(before);
+      const now = await operatorView(env);
+      expect(now.transaction.state).toBe('payment-pending');
+      expect(now.unresolved).toBe(true);
+      expect(now.attempt.status).toBe('reserved');
+      expectJournal(now.transaction, journal);
+
+      // The saved reservation rejects the replay without a fresh challenge
+      const replay = await replayAfterRestart(env, flow, headers, before);
+      expect(replay.statusCode).toBe(409);
+      expect(replay.json()).toMatchObject({ status: 'error', code: 'PAYMENT_REPLAYED' });
+      expect(replay.json()).not.toHaveProperty('payment');
+      expect(replay.json()).not.toHaveProperty('details.challenge');
+      expect(replay.headers.has(PAYMENT_REQUIRED_HEADER)).toBe(false);
+    },
+  );
+
+  it('a held transfer response on the upfront flow leaves the transfer landed and a restart refuses the copy', async () => {
+    const env = await stack({ ap2: false });
+
+    const { before, headers } = await termThenKill(env, 'upfront', 'landed');
+
+    const moved = { buyer: before.buyer - ONE_USDC, merchant: before.merchant + ONE_USDC };
+    expect(await balances()).toEqual(moved);
+    const now = await operatorView(env);
+    expect(now.transaction.state).toBe('payment-pending');
+    expect(now.unresolved).toBe(true);
+    expect(now.attempt.status).toBe('reserved');
+    expectJournal(now.transaction, { settling: true });
+
+    // Verification rejects the spent authorization; its unfinished attempt
+    // still makes the replay return 409 without a fresh challenge
+    const replay = await replayAfterRestart(env, 'upfront', headers, moved);
+    expect(replay.statusCode).toBe(409);
+    expect(replay.json()).toMatchObject({ status: 'error', code: 'PAYMENT_REPLAYED' });
+    expect(replay.json()).not.toHaveProperty('payment');
+    expect(replay.json()).not.toHaveProperty('details.challenge');
+    expect(replay.headers.has(PAYMENT_REQUIRED_HEADER)).toBe(false);
   });
 });
