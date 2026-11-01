@@ -198,9 +198,7 @@ delivery summary.
 
 Operators list rows with `GET /api/transactions?unresolved=true` and read one
 with its attempt, receipt and events at `GET /api/transactions/:id`
-([routes](contracts.md#gateway-http-surface)). The `Transaction` type, the
-journal store methods and this response shape are experimental and may change
-in a minor release.
+([routes](contracts.md#gateway-http-surface)).
 
 ### Reconciliation
 

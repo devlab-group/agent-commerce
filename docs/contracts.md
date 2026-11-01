@@ -193,14 +193,30 @@ persistence must not fail the commerce flow.
     write at `warn` and throws `STORAGE_ERROR`.
   - `TransactionState` and `PersistenceFailure` accept unlisted string values,
     so consumers must handle new values introduced by later releases.
-  - These APIs are experimental and may change in a minor release:
-    `Transaction`, its states and `transactionState()`; the optional
-    `ReceiptStore` journal methods, their argument types and
-    `PaymentAttemptReservation.transaction`; `PaymentProvider.reconcile`, its
-    context and result, and `RECONCILIATION_METADATA_KEY`; and the
+  - `PaymentProvider.reconcile`, its context and result, and
+    `RECONCILIATION_METADATA_KEY` are experimental and may change in a minor
+    release. The supported APIs in 2.6.0 are `Transaction`, its states and
+    `transactionState()`; the optional `ReceiptStore` journal methods and
+    their argument types; `PaymentAttemptReservation.transaction`; and the
     `/api/transactions` response shape.
   - The 3.0.0 migration plan makes `transactionId` and the journal methods
     required; see [Upgrading from 2.x to 3.0](migration-3.0.md).
+- 2.6.0 adds three groups of optional `ReceiptStore` methods. Existing 2.5
+  stores need no changes. A store must implement each group in full or omit it.
+  - Idempotency claims: `claimIdempotencyKey`, `updateIdempotencyKey` and
+    `recoverIdempotencyKeys`, with `IdempotencyScope`, `IdempotencyClaim` and
+    `IdempotencyUpdate`.
+  - Authorization holds: `reserveAuthorizationHold`,
+    `transitionAuthorizationHold`, `getAuthorizationHoldState` and
+    `listOrphanAuthorizationHolds`, with `AuthorizationHoldReservation`,
+    `AuthorizationHoldResult` and `AuthorizationHold`.
+  - Pending tasks: `putPendingTask`, `getPendingTask` and `takePendingTask`,
+    with `PendingTask`.
+  - The types are protocol-neutral. Adapter-specific fields belong in
+    `PendingTask.adapterData`; non-secret hold identifiers belong in
+    `AuthorizationHoldReservation.metadata`.
+  - These methods and types are experimental and may change in a minor
+    release. The 3.0.0 migration plan makes them required.
 
 ### Protocols and gateway
 

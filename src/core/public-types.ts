@@ -69,6 +69,15 @@ export type {
 } from './domain/resource';
 export { DEFAULT_BACKEND_TIMEOUT_MS } from './domain/resource';
 export type {
+  AuthorizationHold,
+  AuthorizationHoldReservation,
+  AuthorizationHoldResult,
+  IdempotencyClaim,
+  IdempotencyScope,
+  IdempotencyUpdate,
+  PendingTask,
+} from './domain/store-records';
+export type {
   AuthorizationHoldState,
   PersistenceFailure,
   Transaction,

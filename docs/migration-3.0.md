@@ -21,6 +21,18 @@ journal methods to `ReceiptStore`. The 3.0.0 plan changes these contracts:
   will omit the ID. If your client requires `receiptId`, update it to handle a
   summary without one.
 
+## Idempotency claims, holds and pending tasks
+
+The optional `ReceiptStore` methods added in 2.6.0 are planned to become
+required in 3.0.0. Custom stores will need to implement:
+
+- Idempotency claims: `claimIdempotencyKey`, `updateIdempotencyKey` and
+  `recoverIdempotencyKeys`.
+- Authorization holds: `reserveAuthorizationHold`,
+  `transitionAuthorizationHold`, `getAuthorizationHoldState` and
+  `listOrphanAuthorizationHolds`.
+- Pending tasks: `putPendingTask`, `getPendingTask` and `takePendingTask`.
+
 ## Envelopes
 
 2.1.0 deprecated `destination`, `network` and `asset` in

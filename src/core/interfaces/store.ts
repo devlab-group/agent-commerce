@@ -13,6 +13,15 @@ import type {
 import type { CommerceEvent } from '../domain/event';
 import type { CommerceReceipt, PaymentAttempt, PaymentAttemptResolution } from '../domain/receipt';
 import type {
+  AuthorizationHold,
+  AuthorizationHoldReservation,
+  AuthorizationHoldResult,
+  IdempotencyClaim,
+  IdempotencyScope,
+  IdempotencyUpdate,
+  PendingTask,
+} from '../domain/store-records';
+import type {
   AuthorizationHoldState,
   PersistenceFailure,
   Transaction,
@@ -46,7 +55,7 @@ export interface PaymentAttemptReservation {
  * Data for a journal row opened with a replay reservation. Journal stores
  * must initialize an included authorization hold as `reserved`. The reservation
  * supplies the request, resource, provider, replay key, amount, currency and
- * payee. Experimental: may change in a minor release.
+ * payee.
  */
 export interface NewTransaction {
   readonly id: string;
@@ -60,10 +69,7 @@ export interface NewTransaction {
   readonly configDigest: string;
 }
 
-/**
- * A journal update after replay reservation. Experimental: may change in a
- * minor release.
- */
+/** A journal update after replay reservation */
 export type TransactionStep = {
   readonly transactionId: string;
   readonly at: IsoTimestamp;
@@ -79,7 +85,6 @@ export type TransactionStep = {
     }
 );
 
-/** Experimental: may change in a minor release */
 export interface TransactionListOptions extends ListOptions {
   /** Opaque cursor from a previous page's `nextCursor` */
   readonly cursor?: string;
@@ -90,7 +95,7 @@ export interface TransactionListOptions extends ListOptions {
   readonly pendingHold?: boolean;
 }
 
-/** Transactions in newest-first order. Experimental: may change in a minor release */
+/** Transactions in newest-first order */
 export interface TransactionPage {
   readonly transactions: readonly Transaction[];
   /**
@@ -100,7 +105,6 @@ export interface TransactionPage {
   readonly nextCursor?: string;
 }
 
-/** Experimental: may change in a minor release */
 export interface PaymentAttemptResolveRequest {
   readonly attemptId: string;
   /** Update only if the attempt still has this status and no resolution */
@@ -196,7 +200,6 @@ export interface ReceiptStore {
    * Record a journal step. Journal methods are optional for compatibility with
    * stores that do not support the journal. Implementations must also recompute
    * a transaction's cached state atomically with payment-attempt updates.
-   * Experimental: may change in a minor release.
    */
   recordTransactionStep?(step: TransactionStep): Promise<void>;
   getTransaction?(id: string): Promise<Transaction | undefined>;
@@ -207,6 +210,87 @@ export interface ReceiptStore {
    * differs from `expectedStatus` or it already has a resolution
    */
   resolvePaymentAttempt?(request: PaymentAttemptResolveRequest): Promise<boolean>;
+
+  /**
+   * Idempotency claims for protocol adapters. A store must implement all three
+   * methods or none. Experimental: may change in a minor release.
+   *
+   * Atomically claim `scope` after deleting `completed` claims whose
+   * `expiresAt` has passed. Other states do not expire. Return `reserved` for
+   * a new scope, or `conflict` for a different `fingerprint`, regardless of
+   * the existing claim's state.
+   */
+  claimIdempotencyKey?(
+    scope: IdempotencyScope,
+    fingerprint: string,
+    expiresAt: IsoTimestamp,
+  ): Promise<IdempotencyClaim>;
+  /** Record a claim's outcome. Experimental: may change in a minor release */
+  updateIdempotencyKey?(scope: IdempotencyScope, update: IdempotencyUpdate): Promise<void>;
+  /**
+   * Call at startup before accepting claims. Mark every `in-flight` claim
+   * `unresolved`, or delete them if `release` is true. Return the number
+   * changed. Assumes one gateway per store. Experimental: may change in a
+   * minor release.
+   */
+  recoverIdempotencyKeys?(options: { readonly release: boolean }): Promise<number>;
+
+  /**
+   * Authorization holds for authorization providers. A store must implement
+   * all four methods or none. Experimental: may change in a minor release.
+   *
+   * Atomically reserve a hold. Return `replayed` with the existing holder's
+   * state if this reference, or another with the same `bindingReference`, is
+   * not `released`. A released reference can be reserved again by the new
+   * `requestId`.
+   */
+  reserveAuthorizationHold?(
+    reservation: AuthorizationHoldReservation,
+  ): Promise<AuthorizationHoldResult>;
+  /**
+   * Move a `reserved` or `uncertain` hold to `to`. This method leaves
+   * `consumed` and `released` holds unchanged. When supplied, `requestId`
+   * restricts changes to that request's hold. Return true when the hold is
+   * in `to`, including on repeated calls. If `requestId` no longer holds the
+   * reference, leave the current hold unchanged and return true only when
+   * `to` is `released`. Return false otherwise. Experimental: may change in
+   * a minor release.
+   */
+  transitionAuthorizationHold?(
+    reference: string,
+    to: Exclude<AuthorizationHoldState, 'reserved'>,
+    requestId?: string,
+  ): Promise<boolean>;
+  /** Experimental: may change in a minor release */
+  getAuthorizationHoldState?(reference: string): Promise<AuthorizationHoldState | undefined>;
+  /**
+   * List `reserved` holds last updated before `updatedBefore`, oldest first,
+   * whose request has no current or replaced payment attempt. The pipeline
+   * reserves an attempt before settlement, so after the request ends it cannot
+   * settle a payment for such a hold. Experimental: may change in a minor
+   * release.
+   */
+  listOrphanAuthorizationHolds?(options: {
+    readonly updatedBefore: IsoTimestamp;
+    readonly limit?: number;
+  }): Promise<readonly AuthorizationHold[]>;
+
+  /**
+   * Pending tasks for protocol adapters. A store must implement all three
+   * methods or none. Experimental: may change in a minor release.
+   *
+   * Delete expired tasks, then store `task`, replacing any task with the same
+   * ID. Return false without storing when `maxTasks` unexpired tasks exist.
+   */
+  putPendingTask?(task: PendingTask, options: { readonly maxTasks: number }): Promise<boolean>;
+  /** Return undefined for a missing or expired task. Experimental: may change in a minor release */
+  getPendingTask?(id: string): Promise<PendingTask | undefined>;
+  /**
+   * Atomically delete and return the task. Return undefined if it has expired
+   * or a concurrent or earlier call already took it. Experimental: may change
+   * in a minor release.
+   */
+  takePendingTask?(id: string): Promise<PendingTask | undefined>;
 
   readonly descriptor: AdapterDescriptor;
   health(): Promise<AdapterHealth>;
