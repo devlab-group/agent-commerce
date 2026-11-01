@@ -1,1 +1,7 @@
-export { createSqliteReceiptStore, type SqliteReceiptStoreOptions } from './store';
+export {
+  createSqliteReceiptStore,
+  type SqliteLegacyImport,
+  type SqliteReceiptStore,
+  type SqliteReceiptStoreOptions,
+  type SqliteReceiptStoreSummary,
+} from './store';

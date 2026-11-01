@@ -2,9 +2,24 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { ReceiptStore } from '../../../src/core';
+import {
+  AUTHORIZATION_INPUT_FIELD,
+  PAYMENT_INPUT_FIELD,
+  type ReceiptStore,
+} from '../../../src/core';
 import { createSqliteReceiptStore } from '../../../src/storage/receipts';
 import { isSecretKey, redact } from '../../../src/storage/receipts/redact';
+import { createConformanceClock, isoAt } from '../../../src/testing/conformance/support';
+import { dumpTables } from '../../fixtures/sqlite-dump';
+import {
+  assemblePresentation,
+  CHECKOUT_ISSUER,
+  createParties,
+  MANDATE_ISSUER,
+  mintMandateParts,
+  sha256Base64url,
+  signCheckoutJwt,
+} from '../authorization-ap2/fixtures';
 import { createFakeClock, createFakeIds, makeEvent, makeReceipt } from './helpers';
 
 /**
@@ -238,5 +253,106 @@ describe('bearer-token-shaped keys', () => {
       durationMs: 12,
     };
     expect(redact(clean)).toEqual(clean);
+  });
+});
+
+// Guard against persisting AP2 presentations in reserved task-input fields
+// or checkout JWTs in hold metadata
+describe('2.6.0 records hold no AP2 presentation', () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'receipt-store-presentation-'));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('writes none of the presentation, its parts or the payment proof to any table', async () => {
+    const parties = await createParties();
+    const checkoutJwt = await signCheckoutJwt(parties.checkoutSigner);
+    const parts = await mintMandateParts(parties.mandateSigner, checkoutJwt);
+    const presentation = assemblePresentation(parts.signedToken, [
+      parts.mandateDisclosure,
+      parts.checkoutDisclosure,
+    ]);
+    const proof = 'payment-proof-that-must-not-persist';
+    const path = join(dir, 'receipts.sqlite');
+    const sqlite = createSqliteReceiptStore({
+      path,
+      clock: createFakeClock(),
+      ids: createFakeIds(),
+    });
+    await sqlite.init();
+    try {
+      await sqlite.reserveAuthorizationHold({
+        method: 'ap2',
+        reference: `sha256:${await sha256Base64url(parts.signedToken)}`,
+        bindingReference: 'checkout_01KTEST',
+        resourceId: 'market_report',
+        requestId: 'req_1',
+        // A secret-shaped key is redacted like any other metadata
+        metadata: { mandateIssuer: MANDATE_ISSUER, checkoutIssuer: CHECKOUT_ISSUER, checkoutJwt },
+      });
+      await sqlite.putPendingTask(
+        {
+          id: 'a2a_task_1',
+          protocol: 'a2a',
+          resourceId: 'market_report',
+          input: {
+            symbol: 'ETH',
+            [AUTHORIZATION_INPUT_FIELD]: { method: 'ap2', presentation },
+            [PAYMENT_INPUT_FIELD]: proof,
+          },
+          adapterData: { contextId: 'ctx_1', network: 'eip155:8453' },
+          expiresAt: '2026-01-01T00:10:00.000Z',
+        },
+        { maxTasks: 10 },
+      );
+      expect((await sqlite.getPendingTask('a2a_task_1'))?.input).toEqual({ symbol: 'ETH' });
+    } finally {
+      await sqlite.close();
+    }
+
+    const everything = JSON.stringify(dumpTables(path));
+    for (const secret of [
+      presentation,
+      parts.signedToken,
+      parts.mandateDisclosure,
+      parts.checkoutDisclosure,
+      checkoutJwt,
+      proof,
+    ]) {
+      expect(everything).not.toContain(secret);
+    }
+    expect(everything).toContain(MANDATE_ISSUER);
+  });
+
+  // The next write must remove expired tasks and their unredacted input
+  it('deletes an expired task when the next one is stored', async () => {
+    const path = join(dir, 'receipts.sqlite');
+    const clock = createConformanceClock();
+    const sqlite = createSqliteReceiptStore({ path, clock });
+    await sqlite.init();
+    const task = (id: string, symbol: string, expiresAt: string) => ({
+      id,
+      protocol: 'a2a' as const,
+      resourceId: 'market_report',
+      input: { symbol },
+      expiresAt,
+    });
+    try {
+      await sqlite.putPendingTask(task('a2a_task_1', 'EXPIRED-INPUT', isoAt(60_000)), {
+        maxTasks: 10,
+      });
+      clock.advance(120_000);
+      await sqlite.putPendingTask(task('a2a_task_2', 'ETH', isoAt(600_000)), { maxTasks: 10 });
+    } finally {
+      await sqlite.close();
+    }
+    const tasks = dumpTables(path).pending_tasks as { id: string }[];
+    expect(tasks.map((t) => t.id)).toEqual(['a2a_task_2']);
+    expect(JSON.stringify(dumpTables(path))).not.toContain('EXPIRED-INPUT');
   });
 });

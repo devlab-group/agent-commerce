@@ -424,10 +424,27 @@ export interface SqliteReceiptStoreOptions {
   readonly ids?: IdGenerator;
 }
 
+// Every optional ReceiptStore method is implemented
+export interface SqliteReceiptStore extends Required<ReceiptStore> {
+  /** Experimental: counts for `doctor`, not part of `ReceiptStore` */
+  summary(options: { readonly orphanHoldMinAgeMs: number }): Promise<SqliteReceiptStoreSummary>;
+}
+
 export function createSqliteReceiptStore(
   options: SqliteReceiptStoreOptions,
-): ReceiptStore;
+): SqliteReceiptStore;
 ```
+
+Creating the store upgrades older files to schema v5. `init()` rejects any
+version other than v5, just as a 2.5.x store rejects a v5 file because it
+requires v4. To downgrade below 2.6.0, restore a copy made before the upgrade.
+
+The store removes the top-level `_payment` and `_authorization` fields from
+pending task input before writing it. Hold `metadata` values under
+secret-shaped keys are redacted, as with other metadata. Idempotency bodies,
+the remaining task input and `adapterData` are stored as JSON without
+redaction so they can be replayed or resumed. Callers must keep secrets out
+of those fields.
 
 `reservePaymentAttempt` atomically claims a `replayKey`. On a duplicate, it
 throws `CommerceError('PAYMENT_REPLAYED', …)` with the existing attempt's

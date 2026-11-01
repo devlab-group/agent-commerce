@@ -33,6 +33,10 @@ import {
 } from '../../core';
 import { PACKAGE_VERSION } from '../../version';
 import { openSqliteDatabase } from '../sqlite';
+import { createHoldMethods, ORPHAN_HOLD_WHERE } from './holds';
+import { createIdempotencyMethods } from './idempotency';
+import { clampListLimit } from './params';
+import { createPendingTaskMethods } from './pending-tasks';
 import { redact } from './redact';
 import {
   type EventRow,
@@ -47,22 +51,6 @@ import {
   type TransactionRow,
 } from './rows';
 import { migrate, SCHEMA_VERSION } from './schema';
-
-const DEFAULT_LIST_LIMIT = 50;
-/**
- * Ceiling on every list query, enforced in the store so every caller is
- * covered, not only the HTTP route. SQLite reads a negative `LIMIT` as no
- * limit, so `{ limit: -1 }` would otherwise return the whole table.
- */
-const MAX_LIST_LIMIT = 500;
-
-// Clamps to a whole number in [1, MAX_LIST_LIMIT]. An absent or non-finite
-// limit (NaN, Infinity) takes the default, whether or not the caller filtered
-// it first.
-function clampListLimit(limit: number | undefined): number {
-  const base = limit !== undefined && Number.isFinite(limit) ? limit : DEFAULT_LIST_LIMIT;
-  return Math.min(Math.max(Math.trunc(base), 1), MAX_LIST_LIMIT);
-}
 
 // Non-2xx statuses, including 0 (unknown), are undelivered, matching
 // deliveryResult() in ReceiptList.tsx. NOT NULL prevents NULL comparisons from
@@ -105,6 +93,35 @@ export interface SqliteReceiptStoreOptions {
   readonly ids?: IdGenerator;
 }
 
+/** Recorded import from a deprecated store file */
+export interface SqliteLegacyImport {
+  readonly source: string;
+  readonly path: string;
+  readonly rows: number;
+  readonly importedAt: IsoTimestamp;
+}
+
+/** Diagnostic counts for `doctor`. Experimental: may change in a minor release */
+export interface SqliteReceiptStoreSummary {
+  /** Unresolved transactions by state, derived when read */
+  readonly unresolvedTransactions: Readonly<Record<string, number>>;
+  /**
+   * `reserved` holds last updated before the age cutoff whose request has no
+   * current or archived payment attempt
+   */
+  readonly orphanHolds: number;
+  /** Claims recorded as `unresolved` */
+  readonly unresolvedIdempotencyKeys: number;
+  readonly unexpiredPendingTasks: number;
+  readonly legacyImports: readonly SqliteLegacyImport[];
+}
+
+/** Implements every optional `ReceiptStore` method */
+export interface SqliteReceiptStore extends Required<ReceiptStore> {
+  /** Experimental: may change in a minor release */
+  summary(options: { readonly orphanHoldMinAgeMs: number }): Promise<SqliteReceiptStoreSummary>;
+}
+
 const defaultIds: IdGenerator = {
   next: (prefix) => (prefix !== undefined ? `${prefix}_${randomUUID()}` : randomUUID()),
 };
@@ -118,7 +135,7 @@ function isUniqueConstraintOn(err: unknown, column: string): boolean {
   );
 }
 
-export function createSqliteReceiptStore(options: SqliteReceiptStoreOptions): ReceiptStore {
+export function createSqliteReceiptStore(options: SqliteReceiptStoreOptions): SqliteReceiptStore {
   const logger = options.logger ?? NOOP_LOGGER;
   const clock = options.clock ?? systemClock;
   const ids = options.ids ?? defaultIds;
@@ -418,6 +435,26 @@ export function createSqliteReceiptStore(options: SqliteReceiptStoreOptions): Re
     },
   );
 
+  // A passed backend deadline can change an unresolved state without a write,
+  // but cannot resolve it. Select rows by cached state, then derive each state
+  // again for the counts.
+  const unresolvedTransactionsStmt = db.prepare<[string, string], TransactionRow>(
+    `${TRANSACTION_SELECT} WHERE t.state NOT IN (?, ?)`,
+  );
+  const countOrphanHoldsStmt = db.prepare<[string], { count: number }>(
+    `SELECT COUNT(*) AS count FROM authorization_holds h WHERE ${ORPHAN_HOLD_WHERE}`,
+  );
+  const countUnresolvedKeysStmt = db.prepare<[], { count: number }>(
+    "SELECT COUNT(*) AS count FROM idempotency_keys WHERE state = 'unresolved'",
+  );
+  const countLiveTasksStmt = db.prepare<[string], { count: number }>(
+    'SELECT COUNT(*) AS count FROM pending_tasks WHERE expires_at > ?',
+  );
+  const legacyImportsStmt = db.prepare<
+    [],
+    { source: string; path: string; rows: number; imported_at: string }
+  >('SELECT source, path, rows, imported_at FROM legacy_imports ORDER BY source');
+
   let closed = false;
 
   const descriptor: AdapterDescriptor = {
@@ -425,11 +462,19 @@ export function createSqliteReceiptStore(options: SqliteReceiptStoreOptions): Re
     kind: 'storage',
     implementationVersion: PACKAGE_VERSION,
     supportedSpec: `sqlite-schema-v${SCHEMA_VERSION}`,
-    capabilities: ['receipts', 'events', 'payment-attempts', 'transactions'],
+    capabilities: [
+      'receipts',
+      'events',
+      'payment-attempts',
+      'transactions',
+      'idempotency-keys',
+      'authorization-holds',
+      'pending-tasks',
+    ],
     status: 'stable',
   };
 
-  const store: ReceiptStore = {
+  const store: SqliteReceiptStore = {
     async init(): Promise<void> {
       // Migration already ran synchronously at construction. This check keeps
       // init() a real, idempotent gate for callers that await it first.
@@ -671,6 +716,34 @@ export function createSqliteReceiptStore(options: SqliteReceiptStoreOptions): Re
       } catch (err) {
         throw toCommerceError(err, 'STORAGE_ERROR', 'Failed to resolve payment attempt');
       }
+    },
+
+    ...createIdempotencyMethods(db, clock),
+    ...createHoldMethods(db, clock),
+    ...createPendingTaskMethods(db, clock),
+
+    // Reads all unresolved transactions at once. Page this query if large
+    // journals make operator diagnostics too costly.
+    async summary({ orphanHoldMinAgeMs }) {
+      const now = clock.nowIso();
+      const unresolvedTransactions: Record<string, number> = {};
+      for (const row of unresolvedTransactionsStmt.all(...RESOLVED_STATES)) {
+        const { state } = rowToTransaction(row, now);
+        unresolvedTransactions[state] = (unresolvedTransactions[state] ?? 0) + 1;
+      }
+      const orphansBefore = new Date(Date.parse(now) - orphanHoldMinAgeMs).toISOString();
+      return {
+        unresolvedTransactions,
+        orphanHolds: countOrphanHoldsStmt.get(orphansBefore)?.count ?? 0,
+        unresolvedIdempotencyKeys: countUnresolvedKeysStmt.get()?.count ?? 0,
+        unexpiredPendingTasks: countLiveTasksStmt.get(now)?.count ?? 0,
+        legacyImports: legacyImportsStmt.all().map((row) => ({
+          source: row.source,
+          path: row.path,
+          rows: row.rows,
+          importedAt: row.imported_at,
+        })),
+      };
     },
 
     descriptor,

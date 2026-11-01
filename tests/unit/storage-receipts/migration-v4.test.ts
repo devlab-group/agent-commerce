@@ -1,10 +1,11 @@
-// Test schema-v4 upgrades with a fixed 2.4.1 SQL fixture and literal expected rows
+// Test upgrades from a fixed 2.4.1 (schema v3) SQL fixture with literal expected rows
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createSqliteReceiptStore } from '../../../src/storage/receipts';
+import { SCHEMA_VERSION } from '../../../src/storage/receipts/schema';
 import { createFakeClock, createFakeIds } from './helpers';
 
 const FIXTURE = readFileSync(new URL('./fixtures/receipts-v3.sql', import.meta.url), 'utf8');
@@ -116,7 +117,7 @@ const ATTEMPTS = [
   }),
 ];
 
-describe('schema v4 migration', () => {
+describe('upgrade from a 2.4.1 file', () => {
   let dir: string;
   let path: string;
 
@@ -135,7 +136,7 @@ describe('schema v4 migration', () => {
   const open = () =>
     createSqliteReceiptStore({ path, clock: createFakeClock(), ids: createFakeIds() });
 
-  it('upgrades a 2.4.1 file to v4 and reads every row back unchanged, without transaction ids', async () => {
+  it('upgrades a 2.4.1 file and reads every row back unchanged, without transaction ids', async () => {
     const store = open();
     try {
       await store.init();
@@ -164,15 +165,15 @@ describe('schema v4 migration', () => {
     }
   });
 
-  it('reports schema v4 in its descriptor and health', async () => {
+  it('reports the current schema in its descriptor and health', async () => {
     const store = open();
     try {
       await store.init();
-      expect(store.descriptor.supportedSpec).toBe('sqlite-schema-v4');
+      expect(store.descriptor.supportedSpec).toBe(`sqlite-schema-v${SCHEMA_VERSION}`);
       expect(store.descriptor.capabilities).toContain('transactions');
       expect(await store.health()).toMatchObject({
         status: 'pass',
-        detail: 'sqlite schema v4 writable',
+        detail: `sqlite schema v${SCHEMA_VERSION} writable`,
       });
     } finally {
       await store.close();
@@ -227,7 +228,7 @@ describe('schema v4 migration', () => {
     }
   });
 
-  it('leaves a v4 file unchanged when reopened', async () => {
+  it('leaves an upgraded file unchanged when reopened', async () => {
     const schemaOf = () => {
       const db = new Database(path, { readonly: true });
       const result = {
@@ -256,7 +257,7 @@ describe('schema v4 migration', () => {
     try {
       await second.init();
       expect(schemaOf()).toStrictEqual(before);
-      expect(before.version).toBe(4);
+      expect(before.version).toBe(SCHEMA_VERSION);
       expect(await second.getTransaction?.('txn_new')).toStrictEqual(transaction);
       expect(await second.listReceipts()).toStrictEqual(RECEIPTS);
     } finally {

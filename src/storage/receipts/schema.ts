@@ -155,6 +155,63 @@ const MIGRATIONS: readonly Migration[] = [
       `);
     },
   },
+  {
+    version: 5,
+    up(db) {
+      // Add shared tables for AP2 holds, ACP claims and A2A tasks without
+      // changing existing tables. A 2.5.x gateway rejects this database at
+      // init() because it requires exactly v4.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS authorization_holds (
+          reference          TEXT PRIMARY KEY,
+          method             TEXT NOT NULL,
+          binding_reference  TEXT NOT NULL,
+          resource_id        TEXT NOT NULL,
+          request_id         TEXT NOT NULL,
+          state              TEXT NOT NULL
+                             CHECK (state IN ('reserved', 'consumed', 'released', 'uncertain')),
+          metadata_json      TEXT,
+          created_at         TEXT NOT NULL,
+          updated_at         TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_authorization_holds_binding ON authorization_holds(binding_reference);
+        CREATE INDEX IF NOT EXISTS idx_authorization_holds_request_id ON authorization_holds(request_id);
+        CREATE INDEX IF NOT EXISTS idx_authorization_holds_state_updated ON authorization_holds(state, updated_at);
+
+        CREATE TABLE IF NOT EXISTS idempotency_keys (
+          deployment       TEXT NOT NULL,
+          endpoint         TEXT NOT NULL,
+          idempotency_key  TEXT NOT NULL,
+          fingerprint      TEXT NOT NULL,
+          state            TEXT NOT NULL,
+          status           INTEGER,
+          body_json        TEXT,
+          created_at       TEXT NOT NULL,
+          expires_at       TEXT NOT NULL,
+          PRIMARY KEY (deployment, endpoint, idempotency_key)
+        );
+        CREATE INDEX IF NOT EXISTS idx_idempotency_keys_expires_at ON idempotency_keys(expires_at);
+
+        CREATE TABLE IF NOT EXISTS pending_tasks (
+          id                 TEXT PRIMARY KEY,
+          protocol           TEXT NOT NULL,
+          resource_id        TEXT NOT NULL,
+          input_json         TEXT NOT NULL,
+          adapter_data_json  TEXT,
+          created_at         TEXT NOT NULL,
+          expires_at         TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_pending_tasks_expires_at ON pending_tasks(expires_at);
+
+        CREATE TABLE IF NOT EXISTS legacy_imports (
+          source       TEXT PRIMARY KEY,
+          path         TEXT NOT NULL,
+          rows         INTEGER NOT NULL,
+          imported_at  TEXT NOT NULL
+        );
+      `);
+    },
+  },
 ];
 
 /** Target schema version: the version of the last migration */
