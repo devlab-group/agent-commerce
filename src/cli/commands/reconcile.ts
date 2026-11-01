@@ -9,9 +9,12 @@
  * Exit 0 means the run completed, even with unresolved attempts; 1 means it
  * failed to complete.
  */
+import { existsSync } from 'node:fs';
 import { userInfo } from 'node:os';
+import { resolve } from 'node:path';
 import {
   type AuthorizationProvider,
+  CommerceError,
   type Logger,
   NOOP_LOGGER,
   type ReceiptStore,
@@ -100,7 +103,9 @@ export async function runReconcileCommand(
 /**
  * Runs `fn` with the receipt store and enabled authorization providers,
  * closing them afterward. Used by `reconcile` and `resolve` with the gateway
- * running or stopped.
+ * running or stopped. It initializes the receipt store but does not import
+ * legacy files. With AP2 enabled, an existing file with no recorded import
+ * blocks payment and hold updates until `start` imports it.
  */
 export async function withJournal(
   config: Awaited<ReturnType<ConfigLoader>>,
@@ -115,20 +120,33 @@ export async function withJournal(
       import('../../gateway/payment-providers'),
       import('../../storage/receipts'),
     ]);
-  const authorizationProviders = await createConfiguredAuthorizationProviders(
-    config.authorization,
-    logger,
-  );
+  const store = createSqliteReceiptStore({ path: config.storage.receipts.path, logger });
   try {
-    const store = createSqliteReceiptStore({ path: config.storage.receipts.path, logger });
+    await store.init();
+    const ap2 = config.authorization?.ap2;
+    const replayPath = ap2?.enabled ? ap2.replay?.path : undefined;
+    if (replayPath !== undefined && replayPath !== ':memory:' && existsSync(replayPath)) {
+      const { legacyImports } = await store.summary({ orphanHoldMinAgeMs: 0 });
+      if (!legacyImports.some((entry) => entry.source === 'ap2-replay')) {
+        // A hold update now would miss the mandates still in that file
+        throw new CommerceError(
+          'STORAGE_ERROR',
+          `the AP2 replay file "${resolve(replayPath)}" has not been imported into the receipt database yet. Run \`agent-commerce start\` once to import it, then retry.`,
+        );
+      }
+    }
+    const authorizationProviders = await createConfiguredAuthorizationProviders(
+      config.authorization,
+      logger,
+      store,
+    );
     try {
-      await store.init();
       await fn(store, authorizationProviders);
     } finally {
-      await store.close();
+      for (const provider of authorizationProviders) provider.close();
     }
   } finally {
-    for (const provider of authorizationProviders) provider.close();
+    await store.close();
   }
 }
 
@@ -148,11 +166,19 @@ function printReport(report: ReconcileReport, io: Io, json: boolean): void {
     unknown: count('unknown'),
     resolved: report.entries.filter((e) => e.written).length,
     holdsAligned: report.holds.filter((h) => h.written).length,
+    orphanHolds: report.orphanHolds.length,
+    orphanHoldsReleased: report.orphanHolds.filter((h) => h.released).length,
   };
   if (json) {
     io.stdout(
       JSON.stringify(
-        { dryRun: report.dryRun, counts, entries: report.entries, holds: report.holds },
+        {
+          dryRun: report.dryRun,
+          counts,
+          entries: report.entries,
+          holds: report.holds,
+          orphanHolds: report.orphanHolds,
+        },
         null,
         2,
       ),
@@ -165,6 +191,9 @@ function printReport(report: ReconcileReport, io: Io, json: boolean): void {
       `${counts.resolved} resolved` +
       (report.holds.length > 0
         ? `, ${counts.holdsAligned} of ${report.holds.length} holds aligned`
+        : '') +
+      (report.orphanHolds.length > 0
+        ? `, ${counts.orphanHoldsReleased} of ${report.orphanHolds.length} orphan holds released`
         : ''),
   );
   for (const entry of report.entries) {
@@ -193,6 +222,19 @@ function printReport(report: ReconcileReport, io: Io, json: boolean): void {
         `hold=${hold.hold}`,
         ...(hold.reason !== undefined ? [`reason=${hold.reason}`] : []),
         ...(hold.written ? ['aligned'] : []),
+      ].join(' '),
+    );
+  }
+  for (const hold of report.orphanHolds) {
+    io.stdout(
+      [
+        'ORPHAN'.padEnd(11),
+        hold.reference,
+        `request=${hold.requestId}`,
+        `method=${hold.method}`,
+        `updated=${hold.updatedAt}`,
+        ...(hold.reason !== undefined ? [`reason=${hold.reason}`] : []),
+        ...(hold.released ? ['released'] : []),
       ].join(' '),
     );
   }

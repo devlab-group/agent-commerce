@@ -124,6 +124,8 @@ describe('runReconcileCommand report', () => {
         unknown: 1,
         resolved: 0,
         holdsAligned: 0,
+        orphanHolds: 0,
+        orphanHoldsReleased: 0,
       },
       entries: [
         {
@@ -138,6 +140,7 @@ describe('runReconcileCommand report', () => {
         },
       ],
       holds: [],
+      orphanHolds: [],
     });
   });
 

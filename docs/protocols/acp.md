@@ -92,9 +92,13 @@ payment challenge, the adapter logs the broken deployment and returns a safe
 The ACP adapter contains no payment logic and never calls a merchant backend
 directly; it sends one canonical request through the pipeline. Its bearer token
 is used only for constant-time request authentication and is not written to the
-idempotency database, logs or responses.
+receipt database, logs or responses.
 
 ## Idempotency
+
+The configured gateway stores claims in the receipt database. To import a
+2.5 file, keep `idempotency.path` set when running 2.6.0 `start`; see
+[Deprecated store files](../configuration.md#deprecated-store-files).
 
 The adapter validates `Idempotency-Key` before reading a POST body. After body
 parsing, it claims the key before calling the merchant. The scope is
@@ -139,7 +143,7 @@ An in-flight row becomes completed, released or unresolved when the request
 finishes. A crash or a SQLite error while finalizing can leave it in-flight;
 the next gateway start marks it unresolved by default or frees it when
 `merchantIdempotent` is enabled. Startup logs the count. This assumes one
-gateway process per idempotency database file.
+gateway process per receipt database.
 
 Only completed records expire, after at least 24 hours. Unresolved records
 remain for operator reconciliation. This avoids rerunning an unknown remote
@@ -147,9 +151,9 @@ side effect but is not an exactly-once transaction across HTTP and SQLite.
 Expired completed rows are purged lazily when a later request claims a key;
 there is no background sweep.
 
-The schema-v1-to-v2 migration rebuilds the idempotency table empty because its
-bearer-token-scoped keys cannot be translated. If it drops non-completed rows,
-startup logs a warning that tells the operator to reconcile them with the
+Schema-v1 idempotency files used bearer-token scopes that cannot be
+translated to deployment scopes. Their rows are skipped. If any claims were
+not completed, startup logs a warning to reconcile those operations with the
 merchant before trusting a retry.
 
 For side-effecting ACP operations, the gateway sends the merchant a derived

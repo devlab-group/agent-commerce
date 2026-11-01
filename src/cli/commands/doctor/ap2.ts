@@ -50,12 +50,24 @@ export function ap2Checks(config: GatewayConfig | undefined): DoctorCheck[] {
       detail: `${describeIssuers('mandate', ap2.trust.mandateIssuers)} · ${describeIssuers('checkout', ap2.trust.checkoutIssuers)}`,
     });
 
+    // A configured legacy path is used for startup import and locking
     checks.push(
-      storeFileCheck('AP2 replay store', ap2.replay.path, {
-        inMemory:
-          'every spent mandate is forgotten on restart, so one could authorize a second purchase',
-        unwritable: 'no mandate could be recorded as spent',
-      }),
+      ap2.replay === undefined
+        ? {
+            name: 'AP2 replay store',
+            status: 'PASS',
+            detail: 'mandate holds in the receipt database',
+          }
+        : storeFileCheck(
+            'AP2 replay store',
+            ap2.replay.path,
+            {
+              inMemory:
+                'every spent mandate is forgotten on restart, so one could authorize a second purchase',
+              unwritable: 'the first start cannot lock the file to import it',
+            },
+            ' (deprecated key, imported at start)',
+          ),
     );
 
     // Resource ids, so an operator can see exactly which purchases now need a

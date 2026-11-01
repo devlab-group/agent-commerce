@@ -55,8 +55,11 @@ export type Ap2AuthorizationConfig =
        * present.
        */
       readonly requireMandateExpiry?: boolean;
-      /** Its own SQLite file. An authorization replay is not a payment replay */
-      readonly replay: { readonly path: string };
+      /**
+       * Legacy replay file for CLI import or a library provider's file fallback.
+       * @deprecated Use the receipt store; removal of this key is planned for 3.0.0.
+       */
+      readonly replay?: { readonly path: string };
     };
 
 /** The enabled half, which is all the verifier ever runs against */

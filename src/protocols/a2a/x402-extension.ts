@@ -10,7 +10,9 @@ import {
   type Clock,
   type CommerceError,
   type PaymentResult,
+  type PendingTask,
   parseAuthorizationSubmission,
+  type ReceiptStore,
 } from '../../core';
 import { isRecord } from '../../core/is-record';
 import {
@@ -62,11 +64,37 @@ export interface PendingPayment {
   readonly expiresAtMs: number;
 }
 
+// Use the requirement's expiry or the default TTL, capped at MAX_PENDING_TTL_MS
+function expiryMs(nowMs: number, expiresAt: string | undefined): number {
+  const requested = expiresAt !== undefined ? Date.parse(expiresAt) : Number.NaN;
+  const ttl = Number.isFinite(requested) ? requested - nowMs : DEFAULT_PENDING_TTL_MS;
+  return nowMs + Math.min(Math.max(ttl, 0), MAX_PENDING_TTL_MS);
+}
+
+type Awaitable<T> = T | Promise<T>;
+
 /**
- * Unpaid tasks, in memory and per process. A restart, or a payment routed to
- * another instance, loses the task: the client gets `TaskNotFoundError` before
- * anything is verified or settled, and starts over.
+ * Pending purchases use the supplied receipt store when it has the pending-task
+ * methods, or process memory otherwise. Memory tasks are lost on restart and
+ * are unavailable to other instances. Durable stored tasks can survive
+ * restarts until expiry. A missing task returns `TaskNotFoundError` before verification or
+ * settlement, so the client must start a new purchase.
  */
+export interface PendingPayments {
+  /** Holds a purchase until `expiresAt`; returns false, holding nothing, when full */
+  put(
+    taskId: string,
+    pending: Omit<PendingPayment, 'expiresAtMs'>,
+    expiresAt?: string,
+  ): Awaitable<boolean>;
+  get(taskId: string): Awaitable<PendingPayment | undefined>;
+  /** Removes and returns the task, so of concurrent calls only one gets it */
+  take(taskId: string): Awaitable<PendingPayment | undefined>;
+  /** Drops what this process holds; a store keeps its tasks and stays open */
+  clear(): void;
+}
+
+/** Unpaid tasks in a map, per process */
 export function createPendingPayments(clock: Clock, maxEntries = MAX_PENDING_PAYMENTS) {
   const tasks = new Map<string, PendingPayment>();
   const now = (): number => clock.now().getTime();
@@ -78,30 +106,30 @@ export function createPendingPayments(clock: Clock, maxEntries = MAX_PENDING_PAY
     }
   }
 
+  function get(taskId: string): PendingPayment | undefined {
+    const pending = tasks.get(taskId);
+    if (pending === undefined) return undefined;
+    if (pending.expiresAtMs <= now()) {
+      tasks.delete(taskId);
+      return undefined;
+    }
+    return pending;
+  }
+
   return {
-    /** Holds a purchase until `expiresAt`; returns false, holding nothing, when full */
     put(taskId: string, pending: Omit<PendingPayment, 'expiresAtMs'>, expiresAt?: string): boolean {
       purgeExpired();
       if (tasks.size >= maxEntries) return false;
-      const requested = expiresAt !== undefined ? Date.parse(expiresAt) : Number.NaN;
-      const ttl = Number.isFinite(requested) ? requested - now() : DEFAULT_PENDING_TTL_MS;
-      const expiresAtMs = now() + Math.min(Math.max(ttl, 0), MAX_PENDING_TTL_MS);
-      tasks.set(taskId, { ...pending, expiresAtMs });
+      tasks.set(taskId, { ...pending, expiresAtMs: expiryMs(now(), expiresAt) });
       return true;
     },
 
-    get(taskId: string): PendingPayment | undefined {
-      const pending = tasks.get(taskId);
-      if (pending === undefined) return undefined;
-      if (pending.expiresAtMs <= now()) {
-        tasks.delete(taskId);
-        return undefined;
-      }
-      return pending;
-    },
+    get,
 
-    delete(taskId: string): void {
+    take(taskId: string): PendingPayment | undefined {
+      const pending = get(taskId);
       tasks.delete(taskId);
+      return pending;
     },
 
     size(): number {
@@ -114,7 +142,105 @@ export function createPendingPayments(clock: Clock, maxEntries = MAX_PENDING_PAY
   };
 }
 
-export type PendingPayments = ReturnType<typeof createPendingPayments>;
+type PendingTaskStore = Required<
+  Pick<ReceiptStore, 'putPendingTask' | 'getPendingTask' | 'takePendingTask'>
+>;
+
+/** A store holds pending tasks only if it implements the whole group */
+export function holdsPendingTasks(
+  store: ReceiptStore | undefined,
+): store is ReceiptStore & PendingTaskStore {
+  return (
+    store !== undefined &&
+    typeof store.putPendingTask === 'function' &&
+    typeof store.getPendingTask === 'function' &&
+    typeof store.takePendingTask === 'function'
+  );
+}
+
+/**
+ * Store unpaid tasks while keeping their parsed AP2 mandates in process memory.
+ * The stored task omits the authorization field. After a restart, a resource
+ * requiring a mandate needs it again in the payment message.
+ */
+export function createStoredPendingPayments(
+  store: PendingTaskStore,
+  clock: Clock,
+  maxTasks = MAX_PENDING_PAYMENTS,
+): PendingPayments {
+  const mandates = new Map<
+    string,
+    { readonly authorization: AuthorizationSubmission; readonly expiresAtMs: number }
+  >();
+  const now = (): number => clock.now().getTime();
+
+  function purgeExpired(): void {
+    const at = now();
+    for (const [taskId, held] of mandates) {
+      if (held.expiresAtMs <= at) mandates.delete(taskId);
+    }
+  }
+
+  function toPending(task: PendingTask): PendingPayment | undefined {
+    const { contextId, network } = task.adapterData ?? {};
+    // Another adapter's task, or one this adapter did not write
+    if (task.protocol !== 'a2a' || typeof contextId !== 'string') return undefined;
+    purgeExpired();
+    const authorization = mandates.get(task.id)?.authorization;
+    return {
+      contextId,
+      resourceId: task.resourceId,
+      input: task.input,
+      ...(authorization !== undefined ? { authorization } : {}),
+      ...(typeof network === 'string' ? { network } : {}),
+      expiresAtMs: Date.parse(task.expiresAt),
+    };
+  }
+
+  return {
+    async put(taskId, pending, expiresAt) {
+      const expiresAtMs = expiryMs(now(), expiresAt);
+      const held = await store.putPendingTask(
+        {
+          id: taskId,
+          protocol: 'a2a',
+          resourceId: pending.resourceId,
+          input: pending.input,
+          adapterData: {
+            contextId: pending.contextId,
+            ...(pending.network !== undefined ? { network: pending.network } : {}),
+          },
+          expiresAt: new Date(expiresAtMs).toISOString(),
+        },
+        { maxTasks },
+      );
+      purgeExpired();
+      mandates.delete(taskId);
+      if (held && pending.authorization !== undefined) {
+        mandates.set(taskId, { authorization: pending.authorization, expiresAtMs });
+      }
+      return held;
+    },
+
+    async get(taskId) {
+      const task = await store.getPendingTask(taskId);
+      return task !== undefined ? toPending(task) : undefined;
+    },
+
+    async take(taskId) {
+      const task = await store.takePendingTask(taskId);
+      // A call that lost the race leaves the winner's mandate alone
+      if (task === undefined) return undefined;
+      const pending = toPending(task);
+      mandates.delete(taskId);
+      return pending;
+    },
+
+    clear() {
+      mandates.clear();
+    },
+  };
+}
 
 /** What a follow-up message on a pending task asks for */
 export type PaymentSubmissionMessage =

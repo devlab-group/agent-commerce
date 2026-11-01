@@ -33,6 +33,17 @@ required in 3.0.0. Custom stores will need to implement:
   `listOrphanAuthorizationHolds`.
 - Pending tasks: `putPendingTask`, `getPendingTask` and `takePendingTask`.
 
+The 3.0.0 plan removes these store settings deprecated in 2.6.0:
+
+- `authorization.ap2.replay.path` and `protocols.acp.idempotency.path`.
+  Import these files by starting 2.6.x with the keys still set, then remove
+  each key after its import succeeds. The 3.0.0 plan includes no import for
+  these files. See
+  [Deprecated store files](configuration.md#deprecated-store-files).
+- `Ap2AuthorizationProviderOptions.replayStore` and
+  `AcpAdapterOptions.idempotency.path`. Pass `store` with a `ReceiptStore`
+  that implements the authorization-hold or idempotency methods.
+
 ## Envelopes
 
 2.1.0 deprecated `destination`, `network` and `asset` in

@@ -6,7 +6,9 @@ import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:
 import * as nodeModule from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import Database from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
+import { A2A_X402_EXTENSION_URI } from '../../../src/protocols/a2a/x402-extension';
 
 const RPC_KEY = 'RPC-KEY-IN-PATH';
 // Nothing listens on port 1, so no provider reaches a chain
@@ -71,7 +73,7 @@ function baseConfig(dir: string): RawConfig {
   };
 }
 
-function ap2Block(dir: string) {
+function ap2Block() {
   const issuer = (name: string, audience: string, kid: string) => ({
     issuer: name,
     audience,
@@ -80,7 +82,6 @@ function ap2Block(dir: string) {
   return {
     ap2: {
       enabled: true,
-      replay: { path: join(dir, 'ap2.sqlite') },
       trust: {
         mandateIssuers: [issuer('https://trusted-surface.example', 'merchant.example', 'm-1')],
         checkoutIssuers: [issuer('https://merchant.example', 'agent-commerce', 'c-1')],
@@ -117,14 +118,13 @@ function acpResource(keys: readonly string[], optional: readonly string[] = []) 
   };
 }
 
-// Every protocol, both rails and AP2, with each store in `dir`
+// Configure every protocol, both payment rails and AP2 with one receipt database
 function fullConfig(dir: string) {
   const config = baseConfig(dir);
   config.protocols['a2a'] = { enabled: true, mountPath: '/a2a' };
   config.protocols['acp'] = {
     enabled: true,
     auth: { type: 'bearer', token: 'acp-token' },
-    idempotency: { path: join(dir, 'acp.sqlite') },
     checkout: {
       operations: {
         createCheckoutSession: 'acp_create',
@@ -158,7 +158,7 @@ function fullConfig(dir: string) {
     challengeSecret: 'mpp-challenge-secret-'.padEnd(32, 'x'),
     facilitator: { mode: 'local', signerPrivateKey: MPP_SIGNER },
   };
-  config['authorization'] = ap2Block(dir);
+  config['authorization'] = ap2Block();
   return config;
 }
 
@@ -289,10 +289,41 @@ describe.concurrent('gateway entry points (main.ts and agent-commerce start)', (
 
       const ready = (await (await fetch(`${gateway.url()}/ready`)).json()) as Record<
         string,
-        { name: string }[]
+        { name: string; status: string }[]
       >;
       const names = (key: string) => (ready[key] ?? []).map((check) => check.name).sort();
       expect(names('adapters')).toEqual(['a2a', 'acp', 'mcp']);
+      // ACP refuses to start with neither a receipt store nor a file
+      expect((ready['adapters'] ?? []).map((check) => check.status)).toEqual([
+        'pass',
+        'pass',
+        'pass',
+      ]);
+
+      // An x402 extension task waits for payment in the receipt database
+      const sent = await fetch(`${gateway.url()}/a2a`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'a2a-version': '1.0',
+          'a2a-extensions': A2A_X402_EXTENSION_URI,
+        },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 'req-1',
+          method: 'SendMessage',
+          params: {
+            message: {
+              role: 'ROLE_USER',
+              messageId: 'msg-buy',
+              parts: [{ data: { resource: 'market_report', input: {} } }],
+            },
+          },
+        }),
+      });
+      const task = ((await sent.json()) as { result?: { task?: { status: { state: string } } } })
+        .result?.task;
+      expect(task?.status.state).toBe('TASK_STATE_INPUT_REQUIRED');
       expect(names('paymentProviders')).toEqual(['mpp', 'x402']);
       expect(names('authorizationProviders')).toEqual(['ap2']);
 
@@ -312,6 +343,12 @@ describe.concurrent('gateway entry points (main.ts and agent-commerce start)', (
 
       gateway.child.kill('SIGINT');
       expect(await gateway.exited).toBe(0);
+      const db = new Database(join(dir, 'receipts.sqlite'), { readonly: true });
+      try {
+        expect(db.prepare('SELECT COUNT(*) AS n FROM pending_tasks').get()).toEqual({ n: 1 });
+      } finally {
+        db.close();
+      }
     } finally {
       gateway.stop();
       rmSync(dir, { recursive: true, force: true });
@@ -397,7 +434,7 @@ describe.concurrent('gateway entry points (main.ts and agent-commerce start)', (
       [
         'authorization.ap2',
         'jose',
-        (dir: string) => ({ ...baseConfig(dir), authorization: ap2Block(dir) }),
+        (dir: string) => ({ ...baseConfig(dir), authorization: ap2Block() }),
       ],
       ['protocols.mcp', '@modelcontextprotocol/server', baseConfig],
     ])(
@@ -422,31 +459,38 @@ describe.concurrent('gateway entry points (main.ts and agent-commerce start)', (
   });
 
   describe.skipIf(RUNS_AS_ROOT)('a store that cannot be written', () => {
-    it.each([
-      ['the receipt store', (dir: string) => baseConfig(dir), 'receipts.sqlite'],
-      [
-        'the AP2 replay store',
-        (dir: string) => ({ ...baseConfig(dir), authorization: ap2Block(dir) }),
-        'ap2.sqlite',
-      ],
-    ])(
-      'stops startup when %s is read-only',
-      async (_label, config, file) => {
-        const dir = tempDir();
-        writeFileSync(join(dir, file), '');
-        chmodSync(join(dir, file), 0o400);
-        const gateway = startMain(dir, config(dir));
-        try {
-          expect(await gateway.exited).toBe(1);
-          expect(gateway.output.stderr).toContain('STORAGE_ERROR');
-          expect(gateway.output.stderr).toContain(`${file}" exists but is not writable`);
-          expect(gateway.output.stdout).not.toContain('gateway listening');
-        } finally {
-          gateway.stop();
-          rmSync(dir, { recursive: true, force: true });
-        }
-      },
-      30_000,
-    );
+    it('stops startup when the receipt store is read-only', async () => {
+      const dir = tempDir();
+      writeFileSync(join(dir, 'receipts.sqlite'), '');
+      chmodSync(join(dir, 'receipts.sqlite'), 0o400);
+      const gateway = startMain(dir, baseConfig(dir));
+      try {
+        expect(await gateway.exited).toBe(1);
+        expect(gateway.output.stderr).toContain('STORAGE_ERROR');
+        expect(gateway.output.stderr).toContain('receipts.sqlite" exists but is not writable');
+        expect(gateway.output.stdout).not.toContain('gateway listening');
+      } finally {
+        gateway.stop();
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }, 30_000);
+
+    // The deprecated file supplies legacy rows; startup locks it while the
+    // receipt store holds the imported mandates
+    it('starts with a read-only deprecated AP2 replay file and records its import', async () => {
+      const dir = tempDir();
+      writeFileSync(join(dir, 'ap2.sqlite'), '');
+      chmodSync(join(dir, 'ap2.sqlite'), 0o400);
+      const replay = { path: join(dir, 'ap2.sqlite') };
+      const authorization = { ap2: { ...ap2Block().ap2, replay } };
+      const gateway = startMain(dir, { ...baseConfig(dir), authorization });
+      try {
+        await gateway.printed('"gateway listening"', 'imported deprecated store file');
+        expect(gateway.output.stderr).toContain('authorization.ap2.replay.path is deprecated');
+      } finally {
+        gateway.stop();
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }, 30_000);
   });
 });

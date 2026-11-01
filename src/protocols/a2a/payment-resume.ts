@@ -1,5 +1,5 @@
 // Completing a purchase that waits for an x402 extension payment, from the follow-up message that pays or declines it
-import type { CanonicalRequest, ProtocolAdapterContext } from '../../core';
+import type { AuthorizationSubmission, CanonicalRequest, ProtocolAdapterContext } from '../../core';
 import { CommerceError, toCommerceError } from '../../core';
 import { toLogInfo } from '../../core/errors';
 import { isRecord } from '../../core/is-record';
@@ -39,7 +39,7 @@ export async function resumePayment(
   const message = isRecord(params) ? params['message'] : undefined;
   const taskId = isRecord(message) ? message['taskId'] : undefined;
   if (context === undefined || typeof taskId !== 'string') return undefined;
-  const pending = pendingPayments?.get(taskId);
+  const pending = await pendingPayments?.get(taskId);
   if (pending === undefined) return undefined;
 
   const messageId = isRecord(message) ? message['messageId'] : undefined;
@@ -63,23 +63,26 @@ export async function resumePayment(
       `For a pending task, set "${X402_PAYMENT_STATUS_KEY}" to "payment-submitted" and provide a "${X402_PAYMENT_PAYLOAD_KEY}" object, or set it to "payment-rejected".`,
     );
   }
-  // A mandate stored with the purchase wins. One sent here is verified
-  // against the stored resource and input, like the payment.
-  let authorization = pending.authorization;
-  if (authorization === undefined && submission.kind === 'submitted') {
+  // An in-memory mandate kept with the purchase takes precedence. A follow-up
+  // mandate is checked against the saved resource and input.
+  let followUp: AuthorizationSubmission | undefined;
+  if (pending.authorization === undefined && submission.kind === 'submitted') {
     try {
-      authorization = readFollowUpAuthorization(message);
+      followUp = readFollowUpAuthorization(message);
     } catch (err) {
       return jsonRpcError(id, JSONRPC_INVALID_PARAMS, toCommerceError(err).message);
     }
   }
-  // Taken before execution, so a second payment message for the task finds
-  // nothing and cannot run the purchase twice
-  pendingPayments?.delete(taskId);
+  // Take only after message validation and before execution. The earlier
+  // read did not claim the task; a competing message that loses this take
+  // follows the unknown-task path.
+  const taken = await pendingPayments?.take(taskId);
+  if (taken === undefined) return undefined;
+  const authorization = taken.authorization ?? followUp;
   const statusMessageId = context.ids.next('a2a-msg');
   const identity: TaskIdentity = {
     taskId,
-    contextId: pending.contextId,
+    contextId: taken.contextId,
     artifactId: context.ids.next('a2a-artifact'),
     statusMessageId,
     timestamp: context.clock.nowIso(),
@@ -88,7 +91,7 @@ export async function resumePayment(
   if (submission.kind === 'rejected') {
     const declined: A2aTask = {
       id: taskId,
-      contextId: pending.contextId,
+      contextId: taken.contextId,
       status: { state: A2A_TASK_STATE_FAILED, timestamp: identity.timestamp },
       artifacts: [],
     };
@@ -106,7 +109,7 @@ export async function resumePayment(
     id,
     await payPending(
       context,
-      { ...pending, ...(authorization !== undefined ? { authorization } : {}) },
+      { ...taken, ...(authorization !== undefined ? { authorization } : {}) },
       submission.payload,
       identity,
     ),

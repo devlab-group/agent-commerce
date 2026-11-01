@@ -122,16 +122,23 @@ export function protocolChecks(
       detail: `bearer token configured (${acp.auth.token.length} characters, not shown)`,
     });
 
+    // A configured legacy path is used for startup import and locking
     checks.push(
-      storeFileCheck(
-        'ACP idempotency',
-        acp.idempotency.path,
-        {
-          inMemory: 'replay protection is lost on every restart',
-          unwritable: 'the adapter cannot claim idempotency keys',
-        },
-        ` (retention ${acp.idempotency.retentionHours}h)`,
-      ),
+      acp.idempotency.path === undefined
+        ? {
+            name: 'ACP idempotency',
+            status: 'PASS',
+            detail: `claims in the receipt database (retention ${acp.idempotency.retentionHours}h)`,
+          }
+        : storeFileCheck(
+            'ACP idempotency',
+            acp.idempotency.path,
+            {
+              inMemory: 'replay protection is lost on every restart',
+              unwritable: 'the first start cannot lock the file to import it',
+            },
+            ` (retention ${acp.idempotency.retentionHours}h; deprecated key, imported at start)`,
+          ),
     );
     checks.push(acpMappingCheck(config, acp.checkout.operations));
 

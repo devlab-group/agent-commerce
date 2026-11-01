@@ -4,7 +4,10 @@
  * for each kind of failure, the reservation lifecycle, and a health probe that
  * tells the truth about a store it cannot read.
  */
-import { beforeAll, describe, expect, it } from 'vitest';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { AP2_CHECKOUT_PROFILE, AP2_SPEC_VERSION } from '../../../src/authorization/ap2/constants';
 import { AP2_UNSUPPORTED } from '../../../src/authorization/ap2/descriptor';
 import { computeInputHash } from '../../../src/authorization/ap2/profile';
@@ -17,8 +20,13 @@ import {
   createAp2ReplayStore,
 } from '../../../src/authorization/ap2/replay-store';
 import type { EnabledAp2Config } from '../../../src/authorization/ap2/types';
-import type { AuthorizationVerificationContext, PaymentRequirement } from '../../../src/core';
+import type {
+  AuthorizationVerificationContext,
+  PaymentRequirement,
+  ReceiptStore,
+} from '../../../src/core';
 import { isCommerceError } from '../../../src/core';
+import { createSqliteReceiptStore, type SqliteReceiptStore } from '../../../src/storage/receipts';
 import {
   checkoutPayload,
   createParties,
@@ -398,6 +406,183 @@ describe('createAp2AuthorizationProvider', () => {
       expect(health.detail).toBe('replay-store-unavailable');
       provider.close();
     });
+  });
+});
+
+describe('createAp2AuthorizationProvider on the receipt store', () => {
+  let dir: string;
+  let store: SqliteReceiptStore;
+  const finalize = { requestId: 'req-1', resourceId: RESOURCE_ID };
+
+  beforeEach(async () => {
+    dir = mkdtempSync(join(tmpdir(), 'ap2-provider-store-'));
+    store = createSqliteReceiptStore({ path: ':memory:' });
+    await store.init();
+  });
+
+  afterEach(async () => {
+    await store.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const onStore = (target: ReceiptStore = store, overrides: Partial<EnabledAp2Config> = {}) =>
+    createAp2AuthorizationProvider({
+      config: config(overrides),
+      clock: fixedClock(),
+      store: target,
+    });
+
+  it('moves a hold to consumed, released or uncertain, and refuses a second presentation', async () => {
+    for (const [action, expected] of [
+      ['consume', 'consumed'],
+      ['release', 'released'],
+      ['markUncertain', 'uncertain'],
+    ] as const) {
+      await store.close();
+      store = createSqliteReceiptStore({ path: ':memory:' });
+      await store.init();
+      const provider = onStore();
+      const presentation = await validMandate();
+      const verification = await provider.verifyAndReserve(context(presentation));
+      expect(await store.getAuthorizationHoldState(verification.reference)).toBe('reserved');
+      expect(await codeOf(() => provider.verifyAndReserve(context(presentation, 'req-2')))).toBe(
+        'AUTHORIZATION_REPLAYED',
+      );
+
+      await provider[action](verification.reservationId, finalize);
+
+      expect(await store.getAuthorizationHoldState(verification.reference)).toBe(expected);
+      provider.close();
+    }
+  });
+
+  it('stores the binding and the two issuers, and nothing from the mandate', async () => {
+    const provider = onStore();
+    const presentation = await validMandate();
+    const verification = await provider.verifyAndReserve(context(presentation));
+
+    const [hold] = await store.listOrphanAuthorizationHolds({
+      updatedBefore: '2100-01-01T00:00:00.000Z',
+    });
+    expect(hold).toMatchObject({
+      method: 'ap2',
+      reference: verification.reference,
+      bindingReference: 'checkout_01KTEST',
+      resourceId: RESOURCE_ID,
+      requestId: 'req-1',
+      metadata: {
+        mandateIssuer: 'https://trusted-surface.example',
+        checkoutIssuer: 'https://merchant.example',
+      },
+    });
+    expect(Object.keys(hold?.metadata ?? {})).toEqual(['mandateIssuer', 'checkoutIssuer']);
+    expect(JSON.stringify(hold)).not.toContain(presentation);
+    provider.close();
+  });
+
+  it('frees a released mandate for a retry, and a late release cannot free the new holder', async () => {
+    const provider = onStore();
+    const presentation = await validMandate();
+    const first = await provider.verifyAndReserve(context(presentation));
+    await provider.release(first.reservationId, finalize);
+    await provider.verifyAndReserve(context(presentation, 'req-2'));
+
+    await provider.release(first.reservationId, finalize);
+    expect(await store.getAuthorizationHoldState(first.reference)).toBe('reserved');
+    await provider.consume(first.reservationId, { requestId: 'req-2', resourceId: RESOURCE_ID });
+    expect(await store.getAuthorizationHoldState(first.reference)).toBe('consumed');
+    provider.close();
+  });
+
+  it('reports a release of a consumed hold as unavailable, leaving it consumed', async () => {
+    const provider = onStore();
+    const first = await provider.verifyAndReserve(context(await validMandate()));
+    await provider.consume(first.reservationId, finalize);
+
+    expect(await codeOf(() => provider.release(first.reservationId, finalize))).toBe(
+      'AUTHORIZATION_PROVIDER_UNAVAILABLE',
+    );
+    expect(await store.getAuthorizationHoldState(first.reference)).toBe('consumed');
+    provider.close();
+  });
+
+  it('reports a store that throws as unavailable, on reserve, finalize and health', async () => {
+    const boom = async (): Promise<never> => {
+      throw new Error('sqlite: disk I/O error');
+    };
+    const broken: ReceiptStore = {
+      ...store,
+      reserveAuthorizationHold: boom,
+      transitionAuthorizationHold: boom,
+      getAuthorizationHoldState: boom,
+      listOrphanAuthorizationHolds: boom,
+    };
+    const provider = onStore(broken);
+
+    expect(await codeOf(() => provider.verifyAndReserve(context('ignored')))).toBe(
+      'AUTHORIZATION_INVALID',
+    );
+    expect(await codeOf(async () => provider.verifyAndReserve(context(await validMandate())))).toBe(
+      'AUTHORIZATION_PROVIDER_UNAVAILABLE',
+    );
+    expect(await codeOf(() => provider.consume('sha256:x', finalize))).toBe(
+      'AUTHORIZATION_PROVIDER_UNAVAILABLE',
+    );
+    expect(await provider.health()).toMatchObject({
+      status: 'fail',
+      detail: 'replay-store-unavailable',
+    });
+    provider.close();
+  });
+
+  it('leaves the shared store open when it closes', async () => {
+    const provider = onStore();
+    const verification = await provider.verifyAndReserve(context(await validMandate()));
+
+    provider.close();
+
+    expect(await store.getAuthorizationHoldState(verification.reference)).toBe('reserved');
+  });
+
+  it('prefers the store to a configured file, which it never creates', async () => {
+    const path = join(dir, 'replay.sqlite');
+    const provider = onStore(store, { replay: { path } });
+
+    await provider.verifyAndReserve(context(await validMandate()));
+
+    expect(existsSync(path)).toBe(false);
+    provider.close();
+  });
+
+  it('prefers an injected replayStore to the store', async () => {
+    const replay = createAp2ReplayStore({ path: ':memory:' });
+    const provider = createAp2AuthorizationProvider({
+      config: config(),
+      clock: fixedClock(),
+      store,
+      replayStore: replay,
+    });
+
+    const verification = await provider.verifyAndReserve(context(await validMandate()));
+
+    expect(replay.stateOf(verification.reference)).toBe('reserved');
+    expect(await store.getAuthorizationHoldState(verification.reference)).toBeUndefined();
+    provider.close();
+  });
+
+  it('falls back to the file when the store has no hold methods, and needs one or the other', async () => {
+    const path = join(dir, 'replay.sqlite');
+    // A 2.5-shaped store: the hold group is absent
+    const { reserveAuthorizationHold: _drop, ...bare } = store;
+    const provider = onStore(bare, { replay: { path } });
+    await provider.verifyAndReserve(context(await validMandate()));
+    expect(existsSync(path)).toBe(true);
+    provider.close();
+
+    const { replay: _, ...noReplay } = config();
+    expect(() =>
+      createAp2AuthorizationProvider({ config: noReplay, clock: fixedClock(), store: bare }),
+    ).toThrow(expect.objectContaining({ code: 'CONFIG_INVALID' }));
   });
 });
 

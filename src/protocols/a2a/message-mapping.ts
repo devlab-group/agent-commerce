@@ -91,14 +91,15 @@ function unsupported(message: string, a2aErrorCode?: number): CommerceError {
 /**
  * Continuation is refused rather than ignored: a caller resuming a task would
  * otherwise get a fresh, independently billed execution back and no signal
- * that their task id meant nothing here. Since this adapter stores no tasks,
- * it returns `TaskNotFoundError` for every supplied task id.
+ * that their task id meant nothing here. Pending payments are handled before
+ * this check. Unknown or expired task IDs, and competing messages that lost
+ * the task, receive `TaskNotFoundError`.
  */
 function assertNoContinuation(params: z.infer<typeof ParamsSchema>): void {
   const message = params.message;
   if (params.taskId !== undefined || message.taskId !== undefined) {
     throw unsupported(
-      'Task not found: tasks are not persisted, so send a request with no taskId.',
+      'Task not found: only a task waiting for payment can be continued, so send a request with no taskId.',
       A2A_ERROR_TASK_NOT_FOUND,
     );
   }

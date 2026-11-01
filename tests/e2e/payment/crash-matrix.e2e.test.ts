@@ -2,7 +2,7 @@
  * Crash recovery for x402 purchases on local Anvil, including AP2 holds.
  *
  * In-process cases block intercepted store, AP2 and backend calls at selected
- * boundaries, then reopen the databases behind a new gateway. Cleanup calls
+ * boundaries, then reopen the receipt database behind a new gateway. Cleanup calls
  * remain available. The tests inspect operator state and run
  * `agent-commerce reconcile` with finalized chain time at the recorded expiry.
  * A repeat run must leave table rows unchanged and make no facilitator calls.
@@ -13,7 +13,7 @@
  * Other cases inject write failures without simulating a crash.
  */
 import { spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createTestClient, http } from 'viem';
@@ -21,7 +21,6 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { createAp2AuthorizationProvider } from '../../../src/authorization/ap2';
 import { AP2_CHECKOUT_PROFILE } from '../../../src/authorization/ap2/constants';
 import { computeInputHash } from '../../../src/authorization/ap2/profile';
-import { createAp2ReplayStore } from '../../../src/authorization/ap2/replay-store';
 import { runReconcileCommand } from '../../../src/cli/commands/reconcile';
 import { type GatewayConfig, parseConfig } from '../../../src/config';
 import {
@@ -159,7 +158,6 @@ function rawConfig(
                 checkoutIssuers: issuers(parties.checkoutIssuers),
               },
               clockSkewSeconds: 60,
-              replay: { path: join(dir, 'ap2.sqlite') },
             },
           },
         }
@@ -171,7 +169,6 @@ interface Env {
   readonly dir: string;
   readonly config: GatewayConfig;
   readonly receipts: string;
-  readonly replay: string;
   // In front of the facilitator, and between the facilitator and the chain
   readonly front: HoldingProxy;
   readonly rpc: HoldingProxy;
@@ -199,7 +196,6 @@ async function stack(options: { ap2: boolean } = { ap2: true }): Promise<Env> {
     dir,
     config: parseConfig(raw, {}),
     receipts: join(dir, 'receipts.sqlite'),
-    replay: join(dir, 'ap2.sqlite'),
     front,
     rpc,
     facilitator,
@@ -286,7 +282,12 @@ async function startGateway(
 ): Promise<Gateway> {
   const store = createSqliteReceiptStore({ path: env.receipts, logger: NOOP_LOGGER });
   await store.init();
-  const ap2 = createAp2AuthorizationProvider({ config: ap2Of(env.config), clock: fixedClock() });
+  // The unwrapped store: AP2 hold calls are frozen or failed through `wrap.ap2`
+  const ap2 = createAp2AuthorizationProvider({
+    config: ap2Of(env.config),
+    clock: fixedClock(),
+    store,
+  });
   const identity: Wrap = (target) => target;
   const gateway = await createGateway({
     config: env.config,
@@ -421,12 +422,13 @@ async function operatorView(env: Env, offsetMs = 0): Promise<View> {
   }
 }
 
-function replayState(env: Env, reference: string) {
-  const replay = createAp2ReplayStore({ path: env.replay });
+async function holdState(env: Env, reference: string) {
+  const store = createSqliteReceiptStore({ path: env.receipts, logger: NOOP_LOGGER });
+  await store.init();
   try {
-    return replay.stateOf(reference);
+    return await store.getAuthorizationHoldState?.(reference);
   } finally {
-    replay.close();
+    await store.close();
   }
 }
 
@@ -465,12 +467,11 @@ async function reconcileAt(env: Env, timestamp: bigint): Promise<ReconcileJson> 
     await testClient().mine({ blocks: FINALITY_BLOCKS });
     const facilitatorCalls = env.facilitator.requests.length;
     const first = await reconcile(env);
-    const databases = [env.receipts, env.replay].filter((path) => existsSync(path));
-    const written = databases.map(dumpTables);
+    const written = dumpTables(env.receipts);
     const second = await reconcile(env);
     expect(second.entries.filter((entry) => entry.written)).toEqual([]);
     expect(second.holds.filter((hold) => hold.written)).toEqual([]);
-    expect(databases.map(dumpTables)).toEqual(written);
+    expect(dumpTables(env.receipts)).toEqual(written);
     expect(env.facilitator.requests).toHaveLength(facilitatorCalls);
     return first;
   } finally {
@@ -684,7 +685,7 @@ describe('crash matrix: restart, operator view and reconcile', () => {
     const reference = now.transaction.authorization?.reservationId ?? '';
     const hold = c.paid ? 'consumed' : 'reserved';
     expect(now.transaction.authorization?.hold).toBe(hold);
-    expect(replayState(env, reference)).toBe(hold);
+    expect(await holdState(env, reference)).toBe(hold);
     expect((await operatorView(env, PAST_DEADLINE_MS)).transaction.state).toBe(c.restart[1]);
 
     const report = await reconcileAt(env, expirySeconds(now.transaction));
@@ -696,7 +697,7 @@ describe('crash matrix: restart, operator view and reconcile', () => {
     if (c.verdict === undefined) {
       expect(report).toMatchObject({ entries: [], holds: [] });
       expect(after.transaction.authorization?.hold).toBe(hold);
-      expect(replayState(env, reference)).toBe(hold);
+      expect(await holdState(env, reference)).toBe(hold);
       return;
     }
     const settled = c.verdict === 'settled';
@@ -715,7 +716,7 @@ describe('crash matrix: restart, operator view and reconcile', () => {
       resolution: { method: 'reconcile', actor: 'crash-e2e' },
     });
     expect(after.transaction.authorization?.hold).toBe(target);
-    expect(replayState(env, reference)).toBe(target);
+    expect(await holdState(env, reference)).toBe(target);
   });
 });
 
@@ -798,7 +799,7 @@ describe('an AP2 hold write failure without a crash', () => {
       authorization: { hold: 'reserved' },
     });
     const reference = view.transaction.authorization?.reservationId ?? '';
-    expect(replayState(env, reference)).toBe('reserved');
+    expect(await holdState(env, reference)).toBe('reserved');
 
     const report = await reconcileAt(env, expirySeconds(view.transaction));
 
@@ -806,7 +807,7 @@ describe('an AP2 hold write failure without a crash', () => {
       entries: [],
       holds: [expect.objectContaining({ hold: 'consumed', written: true })],
     });
-    expect(replayState(env, reference)).toBe('consumed');
+    expect(await holdState(env, reference)).toBe('consumed');
     expect((await operatorView(env)).transaction.authorization?.hold).toBe('consumed');
   });
 });

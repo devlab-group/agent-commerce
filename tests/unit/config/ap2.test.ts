@@ -7,7 +7,7 @@
  * key that turns out to be malformed only once a buyer presents a valid
  * mandate.
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { parseConfig } from '../../../src/config/schema';
 import { isCommerceError } from '../../../src/core';
 import { validRawConfig } from './fixtures';
@@ -127,11 +127,28 @@ describe('authorization.ap2 trust policy', () => {
     expect(expectRejected(withAp2(override))).toContain(hint);
   });
 
-  it('rejects an enabled block with no replay store', () => {
+  // The receipt store holds mandate holds from 2.6.0
+  it('accepts an enabled block with no replay key, and sets none', () => {
     const raw = withAp2();
     const ap2 = (raw['authorization'] as { ap2: Record<string, unknown> }).ap2;
     delete ap2['replay'];
-    expect(expectRejected(raw)).toContain('replay');
+    const config = parseConfig(raw, {}).authorization?.ap2;
+    if (config?.enabled !== true) return expect.unreachable();
+    expect(config.replay).toBeUndefined();
+  });
+
+  it('warns that a replay key is deprecated, and keeps its path for the import', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const config = parseConfig(withAp2(), {}).authorization?.ap2;
+      if (config?.enabled !== true) return expect.unreachable();
+      expect(config.replay?.path).toEqual(expect.any(String));
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('authorization.ap2.replay.path is deprecated'),
+      );
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it.each([

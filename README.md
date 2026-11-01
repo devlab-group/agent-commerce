@@ -536,10 +536,14 @@ sandbox. Public-network validation is pending. EVM and NEAR can report
 
 With `authorization.ap2` enabled, reconciliation also updates AP2 holds on
 resolved payments: `settled` consumes the mandate; `rejected` releases it.
-It opens the AP2 replay database for these updates without verifying mandates.
+It updates holds in the receipt database without verifying mandates.
 The report's `holds` list (`--json`) covers pending holds whose payments are
-resolved in the database. Dry runs report those holds without writing
-resolutions or hold changes. Both databases are still opened and initialized.
+resolved in the database. It also attempts to release `reserved` holds older
+than `--min-age` whose request has no current or archived payment attempt.
+The pipeline reserves an attempt before calling settlement. Scanned orphan
+holds appear in `orphanHolds`; dry runs list at most one page of them.
+Dry runs write no resolutions or hold changes, but still open and initialize
+the database.
 Later runs can retry holds left pending after earlier payment resolutions,
 including those recorded by `resolve` while AP2 was disabled.
 

@@ -26,7 +26,11 @@ export type AcpProtocolConfig =
       readonly mountPath: string;
       readonly auth: { readonly type: 'bearer'; readonly token: string };
       readonly idempotency: {
-        readonly path: string;
+        /**
+         * Legacy file for CLI import or an ACP adapter's file fallback.
+         * @deprecated Use the receipt store; removal of this key is planned for 3.0.0.
+         */
+        readonly path?: string;
         readonly retentionHours: number;
         readonly merchantIdempotent: boolean;
       };

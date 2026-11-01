@@ -15,11 +15,13 @@ import {
   type AdapterDescriptor,
   type AdapterHealth,
   type AdapterHttpRoute,
+  type Clock,
   CommerceError,
   type CommerceResource,
   type DeliveredOutcome,
   type HttpProtocolAdapter,
   type ProtocolAdapterContext,
+  type ReceiptStore,
   toCommerceError,
 } from '../../core';
 import { toLogInfo } from '../../core/errors';
@@ -46,9 +48,12 @@ import {
 } from './errors';
 import { operationKey, requestFingerprint } from './idempotency/fingerprint';
 import {
+  type AcpIdempotencyClaim,
   type AcpIdempotencyScope,
   type AcpIdempotencyStore,
+  type AcpStoredResponse,
   createAcpIdempotencyStore,
+  warnOrphanedClaims,
 } from './idempotency/store';
 import { type AcpGuardedRequest, acpEchoHeaders, guardAcpRequest } from './request-guards';
 import {
@@ -109,15 +114,78 @@ function notReached(failure: AcpFailure): AcpCheckoutAttempt {
   return { response: asResponse(failure), reached: 'no' };
 }
 
+// Common dispatch interface for the receipt store and legacy file
+interface IdempotencyBackend {
+  claim(scope: AcpIdempotencyScope, fingerprint: string): Promise<AcpIdempotencyClaim>;
+  complete(scope: AcpIdempotencyScope, response: AcpStoredResponse): Promise<void>;
+  markUnresolved(scope: AcpIdempotencyScope): Promise<void>;
+  release(scope: AcpIdempotencyScope): Promise<void>;
+}
+
+type IdempotencyMethods = Required<
+  Pick<ReceiptStore, 'claimIdempotencyKey' | 'updateIdempotencyKey' | 'recoverIdempotencyKeys'>
+>;
+
+// Select the receipt store only when all idempotency methods are present
+function hasIdempotencyMethods(
+  store: ReceiptStore | undefined,
+): store is ReceiptStore & IdempotencyMethods {
+  return (
+    store !== undefined &&
+    typeof store.claimIdempotencyKey === 'function' &&
+    typeof store.updateIdempotencyKey === 'function' &&
+    typeof store.recoverIdempotencyKeys === 'function'
+  );
+}
+
+function backendOverReceiptStore(
+  store: IdempotencyMethods,
+  clock: Clock,
+  retentionHours: number,
+): IdempotencyBackend {
+  const retentionMs = retentionHours * 60 * 60 * 1000;
+  return {
+    claim: (scope, fingerprint) =>
+      store.claimIdempotencyKey(
+        scope,
+        fingerprint,
+        new Date(clock.now().getTime() + retentionMs).toISOString(),
+      ),
+    complete: (scope, { status, body }) =>
+      store.updateIdempotencyKey(scope, { kind: 'completed', status, body }),
+    markUnresolved: (scope) => store.updateIdempotencyKey(scope, { kind: 'unresolved' }),
+    release: (scope) => store.updateIdempotencyKey(scope, { kind: 'released' }),
+  };
+}
+
+function backendOverFileStore(store: AcpIdempotencyStore): IdempotencyBackend {
+  return {
+    claim: async (scope, fingerprint) => store.claim(scope, fingerprint),
+    complete: async (scope, response) => store.complete(scope, response),
+    markUnresolved: async (scope) => store.markUnresolved(scope),
+    release: async (scope) => store.release(scope),
+  };
+}
+
 export interface AcpAdapterOptions {
   readonly mountPath: string;
   /** The configured bearer token. Never logged, never echoed, never published */
   readonly token: string;
   /** Which canonical resource implements each ACP checkout operation */
   readonly operations: Readonly<Record<AcpCheckoutOperation, string>>;
-  /** Where checkout idempotency records live, and how long they are kept */
+  /**
+   * Holds checkout idempotency claims when it implements the idempotency
+   * methods. The adapter never closes it.
+   */
+  readonly store?: ReceiptStore;
+  /** How long checkout idempotency records are kept, and the file fallback */
   readonly idempotency: {
-    readonly path: string;
+    /**
+     * Required when no suitable `store` is supplied; the adapter opens and
+     * closes this fallback file itself.
+     * @deprecated Pass a receipt store. Configured gateways use this path for legacy import.
+     */
+    readonly path?: string;
     readonly retentionHours: number;
     /**
      * Declare that the merchant deduplicates by the derived `Idempotency-Key`.
@@ -143,7 +211,10 @@ export class AcpProtocolAdapter implements HttpProtocolAdapter {
    */
   private deployment: string | undefined;
   private readonly discoveryMetadata: AcpDiscoveryMetadata | undefined;
-  private idempotency: AcpIdempotencyStore | undefined;
+  private readonly store: ReceiptStore | undefined;
+  private idempotency: IdempotencyBackend | undefined;
+  // Track the file opened by this adapter so borrowed receipt stores stay open
+  private fileStore: AcpIdempotencyStore | undefined;
   private resources: ReadonlyMap<AcpCheckoutOperation, CommerceResource> = new Map();
 
   private context: ProtocolAdapterContext | undefined;
@@ -157,6 +228,7 @@ export class AcpProtocolAdapter implements HttpProtocolAdapter {
     this.isAuthorized = createBearerCheck(options.token);
     this.operations = options.operations;
     this.idempotencyOptions = options.idempotency;
+    this.store = options.store;
     this.discoveryMetadata = options.discovery;
     this.descriptor = buildDescriptor(PACKAGE_VERSION);
     this.additionalHttpRoutes = [
@@ -211,12 +283,7 @@ export class AcpProtocolAdapter implements HttpProtocolAdapter {
     this.resources = resolved;
 
     this.deployment = context.publicBaseUrl;
-    this.idempotency = createAcpIdempotencyStore({
-      path: this.idempotencyOptions.path,
-      retentionHours: this.idempotencyOptions.retentionHours,
-      releaseOrphans: this.idempotencyOptions.merchantIdempotent === true,
-      logger: context.logger,
-    });
+    this.idempotency = await this.openIdempotency(context);
 
     this.discovery = document;
     this.started = true;
@@ -228,6 +295,33 @@ export class AcpProtocolAdapter implements HttpProtocolAdapter {
       },
       'acp adapter started',
     );
+  }
+
+  // Recover claims at adapter start, not when the shared store opens for
+  // another consumer
+  private async openIdempotency(context: ProtocolAdapterContext): Promise<IdempotencyBackend> {
+    const { path, retentionHours, merchantIdempotent } = this.idempotencyOptions;
+    const release = merchantIdempotent === true;
+    const store = this.store;
+    if (hasIdempotencyMethods(store)) {
+      const recovered = await store.recoverIdempotencyKeys({ release });
+      warnOrphanedClaims(context.logger, recovered, release);
+      return backendOverReceiptStore(store, context.clock, retentionHours);
+    }
+    if (path === undefined) {
+      throw new CommerceError(
+        'CONFIG_INVALID',
+        'ACP idempotency needs a receipt store with idempotency methods or a file - set protocols.acp.idempotency.path',
+        { details: { path: 'protocols.acp.idempotency.path' } },
+      );
+    }
+    this.fileStore = createAcpIdempotencyStore({
+      path,
+      retentionHours,
+      releaseOrphans: release,
+      logger: context.logger,
+    });
+    return backendOverFileStore(this.fileStore);
   }
 
   /** `GET /.well-known/acp.json`: public, unauthenticated, cacheable */
@@ -313,7 +407,7 @@ export class AcpProtocolAdapter implements HttpProtocolAdapter {
     }
 
     const scope: AcpIdempotencyScope = { deployment, endpoint: request.route.path, key };
-    const claim = store.claim(scope, requestFingerprint(request.body));
+    const claim = await store.claim(scope, requestFingerprint(request.body));
 
     switch (claim.kind) {
       case 'in-flight':
@@ -360,22 +454,22 @@ export class AcpProtocolAdapter implements HttpProtocolAdapter {
     } catch (err) {
       // An adapter bug, not a merchant verdict; the merchant may have been
       // called, so the claim is kept
-      store.markUnresolved(scope);
+      await store.markUnresolved(scope);
       throw err;
     }
 
     // A 2xx or 4xx is an outcome, even a refusal, and answers every retry
     if (outcome.response.status < 500) {
-      store.complete(scope, outcome.response);
+      await store.complete(scope, outcome.response);
     } else if (outcome.reached === 'no' || this.idempotencyOptions.merchantIdempotent === true) {
       // Release when no call ran, the merchant returned 429, or the merchant
       // deduplicates retries by the derived key
-      store.release(scope);
+      await store.release(scope);
     } else {
       // A timeout, a merchant status ACP cannot relay or a non-ACP reply: the
       // merchant may have acted, and freeing the key could turn one checkout
       // into two orders
-      store.markUnresolved(scope);
+      await store.markUnresolved(scope);
     }
     return outcome.response;
   }
@@ -505,7 +599,8 @@ export class AcpProtocolAdapter implements HttpProtocolAdapter {
     this.started = false;
     this.discovery = undefined;
     this.resources = new Map();
-    this.idempotency?.close();
+    this.fileStore?.close();
+    this.fileStore = undefined;
     this.idempotency = undefined;
     this.deployment = undefined;
     this.context = undefined;

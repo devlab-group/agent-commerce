@@ -131,7 +131,7 @@ const AcpAuthSchema = z.object({ type: z.literal('bearer'), token: z.string().mi
 
 const AcpIdempotencySchema = z
   .object({
-    path: z.string().min(1),
+    path: z.string().min(1).optional(),
     retentionHours: NumberOrString.optional(),
     merchantIdempotent: z.boolean().optional(),
   })

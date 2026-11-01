@@ -1718,6 +1718,16 @@ describe('runDoctor: ACP', () => {
     expect(idempotency?.detail).toContain('retention 24h');
   });
 
+  it('passes with no idempotency path, since claims live in the receipt database', async () => {
+    const report = await acpReport(enabledAcp({ idempotency: { retentionHours: 48 } }));
+
+    expect(report.checks.find((c) => c.name === 'ACP idempotency')).toEqual({
+      name: 'ACP idempotency',
+      status: 'PASS',
+      detail: 'claims in the receipt database (retention 48h)',
+    });
+  });
+
   it('passes the mapping check when all five resources are free and acp-exposed', async () => {
     const report = await acpReport(enabledAcp());
 
@@ -1917,6 +1927,16 @@ describe('runDoctor: AP2', () => {
     const replay = report.checks.find((c) => c.name === 'AP2 replay store');
     expect(replay?.status).toBe('WARN');
     expect(replay?.detail).toContain('in-memory');
+  });
+
+  it('passes with no replay key, since holds live in the receipt database', async () => {
+    const report = await ap2Report(enabledAp2({ replay: undefined }));
+
+    expect(report.checks.find((c) => c.name === 'AP2 replay store')).toEqual({
+      name: 'AP2 replay store',
+      status: 'PASS',
+      detail: 'mandate holds in the receipt database',
+    });
   });
 
   it('warns when a store file does not exist yet, without creating one', async () => {

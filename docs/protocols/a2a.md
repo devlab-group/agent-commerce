@@ -95,12 +95,19 @@ carries `contextId`, `taskId`, `extensions: [<extension URI>]` and the
    `payment-completed` with the settlement entry. A client can also send
    `payment-rejected` to end the task without paying.
 
-The gateway holds unpaid tasks in process memory until the payment
+The gateway holds unpaid tasks in the receipt database until the payment
 requirement expires, for no longer than one hour. If the requirement has no
 expiry, the task waits ten minutes. While 256 tasks are pending, a new
 purchase fails with `GATEWAY_BUSY`; no waiting task is evicted to make room.
-A restart or a payment routed to another instance loses the task;
-the client receives `TaskNotFoundError` and must start a new purchase.
+An unexpired stored task can survive a restart. After validating a follow-up
+message, the adapter atomically takes the task before running the purchase;
+a competing message that loses the take finds no task. The adapter stores
+the purchase input but keeps the parsed AP2 mandate in process memory.
+After a restart, a payment for a resource requiring a mandate must carry
+`_authorization` again. An otherwise valid payment without it fails with
+`AUTHORIZATION_REQUIRED` after the task has been taken. A payment
+sent to an instance with its own receipt database also finds no task; the
+client gets `TaskNotFoundError` and must start a new purchase.
 `GetTask` and `CancelTask` also answer `TaskNotFoundError` for a pending task,
 which stays payable.
 

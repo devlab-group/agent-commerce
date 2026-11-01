@@ -18,8 +18,9 @@ afterEach(() => {
 
 const REFERENCE = 'sha256:M1';
 
-// Seed a payment attempt and optional AP2 hold in their separate databases
-async function seeded(options: { ap2?: boolean; settled?: boolean } = {}) {
+// Seed a payment attempt and optional AP2 hold in the receipt database.
+// `legacyFile` also creates a configured 2.5 replay file with no recorded import.
+async function seeded(options: { ap2?: boolean; settled?: boolean; legacyFile?: boolean } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'oac-resolve-'));
   tempDirs.push(dir);
   const receipts = join(dir, 'receipts.sqlite');
@@ -50,16 +51,25 @@ async function seeded(options: { ap2?: boolean; settled?: boolean } = {}) {
       kind: 'hold',
       hold: 'uncertain',
     });
-    const replay = createAp2ReplayStore({ path: replayPath });
-    replay.reserve({
+    await store.reserveAuthorizationHold({
+      method: 'ap2',
       reference: REFERENCE,
-      checkoutJti: 'checkout_1',
-      mandateIssuer: 'https://trusted.example',
-      checkoutIssuer: 'https://merchant.example',
+      bindingReference: 'checkout_1',
       resourceId: 'resource.report',
       requestId: 'req_1',
     });
-    replay.markUncertain(REFERENCE);
+    await store.transitionAuthorizationHold(REFERENCE, 'uncertain', 'req_1');
+  }
+  if (options.legacyFile === true) {
+    const replay = createAp2ReplayStore({ path: replayPath });
+    replay.reserve({
+      reference: 'sha256:legacy',
+      checkoutJti: 'checkout_legacy',
+      mandateIssuer: 'https://trusted.example',
+      checkoutIssuer: 'https://merchant.example',
+      resourceId: 'resource.report',
+      requestId: 'req_legacy',
+    });
     replay.close();
   }
   if (options.settled === true) {
@@ -82,7 +92,7 @@ async function seeded(options: { ap2?: boolean; settled?: boolean } = {}) {
               mode: 'direct',
               trust: { mandateIssuers: [], checkoutIssuers: [] },
               clockSkewSeconds: 60,
-              replay: { path: replayPath },
+              ...(options.legacyFile === true ? { replay: { path: replayPath } } : {}),
             },
           } as NonNullable<GatewayConfig['authorization']>,
         }
@@ -100,15 +110,25 @@ async function seeded(options: { ap2?: boolean; settled?: boolean } = {}) {
       await reopened.close();
     }
   };
-  const mandateState = () => {
-    const replay = createAp2ReplayStore({ path: replayPath });
+  const mandateState = async () => {
+    const reopened = createSqliteReceiptStore({ path: receipts });
+    await reopened.init();
     try {
-      return replay.stateOf(REFERENCE);
+      return await reopened.getAuthorizationHoldState(REFERENCE);
     } finally {
-      replay.close();
+      await reopened.close();
     }
   };
-  return { config, attempt, read, mandateState };
+  // What `start` does on its first run with the deprecated key
+  const importLegacy = async () => {
+    const starting = createSqliteReceiptStore({
+      path: receipts,
+      legacyStores: { ap2Replay: replayPath, enabled: { ap2: true } },
+    });
+    await starting.init();
+    await starting.close();
+  };
+  return { config, attempt, read, mandateState, importLegacy };
 }
 
 describe('runResolveCommand', () => {
@@ -238,7 +258,7 @@ describe('runResolveCommand', () => {
 });
 
 describe('AP2 holds from the CLI', () => {
-  it('resolve consumes the hold in the AP2 replay database', async () => {
+  it('resolve consumes the hold in the receipt store', async () => {
     const { config, attempt, read, mandateState } = await seeded({ ap2: true });
     const io = createCapturingIo();
 
@@ -253,7 +273,7 @@ describe('AP2 holds from the CLI', () => {
 
     expect(code).toBe(0);
     expect(io.out).toEqual([`RESOLVED  ${attempt.id} status=settled`, 'HOLD      ap2 consumed']);
-    expect(mandateState()).toBe('consumed');
+    expect(await mandateState()).toBe('consumed');
     expect((await read()).hold).toBe('consumed');
   });
 
@@ -275,7 +295,7 @@ describe('AP2 holds from the CLI', () => {
     expect(io.out[1]).toBe(
       'WARN  ap2 hold not consumed (provider_not_enabled); agent-commerce reconcile aligns it once the provider is available',
     );
-    expect(seed.mandateState()).toBe('uncertain');
+    expect(await seed.mandateState()).toBe('uncertain');
     expect((await seed.read()).hold).toBe('uncertain');
   });
 
@@ -292,11 +312,11 @@ describe('AP2 holds from the CLI', () => {
       'reconcile: 0 candidates, 0 settled, 0 not settled, 0 unknown, 0 resolved, 1 of 1 holds aligned',
       `HOLD        txn_1 attempt=${attempt.id} method=ap2 hold=consumed aligned`,
     ]);
-    expect(mandateState()).toBe('consumed');
+    expect(await mandateState()).toBe('consumed');
     expect((await read()).hold).toBe('consumed');
   });
 
-  it('a reconcile dry run reports the hold and leaves both databases unchanged', async () => {
+  it('a reconcile dry run reports the hold and leaves the store unchanged', async () => {
     const { config, attempt, read, mandateState } = await seeded({ ap2: true, settled: true });
     const io = createCapturingIo();
 
@@ -311,7 +331,29 @@ describe('AP2 holds from the CLI', () => {
         written: false,
       },
     ]);
-    expect(mandateState()).toBe('uncertain');
+    expect(await mandateState()).toBe('uncertain');
     expect((await read()).hold).toBe('uncertain');
   });
+
+  it.each(['resolve', 'reconcile'] as const)(
+    '%s refuses while an AP2 replay file is not imported, and runs once start imported it',
+    async (command) => {
+      const seed = await seeded({ ap2: true, legacyFile: true });
+      const run = (io: ReturnType<typeof createCapturingIo>) =>
+        command === 'resolve'
+          ? runResolveCommand(seed.attempt.id, { status: 'settled', reason: 'x', actor: 'a' }, io, {
+              loadConfig: async () => seed.config,
+            })
+          : runReconcileCommand({ actor: 'ops' }, io, { loadConfig: async () => seed.config });
+
+      const refused = createCapturingIo();
+      expect(await run(refused)).toBe(1);
+      expect(refused.err.join('\n')).toContain('agent-commerce start');
+      expect(await seed.mandateState()).toBe('uncertain');
+      expect((await seed.read()).attempt?.status).toBe('settlement-uncertain');
+
+      await seed.importLegacy();
+      expect(await run(createCapturingIo())).toBe(0);
+    },
+  );
 });

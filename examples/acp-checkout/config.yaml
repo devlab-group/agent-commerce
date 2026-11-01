@@ -41,10 +41,8 @@ protocols:
       type: bearer
       token: ${ACP_BEARER_TOKEN:-local-development-acp-token}
     idempotency:
-      # Its own database: ACP checkout replay has nothing to do with x402
-      # payment replay, and the two must not share a table
-      path: ${ACP_IDEMPOTENCY_PATH:-./data/acp-idempotency.sqlite}
-      # ACP's retry window. 24 is both the default and the floor
+      # Claims live in the receipt database. ACP's retry window: 24 is both
+      # the default and the floor
       retentionHours: 24
     checkout:
       # All five operations, each on its own resource. A partially mapped

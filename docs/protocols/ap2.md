@@ -243,8 +243,10 @@ requires `iat` and `exp`.
 
 ## Replay states
 
-AP2 replay state lives in its own SQLite database at
-`authorization.ap2.replay.path`.
+The configured gateway keeps AP2 replay state in the receipt database. To
+import a 2.5 file, keep `authorization.ap2.replay.path` set when running
+2.6.0 `start`; see
+[Deprecated store files](../configuration.md#deprecated-store-files).
 
 A mandate's replay reference hashes its issuer-signed SD-JWT token, so
 selective-disclosure variants share a reference. Another valid signature can
@@ -270,9 +272,15 @@ pending `reserved` or `uncertain` holds to `consumed` for a settled payment or
 `released` for a rejected one. These updates leave `consumed` and `released`
 rows unchanged; a released mandate can still be reserved again. Both paths
 pass the reserving request ID, so a late release cannot change a later
-request's reservation. If a request stops before recording its payment
-attempt and journal entry, these commands cannot discover its hold; it
-remains reserved.
+request's reservation.
+
+A request that stops before reserving a payment attempt can leave a
+`reserved` hold with no current or archived attempt. The pipeline reserves
+an attempt before calling settlement. With AP2 enabled, `reconcile` attempts
+to release these orphan holds once their last update is older than
+`--min-age`. The report's `orphanHolds` lists the scanned holds and release
+results; dry runs only list them, at most one page. The age threshold reduces
+races with active requests; it does not prove a request has finished.
 
 ## Receipt data
 
@@ -355,7 +363,7 @@ npm install @devlab.group/agent-commerce jose @sd-jwt/core canonicalize
 ```
 
 `agent-commerce doctor` reports the AP2 pin, trusted issuer ids and key
-counts, replay-store status, gated resources and unsupported list.
+counts, where holds are stored, gated resources and unsupported list.
 `GET /.well-known/agent-commerce` reports the descriptor under
 `authorizationProviders`.
 

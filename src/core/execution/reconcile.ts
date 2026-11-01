@@ -6,6 +6,11 @@
  * An `unknown` result leaves the attempt unresolved. Later runs skip resolved
  * attempts as payment candidates but can retry their pending authorization
  * holds. Both paths attempt hold updates after recording payment resolution.
+ *
+ * Reconciliation also attempts to release old orphan holds: `reserved` holds
+ * whose request has no current or archived payment attempt. The pipeline
+ * reserves an attempt before calling settlement; the age threshold reduces
+ * races with requests still between those steps.
  */
 import type { AuthorizationProvider } from '../domain/authorization';
 import type { PaymentProvider, PaymentReconciliationResult } from '../domain/payment';
@@ -74,10 +79,24 @@ export interface HoldEntry {
   readonly reason?: 'provider_not_enabled' | 'provider_error' | 'journal_error';
 }
 
+/** An orphan hold found during reconciliation, with its release result */
+export interface OrphanHoldEntry {
+  readonly reference: string;
+  readonly method: string;
+  readonly requestId: string;
+  readonly resourceId: string;
+  readonly updatedAt: string;
+  /** True when the provider's release call succeeds */
+  readonly released: boolean;
+  readonly reason?: 'provider_not_enabled' | 'provider_error';
+}
+
 export interface ReconcileReport {
   readonly dryRun: boolean;
   readonly entries: readonly ReconcileEntry[];
   readonly holds: readonly HoldEntry[];
+  /** Empty when the store provides no orphan-hold listing method */
+  readonly orphanHolds: readonly OrphanHoldEntry[];
 }
 
 interface Candidate {
@@ -212,7 +231,71 @@ export async function runReconcile(options: ReconcileRunOptions): Promise<Reconc
     cursor = page.nextCursor;
     if (cursor === undefined) break;
   }
-  return { dryRun, entries, holds };
+
+  const orphanHolds = await releaseOrphanHolds(options, limit, dryRun);
+  return { dryRun, entries, holds, orphanHolds };
+}
+
+// A hold with no payment attempt keeps blocking reuse until it is released.
+// Wait for the age threshold to reduce races with requests between reservations.
+async function releaseOrphanHolds(
+  options: ReconcileRunOptions,
+  limit: number,
+  dryRun: boolean,
+): Promise<OrphanHoldEntry[]> {
+  const { store, clock, logger } = options;
+  if (store.listOrphanAuthorizationHolds === undefined) return [];
+  const minAgeMs = options.minAgeMs ?? DEFAULT_RECONCILE_MIN_AGE_MS;
+  const updatedBefore = new Date(clock.now().getTime() - minAgeMs).toISOString();
+  const providers = options.authorizationProviders ?? [];
+  const entries: OrphanHoldEntry[] = [];
+  // Released holds leave the list. Track seen references because unreleased
+  // holds can occupy the first page again; stop when it has no unseen holds.
+  // A dry run reports at most one PAGE-sized page. Scanning beyond unreleased
+  // rows would require a cursor in listOrphanAuthorizationHolds.
+  const seen = new Set<string>();
+  while (entries.length < limit) {
+    const page = await store.listOrphanAuthorizationHolds({
+      updatedBefore,
+      limit: Math.min(PAGE, limit - entries.length),
+    });
+    const fresh = page.filter((hold) => !seen.has(hold.reference));
+    if (fresh.length === 0) break;
+    for (const hold of fresh) {
+      seen.add(hold.reference);
+      const entry = {
+        reference: hold.reference,
+        method: hold.method,
+        requestId: hold.requestId,
+        resourceId: hold.resourceId,
+        updatedAt: hold.updatedAt,
+      };
+      const provider = providers.find((candidate) => candidate.name === hold.method);
+      if (provider === undefined) {
+        entries.push({ ...entry, released: false, reason: 'provider_not_enabled' });
+        continue;
+      }
+      if (dryRun) {
+        entries.push({ ...entry, released: false });
+        continue;
+      }
+      try {
+        // The AP2 provider's reservation id is the hold reference
+        await provider.release(hold.reference, {
+          requestId: hold.requestId,
+          resourceId: hold.resourceId,
+        });
+        entries.push({ ...entry, released: true });
+      } catch (err) {
+        logger?.warn(
+          { reference: hold.reference, method: hold.method, err: redactedErrorText(err) },
+          'reconcile: authorization provider could not release an orphan hold',
+        );
+        entries.push({ ...entry, released: false, reason: 'provider_error' });
+      }
+    }
+  }
+  return entries;
 }
 
 /** Input to {@link resolveManually}; `actor` is a caller-supplied label */

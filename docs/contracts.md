@@ -348,6 +348,20 @@ persistence must not fail the commerce flow.
   `charset=utf-8`, when it is a text type that fits the relayed body; text no
   longer always goes out as `text/plain`. Every text delivery also carries
   `Content-Security-Policy: sandbox` and `X-Content-Type-Options: nosniff`.
+- 2.6.0: `AcpAdapterOptions` and `A2aAdapterOptions` take `store?:
+  ReceiptStore`. Neither adapter closes it, and `runGateway` passes its
+  SQLite store to both.
+  - ACP uses the supplied store when it implements the full idempotency
+    group, calling `recoverIdempotencyKeys` during `start()`. Otherwise it
+    opens `idempotency.path`; without that path, `start()` throws
+    `CONFIG_INVALID`.
+  - `idempotency.path` is optional and deprecated in `AcpAdapterOptions` and
+    `AcpProtocolConfig`. Enabled ACP config warns when it is set. TypeScript
+    consumers must handle its absence; ACP remains experimental.
+  - A2A keeps x402 tasks awaiting payment in a supplied store that implements
+    the pending-task group, or in memory otherwise. Saved tasks can survive a
+    restart until expiry. The adapter keeps the parsed AP2 mandate in memory
+    and omits it from the stored task.
 
 ### Authorization and AP2
 
@@ -375,6 +389,21 @@ persistence must not fail the commerce flow.
 - `AP2_REJECTION_REASONS` dropped `unsupported_algorithm`. A digest algorithm
   other than sha-256 is `malformed_presentation`, and a signing algorithm other
   than the pinned one is `invalid_signature`.
+- 2.6.0: `Ap2AuthorizationProviderOptions.store` holds mandates when it
+  implements the authorization-hold group.
+  - Precedence: `replayStore`, now deprecated, then `store`, then the file at
+    `config.replay.path`. With none of them `createAp2AuthorizationProvider`
+    throws `CONFIG_INVALID`.
+  - `close()` closes a legacy replay store it opened or was given; it leaves
+    the shared receipt `store` open.
+  - The provider writes only mandate and checkout issuer IDs to hold
+    `metadata`.
+  - `EnabledAp2Config.replay` is optional and deprecated. Enabled AP2 config
+    warns when it is set. TypeScript consumers must handle its absence; AP2
+    remains experimental.
+  - `runReconcile` attempts to release orphan holds older than the minimum
+    age through the enabled AP2 provider. `ReconcileReport.orphanHolds` lists
+    the scanned holds and release results; a dry run releases nothing.
 
 ### MPP
 
@@ -664,6 +693,8 @@ export interface Ap2AuthorizationProviderOptions {
   readonly config: EnabledAp2Config;
   readonly clock?: Clock;
   readonly logger?: Logger;
+  readonly store?: ReceiptStore;
+  /** @deprecated pass `store` */
   readonly replayStore?: Ap2ReplayStore;
 }
 
@@ -688,7 +719,8 @@ export type Ap2AuthorizationConfig =
       readonly clockSkewSeconds: number;
       readonly requireMandateAudience?: boolean;
       readonly requireMandateExpiry?: boolean;
-      readonly replay: { readonly path: string };
+      /** @deprecated CLI start imports the 2.5 file into the receipt store */
+      readonly replay?: { readonly path: string };
     };
 
 export type EnabledAp2Config = Extract<Ap2AuthorizationConfig, { enabled: true }>;
@@ -821,7 +853,12 @@ export type AcpProtocolConfig =
       readonly enabled: true;
       readonly mountPath: string;
       readonly auth: { readonly type: 'bearer'; readonly token: string };
-      readonly idempotency: { readonly path: string; readonly retentionHours: number };
+      readonly idempotency: {
+        /** @deprecated CLI start imports the 2.5 file into the receipt store */
+        readonly path?: string;
+        readonly retentionHours: number;
+        readonly merchantIdempotent: boolean;
+      };
       readonly checkout: {
         readonly operations: Readonly<Record<AcpCheckoutOperation, string>>;
       };
