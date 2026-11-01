@@ -246,7 +246,7 @@ requires `iat` and `exp`.
 The configured gateway keeps AP2 replay state in the receipt database. To
 import a 2.5 file, keep `authorization.ap2.replay.path` set when running
 2.6.0 `start`; see
-[Deprecated store files](../configuration.md#deprecated-store-files).
+[Deprecated store files](../storage.md#deprecated-store-files).
 
 A mandate's replay reference hashes its issuer-signed SD-JWT token, so
 selective-disclosure variants share a reference. Another valid signature can

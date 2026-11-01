@@ -39,7 +39,7 @@ The 3.0.0 plan removes these store settings deprecated in 2.6.0:
   Import these files by starting 2.6.x with the keys still set, then remove
   each key after its import succeeds. The 3.0.0 plan includes no import for
   these files. See
-  [Deprecated store files](configuration.md#deprecated-store-files).
+  [Deprecated store files](storage.md#deprecated-store-files).
 - `Ap2AuthorizationProviderOptions.replayStore` and
   `AcpAdapterOptions.idempotency.path`. Pass `store` with a `ReceiptStore`
   that implements the authorization-hold or idempotency methods.

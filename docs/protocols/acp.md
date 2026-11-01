@@ -98,7 +98,7 @@ receipt database, logs or responses.
 
 The configured gateway stores claims in the receipt database. To import a
 2.5 file, keep `idempotency.path` set when running 2.6.0 `start`; see
-[Deprecated store files](../configuration.md#deprecated-store-files).
+[Deprecated store files](../storage.md#deprecated-store-files).
 
 The adapter validates `Idempotency-Key` before reading a POST body. After body
 parsing, it claims the key before calling the merchant. The scope is

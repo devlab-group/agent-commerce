@@ -234,7 +234,7 @@ configuration is in [examples/acp-checkout](../examples/acp-checkout).
 until an operator clears it, because to the next retry, deleting it looks
 exactly like the operation never having happened. Idempotency records live in
 the receipt database, in a table of their own. `idempotency.path` is
-deprecated; see [Deprecated store files](#deprecated-store-files).
+deprecated; see [Deprecated store files](storage.md#deprecated-store-files).
 
 Set `merchantIdempotent: true` only if the merchant stores and replays results
 under the `Idempotency-Key` the gateway derives for each checkout POST. With
@@ -311,43 +311,7 @@ requiring it on a **free** resource, since authorization gates settlement and
 there would be none; and a `clockSkewSeconds` above the ceiling.
 
 Spent mandates are held in the receipt database. `replay.path` is deprecated;
-see [Deprecated store files](#deprecated-store-files).
-
-## Deprecated store files
-
-In 2.6.0, ACP idempotency records and AP2 mandate holds use the receipt
-database. The settings for their separate files are deprecated:
-`protocols.acp.idempotency.path` and `authorization.ap2.replay.path`. For an
-enabled feature, config warns when its key is set. It rejects identical path
-values for these files and the receipt database, except `:memory:`. The
-3.0.0 plan removes both keys.
-
-To upgrade from 2.5, keep the keys set and run `agent-commerce start`:
-
-- Each source is imported once, with its rows and import marker committed
-  together. Later starts skip recorded imports. ACP schema-v1 rows are
-  skipped, matching the 2.5 migration; a nonzero count of claims not marked
-  `completed` is logged at `warn`.
-- `start` locks existing source files against writes until shutdown. While a
-  lock is held, a 2.5 gateway cannot update that file.
-- The first import needs a writable directory. If a read-only mount prevents
-  the import, startup fails with `STORAGE_ERROR`. Make the directory writable
-  or copy the file somewhere writable and point the key there. After a
-  recorded import, `SQLITE_CANTOPEN` logs a warning instead; other lock
-  failures still stop startup.
-- With AP2 enabled, `reconcile` and `resolve` refuse an existing AP2 file with
-  no recorded import. Run `start` first; these commands do not import it.
-- Remove a key after its import succeeds and no 2.5 gateway uses the file.
-  Changing a recorded source path is refused.
-
-For an enabled feature with neither an import nor feature rows recorded,
-`start` also checks for past use in the receipt database. If it finds that
-evidence and the legacy key is unset or names a missing file, startup fails
-with `STORAGE_ERROR`. Point the key at the file used by the previous version,
-or at an empty file to explicitly accept the loss of its records.
-
-A 2.5 gateway refuses a receipt database migrated by 2.6.0. To roll back,
-restore a copy made before the upgrade.
+see [Deprecated store files](storage.md#deprecated-store-files).
 
 ## Payments
 

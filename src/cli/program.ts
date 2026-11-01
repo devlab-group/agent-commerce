@@ -1,6 +1,7 @@
 import { Command } from 'commander';
 import { DEFAULT_CONFIG_FILENAME } from '../config/filename';
 import { PROTOCOL_NAMES } from '../core';
+import { runBackupCommand } from './commands/backup';
 import { runDemo } from './commands/demo';
 import { printDoctorReport, runDoctor } from './commands/doctor';
 import { runImportOpenApi } from './commands/import-openapi';
@@ -27,7 +28,7 @@ export function buildProgram(io: Io = processIo): Command {
   program
     .name('agent-commerce')
     .description(
-      'CLI for the Agent Commerce Gateway: init, import, validate, start, doctor, reconcile, demo.',
+      'CLI for the Agent Commerce Gateway: init, import, validate, start, doctor, reconcile, backup, demo.',
     )
     // `--version` prints the CLI version only; the `version` subcommand also
     // lists the pinned protocol/SDK versions. Both read `readVersionReport()`,
@@ -194,6 +195,26 @@ export function buildProgram(io: Io = processIo): Command {
         );
       },
     );
+
+  program
+    .command('backup')
+    .description(
+      'Copy the receipt database, and deprecated store files not yet imported, into a new directory.',
+    )
+    .requiredOption('--out <dir>', 'a new or empty directory for the copies and backup.json')
+    .option('--config <path>', `path to ${DEFAULT_CONFIG_FILENAME}`)
+    .option('--env-file <path>', ENV_FILE_HELP)
+    .option('--json', 'emit machine-readable JSON instead of a formatted report', false)
+    .action(async (opts: { out: string; config?: string; json: boolean }) => {
+      process.exitCode = await runBackupCommand(
+        {
+          out: opts.out,
+          ...(opts.config !== undefined ? { configPath: opts.config } : {}),
+          json: opts.json,
+        },
+        io,
+      );
+    });
 
   program
     .command('init')

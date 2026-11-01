@@ -576,6 +576,17 @@ run can retry it.
 the admin token controls access without identifying the operator. Exit 0
 means the resolution was written; 1 means a refusal or error.
 
+### `agent-commerce backup`
+
+```bash
+npm run agent-commerce -- backup --out ./backups/2026-11-01
+```
+
+Copies the receipt database into a new or empty directory with a `backup.json`
+manifest. It also copies existing, unimported legacy files configured for enabled
+AP2 or ACP. It can run alongside a live gateway. See [Storage](docs/storage.md)
+for restore instructions.
+
 ### `agent-commerce version`
 
 ```bash
@@ -643,6 +654,7 @@ they are added to a release.
 | [Protocols](docs/protocols.md)                 | supported and unsupported protocol features |
 | [AP2](docs/protocols/ap2.md)                   | mandate verification and the trust model    |
 | [Configuration](docs/configuration.md)         | `config.yaml` reference                     |
+| [Storage](docs/storage.md)                     | upgrade, backup and restore                 |
 | [Upgrading from 2.0](docs/migration-2.1.md)    | changes that can break a 2.0 setup          |
 | [Smoke tests](docs/smoke-tests.md)             | settling on public networks, by hand        |
 | [OpenAPI import](docs/openapi-import.md)       | generate resources from an existing API     |
