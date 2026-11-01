@@ -35,6 +35,7 @@ import { PACKAGE_VERSION } from '../../version';
 import { openSqliteDatabase } from '../sqlite';
 import { createHoldMethods, ORPHAN_HOLD_WHERE } from './holds';
 import { createIdempotencyMethods } from './idempotency';
+import { importLegacyStores, type LegacyStoreOptions } from './legacy-import';
 import { clampListLimit } from './params';
 import { createPendingTaskMethods } from './pending-tasks';
 import { redact } from './redact';
@@ -91,6 +92,12 @@ export interface SqliteReceiptStoreOptions {
   readonly logger?: Logger;
   readonly clock?: Clock;
   readonly ids?: IdGenerator;
+  /**
+   * Deprecated store files for `init()` to import and write-lock until
+   * `close()`. Imports are recorded once per source. Experimental: may change
+   * in a minor release.
+   */
+  readonly legacyStores?: LegacyStoreOptions;
 }
 
 /** Recorded import from a deprecated store file */
@@ -456,6 +463,7 @@ export function createSqliteReceiptStore(options: SqliteReceiptStoreOptions): Sq
   >('SELECT source, path, rows, imported_at FROM legacy_imports ORDER BY source');
 
   let closed = false;
+  let releaseLegacyLocks: (() => void) | undefined;
 
   const descriptor: AdapterDescriptor = {
     name: 'sqlite-receipt-store',
@@ -483,6 +491,15 @@ export function createSqliteReceiptStore(options: SqliteReceiptStoreOptions): Sq
         throw new CommerceError(
           'STORAGE_ERROR',
           `Receipt store schema version mismatch (found ${version}, expected ${SCHEMA_VERSION})`,
+        );
+      }
+      if (options.legacyStores !== undefined && releaseLegacyLocks === undefined) {
+        releaseLegacyLocks = importLegacyStores(
+          db,
+          options.path,
+          options.legacyStores,
+          clock,
+          logger,
         );
       }
     },
@@ -810,6 +827,7 @@ export function createSqliteReceiptStore(options: SqliteReceiptStoreOptions): Sq
     async close(): Promise<void> {
       if (!closed) {
         closed = true;
+        releaseLegacyLocks?.();
         db.close();
       }
     },

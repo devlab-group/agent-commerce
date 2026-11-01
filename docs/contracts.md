@@ -422,6 +422,14 @@ export interface SqliteReceiptStoreOptions {
   readonly logger?: Logger;
   readonly clock?: Clock;
   readonly ids?: IdGenerator;
+  /** Experimental: deprecated files that init() imports once and locks until close() */
+  readonly legacyStores?: LegacyStoreOptions;
+}
+
+export interface LegacyStoreOptions {
+  readonly ap2Replay?: string; // deprecated authorization.ap2.replay.path
+  readonly acpIdempotency?: string; // deprecated protocols.acp.idempotency.path
+  readonly enabled?: { readonly ap2?: boolean; readonly acp?: boolean };
 }
 
 // Every optional ReceiptStore method is implemented
@@ -445,6 +453,25 @@ secret-shaped keys are redacted, as with other metadata. Idempotency bodies,
 the remaining task input and `adapterData` are stored as JSON without
 redaction so they can be replayed or resumed. Callers must keep secrets out
 of those fields.
+
+With `legacyStores`, `init()` imports each source once. Each file's rows
+and its `legacy_imports` marker commit in one transaction. Later starts skip
+recorded imports but still try to lock their files. Locks are acquired before
+reading and held until `close()`. They block competing writers, including a
+2.5.x gateway; readers can continue in WAL mode.
+
+Failures to open, lock, read or store a file's rows produce `STORAGE_ERROR`.
+A failed import leaves that source's rows and marker unchanged; earlier
+source imports remain committed. Changing a recorded source path or using
+the receipt database's path also fails startup. Once a source has been
+imported, an open failure with `SQLITE_CANTOPEN` only logs a warning; other
+lock failures still abort startup.
+
+For a feature set to true in `enabled`, with no import or feature rows
+recorded, `init()` rejects an unset or missing path if the receipt database
+shows past use: an AP2 receipt or transaction with an `authorization`, or an
+ACP event. The legacy file may have been forgotten. Other missing files are
+skipped. Supplying an empty file explicitly accepts the loss of legacy rows.
 
 `reservePaymentAttempt` atomically claims a `replayKey`. On a duplicate, it
 throws `CommerceError('PAYMENT_REPLAYED', …)` with the existing attempt's

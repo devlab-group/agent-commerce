@@ -1,3 +1,4 @@
+export type { LegacyStoreOptions } from './legacy-import';
 export {
   createSqliteReceiptStore,
   type SqliteLegacyImport,
