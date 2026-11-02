@@ -10,9 +10,9 @@ import {
   CommerceError,
   type PendingTask,
   RESERVED_INPUT_FIELDS,
-  type ReceiptStore,
   toCommerceError,
 } from '../../core';
+import type { StoreGroupMethods } from '../../core/store-method-groups';
 import { storedIso } from './params';
 
 interface TaskRow {
@@ -24,9 +24,7 @@ interface TaskRow {
   expires_at: string;
 }
 
-type PendingTaskMethods = Required<
-  Pick<ReceiptStore, 'putPendingTask' | 'getPendingTask' | 'takePendingTask'>
->;
+type PendingTaskMethods = StoreGroupMethods<'pending_tasks'>;
 
 function rowToTask(row: TaskRow): PendingTask {
   return {

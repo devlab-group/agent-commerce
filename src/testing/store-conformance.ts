@@ -9,6 +9,7 @@
  * ```
  */
 import type { Clock, ReceiptStore } from '../core';
+import { STORE_METHOD_GROUPS } from '../core/store-method-groups';
 import { CORE_CASES } from './conformance/core-cases';
 import { RECORD_CASES } from './conformance/record-cases';
 import { type CaseSpec, createConformanceClock } from './conformance/support';
@@ -47,16 +48,7 @@ export interface ConformanceCase {
 }
 
 /** Method groups a store implements completely or not at all */
-export const METHOD_GROUPS = {
-  'idempotency claims': ['claimIdempotencyKey', 'updateIdempotencyKey', 'recoverIdempotencyKeys'],
-  'authorization holds': [
-    'reserveAuthorizationHold',
-    'transitionAuthorizationHold',
-    'getAuthorizationHoldState',
-    'listOrphanAuthorizationHolds',
-  ],
-  'pending tasks': ['putPendingTask', 'getPendingTask', 'takePendingTask'],
-} as const satisfies Record<string, readonly (keyof ReceiptStore)[]>;
+export const METHOD_GROUPS = STORE_METHOD_GROUPS;
 
 const implemented = (store: ReceiptStore, method: keyof ReceiptStore): boolean =>
   typeof store[method] === 'function';
@@ -105,8 +97,9 @@ async function runCase(open: ConformanceStoreFactory, spec: CaseSpec): Promise<v
   const clock = createConformanceClock();
   const opened = await open({ clock });
   let current = opened.store;
-  await current.init();
   try {
+    // Inside the try, so a store whose init() throws is still closed
+    await current.init();
     await spec.run({
       store: current,
       clock,

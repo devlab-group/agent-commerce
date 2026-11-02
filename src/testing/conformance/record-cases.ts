@@ -7,24 +7,20 @@ import type {
   PendingTask,
   ReceiptStore,
 } from '../../core';
+import { STORE_METHOD_GROUPS, type StoreGroupMethods } from '../../core/store-method-groups';
 import { type CaseSpec, isoAt } from './support';
 
-const CLAIMS = ['claimIdempotencyKey', 'updateIdempotencyKey', 'recoverIdempotencyKeys'] as const;
-const HOLDS = [
-  'reserveAuthorizationHold',
-  'transitionAuthorizationHold',
-  'getAuthorizationHoldState',
-  'listOrphanAuthorizationHolds',
-] as const;
-const TASKS = ['putPendingTask', 'getPendingTask', 'takePendingTask'] as const;
+const CLAIMS = STORE_METHOD_GROUPS.idempotency_claims;
+const HOLDS = STORE_METHOD_GROUPS.authorization_holds;
+const TASKS = STORE_METHOD_GROUPS.pending_tasks;
 
 const MINUTE = 60_000;
 const DAY = 24 * 60 * MINUTE;
 
 // Cases list these methods in `uses`; runners must skip cases missing them
-type Claims = Required<Pick<ReceiptStore, (typeof CLAIMS)[number]>>;
-type Holds = Required<Pick<ReceiptStore, (typeof HOLDS)[number]>>;
-type Tasks = Required<Pick<ReceiptStore, (typeof TASKS)[number]>>;
+type Claims = StoreGroupMethods<'idempotency_claims'>;
+type Holds = StoreGroupMethods<'authorization_holds'>;
+type Tasks = StoreGroupMethods<'pending_tasks'>;
 const claims = (store: ReceiptStore) => store as ReceiptStore & Claims;
 const holds = (store: ReceiptStore) => store as ReceiptStore & Holds;
 const tasks = (store: ReceiptStore) => store as ReceiptStore & Tasks;

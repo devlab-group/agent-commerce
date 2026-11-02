@@ -11,9 +11,9 @@ import {
   type AuthorizationHoldState,
   type Clock,
   CommerceError,
-  type ReceiptStore,
   toCommerceError,
 } from '../../core';
+import type { StoreGroupMethods } from '../../core/store-method-groups';
 import { clampListLimit, storedIso } from './params';
 import { redact } from './redact';
 
@@ -29,15 +29,7 @@ interface HoldRow {
   updated_at: string;
 }
 
-type HoldMethods = Required<
-  Pick<
-    ReceiptStore,
-    | 'reserveAuthorizationHold'
-    | 'transitionAuthorizationHold'
-    | 'getAuthorizationHoldState'
-    | 'listOrphanAuthorizationHolds'
-  >
->;
+type HoldMethods = StoreGroupMethods<'authorization_holds'>;
 
 const TRANSITION_TARGETS: ReadonlySet<string> = new Set(['consumed', 'released', 'uncertain']);
 

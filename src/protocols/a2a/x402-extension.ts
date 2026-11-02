@@ -12,9 +12,9 @@ import {
   type PaymentResult,
   type PendingTask,
   parseAuthorizationSubmission,
-  type ReceiptStore,
 } from '../../core';
 import { isRecord } from '../../core/is-record';
+import type { StoreGroupMethods } from '../../core/store-method-groups';
 import {
   settlementFailure,
   settlementResponse,
@@ -142,29 +142,13 @@ export function createPendingPayments(clock: Clock, maxEntries = MAX_PENDING_PAY
   };
 }
 
-type PendingTaskStore = Required<
-  Pick<ReceiptStore, 'putPendingTask' | 'getPendingTask' | 'takePendingTask'>
->;
-
-/** A store holds pending tasks only if it implements the whole group */
-export function holdsPendingTasks(
-  store: ReceiptStore | undefined,
-): store is ReceiptStore & PendingTaskStore {
-  return (
-    store !== undefined &&
-    typeof store.putPendingTask === 'function' &&
-    typeof store.getPendingTask === 'function' &&
-    typeof store.takePendingTask === 'function'
-  );
-}
-
 /**
  * Store unpaid tasks while keeping their parsed AP2 mandates in process memory.
  * The stored task omits the authorization field. After a restart, a resource
  * requiring a mandate needs it again in the payment message.
  */
 export function createStoredPendingPayments(
-  store: PendingTaskStore,
+  store: StoreGroupMethods<'pending_tasks'>,
   clock: Clock,
   maxTasks = MAX_PENDING_PAYMENTS,
 ): PendingPayments {

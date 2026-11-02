@@ -25,6 +25,7 @@ import {
   toCommerceError,
 } from '../../core';
 import { toLogInfo } from '../../core/errors';
+import { hasMethodGroup, type StoreGroupMethods } from '../../core/store-method-groups';
 import { PACKAGE_VERSION } from '../../version';
 import { createBearerCheck } from '../http';
 import { toCanonicalRequest } from './checkout-mapping';
@@ -122,24 +123,8 @@ interface IdempotencyBackend {
   release(scope: AcpIdempotencyScope): Promise<void>;
 }
 
-type IdempotencyMethods = Required<
-  Pick<ReceiptStore, 'claimIdempotencyKey' | 'updateIdempotencyKey' | 'recoverIdempotencyKeys'>
->;
-
-// Select the receipt store only when all idempotency methods are present
-function hasIdempotencyMethods(
-  store: ReceiptStore | undefined,
-): store is ReceiptStore & IdempotencyMethods {
-  return (
-    store !== undefined &&
-    typeof store.claimIdempotencyKey === 'function' &&
-    typeof store.updateIdempotencyKey === 'function' &&
-    typeof store.recoverIdempotencyKeys === 'function'
-  );
-}
-
 function backendOverReceiptStore(
-  store: IdempotencyMethods,
+  store: StoreGroupMethods<'idempotency_claims'>,
   clock: Clock,
   retentionHours: number,
 ): IdempotencyBackend {
@@ -303,7 +288,8 @@ export class AcpProtocolAdapter implements HttpProtocolAdapter {
     const { path, retentionHours, merchantIdempotent } = this.idempotencyOptions;
     const release = merchantIdempotent === true;
     const store = this.store;
-    if (hasIdempotencyMethods(store)) {
+    // Select the receipt store only when all idempotency methods are present
+    if (hasMethodGroup(store, 'idempotency_claims')) {
       const recovered = await store.recoverIdempotencyKeys({ release });
       warnOrphanedClaims(context.logger, recovered, release);
       return backendOverReceiptStore(store, context.clock, retentionHours);

@@ -19,6 +19,7 @@ import type {
   ReceiptStore,
 } from '../../core';
 import { CommerceError, NOOP_LOGGER, systemClock } from '../../core';
+import { hasMethodGroup, type StoreGroupMethods } from '../../core/store-method-groups';
 import { PACKAGE_VERSION } from '../../version';
 import { AP2_CHECKOUT_PROFILE, AP2_SPEC_VERSION } from './constants';
 import { buildAp2Descriptor } from './descriptor';
@@ -82,7 +83,7 @@ function fileHolds(replay: Ap2ReplayStore): Holds {
   };
 }
 
-function storeHolds(store: Required<Pick<ReceiptStore, HoldMethod>>): Holds {
+function storeHolds(store: StoreGroupMethods<'authorization_holds'>): Holds {
   return {
     reserve: (request) =>
       store.reserveAuthorizationHold({
@@ -100,26 +101,9 @@ function storeHolds(store: Required<Pick<ReceiptStore, HoldMethod>>): Holds {
   };
 }
 
-type HoldMethod =
-  | 'reserveAuthorizationHold'
-  | 'transitionAuthorizationHold'
-  | 'getAuthorizationHoldState'
-  | 'listOrphanAuthorizationHolds';
-
-function hasHolds(
-  store: ReceiptStore | undefined,
-): store is ReceiptStore & Required<Pick<ReceiptStore, HoldMethod>> {
-  return (
-    typeof store?.reserveAuthorizationHold === 'function' &&
-    typeof store.transitionAuthorizationHold === 'function' &&
-    typeof store.getAuthorizationHoldState === 'function' &&
-    typeof store.listOrphanAuthorizationHolds === 'function'
-  );
-}
-
 function openHolds(options: Ap2AuthorizationProviderOptions, logger: Logger): Holds {
   if (options.replayStore !== undefined) return fileHolds(options.replayStore);
-  if (hasHolds(options.store)) return storeHolds(options.store);
+  if (hasMethodGroup(options.store, 'authorization_holds')) return storeHolds(options.store);
   const path = options.config.replay?.path;
   if (path === undefined) {
     throw new CommerceError(

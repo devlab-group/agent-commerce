@@ -27,6 +27,7 @@ import {
 } from '../../core';
 import { toLogInfo } from '../../core/errors';
 import { isRecord } from '../../core/is-record';
+import { hasMethodGroup } from '../../core/store-method-groups';
 import { PACKAGE_VERSION } from '../../version';
 import { readCappedBody } from '../http';
 import { buildAgentCard } from './agent-card';
@@ -72,7 +73,6 @@ import {
   A2A_X402_EXTENSION_URI,
   createPendingPayments,
   createStoredPendingPayments,
-  holdsPendingTasks,
   type PendingPayments,
   paymentRequiredMetadata,
   requestsX402Extension,
@@ -173,7 +173,8 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
       mountPath: this.mountPath,
       resources,
     });
-    this.pendingPayments = holdsPendingTasks(this.store)
+    // A store holds pending tasks only if it implements the whole group
+    this.pendingPayments = hasMethodGroup(this.store, 'pending_tasks')
       ? createStoredPendingPayments(this.store, context.clock)
       : createPendingPayments(context.clock);
     this.cardBody = JSON.stringify(this.card);

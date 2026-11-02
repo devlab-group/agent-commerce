@@ -11,9 +11,9 @@ import {
   type Clock,
   type IdempotencyClaim,
   type IdempotencyScope,
-  type ReceiptStore,
   toCommerceError,
 } from '../../core';
+import type { StoreGroupMethods } from '../../core/store-method-groups';
 import { storedIso } from './params';
 
 interface ClaimRow {
@@ -23,9 +23,7 @@ interface ClaimRow {
   body_json: string | null;
 }
 
-type IdempotencyMethods = Required<
-  Pick<ReceiptStore, 'claimIdempotencyKey' | 'updateIdempotencyKey' | 'recoverIdempotencyKeys'>
->;
+type IdempotencyMethods = StoreGroupMethods<'idempotency_claims'>;
 
 const scopeParams = (scope: IdempotencyScope) => ({
   deployment: scope.deployment,

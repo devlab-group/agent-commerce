@@ -47,3 +47,28 @@ describe('SQLite receipt store conformance, in memory', () => {
   });
   for (const c of memoryCases) it.skipIf(c.skip !== undefined)(c.name, () => c.run());
 });
+
+describe('the conformance runner', () => {
+  it('closes a store whose init() throws', async () => {
+    const closed: string[] = [];
+    const [first] = await receiptStoreConformanceCases(() => {
+      const store = createSqliteReceiptStore({ path: ':memory:' });
+      return {
+        store: Object.assign(store, {
+          init: async () => {
+            throw new Error('schema mismatch');
+          },
+          close: async () => {
+            closed.push('closed');
+          },
+        }),
+      };
+    });
+
+    // The probe store was closed while the cases were built
+    closed.length = 0;
+
+    await expect(first?.run()).rejects.toThrow('schema mismatch');
+    expect(closed).toEqual(['closed']);
+  });
+});
