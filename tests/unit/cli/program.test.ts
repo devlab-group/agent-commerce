@@ -58,6 +58,7 @@ describe('agent-commerce --help', () => {
       'start',
       'doctor',
       'reconcile',
+      'backup',
       'init',
       'import',
       'demo',
@@ -66,7 +67,7 @@ describe('agent-commerce --help', () => {
     }
   });
 
-  it.each(['version', 'validate', 'start', 'doctor', 'reconcile', 'init', 'demo'])(
+  it.each(['version', 'validate', 'start', 'doctor', 'reconcile', 'backup', 'init', 'demo'])(
     '%s --help exits 0 and prints its usage',
     async (command) => {
       const { exitCode, io } = await run([command, '--help']);

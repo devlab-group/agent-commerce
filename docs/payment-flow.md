@@ -118,7 +118,8 @@ to redirect them.
 | wrong asset                                                  | `PAYMENT_INVALID`                        | no                                    |
 | authorization expired / not yet valid                        | `PAYMENT_INVALID`                        | no                                    |
 | insufficient balance                                         | `PAYMENT_INVALID`                        | no                                    |
-| authorization already spent on chain                         | `PAYMENT_INVALID`                        | no                                    |
+| authorization spent on chain, no unfinished attempt          | `PAYMENT_INVALID`                        | no                                    |
+| authorization spent on chain while its attempt is unfinished | `PAYMENT_REPLAYED` (409, no challenge)   | no                                    |
 | copy reaches gateway reservation before the original settles | `PAYMENT_REPLAYED`                       | no                                    |
 | provider/RPC unavailable during verification                 | `PAYMENT_PROVIDER_UNAVAILABLE`           | no                                    |
 | settlement transaction fails                                 | `PAYMENT_SETTLEMENT_FAILED`              | no                                    |
@@ -145,6 +146,13 @@ rollback. The gateway records a `settled` payment attempt and a
    constraint **before** calling `settle`. A duplicate returns
    `PAYMENT_REPLAYED`: 409 while the first attempt is unfinished or its status is
    unavailable; 402 with a fresh challenge when its stored status is treated as finished.
+   If the transfer has already landed, a replay can fail verification before
+   reaching the reservation. When the rejected proof carries a replay key,
+   the pipeline looks up the attempt holding it. An unfinished attempt still
+   returns 409 without a challenge. No match or a finished attempt returns
+   402 `PAYMENT_INVALID` with a fresh challenge; so does a custom store without
+   `findPaymentAttemptByReplayKey`. A lookup failure returns `STORAGE_ERROR`
+   without a challenge.
    A rejected x402 attempt settled nothing: the backend failed, settlement was
    refused or the facilitator never submitted it. The same authorization can
    reserve it again. MPP keeps the 402: a credential is single-use per challenge.
@@ -198,9 +206,7 @@ delivery summary.
 
 Operators list rows with `GET /api/transactions?unresolved=true` and read one
 with its attempt, receipt and events at `GET /api/transactions/:id`
-([routes](contracts.md#gateway-http-surface)). The `Transaction` type, the
-journal store methods and this response shape are experimental and may change
-in a minor release.
+([routes](contracts.md#gateway-http-surface)).
 
 ### Reconciliation
 

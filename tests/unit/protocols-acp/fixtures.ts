@@ -15,8 +15,8 @@ import type {
   ResourceRegistry,
 } from '../../../src/core';
 import { createResourceRegistry } from '../../../src/core/execution';
-import type { AcpAdapterOptions } from '../../../src/protocols/acp/adapter';
-import type { AcpCheckoutOperation } from '../../../src/protocols/acp/constants';
+import type { AcpAdapterOptions, AcpProtocolAdapter } from '../../../src/protocols/acp/adapter';
+import { ACP_SPEC_VERSION, type AcpCheckoutOperation } from '../../../src/protocols/acp/constants';
 import { ACP_SUCCESS_STATUS } from '../../../src/protocols/acp/response-mapping';
 
 export const TOKEN = 'acp-secret-token';
@@ -163,4 +163,49 @@ export function firstRequest(execute: { mock: { calls: unknown[][] } }): Canonic
   const request = execute.mock.calls[0]?.[0];
   if (request === undefined) throw new Error('pipeline was never called');
   return request as CanonicalRequest;
+}
+
+/**
+ * One authenticated `POST /acp/checkout_sessions` through `handleHttp`, with a
+ * recording response in place of a socket
+ */
+export async function postCheckout(
+  adapter: AcpProtocolAdapter,
+  key: string,
+  body: unknown,
+  token = TOKEN,
+): Promise<{ status: number; headers: Record<string, string>; body: unknown }> {
+  let status = 0;
+  let headers: Record<string, string> = {};
+  let raw = '';
+  const res = {
+    headersSent: false,
+    writeHead(code: number, sent?: Record<string, string>) {
+      status = code;
+      headers = sent ?? {};
+      return res;
+    },
+    end(chunk?: string) {
+      if (chunk !== undefined) raw = chunk;
+      return res;
+    },
+  };
+  const payload = JSON.stringify(body);
+  const req = Object.assign(
+    (async function* () {
+      yield Buffer.from(payload, 'utf8');
+    })(),
+    {
+      method: 'POST',
+      url: `${MOUNT}/checkout_sessions`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        'api-version': ACP_SPEC_VERSION,
+        'content-type': 'application/json',
+        'idempotency-key': key,
+      },
+    },
+  );
+  await adapter.handleHttp(req as never, res as never);
+  return { status, headers, body: raw.length > 0 ? JSON.parse(raw) : undefined };
 }

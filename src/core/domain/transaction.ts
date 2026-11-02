@@ -10,10 +10,7 @@ import type { AuthorizationRecord } from './authorization';
 import type { DecimalAmount, IsoTimestamp, PaymentMethodName, ProtocolName } from './common';
 import type { PaymentAttempt } from './receipt';
 
-/**
- * States derived by {@link transactionState}. Experimental: may change in a
- * minor release.
- */
+/** States derived by {@link transactionState} */
 export const TRANSACTION_STATES = [
   'payment-pending',
   'payment-failed',
@@ -26,7 +23,7 @@ export const TRANSACTION_STATES = [
 
 /**
  * Open to state names added by later releases; consumers must handle values
- * outside {@link TRANSACTION_STATES}. Experimental: may change in a minor release.
+ * outside {@link TRANSACTION_STATES}
  */
 export type TransactionState = (typeof TRANSACTION_STATES)[number] | (string & {});
 
@@ -42,7 +39,7 @@ export type PersistenceFailure = 'payment-attempt' | 'receipt' | 'journal' | (st
 /**
  * Journal record for a paid purchase, starting with replay reservation.
  * Store only references and digests, never payment proofs, signatures, mandates
- * or input bodies. Experimental: may change in a minor release.
+ * or input bodies.
  */
 export interface Transaction {
   readonly id: string;
@@ -110,7 +107,6 @@ const isSuccess = (status: number): boolean => status >= 200 && status <= 299;
  * Derive state from payment status, backend facts and pipeline completion.
  * For a settled payment, a dispatched call with no result after `deadlineAt`
  * means `delivery-unknown`; a timeout does not prove that the backend never ran.
- * Experimental: may change in a minor release.
  */
 export function transactionState(
   facts: TransactionFacts,

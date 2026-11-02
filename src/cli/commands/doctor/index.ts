@@ -1,7 +1,10 @@
 // `agent-commerce doctor`: config, the running gateway, protocols, payments and storage
 import { type CommerceResource, isCommerceError } from '../../../core';
 import { extractPathParameterNames } from '../../../core/execution';
-import { createSqliteReceiptStore } from '../../../storage/receipts';
+import {
+  createSqliteReceiptStore,
+  openSqliteReceiptStoreReadOnly,
+} from '../../../storage/receipts';
 import { type GatewayConfig, loadConfigDynamic } from '../../lib/config-client';
 import { fetchJson } from '../../lib/http';
 import {
@@ -55,7 +58,14 @@ export async function runDoctor(
 ): Promise<DoctorReport> {
   const fetchImpl = deps.fetchImpl ?? globalThis.fetch;
   const loadConfig = deps.loadConfig ?? loadConfigDynamic;
-  const createStore = deps.createStore ?? ((path: string) => createSqliteReceiptStore({ path }));
+  // Open files read-only so doctor cannot migrate a database still used by
+  // an older gateway. An in-memory store is private to this process.
+  const createStore =
+    deps.createStore ??
+    ((path: string) =>
+      path === ':memory:'
+        ? createSqliteReceiptStore({ path })
+        : openSqliteReceiptStoreReadOnly(path));
   const fillEnvFromManifest = deps.fillEnvFromManifest ?? fillEnvFromLocalChainManifest;
   const chainDeploy = (deps.hasChainDeployScript ?? hasChainDeployScript)();
 
@@ -146,13 +156,15 @@ export async function runDoctor(
       )
     : undefined;
 
-  // 5-7. Protocols, AP2, payments and storage
-  checks.push(...protocolChecks(config, wellKnown));
-  checks.push(...ap2Checks(config));
+  // 5-7. Protocols, AP2, payments and storage. Read import records first so
+  // protocol and AP2 checks can report the status of deprecated store keys.
+  const storage = await storageChecks(config, createStore);
+  checks.push(...protocolChecks(config, wellKnown, storage.legacy));
+  checks.push(...ap2Checks(config, storage.legacy));
   checks.push(
     ...(await paymentChecks(config, wellKnown, gatewayUrl, chainDeploy, deps.loadViemAccounts)),
   );
-  checks.push(...(await storageChecks(config, createStore)));
+  checks.push(...storage.checks);
 
   // 8. Protocol versions
   if (wellKnown?.ok) {

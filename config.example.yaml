@@ -221,11 +221,6 @@ payments:
 #     # mandates without them; the checkout JWT requires both regardless.
 #     requireMandateAudience: false
 #     requireMandateExpiry: false
-#     replay:
-#       # Its own file. An authorization replay is not a payment replay, and a
-#       # spent mandate must stay spent for as long as you can be asked what
-#       # you delivered.
-#       path: ./data/ap2-authorizations.sqlite
 #     trust:
 #       # Who may issue a Checkout Mandate. Usually the buyer's shopping agent
 #       # or credential provider.

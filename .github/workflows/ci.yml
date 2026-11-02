@@ -219,6 +219,18 @@ jobs:
             await gateway.close();
             console.log('bare install ok: gateway composed, served and closed');
           "
+          # The store conformance cases need no peer and no test runner
+          node --input-type=module -e "
+            import { receipts } from '@devlab.group/agent-commerce';
+            import { receiptStoreConformanceCases } from '@devlab.group/agent-commerce/testing';
+            const cases = await receiptStoreConformanceCases(({ clock }) => ({
+              store: receipts({ path: ':memory:', clock }),
+            }));
+            let passed = 0;
+            for (const c of cases) if (c.skip === undefined) { await c.run(); passed++; }
+            if (passed === 0) throw new Error('no conformance case ran');
+            console.log('bare install ok: ' + passed + ' store conformance cases passed');
+          "
 
       - name: Install package with optional peers
         run: |

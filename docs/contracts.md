@@ -193,14 +193,44 @@ persistence must not fail the commerce flow.
     write at `warn` and throws `STORAGE_ERROR`.
   - `TransactionState` and `PersistenceFailure` accept unlisted string values,
     so consumers must handle new values introduced by later releases.
-  - These APIs are experimental and may change in a minor release:
-    `Transaction`, its states and `transactionState()`; the optional
-    `ReceiptStore` journal methods, their argument types and
-    `PaymentAttemptReservation.transaction`; `PaymentProvider.reconcile`, its
-    context and result, and `RECONCILIATION_METADATA_KEY`; and the
+  - `PaymentProvider.reconcile`, its context and result, and
+    `RECONCILIATION_METADATA_KEY` are experimental and may change in a minor
+    release. The supported APIs in 2.6.0 are `Transaction`, its states and
+    `transactionState()`; the optional `ReceiptStore` journal methods and
+    their argument types; `PaymentAttemptReservation.transaction`; and the
     `/api/transactions` response shape.
   - The 3.0.0 migration plan makes `transactionId` and the journal methods
     required; see [Upgrading from 2.x to 3.0](migration-3.0.md).
+- 2.6.0 adds three groups of optional `ReceiptStore` methods. Existing 2.5
+  stores need no changes. A store must implement each group in full or omit it.
+  - Idempotency claims: `claimIdempotencyKey`, `updateIdempotencyKey` and
+    `recoverIdempotencyKeys`, with `IdempotencyScope`, `IdempotencyClaim` and
+    `IdempotencyUpdate`.
+  - Authorization holds: `reserveAuthorizationHold`,
+    `transitionAuthorizationHold`, `getAuthorizationHoldState` and
+    `listOrphanAuthorizationHolds`, with `AuthorizationHoldReservation`,
+    `AuthorizationHoldResult` and `AuthorizationHold`.
+  - Pending tasks: `putPendingTask`, `getPendingTask` and `takePendingTask`,
+    with `PendingTask`.
+  - The types are protocol-neutral. Adapter-specific fields belong in
+    `PendingTask.adapterData`; non-secret hold identifiers belong in
+    `AuthorizationHoldReservation.metadata`.
+  - These methods and types are experimental and may change in a minor
+    release. The 3.0.0 migration plan makes them required.
+- 2.6.0 adds the optional `ReceiptStore.findPaymentAttemptByReplayKey`. It
+  returns the current attempt holding a replay key, excluding attempts
+  replaced by a reclaim.
+  - A `rejected` `PaymentResult` may carry `replayKey`. The x402 provider
+    includes it in every rejection returned after deriving the key. MPP also
+    includes it when the decoded credential's `from` and `nonce` can form a
+    key, using the configured chain and asset. This lets the lookup detect an
+    unfinished attempt even when MPP rejects an expired challenge.
+  - If the key belongs to an attempt whose status is neither `settled` nor
+    `rejected`, the pipeline returns 409 `PAYMENT_REPLAYED` without a
+    challenge. Otherwise it returns 402 `PAYMENT_INVALID` with a fresh
+    challenge. A lookup failure returns `STORAGE_ERROR` without a challenge;
+    a store without the method keeps the 402 response.
+  - The method is experimental. The 3.0.0 migration plan makes it required.
 
 ### Protocols and gateway
 
@@ -332,6 +362,25 @@ persistence must not fail the commerce flow.
   `charset=utf-8`, when it is a text type that fits the relayed body; text no
   longer always goes out as `text/plain`. Every text delivery also carries
   `Content-Security-Policy: sandbox` and `X-Content-Type-Options: nosniff`.
+- 2.6.0: `AcpAdapterOptions` and `A2aAdapterOptions` take `store?:
+  ReceiptStore`. Neither adapter closes it, and `runGateway` passes its
+  SQLite store to both.
+  - ACP uses the supplied store when it implements the full idempotency
+    group, calling `recoverIdempotencyKeys` during `start()`. Otherwise it
+    opens `idempotency.path`; without that path, `start()` throws
+    `CONFIG_INVALID`.
+  - `idempotency.path` is optional and deprecated in `AcpAdapterOptions` and
+    `AcpProtocolConfig`. Enabled ACP config warns when it is set. TypeScript
+    consumers must handle its absence; ACP remains experimental.
+  - A2A keeps x402 tasks awaiting payment in a supplied store that implements
+    the pending-task group, or in memory otherwise. Saved tasks can survive a
+    restart until expiry. The adapter keeps the parsed AP2 mandate in memory
+    and omits it from the stored task.
+- In 2.6.0, `GatewayInstance.close()` stops accepting connections and drains
+  in-flight requests before stopping adapters. It closes keep-alive sockets
+  as they become idle and resolves after requests and adapters have finished.
+  In 2.5, adapters stopped first and could close a store still in use by a
+  request.
 
 ### Authorization and AP2
 
@@ -359,6 +408,26 @@ persistence must not fail the commerce flow.
 - `AP2_REJECTION_REASONS` dropped `unsupported_algorithm`. A digest algorithm
   other than sha-256 is `malformed_presentation`, and a signing algorithm other
   than the pinned one is `invalid_signature`.
+- 2.6.0: `Ap2AuthorizationProviderOptions.store` holds mandates when it
+  implements the authorization-hold group.
+  - Precedence: `replayStore`, now deprecated, then `store`, then the file at
+    `config.replay.path`. With none of them `createAp2AuthorizationProvider`
+    throws `CONFIG_INVALID`.
+  - `close()` closes a legacy replay store it opened or was given; it leaves
+    the shared receipt `store` open.
+  - The provider writes only mandate and checkout issuer IDs to hold
+    `metadata`.
+  - `EnabledAp2Config.replay` is optional and deprecated. Enabled AP2 config
+    warns when it is set. TypeScript consumers must handle its absence; AP2
+    remains experimental.
+  - `runReconcile` attempts to release orphan holds older than the minimum
+    age through the enabled AP2 provider. `ReconcileReport.orphanHolds` lists
+    the scanned holds and release results; a dry run releases nothing. An
+    omitted or empty `authorizationProviders` list skips both hold scans.
+  - If a store read error stops a hold scan, the report keeps any results
+    collected so far and identifies the scan in `ReconcileReport.failedScans`.
+    Saved resolutions remain committed and appear in `entries`.
+    `agent-commerce reconcile` then exits 1.
 
 ### MPP
 
@@ -381,13 +450,14 @@ persistence must not fail the commerce flow.
 
 ## Published entry points
 
-| Entry                               | Surface                                                             | Imported optional peers                                                                                                                                                  |
-| ----------------------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `@devlab.group/agent-commerce`      | Core contract, config, gateway, receipt store, A2A and ACP adapters | None                                                                                                                                                                     |
-| `@devlab.group/agent-commerce/ap2`  | AP2 verification and checkout signing                               | `jose`, `@sd-jwt/core`, `canonicalize`                                                                                                                                   |
-| `@devlab.group/agent-commerce/mcp`  | MCP adapter                                                         | `@modelcontextprotocol/server`                                                                                                                                           |
-| `@devlab.group/agent-commerce/mpp`  | MPP provider and profile metadata                                   | `@coinbase/x402` (only for `auth.type: cdp`), `@x402/core`, `@x402/evm`, `mppx`, `viem`                                                                                  |
-| `@devlab.group/agent-commerce/x402` | x402 provider and client proof helper                               | `@x402/core`, `@x402/evm`, `viem`; `@coinbase/x402` only for `auth.type: cdp`; `@x402/svm` and `@solana/kit` only for a Solana offer; `@x402/near` only for a NEAR offer |
+| Entry                                  | Surface                                                             | Imported optional peers                                                                                                                                                  |
+| -------------------------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `@devlab.group/agent-commerce`         | Core contract, config, gateway, receipt store, A2A and ACP adapters | None                                                                                                                                                                     |
+| `@devlab.group/agent-commerce/ap2`     | AP2 verification and checkout signing                               | `jose`, `@sd-jwt/core`, `canonicalize`                                                                                                                                   |
+| `@devlab.group/agent-commerce/mcp`     | MCP adapter                                                         | `@modelcontextprotocol/server`                                                                                                                                           |
+| `@devlab.group/agent-commerce/mpp`     | MPP provider and profile metadata                                   | `@coinbase/x402` (only for `auth.type: cdp`), `@x402/core`, `@x402/evm`, `mppx`, `viem`                                                                                  |
+| `@devlab.group/agent-commerce/x402`    | x402 provider and client proof helper                               | `@x402/core`, `@x402/evm`, `viem`; `@coinbase/x402` only for `auth.type: cdp`; `@x402/svm` and `@solana/kit` only for a Solana offer; `@x402/near` only for a NEAR offer |
+| `@devlab.group/agent-commerce/testing` | Experimental `ReceiptStore` conformance cases                       | None; imports neither a test runner nor a SQLite driver                                                                                                                  |
 
 The main entry and CLI must not import optional peers. `package.json` is the
 authoritative export and dependency map.
@@ -406,12 +476,65 @@ export interface SqliteReceiptStoreOptions {
   readonly logger?: Logger;
   readonly clock?: Clock;
   readonly ids?: IdGenerator;
+  /** Experimental: deprecated files that init() imports once and locks until close() */
+  readonly legacyStores?: LegacyStoreOptions;
+}
+
+export interface LegacyStoreOptions {
+  readonly ap2Replay?: string; // deprecated authorization.ap2.replay.path
+  readonly acpIdempotency?: string; // deprecated protocols.acp.idempotency.path
+  readonly enabled?: { readonly ap2?: boolean; readonly acp?: boolean };
+}
+
+// Every optional ReceiptStore method is implemented
+export interface SqliteReceiptStore extends Required<ReceiptStore> {
+  /** Experimental: counts for `doctor`, not part of `ReceiptStore` */
+  summary(options: { readonly orphanHoldMinAgeMs: number }): Promise<SqliteReceiptStoreSummary>;
 }
 
 export function createSqliteReceiptStore(
   options: SqliteReceiptStoreOptions,
-): ReceiptStore;
+): SqliteReceiptStore;
 ```
+
+Creating the store upgrades older files to schema v5. `init()` rejects any
+version other than v5, just as a 2.5.x store rejects a v5 file because it
+requires v4. To downgrade below 2.6.0, restore a copy made before the upgrade.
+
+The store removes the top-level `_payment` and `_authorization` fields from
+pending task input before writing it. Hold `metadata` values under
+secret-shaped keys are redacted, as with other metadata. Idempotency bodies,
+the remaining task input and `adapterData` are stored as JSON without
+redaction so they can be replayed or resumed. Callers must keep secrets out
+of those fields.
+
+With `legacyStores`, `init()` imports each source once. Each file's rows
+and its `legacy_imports` marker commit in one transaction. Later starts skip
+recorded imports but still try to lock their files. Locks are acquired before
+reading and held until `close()`. They block competing writers, including a
+2.5.x gateway; readers can continue in WAL mode.
+
+Failures to open, lock, read or store a file's rows produce `STORAGE_ERROR`.
+A failed import leaves that source's rows and marker unchanged; earlier
+source imports remain committed. Changing a recorded source path or using
+the receipt database's path also fails startup. Once a source has been
+imported, an open failure with `SQLITE_CANTOPEN` only logs a warning; other
+lock failures still abort startup.
+
+For a feature set to true in `enabled`, `init()` checks for past use when no
+marker is recorded. For AP2, the evidence is a receipt or transaction with an
+`authorization`; for ACP, it is an ACP event. If that evidence exists, an
+unset key or missing file is rejected because the legacy file may have been
+forgotten. An empty file or `:memory:` explicitly accepts the loss of legacy
+rows. Missing files without that past-use evidence are skipped.
+
+An empty file records an import with zero rows. If no file is available and
+the check passes, `init()` records a marker with a `NULL` path. Later starts
+skip the check for missing files; importing a file later replaces that marker.
+`SqliteReceiptStoreSummary.legacyImports` lists file imports, including those
+with zero rows. `missingLegacyImports` lists sources with past use and no
+marker, which fail the check when enabled and their key is unset or names a
+missing file.
 
 `reservePaymentAttempt` atomically claims a `replayKey`. On a duplicate, it
 throws `CommerceError('PAYMENT_REPLAYED', …)` with the existing attempt's
@@ -604,6 +727,8 @@ export interface Ap2AuthorizationProviderOptions {
   readonly config: EnabledAp2Config;
   readonly clock?: Clock;
   readonly logger?: Logger;
+  readonly store?: ReceiptStore;
+  /** @deprecated pass `store` */
   readonly replayStore?: Ap2ReplayStore;
 }
 
@@ -628,7 +753,8 @@ export type Ap2AuthorizationConfig =
       readonly clockSkewSeconds: number;
       readonly requireMandateAudience?: boolean;
       readonly requireMandateExpiry?: boolean;
-      readonly replay: { readonly path: string };
+      /** @deprecated CLI start imports the 2.5 file into the receipt store */
+      readonly replay?: { readonly path: string };
     };
 
 export type EnabledAp2Config = Extract<Ap2AuthorizationConfig, { enabled: true }>;
@@ -761,7 +887,12 @@ export type AcpProtocolConfig =
       readonly enabled: true;
       readonly mountPath: string;
       readonly auth: { readonly type: 'bearer'; readonly token: string };
-      readonly idempotency: { readonly path: string; readonly retentionHours: number };
+      readonly idempotency: {
+        /** @deprecated CLI start imports the 2.5 file into the receipt store */
+        readonly path?: string;
+        readonly retentionHours: number;
+        readonly merchantIdempotent: boolean;
+      };
       readonly checkout: {
         readonly operations: Readonly<Record<AcpCheckoutOperation, string>>;
       };

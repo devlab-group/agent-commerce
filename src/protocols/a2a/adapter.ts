@@ -22,10 +22,12 @@ import {
   extractReservedInputFields,
   type HttpProtocolAdapter,
   type ProtocolAdapterContext,
+  type ReceiptStore,
   toCommerceError,
 } from '../../core';
 import { toLogInfo } from '../../core/errors';
 import { isRecord } from '../../core/is-record';
+import { hasMethodGroup } from '../../core/store-method-groups';
 import { PACKAGE_VERSION } from '../../version';
 import { readCappedBody } from '../http';
 import { buildAgentCard } from './agent-card';
@@ -70,6 +72,7 @@ import type { A2aAgentCard, A2aTask } from './types';
 import {
   A2A_X402_EXTENSION_URI,
   createPendingPayments,
+  createStoredPendingPayments,
   type PendingPayments,
   paymentRequiredMetadata,
   requestsX402Extension,
@@ -95,6 +98,12 @@ export interface A2aAdapterOptions {
   readonly agentDescription?: string;
   /** Version published on the card. Defaults to this package's version */
   readonly agentVersion?: string;
+  /**
+   * Stores x402 tasks awaiting payment when all pending-task methods are
+   * present. Durable stores can preserve unexpired tasks across restarts;
+   * otherwise tasks stay in memory. The adapter never closes this store.
+   */
+  readonly store?: ReceiptStore;
 }
 
 const DEFAULT_AGENT_DESCRIPTION =
@@ -109,6 +118,7 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
   private readonly agentName: string;
   private readonly agentDescription: string;
   private readonly agentVersion: string;
+  private readonly store: ReceiptStore | undefined;
 
   private context: ProtocolAdapterContext | undefined;
   private started = false;
@@ -128,6 +138,7 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
     this.agentName = options.agentName ?? A2A_DEFAULT_AGENT_NAME;
     this.agentDescription = options.agentDescription ?? DEFAULT_AGENT_DESCRIPTION;
     this.agentVersion = options.agentVersion ?? PACKAGE_VERSION;
+    this.store = options.store;
     this.descriptor = buildDescriptor(PACKAGE_VERSION);
     this.additionalHttpRoutes = [
       {
@@ -162,7 +173,10 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
       mountPath: this.mountPath,
       resources,
     });
-    this.pendingPayments = createPendingPayments(context.clock);
+    // A store holds pending tasks only if it implements the whole group
+    this.pendingPayments = hasMethodGroup(this.store, 'pending_tasks')
+      ? createStoredPendingPayments(this.store, context.clock)
+      : createPendingPayments(context.clock);
     this.cardBody = JSON.stringify(this.card);
     this.cardEtag = `"${createHash('sha256').update(this.cardBody).digest('base64url')}"`;
     this.started = true;
@@ -407,7 +421,7 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
         return taskResult(id, task);
       }
       const network = outcome.requirement.network;
-      const held = this.pendingPayments?.put(
+      const held = await this.pendingPayments?.put(
         identity.taskId,
         {
           contextId: identity.contextId,

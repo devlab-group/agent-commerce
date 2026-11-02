@@ -44,13 +44,12 @@ export function normalizeAcp(raw: RawAcp | undefined): AcpProtocolConfig {
       'protocols.acp.auth is required when ACP is enabled - every ACP checkout endpoint is authenticated, and "bearer" is the only scheme supported in this release',
     );
   }
-  if (raw.idempotency === undefined) {
-    throw acpInvalid(
-      'protocols.acp.idempotency',
-      'protocols.acp.idempotency is required when ACP is enabled - it names the SQLite file holding checkout idempotency records, and ACP makes the Idempotency-Key mandatory on every checkout POST',
+  const idempotency = raw.idempotency ?? {};
+  if (idempotency.path !== undefined) {
+    console.warn(
+      '[agent-commerce] protocols.acp.idempotency.path is deprecated: the receipt database holds ACP idempotency claims. The first start imports this file and keeps it locked while the gateway runs. Remove the key once no 2.5.x gateway uses the file; 3.0.0 stops reading it.',
     );
   }
-
   const discovery = raw.discovery;
 
   return {
@@ -58,13 +57,13 @@ export function normalizeAcp(raw: RawAcp | undefined): AcpProtocolConfig {
     mountPath,
     auth: raw.auth,
     idempotency: {
-      path: raw.idempotency.path,
+      ...(idempotency.path !== undefined ? { path: idempotency.path } : {}),
       retentionHours: toNumber(
-        raw.idempotency.retentionHours ?? ACP_RETENTION_HOURS,
+        idempotency.retentionHours ?? ACP_RETENTION_HOURS,
         'protocols.acp.idempotency.retentionHours',
         { min: ACP_RETENTION_HOURS },
       ),
-      merchantIdempotent: raw.idempotency.merchantIdempotent ?? false,
+      merchantIdempotent: idempotency.merchantIdempotent ?? false,
     },
     checkout: { operations: normalizeAcpOperations(raw.checkout) },
     // Built key by key so absent metadata stays absent rather than `undefined`

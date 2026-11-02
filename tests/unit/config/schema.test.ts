@@ -1672,7 +1672,6 @@ describe('protocols.acp', () => {
     ['no auth block', { auth: undefined }, 'protocols.acp.auth'],
     ['a scheme other than bearer', { auth: { type: 'none' } }, 'protocols.acp.auth.type'],
     ['an empty token', { auth: { type: 'bearer', token: '' } }, 'protocols.acp.auth.token'],
-    ['no idempotency block', { idempotency: undefined }, 'protocols.acp.idempotency'],
     ['an empty idempotency path', { idempotency: { path: '' } }, 'protocols.acp.idempotency.path'],
   ])('rejects an enabled block with %s', (_label, overrides, path) => {
     const acp = enabledAcp();
@@ -1681,6 +1680,38 @@ describe('protocols.acp', () => {
       else acp[key] = value;
     }
     expectConfigInvalid(() => parseConfig(withAcp(acp), {}), path);
+  });
+
+  // The receipt store holds claims from 2.6.0, so the block only tunes them
+  it('accepts an enabled block with no idempotency block, with the defaults', () => {
+    const config = parseConfig(withAcp(enabledAcp({ idempotency: undefined })), {});
+    if (!config.protocols.acp.enabled) return expect.unreachable();
+    expect(config.protocols.acp.idempotency).toEqual({
+      retentionHours: 24,
+      merchantIdempotent: false,
+    });
+  });
+
+  it('warns that an idempotency path is deprecated, and keeps it for the import', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const config = parseConfig(withAcp(enabledAcp()), {});
+      if (!config.protocols.acp.enabled) return expect.unreachable();
+      expect(config.protocols.acp.idempotency.path).toBe('./acp-idempotency.sqlite');
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('protocols.acp.idempotency.path is deprecated'),
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('rejects an idempotency path shared with the receipt store', () => {
+    const raw = withAcp(enabledAcp());
+    const receipts = (raw['storage'] as { receipts: { path: string } }).receipts.path;
+    const acp = (raw['protocols'] as { acp: { idempotency: { path: string } } }).acp;
+    acp.idempotency.path = receipts;
+    expectConfigInvalid(() => parseConfig(raw, {}), 'protocols.acp.idempotency.path');
   });
 
   // 24 hours is ACP's retry window (see ACP_RETENTION_HOURS)

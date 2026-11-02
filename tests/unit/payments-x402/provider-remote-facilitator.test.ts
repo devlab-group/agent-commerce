@@ -19,7 +19,7 @@ import {
   createX402PaymentProvider,
   type X402ProviderOptions,
 } from '../../../src/payments/x402/provider';
-import { computePermit2ReplayKey } from '../../../src/payments/x402/replay-key';
+import { computePermit2ReplayKey, computeReplayKey } from '../../../src/payments/x402/replay-key';
 import { expectStoredLocator, locatorOf } from '../../fixtures/x402/locator';
 
 const verifyMock = vi.fn();
@@ -286,6 +286,65 @@ describe('provider - remote facilitator', () => {
     });
     expect(result.status).toBe('rejected');
     expect(result.rejectionReason).toBe('insufficient_funds');
+  });
+
+  describe('a refusal carries the replay key once the proof names its authorization', () => {
+    // The key a verified result would carry for this proof
+    function keyOf(payload: string): string {
+      const { authorization } = JSON.parse(Buffer.from(payload, 'base64').toString('utf8'))
+        .payload as { authorization: { from: `0x${string}`; nonce: `0x${string}` } };
+      return computeReplayKey({
+        chainId: 31337,
+        asset: ASSET,
+        from: authorization.from,
+        nonce: authorization.nonce,
+      });
+    }
+
+    async function verifyWith(payload: string) {
+      const provider = makeProvider({ type: 'none' });
+      const requirement = await provider.createRequirement(paymentContext());
+      return provider.verify({
+        requestId: 'req-1',
+        resource: RESOURCE,
+        requirement,
+        submission: { method: 'x402', payload },
+      });
+    }
+
+    it("from the facilitator's refusal of a spent authorization", async () => {
+      const { payload } = await proofFor(makeProvider({ type: 'none' }));
+      verifyMock.mockResolvedValueOnce({
+        isValid: false,
+        invalidReason: 'invalid_exact_evm_transaction_simulation_failed',
+      });
+
+      const result = await verifyWith(payload);
+
+      expect(result).toMatchObject({ status: 'rejected', replayKey: keyOf(payload) });
+    });
+
+    it('from a local check after the key is derived', async () => {
+      const { payload } = await proofFor(makeProvider({ type: 'none' }));
+      const decoded = JSON.parse(Buffer.from(payload, 'base64').toString('utf8'));
+      decoded.accepted.network = 'eip155:8453';
+
+      const result = await verifyWith(Buffer.from(JSON.stringify(decoded)).toString('base64'));
+
+      expect(result).toMatchObject({
+        status: 'rejected',
+        rejectionReason: 'invalid_network',
+        replayKey: keyOf(payload),
+      });
+      expect(verifyMock).not.toHaveBeenCalled();
+    });
+
+    it('but not from a payload it cannot read', async () => {
+      const result = await verifyWith(Buffer.from('{"x402Version":2}').toString('base64'));
+
+      expect(result).toMatchObject({ status: 'rejected', rejectionReason: 'invalid_payload' });
+      expect(result).not.toHaveProperty('replayKey');
+    });
   });
 
   it.each([

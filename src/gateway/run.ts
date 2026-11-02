@@ -1,8 +1,8 @@
 /**
  * Concrete startup shared by `main.ts` and `agent-commerce start`.
  *
- * Await enabled rail, AP2 and MCP imports before opening replay stores, so
- * missing startup peers leave no database behind. Solana, NEAR and CDP loads
+ * Await enabled rail, AP2 and MCP imports before opening the receipt store,
+ * so missing startup peers leave no database behind. Solana, NEAR and CDP loads
  * begin during provider construction, but their errors surface in health
  * checks or requests. Store failures abort startup; adapter start failures
  * are isolated. `createGateway` accepts injected implementations without
@@ -55,17 +55,33 @@ export async function runGateway(options: RunGatewayOptions = {}): Promise<void>
     ? await importOptionalPeer('protocols.mcp', () => import('../protocols/mcp'))
     : undefined;
 
+  // Import configured legacy files during init. Acquired write locks stay
+  // held until the store closes, blocking writers on those files.
+  const acp = config.protocols.acp;
+  const ap2Replay = ap2?.enabled ? ap2.replay?.path : undefined;
+  const acpIdempotency = acp.enabled ? acp.idempotency.path : undefined;
   const store: ReceiptStore = createSqliteReceiptStore({
     path: config.storage.receipts.path,
     logger,
+    legacyStores: {
+      ...(ap2Replay !== undefined ? { ap2Replay } : {}),
+      ...(acpIdempotency !== undefined ? { acpIdempotency } : {}),
+      enabled: { ap2: ap2?.enabled === true, acp: acp.enabled },
+    },
   });
-  await store.init();
+  try {
+    await store.init();
+  } catch (error) {
+    await store.close();
+    throw error;
+  }
 
-  // Built only when enabled: the constructor opens the replay database, so a
-  // disabled AP2 block creates no file and holds no handle
+  // Built only when enabled; mandates are held in the receipt store
   const authorizationProviders: Ap2AuthorizationProvider[] = [];
   if (ap2?.enabled && ap2Module !== undefined) {
-    authorizationProviders.push(ap2Module.createAp2AuthorizationProvider({ config: ap2, logger }));
+    authorizationProviders.push(
+      ap2Module.createAp2AuthorizationProvider({ config: ap2, logger, store }),
+    );
   }
 
   // Config validation already rejects a paid resource with no enabled rail;
@@ -97,11 +113,11 @@ export async function runGateway(options: RunGatewayOptions = {}): Promise<void>
         // The Agent Card names the merchant, not the software: a client
         // picking between agents is choosing whose resources to buy
         agentName: config.merchant.name,
+        store,
       }),
     );
   }
 
-  const acp = config.protocols.acp;
   if (acp.enabled) {
     protocolAdapters.push(
       createAcpAdapter({
@@ -109,6 +125,7 @@ export async function runGateway(options: RunGatewayOptions = {}): Promise<void>
         token: acp.auth.token,
         operations: acp.checkout.operations,
         idempotency: acp.idempotency,
+        store,
         ...(acp.discovery !== undefined ? { discovery: acp.discovery } : {}),
       }),
     );
@@ -172,9 +189,14 @@ export async function runGateway(options: RunGatewayOptions = {}): Promise<void>
     console.log('');
   }
 
+  // The first signal waits for in-flight requests without a time limit.
+  // A second exits immediately with status 1, skipping cleanup as a crash would.
   let shuttingDown = false;
   const shutdown = (signal: string): void => {
-    if (shuttingDown) return;
+    if (shuttingDown) {
+      logger.warn({ signal }, 'second signal, exiting without waiting for in-flight requests');
+      process.exit(1);
+    }
     shuttingDown = true;
     logger.info({ signal }, 'shutting down');
     void (async () => {

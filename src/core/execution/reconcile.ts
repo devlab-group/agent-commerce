@@ -6,6 +6,11 @@
  * An `unknown` result leaves the attempt unresolved. Later runs skip resolved
  * attempts as payment candidates but can retry their pending authorization
  * holds. Both paths attempt hold updates after recording payment resolution.
+ *
+ * Reconciliation also attempts to release old orphan holds: `reserved` holds
+ * whose request has no current or archived payment attempt. The pipeline
+ * reserves an attempt before calling settlement; the age threshold reduces
+ * races with requests still between those steps.
  */
 import type { AuthorizationProvider } from '../domain/authorization';
 import type { PaymentProvider, PaymentReconciliationResult } from '../domain/payment';
@@ -35,7 +40,7 @@ export interface ReconcileRunOptions {
   readonly minAgeMs?: number;
   /** Separate caps on payment candidates checked and hold updates attempted */
   readonly limit?: number;
-  /** Providers for hold updates; an omitted or empty list skips the hold scan */
+  /** Providers for hold updates; an omitted or empty list skips both hold scans */
   readonly authorizationProviders?: readonly AuthorizationProvider[];
   readonly logger?: Logger;
 }
@@ -74,10 +79,29 @@ export interface HoldEntry {
   readonly reason?: 'provider_not_enabled' | 'provider_error' | 'journal_error';
 }
 
+/** An orphan hold found during reconciliation, with its release result */
+export interface OrphanHoldEntry {
+  readonly reference: string;
+  readonly method: string;
+  readonly requestId: string;
+  readonly resourceId: string;
+  readonly updatedAt: string;
+  /** True when the provider's release call succeeds */
+  readonly released: boolean;
+  readonly reason?: 'provider_not_enabled' | 'provider_error';
+}
+
 export interface ReconcileReport {
   readonly dryRun: boolean;
   readonly entries: readonly ReconcileEntry[];
   readonly holds: readonly HoldEntry[];
+  /** Empty when the store provides no orphan-hold listing method */
+  readonly orphanHolds: readonly OrphanHoldEntry[];
+  /**
+   * Hold scans that failed, including on a store read error. Previously saved
+   * resolutions remain committed; the report retains partial hold results.
+   */
+  readonly failedScans: readonly ('holds' | 'orphan-holds')[];
 }
 
 interface Candidate {
@@ -183,13 +207,39 @@ export async function runReconcile(options: ReconcileRunOptions): Promise<Reconc
 
   const authorizationProviders = options.authorizationProviders ?? [];
   const holds: HoldEntry[] = [];
+  const orphanHolds: OrphanHoldEntry[] = [];
+  const failedScans: ReconcileReport['failedScans'][number][] = [];
   const limit = options.limit ?? Number.POSITIVE_INFINITY;
-  // Include pending holds left by earlier runs. Hold updates have no age
-  // filter: the pipeline attempts finalization before recording a settled or
-  // rejected payment status.
+  // Preserve the report and any saved resolutions if a hold scan fails
+  const scan = async (name: (typeof failedScans)[number], run: () => Promise<void>) => {
+    try {
+      await run();
+    } catch (err) {
+      logger?.warn({ scan: name, err: redactedErrorText(err) }, 'reconcile: a hold scan failed');
+      failedScans.push(name);
+    }
+  };
+  if (authorizationProviders.length > 0) {
+    await scan('holds', () =>
+      alignPendingHolds(holds, limit, dryRun, { journal, authorizationProviders, clock, logger }),
+    );
+    await scan('orphan-holds', () => releaseOrphanHolds(orphanHolds, options, limit, dryRun));
+  }
+  return { dryRun, entries, holds, orphanHolds, failedScans };
+}
+
+// Include pending holds left by earlier runs. Hold updates have no age
+// filter: the pipeline attempts finalization before recording a settled or
+// rejected payment status.
+async function alignPendingHolds(
+  holds: HoldEntry[],
+  limit: number,
+  dryRun: boolean,
+  deps: AlignDeps,
+): Promise<void> {
   let cursor: string | undefined;
-  scan: while (authorizationProviders.length > 0) {
-    const page = await journal.listTransactions({
+  for (;;) {
+    const page = await deps.journal.listTransactions({
       pendingHold: true,
       limit: PAGE,
       ...(cursor !== undefined ? { cursor } : {}),
@@ -197,22 +247,75 @@ export async function runReconcile(options: ReconcileRunOptions): Promise<Reconc
     for (const transaction of page.transactions) {
       const target = holdTarget(transaction);
       if (target === undefined) continue;
-      if (holds.length >= limit) break scan;
+      if (holds.length >= limit) return;
       holds.push(
-        dryRun
-          ? holdEntry(transaction, target, false)
-          : await alignHold(transaction, target, {
-              journal,
-              authorizationProviders,
-              clock,
-              logger,
-            }),
+        dryRun ? holdEntry(transaction, target, false) : await alignHold(transaction, target, deps),
       );
     }
     cursor = page.nextCursor;
-    if (cursor === undefined) break;
+    if (cursor === undefined) return;
   }
-  return { dryRun, entries, holds };
+}
+
+// A hold with no payment attempt keeps blocking reuse until it is released.
+// Wait for the age threshold to reduce races with requests between reservations.
+async function releaseOrphanHolds(
+  entries: OrphanHoldEntry[],
+  options: ReconcileRunOptions,
+  limit: number,
+  dryRun: boolean,
+): Promise<void> {
+  const { store, clock, logger } = options;
+  if (store.listOrphanAuthorizationHolds === undefined) return;
+  const minAgeMs = options.minAgeMs ?? DEFAULT_RECONCILE_MIN_AGE_MS;
+  const updatedBefore = new Date(clock.now().getTime() - minAgeMs).toISOString();
+  const providers = options.authorizationProviders ?? [];
+  // Released holds leave the list. Track seen references because unreleased
+  // holds can occupy the first page again; stop when it has no unseen holds.
+  // A dry run reports at most one PAGE-sized page. Scanning beyond unreleased
+  // rows would require a cursor in listOrphanAuthorizationHolds.
+  const seen = new Set<string>();
+  while (entries.length < limit) {
+    const page = await store.listOrphanAuthorizationHolds({
+      updatedBefore,
+      limit: Math.min(PAGE, limit - entries.length),
+    });
+    const fresh = page.filter((hold) => !seen.has(hold.reference));
+    if (fresh.length === 0) break;
+    for (const hold of fresh) {
+      seen.add(hold.reference);
+      const entry = {
+        reference: hold.reference,
+        method: hold.method,
+        requestId: hold.requestId,
+        resourceId: hold.resourceId,
+        updatedAt: hold.updatedAt,
+      };
+      const provider = providers.find((candidate) => candidate.name === hold.method);
+      if (provider === undefined) {
+        entries.push({ ...entry, released: false, reason: 'provider_not_enabled' });
+        continue;
+      }
+      if (dryRun) {
+        entries.push({ ...entry, released: false });
+        continue;
+      }
+      try {
+        // The AP2 provider's reservation id is the hold reference
+        await provider.release(hold.reference, {
+          requestId: hold.requestId,
+          resourceId: hold.resourceId,
+        });
+        entries.push({ ...entry, released: true });
+      } catch (err) {
+        logger?.warn(
+          { reference: hold.reference, method: hold.method, err: redactedErrorText(err) },
+          'reconcile: authorization provider could not release an orphan hold',
+        );
+        entries.push({ ...entry, released: false, reason: 'provider_error' });
+      }
+    }
+  }
 }
 
 /** Input to {@link resolveManually}; `actor` is a caller-supplied label */
@@ -399,18 +502,20 @@ function holdEntry(
   };
 }
 
+interface AlignDeps {
+  readonly journal: Journal;
+  readonly authorizationProviders: readonly AuthorizationProvider[];
+  readonly clock: Clock;
+  readonly logger: Logger | undefined;
+}
+
 // Call the provider before updating the journal, so a crash can leave the
 // journal hold pending. After an AP2 consume/release succeeds, repeating it
 // leaves replay state unchanged; the request guard protects later reservations.
 async function alignHold(
   transaction: Transaction,
   target: HoldEntry['hold'],
-  deps: {
-    readonly journal: Journal;
-    readonly authorizationProviders: readonly AuthorizationProvider[];
-    readonly clock: Clock;
-    readonly logger: Logger | undefined;
-  },
+  deps: AlignDeps,
 ): Promise<HoldEntry> {
   const authorization = transaction.authorization;
   const provider = deps.authorizationProviders.find(

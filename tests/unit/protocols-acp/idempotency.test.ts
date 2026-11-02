@@ -13,7 +13,6 @@ import Database from 'better-sqlite3';
 import { describe, expect, it, vi } from 'vitest';
 import { CommerceError, NOOP_LOGGER } from '../../../src/core/public-types';
 import { createAcpAdapter } from '../../../src/protocols/acp/adapter';
-import { ACP_SPEC_VERSION } from '../../../src/protocols/acp/constants';
 import {
   operationKey,
   requestFingerprint,
@@ -22,7 +21,7 @@ import {
   type AcpIdempotencyScope,
   createAcpIdempotencyStore,
 } from '../../../src/protocols/acp/idempotency/store';
-import { adapterOptions, delivered, deliveredFor, setup } from './fixtures';
+import { adapterOptions, delivered, deliveredFor, postCheckout, setup } from './fixtures';
 
 const DEPLOYMENT = 'https://merchant.example.com';
 const SCOPE: AcpIdempotencyScope = {
@@ -307,46 +306,7 @@ describe('ACP request fingerprints', () => {
 });
 
 describe('ACP idempotency over the adapter', () => {
-  async function post(
-    adapter: ReturnType<typeof createAcpAdapter>,
-    key: string,
-    body: unknown,
-    token = 'acp-secret-token',
-  ): Promise<{ status: number; headers: Record<string, string>; body: unknown }> {
-    let status = 0;
-    let headers: Record<string, string> = {};
-    let raw = '';
-    const res = {
-      headersSent: false,
-      writeHead(code: number, sent?: Record<string, string>) {
-        status = code;
-        headers = sent ?? {};
-        return res;
-      },
-      end(chunk?: string) {
-        if (chunk !== undefined) raw = chunk;
-        return res;
-      },
-    };
-    const payload = JSON.stringify(body);
-    const req = Object.assign(
-      (async function* () {
-        yield Buffer.from(payload, 'utf8');
-      })(),
-      {
-        method: 'POST',
-        url: '/acp/checkout_sessions',
-        headers: {
-          authorization: `Bearer ${token}`,
-          'api-version': ACP_SPEC_VERSION,
-          'content-type': 'application/json',
-          'idempotency-key': key,
-        },
-      },
-    );
-    await adapter.handleHttp(req as never, res as never);
-    return { status, headers, body: raw.length > 0 ? JSON.parse(raw) : undefined };
-  }
+  const post = postCheckout;
 
   const CREATE = { line_items: [{ id: 'item_123' }], currency: 'usd', capabilities: {} };
 

@@ -2,13 +2,14 @@
 
 import type { PaymentMethodName } from '../../domain/common';
 import type { PaymentProvider, PaymentRequirement, PaymentResult } from '../../domain/payment';
+import type { PaymentAttempt } from '../../domain/receipt';
 import type { CanonicalRequest, PaymentRequiredOutcome } from '../../domain/request';
 import type { CommerceResource, Pricing } from '../../domain/resource';
 import { CommerceError, isCommerceError, toCommerceError } from '../../errors';
 import { type Flow, newTransaction } from '../journal';
 import { REUSE_REJECTED_AUTHORIZATION_METADATA_KEY } from '../settlement-order';
 import { type AuthorizeAndReserve, resolveAuthorizationProviders } from './authorization';
-import { replayError, retryChallenge } from './challenge';
+import { isFinishedAttempt, replayError, retryChallenge } from './challenge';
 import type { PipelineContext, SettleArgs } from './context';
 
 /** A verified payment whose authorization and replay identity are reserved */
@@ -147,6 +148,7 @@ export function createPaymentAdmission(
     }
 
     if (verification.status !== 'verified') {
+      const refusal = await refusalFor(verification, requirement, request, resource);
       await safeEmit(
         buildEvent(flow, {
           type: 'payment.rejected',
@@ -154,18 +156,15 @@ export function createPaymentAdmission(
           adapter: request.protocol,
           paymentProvider: provider.name,
           status: 'error',
-          data: verification.rejectionReason ? { reason: verification.rejectionReason } : {},
+          data:
+            refusal.code !== 'PAYMENT_INVALID'
+              ? { reason: refusal.code }
+              : verification.rejectionReason
+                ? { reason: verification.rejectionReason }
+                : {},
         }),
       );
-      throw new CommerceError(
-        'PAYMENT_INVALID',
-        verification.rejectionReason ?? 'Payment was rejected',
-        {
-          requestId: request.requestId,
-          resourceId: resource.id,
-          ...retryChallenge(requirement, verification.rejectionReason),
-        },
-      );
+      throw refusal;
     }
 
     if (!verification.replayKey) {
@@ -270,6 +269,47 @@ export function createPaymentAdmission(
       },
     };
   };
+
+  // A spent authorization can fail verification before reaching the replay
+  // reservation. If its key belongs to an unfinished attempt, return 409
+  // without a challenge to avoid prompting another payment. A store without
+  // the lookup keeps the 402 response.
+  async function refusalFor(
+    verification: PaymentResult,
+    requirement: PaymentRequirement,
+    request: CanonicalRequest,
+    resource: CommerceResource,
+  ): Promise<CommerceError> {
+    const ids = { requestId: request.requestId, resourceId: resource.id };
+    if (verification.replayKey !== undefined) {
+      let attempt: PaymentAttempt | undefined;
+      try {
+        attempt = await options.store.findPaymentAttemptByReplayKey?.(verification.replayKey);
+      } catch (error) {
+        return new CommerceError('STORAGE_ERROR', 'Payment attempt could not be read', {
+          ...ids,
+          cause: error,
+        });
+      }
+      if (attempt !== undefined && !isFinishedAttempt(attempt.status)) {
+        return replayError(
+          new CommerceError('PAYMENT_REPLAYED', 'Payment authorization has already been used', {
+            ...ids,
+            details: { attemptStatus: attempt.status },
+          }),
+          requirement,
+        );
+      }
+    }
+    return new CommerceError(
+      'PAYMENT_INVALID',
+      verification.rejectionReason ?? 'Payment was rejected',
+      {
+        ...ids,
+        ...retryChallenge(requirement, verification.rejectionReason),
+      },
+    );
+  }
 }
 
 function pickProvider(

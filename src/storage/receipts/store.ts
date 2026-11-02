@@ -4,6 +4,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { accessSync, constants as fsConstants } from 'node:fs';
+import Database from 'better-sqlite3';
 import {
   type AdapterDescriptor,
   type AdapterHealth,
@@ -33,6 +34,16 @@ import {
 } from '../../core';
 import { PACKAGE_VERSION } from '../../version';
 import { openSqliteDatabase } from '../sqlite';
+import { createHoldMethods, ORPHAN_HOLD_WHERE } from './holds';
+import { createIdempotencyMethods } from './idempotency';
+import {
+  importLegacyStores,
+  type LegacySource,
+  type LegacyStoreOptions,
+  missingLegacyImports,
+} from './legacy-import';
+import { clampListLimit } from './params';
+import { createPendingTaskMethods, sweepExpiredPendingTasks } from './pending-tasks';
 import { redact } from './redact';
 import {
   type EventRow,
@@ -47,22 +58,6 @@ import {
   type TransactionRow,
 } from './rows';
 import { migrate, SCHEMA_VERSION } from './schema';
-
-const DEFAULT_LIST_LIMIT = 50;
-/**
- * Ceiling on every list query, enforced in the store so every caller is
- * covered, not only the HTTP route. SQLite reads a negative `LIMIT` as no
- * limit, so `{ limit: -1 }` would otherwise return the whole table.
- */
-const MAX_LIST_LIMIT = 500;
-
-// Clamps to a whole number in [1, MAX_LIST_LIMIT]. An absent or non-finite
-// limit (NaN, Infinity) takes the default, whether or not the caller filtered
-// it first.
-function clampListLimit(limit: number | undefined): number {
-  const base = limit !== undefined && Number.isFinite(limit) ? limit : DEFAULT_LIST_LIMIT;
-  return Math.min(Math.max(Math.trunc(base), 1), MAX_LIST_LIMIT);
-}
 
 // Non-2xx statuses, including 0 (unknown), are undelivered, matching
 // deliveryResult() in ReceiptList.tsx. NOT NULL prevents NULL comparisons from
@@ -103,6 +98,47 @@ export interface SqliteReceiptStoreOptions {
   readonly logger?: Logger;
   readonly clock?: Clock;
   readonly ids?: IdGenerator;
+  /**
+   * Deprecated store files for `init()` to import and write-lock until
+   * `close()`. Imports are recorded once per source. Experimental: may change
+   * in a minor release.
+   */
+  readonly legacyStores?: LegacyStoreOptions;
+}
+
+/** Recorded import from a deprecated store file */
+export interface SqliteLegacyImport {
+  readonly source: string;
+  readonly path: string;
+  readonly rows: number;
+  readonly importedAt: IsoTimestamp;
+}
+
+/** Diagnostic counts for `doctor`. Experimental: may change in a minor release */
+export interface SqliteReceiptStoreSummary {
+  /** Unresolved transactions by state, derived when read */
+  readonly unresolvedTransactions: Readonly<Record<string, number>>;
+  /**
+   * `reserved` holds last updated before the age cutoff whose request has no
+   * current or archived payment attempt
+   */
+  readonly orphanHolds: number;
+  /** Claims recorded as `unresolved` */
+  readonly unresolvedIdempotencyKeys: number;
+  readonly unexpiredPendingTasks: number;
+  readonly legacyImports: readonly SqliteLegacyImport[];
+  /**
+   * Sources with past-use evidence and no recorded import or prior check.
+   * When enabled, these features cannot start with an unset key or missing
+   * legacy file unless the loss of that history is explicitly accepted.
+   */
+  readonly missingLegacyImports: readonly LegacySource[];
+}
+
+/** Implements every optional `ReceiptStore` method */
+export interface SqliteReceiptStore extends Required<ReceiptStore> {
+  /** Experimental: may change in a minor release */
+  summary(options: { readonly orphanHoldMinAgeMs: number }): Promise<SqliteReceiptStoreSummary>;
 }
 
 const defaultIds: IdGenerator = {
@@ -118,17 +154,57 @@ function isUniqueConstraintOn(err: unknown, column: string): boolean {
   );
 }
 
-export function createSqliteReceiptStore(options: SqliteReceiptStoreOptions): ReceiptStore {
+export function createSqliteReceiptStore(options: SqliteReceiptStoreOptions): SqliteReceiptStore {
+  // Shared with the ACP idempotency and AP2 replay stores, so the permission
+  // hardening has one definition
+  const db = openSqliteDatabase({
+    path: options.path,
+    label: 'Receipt database',
+    logger: options.logger ?? NOOP_LOGGER,
+  });
+  migrate(db);
+  return storeOn(db, options);
+}
+
+/**
+ * Opens an existing receipt database read-only for diagnostics, without
+ * creating the database, migrating its schema or importing legacy files.
+ * A schema version mismatch throws `STORAGE_ERROR` with
+ * `details.schemaVersion` and `details.expected`.
+ * Experimental: may change in a minor release.
+ */
+export function openSqliteReceiptStoreReadOnly(path: string): SqliteReceiptStore {
+  let db: Database.Database | undefined;
+  let schemaVersion: number;
+  try {
+    db = new Database(path, { readonly: true, fileMustExist: true });
+    // Read immediately so invalid database files fail during open
+    schemaVersion = db.pragma('user_version', { simple: true }) as number;
+  } catch (cause) {
+    db?.close();
+    throw new CommerceError(
+      'STORAGE_ERROR',
+      `Receipt database "${path}" cannot be opened: ${cause instanceof Error ? cause.message : String(cause)}`,
+      { details: { path }, cause },
+    );
+  }
+  if (schemaVersion !== SCHEMA_VERSION) {
+    db.close();
+    throw new CommerceError(
+      'STORAGE_ERROR',
+      `Receipt database "${path}" is at schema v${schemaVersion}, not v${SCHEMA_VERSION}`,
+      { details: { path, schemaVersion, expected: SCHEMA_VERSION } },
+    );
+  }
+  return storeOn(db, { path });
+}
+
+function storeOn(db: Database.Database, options: SqliteReceiptStoreOptions): SqliteReceiptStore {
   const logger = options.logger ?? NOOP_LOGGER;
   const clock = options.clock ?? systemClock;
   const ids = options.ids ?? defaultIds;
   const path = options.path;
   const isFileBacked = path !== ':memory:';
-
-  // Shared with the ACP idempotency and AP2 replay stores, so the permission
-  // hardening has one definition
-  const db = openSqliteDatabase({ path, label: 'Receipt database', logger });
-  migrate(db);
 
   const insertReceiptStmt = db.prepare(
     `INSERT INTO receipts (id, request_id, resource_id, payment_json, delivered_at, backend_status, duration_ms, protocol, metadata_json, authorization_json, transaction_id)
@@ -272,6 +348,9 @@ export function createSqliteReceiptStore(options: SqliteReceiptStoreOptions): Re
   );
   const getArchivedPaymentAttemptStmt = db.prepare<[string], PaymentAttemptRow>(
     'SELECT * FROM payment_attempt_history WHERE id = ? ORDER BY seq DESC LIMIT 1',
+  );
+  const paymentAttemptByReplayKeyStmt = db.prepare<[string], PaymentAttemptRow>(
+    'SELECT * FROM payment_attempts WHERE replay_key = ?',
   );
   // Check status and missing resolution in the UPDATE so only one resolver
   // succeeds. Only reconciliation may replace the attempt's reference; manual
@@ -418,26 +497,68 @@ export function createSqliteReceiptStore(options: SqliteReceiptStoreOptions): Re
     },
   );
 
+  // A passed backend deadline can change an unresolved state without a write,
+  // but cannot resolve it. Select rows by cached state, then derive each state
+  // again for the counts.
+  const unresolvedTransactionsStmt = db.prepare<[string, string], TransactionRow>(
+    `${TRANSACTION_SELECT} WHERE t.state NOT IN (?, ?)`,
+  );
+  const countOrphanHoldsStmt = db.prepare<[string], { count: number }>(
+    `SELECT COUNT(*) AS count FROM authorization_holds h WHERE ${ORPHAN_HOLD_WHERE}`,
+  );
+  const countUnresolvedKeysStmt = db.prepare<[], { count: number }>(
+    "SELECT COUNT(*) AS count FROM idempotency_keys WHERE state = 'unresolved'",
+  );
+  const countLiveTasksStmt = db.prepare<[string], { count: number }>(
+    'SELECT COUNT(*) AS count FROM pending_tasks WHERE expires_at > ?',
+  );
+  const legacyImportsStmt = db.prepare<
+    [],
+    { source: string; path: string; rows: number; imported_at: string }
+  >(
+    'SELECT source, path, rows, imported_at FROM legacy_imports WHERE path IS NOT NULL ORDER BY source',
+  );
+
   let closed = false;
+  let releaseLegacyLocks: (() => void) | undefined;
 
   const descriptor: AdapterDescriptor = {
     name: 'sqlite-receipt-store',
     kind: 'storage',
     implementationVersion: PACKAGE_VERSION,
     supportedSpec: `sqlite-schema-v${SCHEMA_VERSION}`,
-    capabilities: ['receipts', 'events', 'payment-attempts', 'transactions'],
+    capabilities: [
+      'receipts',
+      'events',
+      'payment-attempts',
+      'transactions',
+      'idempotency-keys',
+      'authorization-holds',
+      'pending-tasks',
+    ],
     status: 'stable',
   };
 
-  const store: ReceiptStore = {
+  const store: SqliteReceiptStore = {
     async init(): Promise<void> {
-      // Migration already ran synchronously at construction. This check keeps
-      // init() a real, idempotent gate for callers that await it first.
+      // Both constructors supply the expected schema; check again so init()
+      // remains an idempotent gate before callers use the store
       const version = db.pragma('user_version', { simple: true }) as number;
       if (version !== SCHEMA_VERSION) {
         throw new CommerceError(
           'STORAGE_ERROR',
           `Receipt store schema version mismatch (found ${version}, expected ${SCHEMA_VERSION})`,
+        );
+      }
+      // Remove expired pending tasks at startup without waiting for A2A traffic
+      if (!db.readonly) sweepExpiredPendingTasks(db, clock.nowIso());
+      if (options.legacyStores !== undefined && releaseLegacyLocks === undefined) {
+        releaseLegacyLocks = importLegacyStores(
+          db,
+          options.path,
+          options.legacyStores,
+          clock,
+          logger,
         );
       }
     },
@@ -665,12 +786,46 @@ export function createSqliteReceiptStore(options: SqliteReceiptStoreOptions): Re
       return row !== undefined ? rowToPaymentAttempt(row) : undefined;
     },
 
+    async findPaymentAttemptByReplayKey(replayKey: string): Promise<PaymentAttempt | undefined> {
+      const row = paymentAttemptByReplayKeyStmt.get(replayKey);
+      return row !== undefined ? rowToPaymentAttempt(row) : undefined;
+    },
+
     async resolvePaymentAttempt(request: PaymentAttemptResolveRequest): Promise<boolean> {
       try {
         return resolveAttempt(request, clock.nowIso());
       } catch (err) {
         throw toCommerceError(err, 'STORAGE_ERROR', 'Failed to resolve payment attempt');
       }
+    },
+
+    ...createIdempotencyMethods(db, clock),
+    ...createHoldMethods(db, clock),
+    ...createPendingTaskMethods(db, clock),
+
+    // Reads all unresolved transactions at once. Page this query if large
+    // journals make operator diagnostics too costly.
+    async summary({ orphanHoldMinAgeMs }) {
+      const now = clock.nowIso();
+      const unresolvedTransactions: Record<string, number> = {};
+      for (const row of unresolvedTransactionsStmt.all(...RESOLVED_STATES)) {
+        const { state } = rowToTransaction(row, now);
+        unresolvedTransactions[state] = (unresolvedTransactions[state] ?? 0) + 1;
+      }
+      const orphansBefore = new Date(Date.parse(now) - orphanHoldMinAgeMs).toISOString();
+      return {
+        unresolvedTransactions,
+        orphanHolds: countOrphanHoldsStmt.get(orphansBefore)?.count ?? 0,
+        unresolvedIdempotencyKeys: countUnresolvedKeysStmt.get()?.count ?? 0,
+        unexpiredPendingTasks: countLiveTasksStmt.get(now)?.count ?? 0,
+        legacyImports: legacyImportsStmt.all().map((row) => ({
+          source: row.source,
+          path: row.path,
+          rows: row.rows,
+          importedAt: row.imported_at,
+        })),
+        missingLegacyImports: missingLegacyImports(db),
+      };
     },
 
     descriptor,
@@ -737,6 +892,7 @@ export function createSqliteReceiptStore(options: SqliteReceiptStoreOptions): Re
     async close(): Promise<void> {
       if (!closed) {
         closed = true;
+        releaseLegacyLocks?.();
         db.close();
       }
     },

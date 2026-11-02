@@ -779,6 +779,12 @@ describe('MPP verify', () => {
       clock.advance(61_000);
       const result = await verifyWith(provider, requirement, credential);
       expect(result.rejectionReason).toBe('challenge_expired');
+      // This key lets the pipeline return 409 without a fresh challenge for
+      // an uncertain settlement
+      const { nonce } = Credential.deserialize(credential).payload as { nonce: `0x${string}` };
+      expect(result.replayKey).toBe(
+        computeReplayKey({ chainId: 31337, asset: ASSET, from: buyer.address, nonce }),
+      );
     });
   });
 
@@ -791,6 +797,23 @@ describe('MPP verify', () => {
       });
       const result = await verifyWith(provider, requirement, permit2);
       expect(result.rejectionReason).toBe('unsupported_credential');
+    });
+
+    it.each([
+      ['a payer that is not an address', { from: 'not-an-address' }],
+      ['a nonce that is not 32 bytes', { nonce: '0x1234' }],
+    ])('rejects %s without a replay key, rather than throwing', async (_label, fields) => {
+      const provider = makeProvider();
+      const requirement = await requirementFor(provider);
+      const malformed = altered(await clientCredential(requirement), (credential) => {
+        Object.assign(credential.payload, fields);
+      });
+
+      const result = await verifyWith(provider, requirement, malformed);
+
+      expect(result.status).toBe('rejected');
+      expect(result).not.toHaveProperty('replayKey');
+      expect(facilitator.verify).not.toHaveBeenCalled();
     });
 
     it('refuses a nonce that is not the challenge hash', async () => {

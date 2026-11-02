@@ -1,1 +1,13 @@
-export { createSqliteReceiptStore, type SqliteReceiptStoreOptions } from './store';
+export {
+  type LegacySource,
+  type LegacyStoreOptions,
+  readMissingLegacyImports,
+} from './legacy-import';
+export {
+  createSqliteReceiptStore,
+  openSqliteReceiptStoreReadOnly,
+  type SqliteLegacyImport,
+  type SqliteReceiptStore,
+  type SqliteReceiptStoreOptions,
+  type SqliteReceiptStoreSummary,
+} from './store';

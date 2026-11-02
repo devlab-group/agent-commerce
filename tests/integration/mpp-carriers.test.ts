@@ -366,6 +366,27 @@ describe('MPP over HTTP', () => {
     expect(facilitator.settle).not.toHaveBeenCalled();
   });
 
+  it('refuses a spent credential with 409 and no challenge while its settlement is uncertain', async () => {
+    const store = createSqliteReceiptStore({ path: ':memory:' });
+    await store.init();
+    const gw = await startGateway(store);
+    const credential = await credentialFor((await invokeHttp(gw)).headers['www-authenticate']);
+    facilitator.settle.mockRejectedValueOnce(new Error('socket hang up'));
+    expect((await invokeHttp(gw, { authorization: credential })).statusCode).toBe(502);
+    expect((await store.listPaymentAttempts())[0]?.status).toBe('settlement-uncertain');
+
+    // Simulate a landed transfer by making verification report a spent nonce
+    facilitator.verify.mockResolvedValueOnce({
+      isValid: false,
+      invalidReason: 'invalid_exact_evm_nonce_already_used',
+    });
+    const retry = await invokeHttp(gw, { authorization: credential });
+
+    expect(retry.statusCode).toBe(409);
+    expect(retry.json()).toMatchObject({ code: 'PAYMENT_REPLAYED' });
+    expect(retry.headers['www-authenticate']).toBeUndefined();
+  });
+
   it('withholds the response and rechallenges after settlement refusal', async () => {
     let backendCalls = 0;
     const counting: BackendExecutor = {

@@ -7,7 +7,7 @@
 import type { Ap2AuthorizationProvider } from '../authorization/ap2';
 import type { GatewayConfig } from '../config';
 import type { X402OptionConfig } from '../config/schema';
-import type { Logger, PaymentProvider } from '../core';
+import type { Logger, PaymentProvider, ReceiptStore } from '../core';
 import type { X402OfferOptions } from '../payments/x402';
 import { importOptionalPeer } from './optional-peer';
 
@@ -107,12 +107,14 @@ export async function createConfiguredPaymentProviders(
 }
 
 /**
- * Builds enabled authorization providers for CLI hold updates.
- * Each opens a replay database that the caller must close.
+ * Build enabled authorization providers for CLI hold updates. AP2 uses
+ * `store` when it has the hold methods, otherwise its configured legacy file.
+ * The caller must close each provider; providers leave the shared store open.
  */
 export async function createConfiguredAuthorizationProviders(
   authorization: GatewayConfig['authorization'],
   logger: Logger,
+  store: ReceiptStore,
 ): Promise<Ap2AuthorizationProvider[]> {
   const ap2 = authorization?.ap2;
   if (!ap2?.enabled) return [];
@@ -120,5 +122,5 @@ export async function createConfiguredAuthorizationProviders(
     'authorization.ap2',
     () => import('../authorization/ap2'),
   );
-  return [createAp2AuthorizationProvider({ config: ap2, logger })];
+  return [createAp2AuthorizationProvider({ config: ap2, logger, store })];
 }

@@ -98,7 +98,9 @@ export interface PaymentResult {
    * The pipeline reserves this key before settlement and rejects a second
    * request presenting it with `PAYMENT_REPLAYED`. Providers must derive it
    * only from the authorization (payer, nonce, asset, network), so the same
-   * authorization always maps to the same key.
+   * authorization always maps to the same key. A `rejected` result may also
+   * carry it so a store lookup can identify an unfinished attempt even when
+   * verification rejects the proof because its transfer has landed.
    */
   readonly replayKey?: string;
   /** Machine-readable rejection reason when status is `rejected` */

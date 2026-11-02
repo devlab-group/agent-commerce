@@ -1,6 +1,7 @@
 // Reconciliation candidates, conditional writes, dry runs and provider errors with SQLite
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
+  AuthorizationProvider,
   Clock,
   Logger,
   PaymentAttemptReservation,
@@ -123,6 +124,8 @@ describe('runReconcile writes', () => {
         },
       ],
       holds: [],
+      orphanHolds: [],
+      failedScans: [],
     });
     expect(await store.getPaymentAttempt?.(attempt.id)).toMatchObject({
       status: 'settled',
@@ -394,5 +397,184 @@ describe('runReconcile provider answers', () => {
     await expect(
       runReconcile({ store: legacyStore, providers: [], clock, actor: 'ops' }),
     ).rejects.toMatchObject({ code: 'STORAGE_ERROR' });
+  });
+});
+
+describe('runReconcile after a failed hold scan', () => {
+  it('keeps the saved resolutions in the report and names the pending-hold scan', async () => {
+    const attempt = await uncertain(1);
+    const provider = fakeProvider({ req_1: { outcome: 'settled', reason: 'transfer_final' } });
+    const list = store.listTransactions?.bind(store);
+    vi.spyOn(store, 'listTransactions').mockImplementation(async (options) => {
+      if (options?.pendingHold === true) throw new Error('SQLITE_BUSY');
+      return (list as NonNullable<typeof list>)(options);
+    });
+    const ap2 = { name: 'ap2' } as unknown as AuthorizationProvider;
+
+    clock.set(RUN_AT);
+    const report = await runReconcile({
+      store,
+      providers: [provider],
+      authorizationProviders: [ap2],
+      clock,
+      actor: 'ops@example',
+    });
+
+    expect(report.entries).toMatchObject([{ attemptId: attempt.id, written: true }]);
+    expect(report.holds).toEqual([]);
+    expect(report.failedScans).toEqual(['holds']);
+    expect((await store.getPaymentAttempt?.(attempt.id))?.status).toBe('settled');
+  });
+});
+
+describe('runReconcile orphan holds', () => {
+  const MIN = 60_000;
+
+  // Releases through the store, as the AP2 provider does, and records each call
+  function holdProvider(fail = false) {
+    const calls: { reference: string; requestId: string; resourceId: string }[] = [];
+    const provider = {
+      name: 'ap2',
+      calls,
+      async release(reference: string, context: { requestId: string; resourceId: string }) {
+        calls.push({ reference, ...context });
+        if (fail) throw new Error('replay store down');
+        await store.transitionAuthorizationHold?.(reference, 'released', context.requestId);
+      },
+    };
+    return provider as unknown as AuthorizationProvider & { calls: typeof calls };
+  }
+
+  async function hold(n: number, at: string) {
+    clock.set(at);
+    await store.reserveAuthorizationHold?.({
+      method: 'ap2',
+      reference: `sha256:ref_${n}`,
+      bindingReference: `jti_${n}`,
+      resourceId: 'resource.report',
+      requestId: `req_${n}`,
+    });
+  }
+
+  const reconcileAt = (
+    at: string,
+    authorizationProviders: readonly AuthorizationProvider[],
+    options: { dryRun?: boolean; minAgeMs?: number; limit?: number } = {},
+  ) => {
+    clock.set(at);
+    return runReconcile({
+      store,
+      providers: [],
+      clock,
+      actor: 'ops',
+      authorizationProviders,
+      ...options,
+    });
+  };
+
+  it('releases a hold whose request never reserved an attempt, once it reaches the minimum age', async () => {
+    // req_1 reserved its mandate and stopped before its payment attempt
+    await hold(1, T0);
+    const provider = holdProvider();
+
+    const young = await reconcileAt('2026-10-28T12:14:00.000Z', [provider]);
+    expect(young.orphanHolds).toEqual([]);
+
+    const report = await reconcileAt(RUN_AT, [provider]);
+    expect(report.orphanHolds).toEqual([
+      {
+        reference: 'sha256:ref_1',
+        method: 'ap2',
+        requestId: 'req_1',
+        resourceId: 'resource.report',
+        updatedAt: T0,
+        released: true,
+      },
+    ]);
+    expect(provider.calls).toEqual([
+      { reference: 'sha256:ref_1', requestId: 'req_1', resourceId: 'resource.report' },
+    ]);
+    expect(await store.getAuthorizationHoldState?.('sha256:ref_1')).toBe('released');
+
+    // A second run finds nothing to release
+    expect((await reconcileAt(RUN_AT, [provider])).orphanHolds).toEqual([]);
+    expect(provider.calls).toHaveLength(1);
+  });
+
+  it('leaves a hold whose request reserved a payment attempt', async () => {
+    await hold(1, T0);
+    await store.reservePaymentAttempt(reservation(1));
+    const provider = holdProvider();
+
+    expect((await reconcileAt(RUN_AT, [provider])).orphanHolds).toEqual([]);
+    expect(provider.calls).toEqual([]);
+    expect(await store.getAuthorizationHoldState?.('sha256:ref_1')).toBe('reserved');
+  });
+
+  it('reports without releasing on a dry run, and honors --min-age', async () => {
+    await hold(1, T0);
+    const provider = holdProvider();
+
+    const dry = await reconcileAt(RUN_AT, [provider], { dryRun: true });
+    expect(dry.orphanHolds).toMatchObject([{ reference: 'sha256:ref_1', released: false }]);
+    expect(provider.calls).toEqual([]);
+    expect(await store.getAuthorizationHoldState?.('sha256:ref_1')).toBe('reserved');
+
+    expect((await reconcileAt(RUN_AT, [provider], { minAgeMs: 31 * MIN })).orphanHolds).toEqual([]);
+  });
+
+  it('reports each hold it could not release, with the reason, and keeps it reserved', async () => {
+    await hold(1, T0);
+
+    const other = { ...holdProvider(), name: 'other' } as unknown as AuthorizationProvider;
+    const disabled = await reconcileAt(RUN_AT, [other]);
+    expect(disabled.orphanHolds).toMatchObject([
+      { reference: 'sha256:ref_1', released: false, reason: 'provider_not_enabled' },
+    ]);
+    const failing = await reconcileAt(RUN_AT, [holdProvider(true)]);
+    expect(failing.orphanHolds).toMatchObject([
+      { reference: 'sha256:ref_1', released: false, reason: 'provider_error' },
+    ]);
+    expect(await store.getAuthorizationHoldState?.('sha256:ref_1')).toBe('reserved');
+  });
+
+  it('skips the scan without authorization providers, as for a payments-only run', async () => {
+    await hold(1, T0);
+    const list = vi.spyOn(store, 'listOrphanAuthorizationHolds');
+
+    expect((await reconcileAt(RUN_AT, [])).orphanHolds).toEqual([]);
+    expect(list).not.toHaveBeenCalled();
+  });
+
+  it('keeps the report, and names the scan, when the orphan listing fails', async () => {
+    await hold(1, T0);
+    vi.spyOn(store, 'listOrphanAuthorizationHolds').mockRejectedValueOnce(new Error('SQLITE_BUSY'));
+
+    const report = await reconcileAt(RUN_AT, [holdProvider()]);
+
+    expect(report).toMatchObject({ orphanHolds: [], failedScans: ['orphan-holds'] });
+    expect(await store.getAuthorizationHoldState?.('sha256:ref_1')).toBe('reserved');
+  });
+
+  it('stops at the limit, oldest first, and releases the rest on the next run', async () => {
+    await hold(1, T0);
+    await hold(2, '2026-10-28T12:01:00.000Z');
+    await hold(3, '2026-10-28T12:02:00.000Z');
+    const provider = holdProvider();
+
+    const first = await reconcileAt(RUN_AT, [provider], { limit: 2 });
+    expect(first.orphanHolds.map((h) => h.reference)).toEqual(['sha256:ref_1', 'sha256:ref_2']);
+    const second = await reconcileAt(RUN_AT, [provider], { limit: 2 });
+    expect(second.orphanHolds.map((h) => h.reference)).toEqual(['sha256:ref_3']);
+  });
+
+  it('releases holds past the first page of 200', async () => {
+    for (let n = 1; n <= 201; n++) await hold(n, T0);
+    const provider = holdProvider();
+
+    const report = await reconcileAt(RUN_AT, [provider]);
+
+    expect(report.orphanHolds.filter((h) => h.released)).toHaveLength(201);
+    expect(await store.getAuthorizationHoldState?.('sha256:ref_201')).toBe('released');
   });
 });

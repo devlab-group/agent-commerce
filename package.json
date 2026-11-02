@@ -32,6 +32,10 @@
       "types": "./dist/x402.d.ts",
       "import": "./dist/x402.js"
     },
+    "./testing": {
+      "types": "./dist/testing.d.ts",
+      "import": "./dist/testing.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [

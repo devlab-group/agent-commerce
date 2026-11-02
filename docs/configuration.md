@@ -169,8 +169,7 @@ protocols:
     auth:
       type: bearer             # the only supported scheme
       token: ${ACP_BEARER_TOKEN}
-    idempotency:
-      path: ./data/acp-idempotency.sqlite
+    idempotency:               # optional
       retentionHours: 24       # default, and the floor
       merchantIdempotent: false  # set true only when the merchant deduplicates by Idempotency-Key
     checkout:
@@ -233,8 +232,9 @@ configuration is in [examples/acp-checkout](../examples/acp-checkout).
 `Idempotency-Key` past an expired record and run a checkout twice. It bounds
 *completed* records only. One whose merchant outcome was never learned is kept
 until an operator clears it, because to the next retry, deleting it looks
-exactly like the operation never having happened. The idempotency database is
-its own file - it never shares a table with receipts or the x402 replay defense.
+exactly like the operation never having happened. Idempotency records live in
+the receipt database, in a table of their own. `idempotency.path` is
+deprecated; see [Deprecated store files](storage.md#deprecated-store-files).
 
 Set `merchantIdempotent: true` only if the merchant stores and replays results
 under the `Idempotency-Key` the gateway derives for each checkout POST. With
@@ -263,8 +263,6 @@ authorization:
     clockSkewSeconds: 60       # default; 300 is the ceiling
     requireMandateAudience: false   # default; AP2 makes `aud` optional
     requireMandateExpiry: false     # default; AP2 makes `exp` optional
-    replay:
-      path: ./data/ap2-authorizations.sqlite   # its own file, never shared
     trust:
       mandateIssuers:          # who may issue a Checkout Mandate
         - issuer: https://surface.example
@@ -310,8 +308,10 @@ mandate issuers; a shared `kid` makes an issuerless token ambiguous.
 
 Refused at load: requiring `ap2` while the block is absent or disabled;
 requiring it on a **free** resource, since authorization gates settlement and
-there would be none; a `replay.path` shared with the receipt store or the ACP
-idempotency store; and a `clockSkewSeconds` above the ceiling.
+there would be none; and a `clockSkewSeconds` above the ceiling.
+
+Spent mandates are held in the receipt database. `replay.path` is deprecated;
+see [Deprecated store files](storage.md#deprecated-store-files).
 
 ## Payments
 

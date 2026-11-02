@@ -148,6 +148,34 @@ missing package.
 `facilitator.auth.type: cdp` and brings the larger CDP dependency tree. A
 facilitator with a static token can use `auth.type: bearer` without it.
 
+### Testing a custom store
+
+`createGateway` accepts a custom `ReceiptStore`. The experimental `./testing`
+entry exports conformance cases to test it. The cases use `node:assert/strict`
+and import no test runner or optional peers, so you can wrap them with your
+runner:
+
+```ts
+import { receiptStoreConformanceCases } from '@devlab.group/agent-commerce/testing';
+import { it } from 'vitest';
+
+const cases = await receiptStoreConformanceCases(({ clock }) => ({
+  store: createMyStore({ clock }),
+}));
+for (const c of cases) it.skipIf(c.skip !== undefined)(c.name, () => c.run());
+```
+
+Have the factory return a new, empty store for each case. The suite calls
+`init()` and `close()`. Pass the supplied `clock` to the store so expiry cases
+can advance time without waiting.
+
+Each optional method group, such as authorization holds, must be implemented
+in full or omitted; one case checks this. Cases that need missing methods are
+marked to skip. Durability cases also skip unless the factory returns `reopen()`,
+which must close the current store and open another over the same data.
+Concurrency cases submit competing reservations, resolutions, idempotency
+claims and pending-task takes, then check that exactly one caller wins.
+
 ## Integrate with an AI coding agent
 
 The repository includes an experimental [Agent Skills](https://agentskills.io)
@@ -311,11 +339,14 @@ prints the `unsupported` lists for A2A, ACP and AP2 when they are enabled.
 ### Versioning
 
 Minor releases may break experimental configurations, integrations or types:
-MPP, A2A, ACP, AP2, ERC-8409 quotes, `agent-commerce import openapi`, the
-journal's `Transaction` type, `ReceiptStore` journal methods,
-`PaymentProvider.reconcile` and the `/api/transactions` response shape.
-The `transactionId` fields, `receiptCommitted`, and the flags accepted by
-`reconcile` and `resolve` are supported.
+MPP, A2A, ACP, AP2, ERC-8409 quotes, `agent-commerce import openapi`,
+`PaymentProvider.reconcile`, the `ReceiptStore` methods and types added in
+2.6.0, and the `./testing` entry.
+
+The journal's `Transaction` type, `ReceiptStore` journal methods and
+`/api/transactions` response shape are supported. The `transactionId` fields,
+`receiptCommitted` and flags accepted by `reconcile` and `resolve` are also
+supported.
 
 Experimental runtime adapters and providers identify themselves with
 `status: experimental` in `GET /.well-known/agent-commerce`. Pin experimental
@@ -467,10 +498,11 @@ INFO  ACP                  disabled
 INFO  AP2                  disabled
 PASS  Payments             x402 v2 (scheme=exact) enabled - LOCAL dev chain (eip155:31337), destination=0x7099…79C8, facilitator=local (in-process), paymentFlow=authorization
 INFO  Payments (MPP)       MPP not configured
-PASS  Storage              sqlite schema v4 writable; receipts=2
+PASS  Storage              sqlite schema v5 writable; receipts=2
+PASS  Transactions         none unresolved
 PASS  Protocol versions    reported by gateway /.well-known/agent-commerce
 
-Score: 7/7 checks passed
+Score: 8/8 checks passed
 ```
 
 `doctor` compares live settlement terms with local config for each rail and
@@ -511,7 +543,11 @@ checked by state: `payment-uncertain`, `payment-pending`, then
 attempts are considered. A capped batch of attempts without journal entries
 follows.
 It exits 0 after a completed run, even if attempts remain unresolved, and 1 if
-the run fails to complete.
+the run fails to complete. If a store error stops a hold scan, the command
+prints the report, preserving any saved resolutions, and exits 1.
+`reconcile` and `resolve` refuse receipt databases below schema v5 without
+migrating them. Back up the database, then start the gateway once before
+retrying either command.
 
 Each family needs its own evidence:
 
@@ -536,10 +572,14 @@ sandbox. Public-network validation is pending. EVM and NEAR can report
 
 With `authorization.ap2` enabled, reconciliation also updates AP2 holds on
 resolved payments: `settled` consumes the mandate; `rejected` releases it.
-It opens the AP2 replay database for these updates without verifying mandates.
+It updates holds in the receipt database without verifying mandates.
 The report's `holds` list (`--json`) covers pending holds whose payments are
-resolved in the database. Dry runs report those holds without writing
-resolutions or hold changes. Both databases are still opened and initialized.
+resolved in the database. It also attempts to release `reserved` holds older
+than `--min-age` whose request has no current or archived payment attempt.
+The pipeline reserves an attempt before calling settlement. Scanned orphan
+holds appear in `orphanHolds`; dry runs list at most one page of them.
+Dry runs write no resolutions or hold changes, but still open and initialize
+the database.
 Later runs can retry holds left pending after earlier payment resolutions,
 including those recorded by `resolve` while AP2 was disabled.
 
@@ -571,6 +611,17 @@ run can retry it.
 `POST /api/payment-attempts/:id/resolve` applies the same rules over HTTP;
 the admin token controls access without identifying the operator. Exit 0
 means the resolution was written; 1 means a refusal or error.
+
+### `agent-commerce backup`
+
+```bash
+npm run agent-commerce -- backup --out ./backups/2026-11-01
+```
+
+Copies the receipt database into a new or empty directory with a `backup.json`
+manifest. It also copies existing, unimported legacy files configured for enabled
+AP2 or ACP. It can run alongside a live gateway. See [Storage](docs/storage.md)
+for restore and shutdown instructions.
 
 ### `agent-commerce version`
 
@@ -639,6 +690,7 @@ they are added to a release.
 | [Protocols](docs/protocols.md)                 | supported and unsupported protocol features |
 | [AP2](docs/protocols/ap2.md)                   | mandate verification and the trust model    |
 | [Configuration](docs/configuration.md)         | `config.yaml` reference                     |
+| [Storage](docs/storage.md)                     | upgrade, backup, restore and shutdown       |
 | [Upgrading from 2.0](docs/migration-2.1.md)    | changes that can break a 2.0 setup          |
 | [Smoke tests](docs/smoke-tests.md)             | settling on public networks, by hand        |
 | [OpenAPI import](docs/openapi-import.md)       | generate resources from an existing API     |

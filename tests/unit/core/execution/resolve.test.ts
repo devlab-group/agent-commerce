@@ -270,7 +270,13 @@ describe('hold alignment in reconcile', () => {
       provider,
     ]);
 
-    expect(second).toEqual({ dryRun: false, entries: [], holds: [] });
+    expect(second).toEqual({
+      dryRun: false,
+      entries: [],
+      holds: [],
+      orphanHolds: [],
+      failedScans: [],
+    });
     expect(calls).toEqual([]);
   });
 

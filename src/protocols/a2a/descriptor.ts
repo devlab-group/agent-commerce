@@ -38,8 +38,8 @@ export const A2A_UNSUPPORTED: readonly string[] = [
   'authenticated extended agent cards',
   'A2A authentication schemes',
   'artifact types beyond Agent Commerce outcome data',
-  // Pending x402 payments live in process memory
-  'x402 extension payments across gateway restarts or instances',
+  // Instances with separate receipt stores cannot resume each other's tasks
+  'x402 extension payments across gateway instances',
 ];
 
 export function buildDescriptor(implementationVersion: string): AdapterDescriptor {

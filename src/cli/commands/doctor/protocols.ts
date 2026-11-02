@@ -15,7 +15,7 @@ import {
 } from '../../../protocols/acp/constants';
 import { ACP_UNSUPPORTED } from '../../../protocols/acp/descriptor';
 import type { GatewayConfig } from '../../lib/config-client';
-import { storeFileCheck } from './storage';
+import { type LegacyState, legacyStoreCheck } from './storage';
 import type { DoctorCheck, WellKnownResult } from './types';
 
 /**
@@ -61,6 +61,7 @@ function acpMappingCheck(
 export function protocolChecks(
   config: GatewayConfig | undefined,
   wellKnown: WellKnownResult | undefined,
+  legacy: LegacyState,
 ): DoctorCheck[] {
   const checks: DoctorCheck[] = [];
   // 5. Protocols
@@ -123,13 +124,12 @@ export function protocolChecks(
     });
 
     checks.push(
-      storeFileCheck(
+      legacyStoreCheck(
         'ACP idempotency',
+        'acp-idempotency',
         acp.idempotency.path,
-        {
-          inMemory: 'replay protection is lost on every restart',
-          unwritable: 'the adapter cannot claim idempotency keys',
-        },
+        legacy,
+        `claims in the receipt database (retention ${acp.idempotency.retentionHours}h)`,
         ` (retention ${acp.idempotency.retentionHours}h)`,
       ),
     );

@@ -1,7 +1,7 @@
 // The business-rule pass: coerces leaves and checks cross-references across sections
 import { CommerceError } from '../../core';
 import { normalizeAcp, validateAcpCheckoutMapping } from './acp';
-import { normalizeAp2, validateReplayStoreIsolated } from './ap2';
+import { normalizeAp2, validateLegacyStoresIsolated } from './ap2';
 import { normalizeMpp } from './mpp';
 import { type RawConfig, SUPPORTED_CONFIG_VERSION } from './raw';
 import { normalizeResource } from './resources';
@@ -34,9 +34,7 @@ export function normalize(raw: RawConfig): GatewayConfig {
   const mpp = normalizeMpp(raw.payments.mpp);
 
   const ap2 = normalizeAp2(raw.authorization?.ap2);
-  if (ap2?.enabled) {
-    validateReplayStoreIsolated(ap2.replay.path, raw.storage.receipts.path, protocols.acp);
-  }
+  validateLegacyStoresIsolated(ap2, protocols.acp, raw.storage.receipts.path);
 
   const resources = Object.entries(raw.resources).map(([id, entry]) =>
     normalizeResource(id, entry, protocols, x402Settings, mpp, ap2),

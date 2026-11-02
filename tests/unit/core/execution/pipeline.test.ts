@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { EventSink, PaymentAttempt, ReceiptStore } from '../../../../src/core';
 import type { CommerceEvent, CommerceEventType } from '../../../../src/core/domain/event';
 import type {
   CanonicalRequest,
@@ -948,6 +949,160 @@ describe('createExecutionPipeline', () => {
       expect(challenge).toEqual(status === 402 ? envelope : undefined);
     },
   );
+
+  describe('a proof refused by verify() whose replay key an attempt already holds', () => {
+    const envelope = { x402Version: 2, accepts: [{ scheme: 'exact' }] };
+    const reason = 'invalid_exact_evm_transaction_simulation_failed';
+
+    function attemptWith(status: string): PaymentAttempt {
+      return {
+        id: 'attempt-1',
+        requestId: 'req-0',
+        resourceId: 'res-1',
+        provider: 'x402',
+        replayKey: 'replay-key-1',
+        status: status as PaymentAttempt['status'],
+        amount: '0.01',
+        currency: 'USDC',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      };
+    }
+
+    // Simulate verification rejecting an authorization whose transfer landed
+    async function replay(
+      store: ReceiptStore & EventSink,
+      replayKey: string | null = 'replay-key-1',
+    ) {
+      let settleCalls = 0;
+      const pipeline = createExecutionPipeline({
+        resources: createResourceRegistry([
+          makeResource({
+            id: 'res-1',
+            pricing: { type: 'fixed', amount: '0.01', currency: 'USDC' },
+            paymentMethods: ['x402'],
+          }),
+        ]),
+        paymentProviders: [
+          createFakePaymentProvider({
+            challengeEnvelope: envelope,
+            verify: async () => ({
+              status: 'rejected',
+              provider: 'x402',
+              amount: '0.01',
+              currency: 'USDC',
+              rejectionReason: reason,
+              ...(replayKey !== null ? { replayKey } : {}),
+            }),
+            settle: async () => {
+              settleCalls += 1;
+              return { status: 'settled', provider: 'x402', amount: '0.01', currency: 'USDC' };
+            },
+          }),
+        ],
+        store,
+        backend: createFakeBackendExecutor(),
+        events: store,
+        logger: createCapturingLogger(),
+        clock: createFakeClock(),
+        ids: createFakeIdGenerator(),
+      });
+      const error = await pipeline
+        .execute(makeRequest({ payment: { method: 'x402', payload: 'proof' } }))
+        .then(
+          () => undefined,
+          (e: unknown) => e,
+        );
+      if (!isCommerceError(error)) throw new Error(`expected a CommerceError, got ${error}`);
+      return { error, settleCalls };
+    }
+
+    it.each([
+      'reserved',
+      'settlement-uncertain',
+      // Legacy status for any settle() throw before settlement-uncertain existed
+      'failed',
+      'an-unreadable-status',
+    ])(
+      'returns 409 PAYMENT_REPLAYED with no challenge while that attempt is %s',
+      async (status) => {
+        const store = createFakeStore();
+        store.attempts.set('replay-key-1', attemptWith(status));
+
+        const { error, settleCalls } = await replay(store);
+
+        expect([error.code, error.httpStatus]).toEqual(['PAYMENT_REPLAYED', 409]);
+        expect(error.details).toEqual({ attemptStatus: status });
+        expect(settleCalls).toBe(0);
+        expect([...store.attempts.values()]).toEqual([attemptWith(status)]);
+        expect(eventTypes(store)).toEqual(['resource.requested', 'payment.rejected']);
+        expect(store.events[1]?.data).toEqual({ reason: 'PAYMENT_REPLAYED' });
+      },
+    );
+
+    it.each(['settled', 'rejected', undefined])(
+      'keeps 402 PAYMENT_INVALID with a fresh challenge when the attempt is %s',
+      async (status) => {
+        const store = createFakeStore();
+        if (status !== undefined) store.attempts.set('replay-key-1', attemptWith(status));
+
+        const { error, settleCalls } = await replay(store);
+
+        expect([error.code, error.httpStatus]).toEqual(['PAYMENT_INVALID', 402]);
+        expect(error.details).toEqual({ challenge: envelope, reason });
+        expect(settleCalls).toBe(0);
+        expect(store.events[1]?.data).toEqual({ reason });
+      },
+    );
+
+    it('keeps 402 PAYMENT_INVALID when an unfinished attempt holds another key', async () => {
+      const store = createFakeStore();
+      store.attempts.set('replay-key-1', attemptWith('reserved'));
+
+      const { error } = await replay(store, 'replay-key-2');
+
+      expect([error.code, error.httpStatus]).toEqual(['PAYMENT_INVALID', 402]);
+      expect(error.details).toEqual({ challenge: envelope, reason });
+    });
+
+    it('keeps 402 PAYMENT_INVALID without reading the store when the refusal carries no replay key', async () => {
+      const store = createFakeStore({
+        findPaymentAttemptByReplayKey: async () => {
+          throw new Error('SQLITE_IOERR: disk I/O error');
+        },
+      });
+
+      const { error } = await replay(store, null);
+
+      expect([error.code, error.httpStatus]).toEqual(['PAYMENT_INVALID', 402]);
+      expect(error.details).toEqual({ challenge: envelope, reason });
+    });
+
+    it('keeps 402 PAYMENT_INVALID for a store without findPaymentAttemptByReplayKey', async () => {
+      const { findPaymentAttemptByReplayKey: _lookup, ...legacy } = createFakeStore();
+      legacy.attempts.set('replay-key-1', attemptWith('reserved'));
+
+      const { error } = await replay(legacy);
+
+      expect([error.code, error.httpStatus]).toEqual(['PAYMENT_INVALID', 402]);
+      expect(error.details).toEqual({ challenge: envelope, reason });
+    });
+
+    it('returns STORAGE_ERROR with no challenge when the lookup fails', async () => {
+      const store = createFakeStore({
+        findPaymentAttemptByReplayKey: async () => {
+          throw new Error('SQLITE_IOERR: disk I/O error');
+        },
+      });
+
+      const { error, settleCalls } = await replay(store);
+
+      expect(error.code).toBe('STORAGE_ERROR');
+      expect(error.details).toBeUndefined();
+      expect(settleCalls).toBe(0);
+      expect(store.events[1]?.data).toEqual({ reason: 'STORAGE_ERROR' });
+    });
+  });
 
   it('settle() rejected -> PAYMENT_SETTLEMENT_FAILED, no backend call', async () => {
     const resource = makeResource({

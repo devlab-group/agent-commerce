@@ -1,7 +1,8 @@
 /**
- * Durable ACP checkout idempotency, in its own database file: it is protocol
- * replay semantics for a checkout, unrelated to the payment replay defense in
- * the receipt store, with its own lifetime and retention.
+ * Durable ACP checkout idempotency in a legacy database file. The adapter uses
+ * it when no receipt store implements the full idempotency group. Both backends
+ * apply the same checkout replay rules, separate from payment replay defense,
+ * with their own lifetime and retention.
  *
  * A key is claimed atomically before the side effect starts, so a second
  * request with the same key finds the claim instead of starting a second
@@ -216,26 +217,30 @@ export function createAcpIdempotencyStore(
 // `in_flight` row outlived the process that claimed it and would otherwise
 // answer "retry later" forever
 function resolveOrphanedClaims(db: Database, logger: Logger, release: boolean): void {
+  const { changes } = release
+    ? db.prepare("DELETE FROM acp_idempotency WHERE state = 'in_flight'").run()
+    : db.prepare("UPDATE acp_idempotency SET state = 'unresolved' WHERE state = 'in_flight'").run();
+  warnOrphanedClaims(logger, changes, release);
+}
+
+/**
+ * Log recovered claims at warn level when the count is nonzero. Both store
+ * backends use the same messages for released and unresolved claims.
+ */
+export function warnOrphanedClaims(logger: Logger, count: number, release: boolean): void {
+  if (count === 0) return;
   if (release) {
-    const { changes } = db.prepare("DELETE FROM acp_idempotency WHERE state = 'in_flight'").run();
-    if (changes > 0) {
-      logger.warn(
-        { released: changes },
-        'acp idempotency: freed claims left in flight by an earlier process; merchant deduplication is enabled',
-      );
-    }
+    logger.warn(
+      { released: count },
+      'acp idempotency: freed claims left in flight by an earlier process; merchant deduplication is enabled',
+    );
     return;
   }
-  const { changes } = db
-    .prepare("UPDATE acp_idempotency SET state = 'unresolved' WHERE state = 'in_flight'")
-    .run();
-  if (changes > 0) {
-    logger.warn(
-      { unresolved: changes },
-      'acp idempotency: marked claims left in flight by an earlier process as unresolved; ' +
-        'reconcile these operations against the merchant before trusting a retry',
-    );
-  }
+  logger.warn(
+    { unresolved: count },
+    'acp idempotency: marked claims left in flight by an earlier process as unresolved; ' +
+      'reconcile these operations against the merchant before trusting a retry',
+  );
 }
 
 // `PRAGMA user_version` marks the schema, so reopening a current file is a no-op

@@ -1,7 +1,8 @@
 // Reconcile CLI validation, startup failures and report formats
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { parseDuration, runReconcileCommand } from '../../../src/cli/commands/reconcile';
 import { CommerceError } from '../../../src/core';
@@ -92,6 +93,30 @@ describe('runReconcileCommand flag checks', () => {
     expect(await runReconcileCommand({}, io, { loadConfig: async () => config })).toBe(1);
     expect(io.err.join('\n')).toContain('FAIL  reconcile could not run');
   });
+
+  it('refuses a 2.5 database without migrating it', async () => {
+    const path = join(tempDir(), 'receipts.sqlite');
+    const v4 = new Database(path);
+    v4.exec(
+      readFileSync(
+        new URL('../storage-receipts/fixtures/receipts-v4.sql', import.meta.url),
+        'utf8',
+      ),
+    );
+    v4.close();
+    const config = makeGatewayConfig({ storage: { receipts: { driver: 'sqlite', path } } });
+    const io = createCapturingIo();
+
+    expect(await runReconcileCommand({}, io, { loadConfig: async () => config })).toBe(1);
+    expect(io.err.join('\n')).toMatch(/schema v4.*agent-commerce backup/);
+    const after = new Database(path, { readonly: true });
+    try {
+      // Preserve schema v4 so a 2.5 gateway can still open the file
+      expect(after.pragma('user_version', { simple: true })).toBe(4);
+    } finally {
+      after.close();
+    }
+  });
 });
 
 describe('runReconcileCommand report', () => {
@@ -124,6 +149,8 @@ describe('runReconcileCommand report', () => {
         unknown: 1,
         resolved: 0,
         holdsAligned: 0,
+        orphanHolds: 0,
+        orphanHoldsReleased: 0,
       },
       entries: [
         {
@@ -138,7 +165,73 @@ describe('runReconcileCommand report', () => {
         },
       ],
       holds: [],
+      orphanHolds: [],
+      failedScans: [],
     });
+  });
+
+  it('prints the saved resolutions and exits 1 when a hold scan fails', async () => {
+    const { config, attempt } = await seededConfig();
+    const ap2 = {
+      enabled: true,
+      trust: { mandateIssuers: [], checkoutIssuers: [] },
+    } as unknown as NonNullable<NonNullable<typeof config.authorization>['ap2']>;
+    const io = createCapturingIo();
+    // Inject a failure when the command reads orphan holds
+    const { createSqliteReceiptStore: real } = await import('../../../src/storage/receipts');
+    const spy = vi
+      .spyOn(await import('../../../src/storage/receipts'), 'createSqliteReceiptStore')
+      .mockImplementation((options) => {
+        const store = real(options);
+        store.listOrphanAuthorizationHolds = async () => {
+          throw new Error('SQLITE_BUSY');
+        };
+        return store;
+      });
+    try {
+      const code = await runReconcileCommand({}, io, {
+        loadConfig: async () => ({ ...config, authorization: { ap2 } }),
+      });
+
+      expect(code).toBe(1);
+      expect(io.out[1]).toContain(attempt.id);
+      expect(io.err.join('\n')).toContain('could not finish the orphan-holds scan');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("leaves a live gateway's ACP claims and its deprecated ACP file alone", async () => {
+    const { config } = await seededConfig();
+    const scope = { deployment: 'https://shop.example', endpoint: '/checkout_sessions', key: 'k1' };
+    const expiresAt = '2999-01-01T00:00:00.000Z';
+    const live = createSqliteReceiptStore({ path: config.storage.receipts.path });
+    await live.init();
+    expect(await live.claimIdempotencyKey(scope, 'sha256:body', expiresAt)).toEqual({
+      kind: 'reserved',
+    });
+    const acpFile = join(tempDir(), 'acp-idempotency.sqlite');
+    writeFileSync(acpFile, '');
+    const acp = {
+      enabled: true,
+      idempotency: { path: acpFile, retentionHours: 24, merchantIdempotent: false },
+    } as unknown as NonNullable<typeof config.protocols.acp>;
+
+    try {
+      const code = await runReconcileCommand({}, createCapturingIo(), {
+        loadConfig: async () => ({ ...config, protocols: { ...config.protocols, acp } }),
+      });
+
+      expect(code).toBe(0);
+      // Recovery would mark the active claim unresolved; import would add a marker
+      expect(await live.claimIdempotencyKey(scope, 'sha256:body', expiresAt)).toEqual({
+        kind: 'in-flight',
+      });
+      expect((await live.summary({ orphanHoldMinAgeMs: 0 })).legacyImports).toEqual([]);
+      expect(readFileSync(acpFile)).toHaveLength(0);
+    } finally {
+      await live.close();
+    }
   });
 
   it('marks a dry run in the text report', async () => {

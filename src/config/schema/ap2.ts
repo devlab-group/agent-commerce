@@ -1,4 +1,5 @@
 // AP2 mandate verification settings and each resource's authorization requirement
+import { resolve } from 'node:path';
 import type { z } from 'zod';
 import {
   AP2_DEFAULT_CLOCK_SKEW_SECONDS,
@@ -58,10 +59,9 @@ export function normalizeAp2(raw: RawAp2 | undefined): Ap2AuthorizationConfig | 
     );
   }
 
-  if (raw.replay === undefined) {
-    throw ap2Invalid(
-      'authorization.ap2.replay',
-      'authorization.ap2.replay is required when AP2 is enabled - it names the SQLite file recording which mandates have been spent, and without it a verified mandate could authorize a second settlement',
+  if (raw.replay !== undefined) {
+    console.warn(
+      '[agent-commerce] authorization.ap2.replay.path is deprecated: the receipt database holds AP2 mandate holds. The first start imports this file and keeps it locked while the gateway runs. Remove the key once no 2.5.x gateway uses the file; 3.0.0 stops reading it.',
     );
   }
 
@@ -92,7 +92,7 @@ export function normalizeAp2(raw: RawAp2 | undefined): Ap2AuthorizationConfig | 
       raw.requireMandateExpiry ?? false,
       'authorization.ap2.requireMandateExpiry',
     ),
-    replay: { path: raw.replay.path },
+    ...(raw.replay !== undefined ? { replay: { path: raw.replay.path } } : {}),
   };
 }
 
@@ -214,28 +214,33 @@ function validateJwk(
   return normalized;
 }
 
-// The AP2 replay store gets its own SQLite file. Reserved mandates, payment
-// attempts and ACP idempotency records have different schemas and retention
-// rules, and a shared file means a migration conflict at startup or a shared
-// write lock on the settlement path.
-export function validateReplayStoreIsolated(
-  replayPath: string,
-  receiptsPath: string,
+// Legacy imports hold write locks, so reject source paths whose resolved
+// path matches another source or the receipt database
+export function validateLegacyStoresIsolated(
+  ap2: Ap2AuthorizationConfig | undefined,
   acp: AcpProtocolConfig,
+  receiptsPath: string,
 ): void {
-  // Every `:memory:` handle is its own private database, so equal strings do
-  // not collide
-  if (replayPath === ':memory:') return;
-
+  const files: [string, string | undefined][] = [
+    ['authorization.ap2.replay.path', ap2?.enabled ? ap2.replay?.path : undefined],
+    ['protocols.acp.idempotency.path', acp.enabled ? acp.idempotency.path : undefined],
+  ];
   const others: [string, string][] = [['storage.receipts.path', receiptsPath]];
-  if (acp.enabled) others.push(['protocols.acp.idempotency.path', acp.idempotency.path]);
-
-  for (const [otherPath, other] of others) {
-    if (replayPath !== other) continue;
-    throw ap2Invalid(
-      'authorization.ap2.replay.path',
-      `authorization.ap2.replay.path is the same file as ${otherPath} ("${replayPath}") - the AP2 replay store keeps its own schema and must not share a database with another store`,
+  for (const [key, path] of files) {
+    // Every `:memory:` handle is its own private database, so equal strings do
+    // not collide
+    if (path === undefined || path === ':memory:') continue;
+    const clash = others.find(
+      ([, other]) => other !== ':memory:' && resolve(other) === resolve(path),
     );
+    if (clash !== undefined) {
+      throw new CommerceError(
+        'CONFIG_INVALID',
+        `${key} is the same file as ${clash[0]} ("${resolve(path)}") - a deprecated store file is imported into the receipt database and then locked, so it must be a separate file`,
+        { details: { path: key } },
+      );
+    }
+    others.push([key, path]);
   }
 }
 

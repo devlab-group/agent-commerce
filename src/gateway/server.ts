@@ -66,6 +66,10 @@ export interface GatewayInstance {
   readonly pipeline: ExecutionPipeline;
   readonly resources: ResourceRegistry;
   listen(): Promise<{ url: string }>;
+  /**
+   * Stops accepting connections and drains in-flight requests before stopping
+   * adapters, then resolves when both are done.
+   */
   close(): Promise<void>;
   /** Fastify instance, for `.inject()` in tests */
   readonly server: FastifyInstance;
@@ -189,8 +193,17 @@ export async function createGateway(options: GatewayOptions): Promise<GatewayIns
       return { url };
     },
     async close(): Promise<void> {
+      // Drain requests before adapters close stores they may still use.
+      // Node's initial close() sweep misses sockets that become idle later;
+      // sweep again to avoid waiting for their keep-alive timeout.
+      const sweep = setInterval(() => server.server.closeIdleConnections(), 100);
+      sweep.unref();
+      try {
+        await server.close();
+      } finally {
+        clearInterval(sweep);
+      }
       await stopAdapters(adapterRuntimes, logger);
-      await server.close();
     },
     server,
   };

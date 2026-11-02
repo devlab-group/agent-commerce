@@ -23,13 +23,16 @@ export function retryChallenge(
 // hide a transfer, like `settlement-uncertain`.
 const FINISHED_ATTEMPT_STATUSES: ReadonlySet<string> = new Set(['settled', 'rejected']);
 
+export function isFinishedAttempt(status: unknown): boolean {
+  return typeof status === 'string' && FINISHED_ATTEMPT_STATUSES.has(status);
+}
+
 // Include the paid offer's network for the rail's replay code. Finished
 // attempts get 402 with a fresh challenge; unfinished or unreadable attempts
 // keep 409 to avoid prompting a second payment.
 export function replayError(error: CommerceError, requirement: PaymentRequirement): CommerceError {
   if (error.code !== 'PAYMENT_REPLAYED') return error;
-  const status = error.details?.['attemptStatus'];
-  const finished = typeof status === 'string' && FINISHED_ATTEMPT_STATUSES.has(status);
+  const finished = isFinishedAttempt(error.details?.['attemptStatus']);
   const network = requirement.network;
   if (!finished && network === undefined) return error;
   return new CommerceError('PAYMENT_REPLAYED', error.message, {
