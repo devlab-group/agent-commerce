@@ -339,11 +339,14 @@ prints the `unsupported` lists for A2A, ACP and AP2 when they are enabled.
 ### Versioning
 
 Minor releases may break experimental configurations, integrations or types:
-MPP, A2A, ACP, AP2, ERC-8409 quotes, `agent-commerce import openapi`, the
-journal's `Transaction` type, `ReceiptStore` journal methods,
-`PaymentProvider.reconcile` and the `/api/transactions` response shape.
-The `transactionId` fields, `receiptCommitted`, and the flags accepted by
-`reconcile` and `resolve` are supported.
+MPP, A2A, ACP, AP2, ERC-8409 quotes, `agent-commerce import openapi`,
+`PaymentProvider.reconcile`, the `ReceiptStore` methods and types added in
+2.6.0, and the `./testing` entry.
+
+The journal's `Transaction` type, `ReceiptStore` journal methods and
+`/api/transactions` response shape are supported. The `transactionId` fields,
+`receiptCommitted` and flags accepted by `reconcile` and `resolve` are also
+supported.
 
 Experimental runtime adapters and providers identify themselves with
 `status: experimental` in `GET /.well-known/agent-commerce`. Pin experimental

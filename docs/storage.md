@@ -42,8 +42,8 @@ database, except `:memory:`. The 3.0.0 plan removes both keys.
 - `reconcile` and `resolve` refuse receipt databases below schema v5 without
   migrating them. This preserves access for a 2.5 gateway still using the
   file. Back up the database and run `start` once to migrate it.
-- Remove a key after its import succeeds and no 2.5 gateway uses the file.
-  Changing a recorded source path is refused.
+- Remove the key after `doctor` confirms the file was imported and no 2.5
+  gateway still uses it. Changing a recorded source path is refused.
 
 When an enabled feature has no recorded import or prior check, `start`
 checks for past use in the receipt database. For AP2, it looks for a receipt
