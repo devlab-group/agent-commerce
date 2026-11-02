@@ -540,7 +540,11 @@ checked by state: `payment-uncertain`, `payment-pending`, then
 attempts are considered. A capped batch of attempts without journal entries
 follows.
 It exits 0 after a completed run, even if attempts remain unresolved, and 1 if
-the run fails to complete.
+the run fails to complete. If a store error stops a hold scan, the command
+prints the report, preserving any saved resolutions, and exits 1.
+`reconcile` and `resolve` refuse receipt databases below schema v5 without
+migrating them. Back up the database, then start the gateway once before
+retrying either command.
 
 Each family needs its own evidence:
 

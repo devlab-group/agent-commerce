@@ -1,7 +1,8 @@
 // Reconcile CLI validation, startup failures and report formats
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { parseDuration, runReconcileCommand } from '../../../src/cli/commands/reconcile';
 import { CommerceError } from '../../../src/core';
@@ -92,6 +93,30 @@ describe('runReconcileCommand flag checks', () => {
     expect(await runReconcileCommand({}, io, { loadConfig: async () => config })).toBe(1);
     expect(io.err.join('\n')).toContain('FAIL  reconcile could not run');
   });
+
+  it('refuses a 2.5 database without migrating it', async () => {
+    const path = join(tempDir(), 'receipts.sqlite');
+    const v4 = new Database(path);
+    v4.exec(
+      readFileSync(
+        new URL('../storage-receipts/fixtures/receipts-v4.sql', import.meta.url),
+        'utf8',
+      ),
+    );
+    v4.close();
+    const config = makeGatewayConfig({ storage: { receipts: { driver: 'sqlite', path } } });
+    const io = createCapturingIo();
+
+    expect(await runReconcileCommand({}, io, { loadConfig: async () => config })).toBe(1);
+    expect(io.err.join('\n')).toMatch(/schema v4.*agent-commerce backup/);
+    const after = new Database(path, { readonly: true });
+    try {
+      // Preserve schema v4 so a 2.5 gateway can still open the file
+      expect(after.pragma('user_version', { simple: true })).toBe(4);
+    } finally {
+      after.close();
+    }
+  });
 });
 
 describe('runReconcileCommand report', () => {
@@ -141,7 +166,39 @@ describe('runReconcileCommand report', () => {
       ],
       holds: [],
       orphanHolds: [],
+      failedScans: [],
     });
+  });
+
+  it('prints the saved resolutions and exits 1 when a hold scan fails', async () => {
+    const { config, attempt } = await seededConfig();
+    const ap2 = {
+      enabled: true,
+      trust: { mandateIssuers: [], checkoutIssuers: [] },
+    } as unknown as NonNullable<NonNullable<typeof config.authorization>['ap2']>;
+    const io = createCapturingIo();
+    // Inject a failure when the command reads orphan holds
+    const { createSqliteReceiptStore: real } = await import('../../../src/storage/receipts');
+    const spy = vi
+      .spyOn(await import('../../../src/storage/receipts'), 'createSqliteReceiptStore')
+      .mockImplementation((options) => {
+        const store = real(options);
+        store.listOrphanAuthorizationHolds = async () => {
+          throw new Error('SQLITE_BUSY');
+        };
+        return store;
+      });
+    try {
+      const code = await runReconcileCommand({}, io, {
+        loadConfig: async () => ({ ...config, authorization: { ap2 } }),
+      });
+
+      expect(code).toBe(1);
+      expect(io.out[1]).toContain(attempt.id);
+      expect(io.err.join('\n')).toContain('could not finish the orphan-holds scan');
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('marks a dry run in the text report', async () => {

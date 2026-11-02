@@ -125,6 +125,7 @@ describe('runReconcile writes', () => {
       ],
       holds: [],
       orphanHolds: [],
+      failedScans: [],
     });
     expect(await store.getPaymentAttempt?.(attempt.id)).toMatchObject({
       status: 'settled',
@@ -399,6 +400,33 @@ describe('runReconcile provider answers', () => {
   });
 });
 
+describe('runReconcile after a failed hold scan', () => {
+  it('keeps the saved resolutions in the report and names the pending-hold scan', async () => {
+    const attempt = await uncertain(1);
+    const provider = fakeProvider({ req_1: { outcome: 'settled', reason: 'transfer_final' } });
+    const list = store.listTransactions?.bind(store);
+    vi.spyOn(store, 'listTransactions').mockImplementation(async (options) => {
+      if (options?.pendingHold === true) throw new Error('SQLITE_BUSY');
+      return (list as NonNullable<typeof list>)(options);
+    });
+    const ap2 = { name: 'ap2' } as unknown as AuthorizationProvider;
+
+    clock.set(RUN_AT);
+    const report = await runReconcile({
+      store,
+      providers: [provider],
+      authorizationProviders: [ap2],
+      clock,
+      actor: 'ops@example',
+    });
+
+    expect(report.entries).toMatchObject([{ attemptId: attempt.id, written: true }]);
+    expect(report.holds).toEqual([]);
+    expect(report.failedScans).toEqual(['holds']);
+    expect((await store.getPaymentAttempt?.(attempt.id))?.status).toBe('settled');
+  });
+});
+
 describe('runReconcile orphan holds', () => {
   const MIN = 60_000;
 
@@ -498,7 +526,8 @@ describe('runReconcile orphan holds', () => {
   it('reports each hold it could not release, with the reason, and keeps it reserved', async () => {
     await hold(1, T0);
 
-    const disabled = await reconcileAt(RUN_AT, []);
+    const other = { ...holdProvider(), name: 'other' } as unknown as AuthorizationProvider;
+    const disabled = await reconcileAt(RUN_AT, [other]);
     expect(disabled.orphanHolds).toMatchObject([
       { reference: 'sha256:ref_1', released: false, reason: 'provider_not_enabled' },
     ]);
@@ -506,6 +535,24 @@ describe('runReconcile orphan holds', () => {
     expect(failing.orphanHolds).toMatchObject([
       { reference: 'sha256:ref_1', released: false, reason: 'provider_error' },
     ]);
+    expect(await store.getAuthorizationHoldState?.('sha256:ref_1')).toBe('reserved');
+  });
+
+  it('skips the scan without authorization providers, as for a payments-only run', async () => {
+    await hold(1, T0);
+    const list = vi.spyOn(store, 'listOrphanAuthorizationHolds');
+
+    expect((await reconcileAt(RUN_AT, [])).orphanHolds).toEqual([]);
+    expect(list).not.toHaveBeenCalled();
+  });
+
+  it('keeps the report, and names the scan, when the orphan listing fails', async () => {
+    await hold(1, T0);
+    vi.spyOn(store, 'listOrphanAuthorizationHolds').mockRejectedValueOnce(new Error('SQLITE_BUSY'));
+
+    const report = await reconcileAt(RUN_AT, [holdProvider()]);
+
+    expect(report).toMatchObject({ orphanHolds: [], failedScans: ['orphan-holds'] });
     expect(await store.getAuthorizationHoldState?.('sha256:ref_1')).toBe('reserved');
   });
 

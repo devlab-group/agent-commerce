@@ -7,7 +7,8 @@
  * payments without verifying mandates. Dry runs skip resolution and hold
  * writes. Reconciliation does not settle, broadcast, refund or retry delivery.
  * Exit 0 means the run completed, even with unresolved attempts; 1 means it
- * failed to complete.
+ * failed to complete. If a hold scan fails, the report retains any saved
+ * resolutions and the command exits 1.
  */
 import { existsSync } from 'node:fs';
 import { userInfo } from 'node:os';
@@ -15,6 +16,7 @@ import { resolve } from 'node:path';
 import {
   type AuthorizationProvider,
   CommerceError,
+  isCommerceError,
   type Logger,
   NOOP_LOGGER,
   type ReceiptStore,
@@ -79,8 +81,9 @@ export async function runReconcileCommand(
     const providers = await (
       await import('../../gateway/payment-providers')
     ).createConfiguredPaymentProviders(config.payments, logger);
+    let report: ReconcileReport | undefined;
     await withJournal(config, logger, async (store, authorizationProviders) => {
-      const report = await runReconcile({
+      report = await runReconcile({
         store,
         providers,
         authorizationProviders,
@@ -93,6 +96,12 @@ export async function runReconcileCommand(
       });
       printReport(report, io, options.json === true);
     });
+    if (report !== undefined && report.failedScans.length > 0) {
+      io.stderr(
+        `FAIL  reconcile could not finish the ${report.failedScans.join(' and ')} scan; the resolutions above are saved, so run it again`,
+      );
+      return 1;
+    }
     return 0;
   } catch (error) {
     io.stderr(`FAIL  reconcile could not run: ${redactedErrorText(error)}`);
@@ -104,7 +113,8 @@ export async function runReconcileCommand(
  * Runs `fn` with the receipt store and enabled authorization providers,
  * closing them afterward. Used by `reconcile` and `resolve` with the gateway
  * running or stopped. It initializes the receipt store but does not import
- * legacy files. With AP2 enabled, an existing file with no recorded import
+ * legacy files. Existing databases with an older schema are refused before
+ * migration. With AP2 enabled, an existing file with no recorded import
  * blocks payment and hold updates until `start` imports it.
  */
 export async function withJournal(
@@ -115,12 +125,35 @@ export async function withJournal(
     authorizationProviders: readonly AuthorizationProvider[],
   ) => Promise<void>,
 ): Promise<void> {
-  const [{ createConfiguredAuthorizationProviders }, { createSqliteReceiptStore }] =
-    await Promise.all([
-      import('../../gateway/payment-providers'),
-      import('../../storage/receipts'),
-    ]);
-  const store = createSqliteReceiptStore({ path: config.storage.receipts.path, logger });
+  const [
+    { createConfiguredAuthorizationProviders },
+    { createSqliteReceiptStore, openSqliteReceiptStoreReadOnly },
+  ] = await Promise.all([
+    import('../../gateway/payment-providers'),
+    import('../../storage/receipts'),
+  ]);
+  const path = config.storage.receipts.path;
+  if (path !== ':memory:' && existsSync(path)) {
+    // Check the schema before opening for writes so these commands cannot
+    // migrate a database still used by a 2.5 gateway
+    try {
+      await openSqliteReceiptStoreReadOnly(path).close();
+    } catch (error) {
+      const { schemaVersion, expected } = isCommerceError(error) ? (error.details ?? {}) : {};
+      if (
+        typeof schemaVersion === 'number' &&
+        typeof expected === 'number' &&
+        schemaVersion < expected
+      ) {
+        throw new CommerceError(
+          'STORAGE_ERROR',
+          `the receipt database "${resolve(path)}" is at schema v${schemaVersion}, and this version would migrate it to v${expected}, which earlier versions cannot open. Run agent-commerce backup, start the gateway once to migrate it, then retry.`,
+        );
+      }
+      throw error;
+    }
+  }
+  const store = createSqliteReceiptStore({ path, logger });
   try {
     await store.init();
     const ap2 = config.authorization?.ap2;
@@ -178,6 +211,7 @@ function printReport(report: ReconcileReport, io: Io, json: boolean): void {
           entries: report.entries,
           holds: report.holds,
           orphanHolds: report.orphanHolds,
+          failedScans: report.failedScans,
         },
         null,
         2,

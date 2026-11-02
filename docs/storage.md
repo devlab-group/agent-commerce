@@ -39,6 +39,9 @@ values for these files and the receipt database, except `:memory:`. The
   failures still stop startup.
 - With AP2 enabled, `reconcile` and `resolve` refuse an existing AP2 file with
   no recorded import. Run `start` first; these commands do not import it.
+- `reconcile` and `resolve` refuse receipt databases below schema v5 without
+  migrating them. This preserves access for a 2.5 gateway still using the
+  file. Back up the database and run `start` once to migrate it.
 - Remove a key after its import succeeds and no 2.5 gateway uses the file.
   Changing a recorded source path is refused.
 

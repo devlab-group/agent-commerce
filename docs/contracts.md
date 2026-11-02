@@ -422,7 +422,12 @@ persistence must not fail the commerce flow.
     remains experimental.
   - `runReconcile` attempts to release orphan holds older than the minimum
     age through the enabled AP2 provider. `ReconcileReport.orphanHolds` lists
-    the scanned holds and release results; a dry run releases nothing.
+    the scanned holds and release results; a dry run releases nothing. An
+    omitted or empty `authorizationProviders` list skips both hold scans.
+  - If a store read error stops a hold scan, the report keeps any results
+    collected so far and identifies the scan in `ReconcileReport.failedScans`.
+    Saved resolutions remain committed and appear in `entries`.
+    `agent-commerce reconcile` then exits 1.
 
 ### MPP
 
