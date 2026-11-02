@@ -15,7 +15,7 @@ import {
 } from '../../../protocols/acp/constants';
 import { ACP_UNSUPPORTED } from '../../../protocols/acp/descriptor';
 import type { GatewayConfig } from '../../lib/config-client';
-import { storeFileCheck } from './storage';
+import { type LegacyImports, legacyStoreCheck } from './storage';
 import type { DoctorCheck, WellKnownResult } from './types';
 
 /**
@@ -61,6 +61,7 @@ function acpMappingCheck(
 export function protocolChecks(
   config: GatewayConfig | undefined,
   wellKnown: WellKnownResult | undefined,
+  legacyImports: LegacyImports,
 ): DoctorCheck[] {
   const checks: DoctorCheck[] = [];
   // 5. Protocols
@@ -122,7 +123,6 @@ export function protocolChecks(
       detail: `bearer token configured (${acp.auth.token.length} characters, not shown)`,
     });
 
-    // A configured legacy path is used for startup import and locking
     checks.push(
       acp.idempotency.path === undefined
         ? {
@@ -130,14 +130,12 @@ export function protocolChecks(
             status: 'PASS',
             detail: `claims in the receipt database (retention ${acp.idempotency.retentionHours}h)`,
           }
-        : storeFileCheck(
+        : legacyStoreCheck(
             'ACP idempotency',
+            'acp-idempotency',
             acp.idempotency.path,
-            {
-              inMemory: 'replay protection is lost on every restart',
-              unwritable: 'the first start cannot lock the file to import it',
-            },
-            ` (retention ${acp.idempotency.retentionHours}h; deprecated key, imported at start)`,
+            legacyImports,
+            ` (retention ${acp.idempotency.retentionHours}h)`,
           ),
     );
     checks.push(acpMappingCheck(config, acp.checkout.operations));

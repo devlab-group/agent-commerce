@@ -9,7 +9,7 @@ import {
 } from '../../../authorization/ap2/constants';
 import { AP2_UNSUPPORTED } from '../../../authorization/ap2/descriptor';
 import type { GatewayConfig } from '../../lib/config-client';
-import { storeFileCheck } from './storage';
+import { type LegacyImports, legacyStoreCheck } from './storage';
 import type { DoctorCheck } from './types';
 
 // Issuer ids and how many keys each carries. Never a key
@@ -25,7 +25,10 @@ function describeIssuers(
   return `${label} issuers: ${described}`;
 }
 
-export function ap2Checks(config: GatewayConfig | undefined): DoctorCheck[] {
+export function ap2Checks(
+  config: GatewayConfig | undefined,
+  legacyImports: LegacyImports,
+): DoctorCheck[] {
   const checks: DoctorCheck[] = [];
   // 5d. AP2 authorization, from config and the pins. Verification keys are
   // public but still trust policy nobody asked this report to print, so only
@@ -50,7 +53,6 @@ export function ap2Checks(config: GatewayConfig | undefined): DoctorCheck[] {
       detail: `${describeIssuers('mandate', ap2.trust.mandateIssuers)} · ${describeIssuers('checkout', ap2.trust.checkoutIssuers)}`,
     });
 
-    // A configured legacy path is used for startup import and locking
     checks.push(
       ap2.replay === undefined
         ? {
@@ -58,16 +60,7 @@ export function ap2Checks(config: GatewayConfig | undefined): DoctorCheck[] {
             status: 'PASS',
             detail: 'mandate holds in the receipt database',
           }
-        : storeFileCheck(
-            'AP2 replay store',
-            ap2.replay.path,
-            {
-              inMemory:
-                'every spent mandate is forgotten on restart, so one could authorize a second purchase',
-              unwritable: 'the first start cannot lock the file to import it',
-            },
-            ' (deprecated key, imported at start)',
-          ),
+        : legacyStoreCheck('AP2 replay store', 'ap2-replay', ap2.replay.path, legacyImports),
     );
 
     // Resource ids, so an operator can see exactly which purchases now need a

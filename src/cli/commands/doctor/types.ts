@@ -1,5 +1,6 @@
 // The report doctor builds, and what a caller can inject
 import type { ReceiptStore } from '../../../core';
+import type { SqliteReceiptStore } from '../../../storage/receipts';
 import type { ConfigLoader } from '../../lib/config-client';
 import type { FetchJsonResult, FetchLike } from '../../lib/http';
 import type { ManifestEnvFill } from '../../lib/manifest-env';
@@ -24,10 +25,13 @@ export interface DoctorOptions {
   readonly gatewayUrl?: string;
 }
 
+/** A receipt store for doctor to read; `summary` adds the journal and import checks */
+export type DoctorStore = ReceiptStore & { readonly summary?: SqliteReceiptStore['summary'] };
+
 export interface DoctorDeps {
   readonly fetchImpl?: FetchLike;
   readonly loadConfig?: ConfigLoader;
-  readonly createStore?: (path: string) => ReceiptStore;
+  readonly createStore?: (path: string) => DoctorStore;
   readonly fillEnvFromManifest?: (env: NodeJS.ProcessEnv) => ManifestEnvFill;
   readonly hasChainDeployScript?: () => boolean;
   readonly loadViemAccounts?: LoadViemAccounts;

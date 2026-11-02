@@ -468,9 +468,10 @@ INFO  AP2                  disabled
 PASS  Payments             x402 v2 (scheme=exact) enabled - LOCAL dev chain (eip155:31337), destination=0x7099…79C8, facilitator=local (in-process), paymentFlow=authorization
 INFO  Payments (MPP)       MPP not configured
 PASS  Storage              sqlite schema v5 writable; receipts=2
+PASS  Transactions         none unresolved
 PASS  Protocol versions    reported by gateway /.well-known/agent-commerce
 
-Score: 7/7 checks passed
+Score: 8/8 checks passed
 ```
 
 `doctor` compares live settlement terms with local config for each rail and

@@ -48,6 +48,13 @@ evidence and the legacy key is unset or names a missing file, startup fails
 with `STORAGE_ERROR`. Point the key at the file used by the previous version,
 or at an empty file to explicitly accept the loss of its records.
 
+`agent-commerce doctor` opens the receipt file read-only, without migrating
+its schema or importing legacy records. If the schema is older than v5,
+such as a 2.5 database, it warns that the next start will migrate it. For each
+legacy key set on an enabled feature, it reports whether an import is recorded
+or notes when that information is unavailable. A configured file path that
+resolves to a different path from the recorded source gets `FAIL`.
+
 ## Backup
 
 ```bash

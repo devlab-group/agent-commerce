@@ -5,6 +5,7 @@ import { stripVTControlCharacters } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { AP2_UNSUPPORTED } from '../../../src/authorization/ap2/descriptor';
 import { printDoctorReport, runDoctor } from '../../../src/cli/commands/doctor';
+import type { DoctorStore } from '../../../src/cli/commands/doctor/types';
 import type { GatewayConfig } from '../../../src/config';
 import { CommerceError, type CommerceResource } from '../../../src/core';
 import { A2A_UNSUPPORTED } from '../../../src/protocols/a2a/descriptor';
@@ -1710,12 +1711,15 @@ describe('runDoctor: ACP', () => {
     expect(JSON.stringify(report)).not.toContain('super-secret-acp-token');
   });
 
-  it('warns that an in-memory idempotency store loses replay protection', async () => {
+  it('warns that an in-memory idempotency key has nothing to import', async () => {
     const report = await acpReport(enabledAcp());
 
-    const idempotency = report.checks.find((c) => c.name === 'ACP idempotency');
-    expect(idempotency?.status).toBe('WARN');
-    expect(idempotency?.detail).toContain('retention 24h');
+    expect(report.checks.find((c) => c.name === 'ACP idempotency')).toEqual({
+      name: 'ACP idempotency',
+      status: 'WARN',
+      detail:
+        'deprecated key: an in-memory store has nothing to import; remove the key (retention 24h)',
+    });
   });
 
   it('passes with no idempotency path, since claims live in the receipt database', async () => {
@@ -1850,6 +1854,7 @@ describe('runDoctor: AP2', () => {
   async function ap2Report(
     ap2: unknown,
     resources: readonly CommerceResource[] = [gatedResource()],
+    store: DoctorStore = makeFakeReceiptStore(),
   ): Promise<Awaited<ReturnType<typeof runDoctor>>> {
     const base = makeGatewayConfig();
     return runDoctor(
@@ -1865,7 +1870,7 @@ describe('runDoctor: AP2', () => {
                 authorization: { ap2: ap2 as NonNullable<GatewayConfig['authorization']>['ap2'] },
               }),
         }),
-        createStore: () => makeFakeReceiptStore(),
+        createStore: () => store,
       },
     );
   }
@@ -1921,12 +1926,14 @@ describe('runDoctor: AP2', () => {
     expect(JSON.stringify(report)).not.toContain(KEY.y);
   });
 
-  it('warns that an in-memory replay store forgets every spent mandate', async () => {
+  it('warns that an in-memory replay key has nothing to import', async () => {
     const report = await ap2Report(enabledAp2());
 
-    const replay = report.checks.find((c) => c.name === 'AP2 replay store');
-    expect(replay?.status).toBe('WARN');
-    expect(replay?.detail).toContain('in-memory');
+    expect(report.checks.find((c) => c.name === 'AP2 replay store')).toEqual({
+      name: 'AP2 replay store',
+      status: 'WARN',
+      detail: 'deprecated key: an in-memory store has nothing to import; remove the key',
+    });
   });
 
   it('passes with no replay key, since holds live in the receipt database', async () => {
@@ -1939,12 +1946,46 @@ describe('runDoctor: AP2', () => {
     });
   });
 
-  it('warns when a store file does not exist yet, without creating one', async () => {
+  it('reports the replay file import the receipt database records', async () => {
+    const report = await ap2Report(
+      enabledAp2({ replay: { path: '/data/ap2.sqlite' } }),
+      undefined,
+      {
+        ...makeFakeReceiptStore(),
+        summary: async () => ({
+          unresolvedTransactions: {},
+          orphanHolds: 0,
+          unresolvedIdempotencyKeys: 0,
+          unexpiredPendingTasks: 0,
+          legacyImports: [
+            {
+              source: 'ap2-replay',
+              path: '/data/ap2.sqlite',
+              rows: 4,
+              importedAt: '2026-11-01T10:00:00.000Z',
+            },
+          ],
+        }),
+      },
+    );
+
+    expect(report.checks.find((c) => c.name === 'AP2 replay store')).toEqual({
+      name: 'AP2 replay store',
+      status: 'WARN',
+      detail:
+        'deprecated key: 4 row(s) moved into the receipt database at 2026-11-01T10:00:00.000Z; remove the key',
+    });
+  });
+
+  it('warns that a missing store file has nothing to import, without creating one', async () => {
     const path = join(tmpdir(), `ap2-doctor-${Date.now()}.db`);
     const report = await ap2Report(enabledAp2({ replay: { path } }));
 
-    const replay = report.checks.find((c) => c.name === 'AP2 replay store');
-    expect(replay?.status).toBe('WARN');
+    expect(report.checks.find((c) => c.name === 'AP2 replay store')).toEqual({
+      name: 'AP2 replay store',
+      status: 'WARN',
+      detail: `deprecated key: no file at "${path}", so there is nothing to import; remove the key`,
+    });
     expect(existsSync(path)).toBe(false);
   });
 
@@ -1955,7 +1996,7 @@ describe('runDoctor: AP2', () => {
       const path = join(mkdtempSync(join(tmpdir(), 'ap2-doctor-')), 'replay.db');
       writeFileSync(path, '');
       const writable = await ap2Report(enabledAp2({ replay: { path } }));
-      expect(writable.checks.find((c) => c.name === 'AP2 replay store')?.status).toBe('PASS');
+      expect(writable.checks.find((c) => c.name === 'AP2 replay store')?.status).toBe('WARN');
 
       chmodSync(path, 0o444);
       const report = await ap2Report(enabledAp2({ replay: { path } }));

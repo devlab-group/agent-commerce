@@ -4,6 +4,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { accessSync, constants as fsConstants } from 'node:fs';
+import Database from 'better-sqlite3';
 import {
   type AdapterDescriptor,
   type AdapterHealth,
@@ -143,16 +144,56 @@ function isUniqueConstraintOn(err: unknown, column: string): boolean {
 }
 
 export function createSqliteReceiptStore(options: SqliteReceiptStoreOptions): SqliteReceiptStore {
+  // Shared with the ACP idempotency and AP2 replay stores, so the permission
+  // hardening has one definition
+  const db = openSqliteDatabase({
+    path: options.path,
+    label: 'Receipt database',
+    logger: options.logger ?? NOOP_LOGGER,
+  });
+  migrate(db);
+  return storeOn(db, options);
+}
+
+/**
+ * Opens an existing receipt database read-only for diagnostics, without
+ * creating the database, migrating its schema or importing legacy files.
+ * A schema version mismatch throws `STORAGE_ERROR` with
+ * `details.schemaVersion` and `details.expected`.
+ * Experimental: may change in a minor release.
+ */
+export function openSqliteReceiptStoreReadOnly(path: string): SqliteReceiptStore {
+  let db: Database.Database | undefined;
+  let schemaVersion: number;
+  try {
+    db = new Database(path, { readonly: true, fileMustExist: true });
+    // Read immediately so invalid database files fail during open
+    schemaVersion = db.pragma('user_version', { simple: true }) as number;
+  } catch (cause) {
+    db?.close();
+    throw new CommerceError(
+      'STORAGE_ERROR',
+      `Receipt database "${path}" cannot be opened: ${cause instanceof Error ? cause.message : String(cause)}`,
+      { details: { path }, cause },
+    );
+  }
+  if (schemaVersion !== SCHEMA_VERSION) {
+    db.close();
+    throw new CommerceError(
+      'STORAGE_ERROR',
+      `Receipt database "${path}" is at schema v${schemaVersion}, not v${SCHEMA_VERSION}`,
+      { details: { path, schemaVersion, expected: SCHEMA_VERSION } },
+    );
+  }
+  return storeOn(db, { path });
+}
+
+function storeOn(db: Database.Database, options: SqliteReceiptStoreOptions): SqliteReceiptStore {
   const logger = options.logger ?? NOOP_LOGGER;
   const clock = options.clock ?? systemClock;
   const ids = options.ids ?? defaultIds;
   const path = options.path;
   const isFileBacked = path !== ':memory:';
-
-  // Shared with the ACP idempotency and AP2 replay stores, so the permission
-  // hardening has one definition
-  const db = openSqliteDatabase({ path, label: 'Receipt database', logger });
-  migrate(db);
 
   const insertReceiptStmt = db.prepare(
     `INSERT INTO receipts (id, request_id, resource_id, payment_json, delivered_at, backend_status, duration_ms, protocol, metadata_json, authorization_json, transaction_id)
@@ -487,8 +528,8 @@ export function createSqliteReceiptStore(options: SqliteReceiptStoreOptions): Sq
 
   const store: SqliteReceiptStore = {
     async init(): Promise<void> {
-      // Migration already ran synchronously at construction. This check keeps
-      // init() a real, idempotent gate for callers that await it first.
+      // Both constructors supply the expected schema; check again so init()
+      // remains an idempotent gate before callers use the store
       const version = db.pragma('user_version', { simple: true }) as number;
       if (version !== SCHEMA_VERSION) {
         throw new CommerceError(
