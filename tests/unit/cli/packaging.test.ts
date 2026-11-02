@@ -36,6 +36,7 @@ const manifest = JSON.parse(readFileSync(join(pkgRoot, 'package.json'), 'utf8'))
 
 // Node builtins as they appear when imported without the `node:` prefix
 const BUILTINS = new Set([
+  'assert',
   'fs',
   'path',
   'url',
@@ -712,5 +713,42 @@ describe.skipIf(!existsSync(libEntry))('optional-peer subpaths', () => {
       { encoding: 'utf8' },
     );
     expect(out).toBe('true');
+  });
+});
+
+describe.skipIf(!existsSync(libEntry))('the ./testing entry', () => {
+  it('imports no peer, no test runner and no SQLite driver', () => {
+    const entry = join(pkgRoot, 'dist', 'testing.js');
+    // Check existence because the import scanner ignores missing files
+    expect(existsSync(entry)).toBe(true);
+    expect(bareImportsOf(entry)).toEqual([]);
+  });
+
+  it('runs every case against the built SQLite store through the exports map', () => {
+    // Import by package name to check the exports map as a consumer would
+    const out = execFileSync(
+      process.execPath,
+      [
+        '--input-type=module',
+        '-e',
+        `import { receipts } from '@devlab.group/agent-commerce';
+         import { receiptStoreConformanceCases } from '@devlab.group/agent-commerce/testing';
+         const cases = await receiptStoreConformanceCases(({ clock }) => ({
+           store: receipts({ path: ':memory:', clock }),
+         }));
+         const result = { passed: 0, skips: [], failed: [] };
+         for (const c of cases) {
+           if (c.skip !== undefined) { result.skips.push(c.skip); continue; }
+           try { await c.run(); result.passed++; } catch (e) { result.failed.push(c.name); }
+         }
+         process.stdout.write(JSON.stringify(result));`,
+      ],
+      { cwd: pkgRoot, encoding: 'utf8' },
+    );
+    const result = JSON.parse(out) as { passed: number; skips: string[]; failed: string[] };
+    expect(result.failed).toEqual([]);
+    expect(result.passed).toBeGreaterThan(0);
+    // An in-memory store cannot reopen; nothing else may skip
+    expect(new Set(result.skips)).toEqual(new Set(['the factory supplies no reopen()']));
   });
 });

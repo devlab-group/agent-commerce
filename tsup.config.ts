@@ -22,10 +22,11 @@ const shared = {
 /**
  * Two builds.
  *
- * Library: `dist/index.js` plus one entry per optional-peer subpath, built
- * together with `splitting: true` so shared code is emitted once. Separate
- * bundles would each carry their own `CommerceError`, and an error from a
- * subpath would fail `instanceof CommerceError` against the main entry's class.
+ * Library: `dist/index.js`, the optional-peer subpaths and `./testing`, which
+ * needs no optional peers. Build them together with `splitting: true` to emit
+ * shared code once. Separate bundles would duplicate `CommerceError`, causing
+ * subpath errors to fail `instanceof CommerceError` checks against the main
+ * entry's class.
  *
  * CLI: `dist/cli/index.js`, built separately with its chunks under
  * `dist/cli/`. `start` imports the gateway dynamically, so the imports of
@@ -46,6 +47,7 @@ export default defineConfig([
       mcp: 'src/mcp.ts',
       mpp: 'src/mpp.ts',
       x402: 'src/x402.ts',
+      testing: 'src/testing.ts',
     },
     clean: true,
     splitting: true,

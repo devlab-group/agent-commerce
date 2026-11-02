@@ -148,6 +148,34 @@ missing package.
 `facilitator.auth.type: cdp` and brings the larger CDP dependency tree. A
 facilitator with a static token can use `auth.type: bearer` without it.
 
+### Testing a custom store
+
+`createGateway` accepts a custom `ReceiptStore`. The experimental `./testing`
+entry exports conformance cases to test it. The cases use `node:assert/strict`
+and import no test runner or optional peers, so you can wrap them with your
+runner:
+
+```ts
+import { receiptStoreConformanceCases } from '@devlab.group/agent-commerce/testing';
+import { it } from 'vitest';
+
+const cases = await receiptStoreConformanceCases(({ clock }) => ({
+  store: createMyStore({ clock }),
+}));
+for (const c of cases) it.skipIf(c.skip !== undefined)(c.name, () => c.run());
+```
+
+Have the factory return a new, empty store for each case. The suite calls
+`init()` and `close()`. Pass the supplied `clock` to the store so expiry cases
+can advance time without waiting.
+
+Each optional method group, such as authorization holds, must be implemented
+in full or omitted; one case checks this. Cases that need missing methods are
+marked to skip. Durability cases also skip unless the factory returns `reopen()`,
+which must close the current store and open another over the same data.
+Concurrency cases submit competing reservations, resolutions, idempotency
+claims and pending-task takes, then check that exactly one caller wins.
+
 ## Integrate with an AI coding agent
 
 The repository includes an experimental [Agent Skills](https://agentskills.io)

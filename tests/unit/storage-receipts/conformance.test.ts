@@ -4,10 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { createSqliteReceiptStore } from '../../../src/storage/receipts';
-import {
-  type ConformanceStoreFactory,
-  receiptStoreConformanceCases,
-} from '../../../src/testing/store-conformance';
+import { type ConformanceStoreFactory, receiptStoreConformanceCases } from '../../../src/testing';
 
 const dirs: string[] = [];
 afterAll(() => {
