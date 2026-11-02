@@ -38,7 +38,7 @@ import { createHoldMethods, ORPHAN_HOLD_WHERE } from './holds';
 import { createIdempotencyMethods } from './idempotency';
 import { importLegacyStores, type LegacyStoreOptions } from './legacy-import';
 import { clampListLimit } from './params';
-import { createPendingTaskMethods } from './pending-tasks';
+import { createPendingTaskMethods, sweepExpiredPendingTasks } from './pending-tasks';
 import { redact } from './redact';
 import {
   type EventRow,
@@ -537,6 +537,8 @@ function storeOn(db: Database.Database, options: SqliteReceiptStoreOptions): Sql
           `Receipt store schema version mismatch (found ${version}, expected ${SCHEMA_VERSION})`,
         );
       }
+      // Remove expired pending tasks at startup without waiting for A2A traffic
+      if (!db.readonly) sweepExpiredPendingTasks(db, clock.nowIso());
       if (options.legacyStores !== undefined && releaseLegacyLocks === undefined) {
         releaseLegacyLocks = importLegacyStores(
           db,

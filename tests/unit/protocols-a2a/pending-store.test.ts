@@ -592,6 +592,34 @@ describe('createStoredPendingPayments', () => {
 
     expect(await pending.get('foreign')).toBeUndefined();
     expect(await pending.get('bare')).toBeUndefined();
+    // A take puts another adapter's task back instead of destroying it
+    expect(await pending.take('foreign')).toBeUndefined();
+    expect(await store.getPendingTask('foreign')).toMatchObject({ protocol: 'acp' });
+  });
+
+  it('deletes expired input on a take and on the next start, not only on a new purchase', async () => {
+    const pending = createStoredPendingPayments(store, time.clock);
+    const rows = () => {
+      const db = new Database(path, { readonly: true });
+      try {
+        return db.prepare('SELECT id FROM pending_tasks').all();
+      } finally {
+        db.close();
+      }
+    };
+    await pending.put('first', PURCHASE, new Date(START + MINUTE).toISOString());
+    await pending.put('second', PURCHASE, new Date(START + 2 * MINUTE).toISOString());
+
+    time.advance(MINUTE);
+    await pending.take('unknown');
+    expect(rows()).toEqual([{ id: 'second' }]);
+
+    time.advance(MINUTE);
+    await store.close();
+    const reopened = createSqliteReceiptStore({ path, clock: time.clock, logger: NOOP_LOGGER });
+    await reopened.init();
+    store = reopened as typeof store;
+    expect(rows()).toEqual([]);
   });
 
   describe('the mandate', () => {

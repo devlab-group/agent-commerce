@@ -63,8 +63,9 @@ describe('reservePaymentAttempt', () => {
       currency: 'USDC',
       payer: '0xbuyer',
       payee: '0xmerchant',
-      createdAt: '2026-01-01T00:00:00.000Z',
-      updatedAt: '2026-01-01T00:00:00.000Z',
+      // init() read the clock once, to sweep expired pending tasks
+      createdAt: '2026-01-01T00:00:00.001Z',
+      updatedAt: '2026-01-01T00:00:00.001Z',
     };
     expect(attempt).toEqual(expected);
     expect(await store.listPaymentAttempts()).toEqual([expected]);

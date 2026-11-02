@@ -216,6 +216,11 @@ export function createStoredPendingPayments(
       // A call that lost the race leaves the winner's mandate alone
       if (task === undefined) return undefined;
       const pending = toPending(task);
+      if (pending === undefined) {
+        // Put unrecognized tasks back so this adapter does not discard them
+        await store.putPendingTask(task, { maxTasks: Number.MAX_SAFE_INTEGER });
+        return undefined;
+      }
       mandates.delete(taskId);
       return pending;
     },

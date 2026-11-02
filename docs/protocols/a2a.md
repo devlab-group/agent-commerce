@@ -99,10 +99,12 @@ The gateway holds unpaid tasks in the receipt database until the payment
 requirement expires, for no longer than one hour. If the requirement has no
 expiry, the task waits ten minutes. While 256 tasks are pending, a new
 purchase fails with `GATEWAY_BUSY`; no waiting task is evicted to make room.
-An unexpired stored task can survive a restart. After validating a follow-up
-message, the adapter atomically takes the task before running the purchase;
-a competing message that loses the take finds no task. The adapter stores
-the purchase input but keeps the parsed AP2 mandate in process memory.
+An unexpired stored task can survive a restart. The SQLite store deletes
+expired tasks when initializing a writable store and when storing or taking
+a task. After validating a follow-up message, the adapter atomically takes
+the task before running the purchase. A competing message that loses the take
+finds no task. The adapter stores the purchase input but keeps the parsed AP2
+mandate in process memory.
 After a restart, a payment for a resource requiring a mandate must carry
 `_authorization` again. An otherwise valid payment without it fails with
 `AUTHORIZATION_REQUIRED` after the task has been taken. A payment

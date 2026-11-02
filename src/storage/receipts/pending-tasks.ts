@@ -43,8 +43,15 @@ function withoutReservedFields(input: Readonly<Record<string, unknown>>): Record
   );
 }
 
+const SWEEP_EXPIRED = 'DELETE FROM pending_tasks WHERE expires_at <= ?';
+
+/** Deletes expired pending tasks, for `init()` of a writable store */
+export function sweepExpiredPendingTasks(db: Database.Database, now: string): void {
+  db.prepare(SWEEP_EXPIRED).run(now);
+}
+
 export function createPendingTaskMethods(db: Database.Database, clock: Clock): PendingTaskMethods {
-  const sweepExpired = db.prepare('DELETE FROM pending_tasks WHERE expires_at <= ?');
+  const sweepExpired = db.prepare(SWEEP_EXPIRED);
   const countLive = db.prepare<[string], { count: number }>(
     'SELECT COUNT(*) AS count FROM pending_tasks WHERE expires_at > ?',
   );
@@ -97,7 +104,10 @@ export function createPendingTaskMethods(db: Database.Database, clock: Clock): P
 
     async takePendingTask(id) {
       try {
-        const row = takeLive.get(id, clock.nowIso());
+        const now = clock.nowIso();
+        // Delete expired task input even if no new purchase arrives
+        sweepExpired.run(now);
+        const row = takeLive.get(id, now);
         return row !== undefined ? rowToTask(row) : undefined;
       } catch (err) {
         throw toCommerceError(err, 'STORAGE_ERROR', 'Failed to take pending task');
