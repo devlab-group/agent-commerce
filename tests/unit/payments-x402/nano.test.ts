@@ -197,6 +197,21 @@ describe('createNanoRpc', () => {
     );
   });
 
+  it('refuses cleartext public node URLs and oversized replies', async () => {
+    expect(() => createNanoRpc('http://node.example', 1000)).toThrow(/https/);
+    expect(() => createNanoRpc('https://user:pw@node.example', 1000)).toThrow(/credentials/);
+    expect(() => createNanoRpc('http://127.0.0.1:7076', 1000)).not.toThrow();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response('x'.repeat(70_000), { status: 200 })),
+    );
+    const err = await createNanoRpc(
+      'https://node.example',
+      1000,
+    )({ action: 'version' }).catch((e: unknown) => e);
+    expect(isCommerceError(err) && err.code).toBe('PAYMENT_PROVIDER_UNAVAILABLE');
+  });
+
   it('treats an HTTP error as an unavailable node', async () => {
     vi.stubGlobal(
       'fetch',

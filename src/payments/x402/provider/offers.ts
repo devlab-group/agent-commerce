@@ -8,7 +8,12 @@ import {
   createLocalPublicClient,
   type LocalFacilitatorClient,
 } from '../chain';
-import { assertDevKeyIsLocalOnly, assertPayToIsNotDevAddress, describeRpc } from '../dev-key-guard';
+import {
+  assertDevKeyIsLocalOnly,
+  assertNanoRpcUrlIsSafe,
+  assertPayToIsNotDevAddress,
+  describeRpc,
+} from '../dev-key-guard';
 import { createRemoteFacilitatorBinding, type FacilitatorBinding } from '../facilitator';
 import { resolveX402Deployment } from '../guardrails';
 import { createLocalFacilitatorBinding } from '../local-facilitator';
@@ -201,6 +206,7 @@ export function resolveOffers(
         binding,
       };
       if (profile.family === 'nano') {
+        assertNanoRpcUrlIsSafe(input.rpcUrl);
         // The `nano_` form, which the challenge names
         const payTo = normalizeAddress(profile, input.payTo) as string;
         const offer: Offer = { ...base, family: 'nano', profile, asset: input.asset, payTo };

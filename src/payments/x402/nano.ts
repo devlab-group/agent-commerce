@@ -10,6 +10,7 @@
  */
 import { CommerceError } from '../../core';
 import { isRecord } from '../../core/is-record';
+import { assertNanoRpcUrlIsSafe } from './dev-key-guard';
 import { normalizeNanoAddress } from './nano-address';
 import { computeNanoReplayKey } from './replay-key';
 
@@ -18,9 +19,13 @@ export type NanoRpc = (request: Readonly<Record<string, unknown>>) => Promise<un
 
 const BLOCK_HASH = /^[0-9A-Fa-f]{64}$/;
 const RAW_AMOUNT = /^\d{1,40}$/;
+/** A real `block_info` reply is well under 2 KiB */
+const MAX_RPC_REPLY_BYTES = 64 * 1024;
 
-/** A fetch-based `NanoRpc` against a node's HTTP RPC, bounded by `timeoutMs` */
+/** A fetch-based `NanoRpc` against a node's HTTP RPC, bounded by `timeoutMs` and
+ * a reply-size cap. Plain HTTP is refused unless the node is local or private. */
 export function createNanoRpc(rpcUrl: string, timeoutMs: number): NanoRpc {
+  assertNanoRpcUrlIsSafe(rpcUrl);
   return async (request) => {
     const response = await fetch(rpcUrl, {
       method: 'POST',
@@ -34,7 +39,14 @@ export function createNanoRpc(rpcUrl: string, timeoutMs: number): NanoRpc {
         `Nano RPC ${String(request['action'])} returned HTTP ${response.status}`,
       );
     }
-    return response.json();
+    const text = await response.text();
+    if (text.length > MAX_RPC_REPLY_BYTES) {
+      throw new CommerceError(
+        'PAYMENT_PROVIDER_UNAVAILABLE',
+        `Nano RPC ${String(request['action'])} reply is too large`,
+      );
+    }
+    return JSON.parse(text) as unknown;
   };
 }
 

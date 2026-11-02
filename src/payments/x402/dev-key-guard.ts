@@ -46,6 +46,28 @@ export function isLikelyLocalOrPrivateHost(hostname: string): boolean {
   return false;
 }
 
+/**
+ * A Nano node's `block_info` reply is the whole verdict on a payment, so a
+ * cleartext hop would let anyone on the path forge it. Plain HTTP is accepted
+ * only for a local or private host; credentials in the URL are refused.
+ */
+export function assertNanoRpcUrlIsSafe(rpcUrl: string): void {
+  const hostname = parseHostnameOrThrow(rpcUrl);
+  const parsed = new URL(rpcUrl);
+  if (parsed.username !== '' || parsed.password !== '') {
+    throw new CommerceError(
+      'CONFIG_INVALID',
+      'x402 provider: a Nano rpcUrl must not embed credentials',
+    );
+  }
+  if (parsed.protocol === 'https:') return;
+  if (parsed.protocol === 'http:' && isLikelyLocalOrPrivateHost(hostname)) return;
+  throw new CommerceError(
+    'CONFIG_INVALID',
+    `x402 provider: a Nano rpcUrl must use https, or http on a local/private host (${describeRpc(rpcUrl)})`,
+  );
+}
+
 function parseHostnameOrThrow(rpcUrl: string): string {
   try {
     return new URL(rpcUrl).hostname;
