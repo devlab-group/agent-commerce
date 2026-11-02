@@ -139,7 +139,11 @@ export function createMppProviderWithSettlement(
     },
   });
 
-  function rejected(requirement: PaymentRequirement, reason: string): PaymentResult {
+  function rejected(
+    requirement: PaymentRequirement,
+    reason: string,
+    replayKey?: string,
+  ): PaymentResult {
     return {
       status: 'rejected',
       provider: 'mpp',
@@ -148,7 +152,27 @@ export function createMppProviderWithSettlement(
       network,
       asset,
       rejectionReason: reason,
+      ...(replayKey !== undefined ? { replayKey } : {}),
     };
+  }
+
+  // Derive a replay key from the unverified payer and nonce, omitting it if
+  // those fields cannot form a key. Rejections carry it so the pipeline can
+  // detect an unfinished attempt when a transfer lands or a challenge expires
+  // after an uncertain settlement.
+  function claimedReplayKey(credential: Credential.Credential): string | undefined {
+    const { from, nonce } = (credential.payload ?? {}) as { from?: unknown; nonce?: unknown };
+    if (typeof from !== 'string' || typeof nonce !== 'string') return undefined;
+    try {
+      return computeReplayKey({
+        chainId,
+        asset,
+        from: getAddress(from),
+        nonce: nonce as `0x${string}`,
+      });
+    } catch {
+      return undefined;
+    }
   }
 
   async function createRequirement(context: PaymentContext): Promise<PaymentRequirement> {
@@ -237,19 +261,21 @@ export function createMppProviderWithSettlement(
       return rejected(requirement, 'malformed_credential');
     }
     const echoed = credential.challenge;
+    const claimedKey = claimedReplayKey(credential);
+    const refused = (reason: string) => rejected(requirement, reason, claimedKey);
 
     // A valid HMAC means this gateway issued the challenge, not that it was
     // issued for this resource and price. The binding checks below close that gap.
     if (!Challenge.verify(echoed, { secretKey: options.challengeSecret })) {
-      return rejected(requirement, 'challenge_not_issued');
+      return refused('challenge_not_issued');
     }
     const binding = bindingMismatch(echoed, issued, resource.id);
-    if (binding) return rejected(requirement, binding);
+    if (binding) return refused(binding);
     if (!echoed.expires || new Date(echoed.expires).getTime() <= clock.now().getTime()) {
-      return rejected(requirement, 'challenge_expired');
+      return refused('challenge_expired');
     }
     if ((credential.payload as { type?: unknown } | null)?.type !== MPP_PROFILE.credentialType) {
-      return rejected(requirement, 'unsupported_credential');
+      return refused('unsupported_credential');
     }
 
     // Local checks only: signature recovery, nonce == challenge hash, the
@@ -260,7 +286,7 @@ export function createMppProviderWithSettlement(
       const validation = await Method.validateCredential([method], credential);
       payer = getAddress((validation.details as { payer: string }).payer);
     } catch (error) {
-      return rejected(requirement, verificationReason(error));
+      return refused(verificationReason(error));
     }
 
     const authorization = credential.payload as Types.AuthorizationPayload;
@@ -284,11 +310,12 @@ export function createMppProviderWithSettlement(
       return rejected(
         requirement,
         spent ? 'challenge_already_used' : (reason ?? 'settlement_rejected'),
+        replayKey,
       );
     }
     // A different key would settle an authorization the pipeline did not reserve
     if (x402Verification.replayKey !== replayKey) {
-      return rejected(requirement, 'settlement_mismatch');
+      return rejected(requirement, 'settlement_mismatch', replayKey);
     }
 
     return {

@@ -221,7 +221,10 @@ persistence must not fail the commerce flow.
   returns the current attempt holding a replay key, excluding attempts
   replaced by a reclaim.
   - A `rejected` `PaymentResult` may carry `replayKey`. The x402 provider
-    includes it in every rejection returned after deriving the key.
+    includes it in every rejection returned after deriving the key. MPP also
+    includes it when the decoded credential's `from` and `nonce` can form a
+    key, using the configured chain and asset. This lets the lookup detect an
+    unfinished attempt even when MPP rejects an expired challenge.
   - If the key belongs to an attempt whose status is neither `settled` nor
     `rejected`, the pipeline returns 409 `PAYMENT_REPLAYED` without a
     challenge. Otherwise it returns 402 `PAYMENT_INVALID` with a fresh
