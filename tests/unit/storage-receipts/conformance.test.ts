@@ -1,8 +1,10 @@
 // Run the ReceiptStore conformance cases against SQLite files and in memory
+import { AssertionError } from 'node:assert';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
+import type { PaymentAttemptReservation } from '../../../src/core/public-types';
 import { createSqliteReceiptStore } from '../../../src/storage/receipts';
 import { type ConformanceStoreFactory, receiptStoreConformanceCases } from '../../../src/testing';
 
@@ -70,5 +72,29 @@ describe('the conformance runner', () => {
 
     await expect(first?.run()).rejects.toThrow('schema mismatch');
     expect(closed).toEqual(['closed']);
+  });
+
+  it('fails a store that reserves one replay key twice', async () => {
+    let n = 0;
+    const cases = await receiptStoreConformanceCases(({ clock }) => {
+      const store = createSqliteReceiptStore({ path: ':memory:', clock });
+      const reserve = store.reservePaymentAttempt.bind(store);
+      // Give each call a unique key so repeated input bypasses replay protection
+      return {
+        store: Object.assign(store, {
+          reservePaymentAttempt: (r: PaymentAttemptReservation) =>
+            reserve({ ...r, replayKey: `${r.replayKey}#${++n}` }),
+        }),
+      };
+    });
+    const replayCases = cases.filter((c) =>
+      [
+        'a second reservation of a replay key is refused',
+        'concurrent reservations of one replay key let exactly one win',
+      ].includes(c.name),
+    );
+
+    expect(replayCases).toHaveLength(2);
+    for (const c of replayCases) await expect(c.run()).rejects.toBeInstanceOf(AssertionError);
   });
 });

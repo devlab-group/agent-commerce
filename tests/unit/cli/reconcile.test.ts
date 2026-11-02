@@ -1,5 +1,5 @@
 // Reconcile CLI validation, startup failures and report formats
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
@@ -198,6 +198,39 @@ describe('runReconcileCommand report', () => {
       expect(io.err.join('\n')).toContain('could not finish the orphan-holds scan');
     } finally {
       spy.mockRestore();
+    }
+  });
+
+  it("leaves a live gateway's ACP claims and its deprecated ACP file alone", async () => {
+    const { config } = await seededConfig();
+    const scope = { deployment: 'https://shop.example', endpoint: '/checkout_sessions', key: 'k1' };
+    const expiresAt = '2999-01-01T00:00:00.000Z';
+    const live = createSqliteReceiptStore({ path: config.storage.receipts.path });
+    await live.init();
+    expect(await live.claimIdempotencyKey(scope, 'sha256:body', expiresAt)).toEqual({
+      kind: 'reserved',
+    });
+    const acpFile = join(tempDir(), 'acp-idempotency.sqlite');
+    writeFileSync(acpFile, '');
+    const acp = {
+      enabled: true,
+      idempotency: { path: acpFile, retentionHours: 24, merchantIdempotent: false },
+    } as unknown as NonNullable<typeof config.protocols.acp>;
+
+    try {
+      const code = await runReconcileCommand({}, createCapturingIo(), {
+        loadConfig: async () => ({ ...config, protocols: { ...config.protocols, acp } }),
+      });
+
+      expect(code).toBe(0);
+      // Recovery would mark the active claim unresolved; import would add a marker
+      expect(await live.claimIdempotencyKey(scope, 'sha256:body', expiresAt)).toEqual({
+        kind: 'in-flight',
+      });
+      expect((await live.summary({ orphanHoldMinAgeMs: 0 })).legacyImports).toEqual([]);
+      expect(readFileSync(acpFile)).toHaveLength(0);
+    } finally {
+      await live.close();
     }
   });
 
