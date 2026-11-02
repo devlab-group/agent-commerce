@@ -11,6 +11,7 @@ import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import Database from 'better-sqlite3';
 import { type Clock, CommerceError, type Logger, toCommerceError } from '../../core';
+import { hasTable } from './schema';
 
 /** Deprecated store files to import. Experimental: through 2.x only */
 export interface LegacyStoreOptions {
@@ -19,20 +20,23 @@ export interface LegacyStoreOptions {
   /** Deprecated `protocols.acp.idempotency.path` */
   readonly acpIdempotency?: string;
   /**
-   * Enabled features to check for missing legacy records. With no import or
-   * feature rows recorded, `init()` rejects a missing file or path when the
-   * receipt database shows past use. The legacy file may have been forgotten.
+   * Enabled features whose missing legacy history must be checked. Without a
+   * recorded import or prior check, `init()` rejects an unset key or missing
+   * file when the receipt database shows past use. `:memory:` explicitly
+   * declares that no legacy file was retained. A passed check with no file
+   * is recorded so later starts can omit the key.
    */
   readonly enabled?: { readonly ap2?: boolean; readonly acp?: boolean };
 }
 
+/** A deprecated store file's name in `legacy_imports` */
+export type LegacySource = 'ap2-replay' | 'acp-idempotency';
+
 interface Source {
-  readonly name: 'ap2-replay' | 'acp-idempotency';
+  readonly name: LegacySource;
   readonly option: 'ap2Replay' | 'acpIdempotency';
   readonly feature: 'ap2' | 'acp';
   readonly key: string;
-  // Rows the store already holds for this feature
-  readonly storedSql: string;
   // Evidence of past use in the receipt database
   readonly usedSql: string;
   // Read through the locked source connection and return a destination writer
@@ -46,20 +50,12 @@ interface Imported {
 
 const NOTHING: Imported = { rows: 0, write: () => {} };
 
-function hasTable(file: Database.Database, name: string): boolean {
-  return (
-    file.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name) !==
-    undefined
-  );
-}
-
 const SOURCES: readonly Source[] = [
   {
     name: 'ap2-replay',
     option: 'ap2Replay',
     feature: 'ap2',
     key: 'authorization.ap2.replay.path',
-    storedSql: "SELECT 1 FROM authorization_holds WHERE method = 'ap2' LIMIT 1",
     usedSql: `SELECT 1 FROM receipts WHERE authorization_json IS NOT NULL
                UNION ALL SELECT 1 FROM transactions WHERE authorization_json IS NOT NULL LIMIT 1`,
     read(file) {
@@ -106,7 +102,6 @@ const SOURCES: readonly Source[] = [
     option: 'acpIdempotency',
     feature: 'acp',
     key: 'protocols.acp.idempotency.path',
-    storedSql: 'SELECT 1 FROM idempotency_keys LIMIT 1',
     usedSql: "SELECT 1 FROM events WHERE adapter = 'acp' LIMIT 1",
     read(file, logger) {
       if (!hasTable(file, 'acp_idempotency')) return NOTHING;
@@ -155,8 +150,47 @@ function storageError(message: string, details: Record<string, unknown>, cause?:
   return new CommerceError('STORAGE_ERROR', message, { details, cause });
 }
 
+function selectMarker(db: Database.Database, source: LegacySource) {
+  return db
+    .prepare<[string], { path: string | null }>('SELECT path FROM legacy_imports WHERE source = ?')
+    .get(source);
+}
+
+const usedBefore = (db: Database.Database, source: Source): boolean =>
+  db.prepare(source.usedSql).get() !== undefined;
+
 /**
- * Import sources with no recorded marker and retain acquired file locks.
+ * Finds sources with past-use evidence and no recorded import or prior
+ * check. If the feature is enabled, `init()` refuses an unset key or a missing
+ * source file until its history is imported or its loss explicitly accepted.
+ */
+export function missingLegacyImports(db: Database.Database): LegacySource[] {
+  // Schemas below v5 have no legacy_imports table
+  const recorded = hasTable(db, 'legacy_imports');
+  return SOURCES.filter(
+    (source) =>
+      !(recorded && selectMarker(db, source.name) !== undefined) && usedBefore(db, source),
+  ).map((source) => source.name);
+}
+
+/**
+ * Reads {@link missingLegacyImports} from an existing file opened read-only.
+ * Returns undefined if opening the file or querying its tables fails.
+ */
+export function readMissingLegacyImports(path: string): LegacySource[] | undefined {
+  let db: Database.Database | undefined;
+  try {
+    db = new Database(path, { readonly: true, fileMustExist: true });
+    return missingLegacyImports(db);
+  } catch {
+    return undefined;
+  } finally {
+    db?.close();
+  }
+}
+
+/**
+ * Import sources with no recorded import and retain acquired file locks.
  * Import or lock failures, changed source paths, the receipt database's path
  * and missing legacy records can cause `STORAGE_ERROR`. Release acquired locks
  * on failure; earlier source imports remain committed. Return a function to
@@ -169,11 +203,11 @@ export function importLegacyStores(
   clock: Clock,
   logger: Logger,
 ): () => void {
-  const selectMarker = db.prepare<[string], { path: string }>(
-    'SELECT path FROM legacy_imports WHERE source = ?',
-  );
-  const insertMarker = db.prepare(
-    'INSERT INTO legacy_imports (source, path, rows, imported_at) VALUES (?, ?, ?, ?)',
+  // Record a passed check with no file as NULL; a later file import replaces it
+  const recordMarker = db.prepare(
+    `INSERT INTO legacy_imports (source, path, rows, imported_at) VALUES (?, ?, ?, ?)
+     ON CONFLICT (source) DO UPDATE SET
+       path = excluded.path, rows = excluded.rows, imported_at = excluded.imported_at`,
   );
   const locks: Database.Database[] = [];
   const release = () => {
@@ -183,7 +217,8 @@ export function importLegacyStores(
   try {
     for (const source of SOURCES) {
       const given = options[source.option];
-      const marker = selectMarker.get(source.name);
+      const marker = selectMarker(db, source.name);
+      const importedPath = marker?.path ?? undefined;
       const path = given !== undefined && given !== ':memory:' ? resolve(given) : undefined;
 
       // Locking the receipt database itself would block every write to it
@@ -193,19 +228,25 @@ export function importLegacyStores(
           path,
         });
       }
-      if (path !== undefined && marker !== undefined && marker.path !== path) {
+      if (path !== undefined && importedPath !== undefined && importedPath !== path) {
         throw storageError(
-          `${source.key} names "${path}", but "${marker.path}" was imported from it already. ` +
+          `${source.key} names "${path}", but "${importedPath}" was imported from it already. ` +
             `Point ${source.key} back at the imported file, or remove the key.`,
-          { key: source.key, path, importedPath: marker.path },
+          { key: source.key, path, importedPath },
         );
       }
       if (path === undefined || !existsSync(path)) {
-        if (marker === undefined) guardForgottenKey(db, source, options, path);
-        if (path !== undefined) {
+        if (marker === undefined && options.enabled?.[source.feature] === true) {
+          // A 2.5 in-memory store retained no history across restarts
+          if (given !== ':memory:' && usedBefore(db, source)) {
+            throw forgottenKey(source, path);
+          }
+          recordMarker.run(source.name, null, 0, clock.nowIso());
+        }
+        if (given !== undefined) {
           logger.info(
-            { key: source.key, path },
-            'deprecated store file is absent; nothing to import, and the key can be removed',
+            { key: source.key, path: path ?? given },
+            'deprecated store has no file to import; the key can be removed',
           );
         }
         continue;
@@ -219,7 +260,7 @@ export function importLegacyStores(
         file?.close();
         const cantOpen = (cause as { code?: unknown }).code === 'SQLITE_CANTOPEN';
         // A recorded import permits SQLITE_CANTOPEN here; warn and continue
-        if (marker !== undefined && cantOpen) {
+        if (importedPath !== undefined && cantOpen) {
           logger.warn(
             { key: source.key, path },
             'deprecated store file cannot be opened to lock it; its rows are already imported',
@@ -236,7 +277,7 @@ export function importLegacyStores(
         );
       }
       locks.push(file);
-      if (marker !== undefined) continue;
+      if (importedPath !== undefined) continue;
 
       let imported: Imported;
       try {
@@ -250,7 +291,7 @@ export function importLegacyStores(
       }
       db.transaction(() => {
         imported.write(db);
-        insertMarker.run(source.name, path, imported.rows, clock.nowIso());
+        recordMarker.run(source.name, path, imported.rows, clock.nowIso());
       })();
       logger.info(
         { key: source.key, path, rows: imported.rows },
@@ -264,18 +305,9 @@ export function importLegacyStores(
   return release;
 }
 
-// Refuse startup when an enabled feature's replay history appears missing;
-// losing AP2 replay records could allow a consumed mandate to be reused
-function guardForgottenKey(
-  db: Database.Database,
-  source: Source,
-  options: LegacyStoreOptions,
-  path: string | undefined,
-): void {
-  if (options.enabled?.[source.feature] !== true) return;
-  if (db.prepare(source.storedSql).get() !== undefined) return;
-  if (db.prepare(source.usedSql).get() === undefined) return;
-  throw storageError(
+// Losing AP2 replay records could allow a consumed mandate to be reused
+function forgottenKey(source: Source, path: string | undefined): CommerceError {
+  return storageError(
     `${source.feature.toUpperCase()} ran on this receipt database before, but ${source.key} ` +
       `${path === undefined ? 'is not set' : `names a missing file "${path}"`}, so its records would be lost. ` +
       `Set ${source.key} to the file the previous version used to import them, or to an empty file to accept the loss.`,

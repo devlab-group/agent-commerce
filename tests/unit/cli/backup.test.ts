@@ -216,6 +216,25 @@ describe('agent-commerce backup', () => {
     expect(manifest().files.map((file) => file.file)).toEqual(['receipts.sqlite']);
   });
 
+  it('copies a deprecated file when the database only records a start with nothing to import', async () => {
+    // Record a 2.6 start without legacy files, then supply the 2.5 files
+    const store = createSqliteReceiptStore({
+      path: receipts,
+      legacyStores: { enabled: { ap2: true, acp: true } },
+    });
+    await store.init();
+    await store.close();
+    writeLegacyFiles();
+
+    expect((await backup()).code).toBe(0);
+
+    expect(manifest().files.map((file) => file.file)).toEqual([
+      'receipts.sqlite',
+      'ap2-replay.sqlite',
+      'acp-idempotency.sqlite',
+    ]);
+  });
+
   it.each([
     [
       'holds a file',
@@ -257,7 +276,7 @@ describe('agent-commerce backup', () => {
     const { code, io } = await backup();
 
     expect(code).toBe(1);
-    expect(io.err.join('\n')).toContain(`schema v${version}; this version backs up v4 and v5`);
+    expect(io.err.join('\n')).toContain(`schema v${version}; this version backs up v4 to v5`);
     expect(readdirSync(out)).toEqual([]);
   });
 

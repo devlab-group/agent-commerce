@@ -203,9 +203,10 @@ const MIGRATIONS: readonly Migration[] = [
         );
         CREATE INDEX IF NOT EXISTS idx_pending_tasks_expires_at ON pending_tasks(expires_at);
 
+        -- path is NULL when the feature started with nothing to import
         CREATE TABLE IF NOT EXISTS legacy_imports (
           source       TEXT PRIMARY KEY,
-          path         TEXT NOT NULL,
+          path         TEXT,
           rows         INTEGER NOT NULL,
           imported_at  TEXT NOT NULL
         );
@@ -216,6 +217,13 @@ const MIGRATIONS: readonly Migration[] = [
 
 /** Target schema version: the version of the last migration */
 export const SCHEMA_VERSION = MIGRATIONS.at(-1)?.version ?? 0;
+
+export function hasTable(db: Database.Database, name: string): boolean {
+  return (
+    db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name) !==
+    undefined
+  );
+}
 
 /**
  * Apply pending migrations through `target`, defaulting to {@link SCHEMA_VERSION},

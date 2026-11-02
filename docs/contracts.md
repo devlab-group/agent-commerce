@@ -521,11 +521,20 @@ the receipt database's path also fails startup. Once a source has been
 imported, an open failure with `SQLITE_CANTOPEN` only logs a warning; other
 lock failures still abort startup.
 
-For a feature set to true in `enabled`, with no import or feature rows
-recorded, `init()` rejects an unset or missing path if the receipt database
-shows past use: an AP2 receipt or transaction with an `authorization`, or an
-ACP event. The legacy file may have been forgotten. Other missing files are
-skipped. Supplying an empty file explicitly accepts the loss of legacy rows.
+For a feature set to true in `enabled`, `init()` checks for past use when no
+marker is recorded. For AP2, the evidence is a receipt or transaction with an
+`authorization`; for ACP, it is an ACP event. If that evidence exists, an
+unset key or missing file is rejected because the legacy file may have been
+forgotten. An empty file or `:memory:` explicitly accepts the loss of legacy
+rows. Missing files without that past-use evidence are skipped.
+
+An empty file records an import with zero rows. If no file is available and
+the check passes, `init()` records a marker with a `NULL` path. Later starts
+skip the check for missing files; importing a file later replaces that marker.
+`SqliteReceiptStoreSummary.legacyImports` lists file imports, including those
+with zero rows. `missingLegacyImports` lists sources with past use and no
+marker, which fail the check when enabled and their key is unset or names a
+missing file.
 
 `reservePaymentAttempt` atomically claims a `replayKey`. On a duplicate, it
 throws `CommerceError('PAYMENT_REPLAYED', …)` with the existing attempt's

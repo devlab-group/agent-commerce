@@ -1957,6 +1957,7 @@ describe('runDoctor: AP2', () => {
           orphanHolds: 0,
           unresolvedIdempotencyKeys: 0,
           unexpiredPendingTasks: 0,
+          missingLegacyImports: [],
           legacyImports: [
             {
               source: 'ap2-replay',

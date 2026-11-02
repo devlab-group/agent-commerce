@@ -11,6 +11,7 @@ import type { DoctorStore } from '../../../src/cli/commands/doctor/types';
 import type { GatewayConfig } from '../../../src/config';
 import {
   createSqliteReceiptStore,
+  type LegacySource,
   type SqliteLegacyImport,
   type SqliteReceiptStoreSummary,
 } from '../../../src/storage/receipts';
@@ -37,6 +38,7 @@ const EMPTY_SUMMARY: SqliteReceiptStoreSummary = {
   unresolvedIdempotencyKeys: 0,
   unexpiredPendingTasks: 0,
   legacyImports: [],
+  missingLegacyImports: [],
 };
 
 let dir: string;
@@ -108,11 +110,24 @@ describe('legacyStoreCheck', () => {
     rows: 3,
     importedAt: '2026-11-01T10:00:00.000Z',
   };
+  const PASS = 'holds in the receipt database';
+  const ap2Check = (
+    path: string | undefined,
+    imports: readonly SqliteLegacyImport[] | undefined,
+    missing: readonly LegacySource[] = [],
+    note?: string,
+  ) =>
+    legacyStoreCheck(
+      'AP2 replay store',
+      'ap2-replay',
+      path,
+      imports !== undefined ? { imports, missing } : undefined,
+      PASS,
+      note,
+    );
 
   it('warns to remove a key whose file was imported, naming the rows and the time', () => {
-    expect(
-      legacyStoreCheck('AP2 replay store', 'ap2-replay', '/data/ap2.sqlite', [imported]),
-    ).toEqual({
+    expect(ap2Check('/data/ap2.sqlite', [imported])).toEqual({
       name: 'AP2 replay store',
       status: 'WARN',
       detail:
@@ -122,19 +137,12 @@ describe('legacyStoreCheck', () => {
 
   it('compares a relative key with the absolute path the import recorded', () => {
     const file = join(dir, 'ap2.sqlite');
-    const check = legacyStoreCheck(
-      'AP2 replay store',
-      'ap2-replay',
-      relative(process.cwd(), file),
-      [{ ...imported, path: file }],
-    );
+    const check = ap2Check(relative(process.cwd(), file), [{ ...imported, path: file }]);
     expect(check.status).toBe('WARN');
   });
 
   it('fails a key that names another file than the one imported, as start refuses it', () => {
-    expect(
-      legacyStoreCheck('AP2 replay store', 'ap2-replay', '/data/other.sqlite', [imported]),
-    ).toEqual({
+    expect(ap2Check('/data/other.sqlite', [imported])).toEqual({
       name: 'AP2 replay store',
       status: 'FAIL',
       detail:
@@ -145,7 +153,13 @@ describe('legacyStoreCheck', () => {
   it("ignores another source's import", () => {
     const file = join(dir, 'acp.sqlite');
     writeFileSync(file, '');
-    const check = legacyStoreCheck('ACP idempotency', 'acp-idempotency', file, [imported]);
+    const check = legacyStoreCheck(
+      'ACP idempotency',
+      'acp-idempotency',
+      file,
+      { imports: [imported], missing: [] },
+      PASS,
+    );
     expect(check.detail).toBe(
       `deprecated key: rows in "${file}" are not moved yet. Start the gateway once with this key set, then remove it`,
     );
@@ -154,7 +168,7 @@ describe('legacyStoreCheck', () => {
   it('warns that an existing file is not moved yet when the database records no import', () => {
     const file = join(dir, 'ap2.sqlite');
     writeFileSync(file, '');
-    expect(legacyStoreCheck('AP2 replay store', 'ap2-replay', file, [], ' (note)')).toEqual({
+    expect(ap2Check(file, [], [], ' (note)')).toEqual({
       name: 'AP2 replay store',
       status: 'WARN',
       detail: `deprecated key: rows in "${file}" are not moved yet. Start the gateway once with this key set, then remove it (note)`,
@@ -164,7 +178,7 @@ describe('legacyStoreCheck', () => {
   it('does not claim either state when the receipt database could not be read', () => {
     const file = join(dir, 'ap2.sqlite');
     writeFileSync(file, '');
-    expect(legacyStoreCheck('AP2 replay store', 'ap2-replay', file, undefined)).toEqual({
+    expect(ap2Check(file, undefined)).toEqual({
       name: 'AP2 replay store',
       status: 'WARN',
       detail: `deprecated key: start imports "${file}" into the receipt database once; the receipt database could not be read to tell whether it has`,
@@ -172,9 +186,46 @@ describe('legacyStoreCheck', () => {
   });
 
   it('reports an import recorded for an in-memory key as moved, since start compares no path', () => {
-    const check = legacyStoreCheck('AP2 replay store', 'ap2-replay', ':memory:', [imported]);
+    const check = ap2Check(':memory:', [imported]);
     expect(check.status).toBe('WARN');
     expect(check.detail).toContain('3 row(s) moved');
+  });
+
+  it('passes an unset key, or one whose file was imported', () => {
+    expect(ap2Check(undefined, [])).toEqual({
+      name: 'AP2 replay store',
+      status: 'PASS',
+      detail: PASS,
+    });
+    expect(ap2Check(undefined, [imported], ['ap2-replay'])).toMatchObject({ status: 'PASS' });
+  });
+
+  it('fails an unset key or a missing file when start would find the records forgotten', () => {
+    expect(ap2Check(undefined, [], ['ap2-replay'])).toEqual({
+      name: 'AP2 replay store',
+      status: 'FAIL',
+      detail:
+        'AP2 ran on this receipt database before and its records were never imported, so start refuses the unset key. Set authorization.ap2.replay.path to the file the previous version used, or to an empty file to accept the loss',
+    });
+    const gone = join(dir, 'gone.sqlite');
+    expect(ap2Check(gone, [], ['ap2-replay'])).toMatchObject({
+      status: 'FAIL',
+      detail: expect.stringContaining(`start refuses "${gone}", which does not exist`),
+    });
+    // Another source's use does not count
+    expect(ap2Check(gone, [], ['acp-idempotency'])).toMatchObject({ status: 'WARN' });
+  });
+
+  it('keeps an in-memory key until the first start when the records count as forgotten', () => {
+    expect(ap2Check(':memory:', [], ['ap2-replay'])).toEqual({
+      name: 'AP2 replay store',
+      status: 'WARN',
+      detail:
+        'deprecated key: an in-memory store has nothing to import. Start the gateway once with this key set, then remove it',
+    });
+    expect(ap2Check(':memory:', [])?.detail).toBe(
+      'deprecated key: an in-memory store has nothing to import; remove the key',
+    );
   });
 
   // Root bypasses file permissions, so a read-only file stays writable for it
@@ -184,8 +235,8 @@ describe('legacyStoreCheck', () => {
       const file = join(dir, 'ap2.sqlite');
       writeFileSync(file, '');
       chmodSync(file, 0o444);
-      for (const imports of [[], undefined]) {
-        expect(legacyStoreCheck('AP2 replay store', 'ap2-replay', file, imports)).toEqual({
+      for (const imports of [[], undefined] as const) {
+        expect(ap2Check(file, imports)).toEqual({
           name: 'AP2 replay store',
           status: 'FAIL',
           detail: `"${file}" exists but is not writable by this user, so the first start cannot lock the file to import it`,
@@ -324,6 +375,31 @@ describe('runDoctor: the receipt database is read, never changed', () => {
     expect(check(report, 'Transactions')).toBeUndefined();
     expect(sha(receipts)).toBe(before);
     expect(version()).toBe(4);
+  });
+
+  it('fails the unset key that start refuses on a v4 database where ACP ran', async () => {
+    seedV4();
+    const db = new Database(receipts);
+    db.exec(`INSERT INTO events (id, type, request_id, at, adapter)
+             VALUES ('event_acp', 'resource.requested', 'req_acp', '2026-10-01T10:00:00.000Z', 'acp')`);
+    db.close();
+
+    const report = await doctorWith(acpConfig(receipts));
+
+    expect(check(report, 'ACP idempotency')).toMatchObject({
+      status: 'FAIL',
+      detail: expect.stringContaining('so start refuses the unset key'),
+    });
+    expect(version()).toBe(4);
+    const store = createSqliteReceiptStore({
+      path: receipts,
+      legacyStores: { enabled: { acp: true } },
+    });
+    try {
+      await expect(store.init()).rejects.toMatchObject({ code: 'STORAGE_ERROR' });
+    } finally {
+      await store.close();
+    }
   });
 
   it('reads a v5 database without importing a deprecated file it has not imported', async () => {

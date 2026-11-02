@@ -3,7 +3,12 @@ import { accessSync, existsSync, constants as fsConstants } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { isCommerceError } from '../../../core';
 import { DEFAULT_RECONCILE_MIN_AGE_MS } from '../../../core/execution/reconcile';
-import type { SqliteLegacyImport, SqliteReceiptStoreSummary } from '../../../storage/receipts';
+import {
+  type LegacySource,
+  readMissingLegacyImports,
+  type SqliteLegacyImport,
+  type SqliteReceiptStoreSummary,
+} from '../../../storage/receipts';
 import type { GatewayConfig } from '../../lib/config-client';
 import type { CheckStatus, DoctorCheck, DoctorStore } from './types';
 
@@ -18,25 +23,38 @@ function isWritableFile(path: string): boolean {
 }
 
 /**
- * Recorded imports, or `[]` if none are recorded or the database is missing
- * or below schema v5. Undefined means import information is unavailable,
- * including when the store has no summary or the summary read fails.
+ * Recorded file imports and sources with missing legacy history. Both lists
+ * are empty for a missing database. Undefined means the information is
+ * unavailable, including when the store has no summary or the read fails.
  */
-export type LegacyImports = readonly SqliteLegacyImport[] | undefined;
+export type LegacyState =
+  | {
+      readonly imports: readonly SqliteLegacyImport[];
+      readonly missing: readonly LegacySource[];
+    }
+  | undefined;
+
+const LEGACY_KEYS: Record<LegacySource, { readonly feature: string; readonly key: string }> = {
+  'ap2-replay': { feature: 'AP2', key: 'authorization.ap2.replay.path' },
+  'acp-idempotency': { feature: 'ACP', key: 'protocols.acp.idempotency.path' },
+};
 
 /**
- * Checks a deprecated store path against recorded imports and file access.
- * Appends `note` to every detail.
+ * Checks an enabled feature's legacy setting against startup import rules.
+ * `path` is undefined for an unset key. `pass` supplies the detail for a PASS
+ * result; `note` is appended to every other result's detail.
  */
 export function legacyStoreCheck(
   name: string,
-  source: 'ap2-replay' | 'acp-idempotency',
-  path: string,
-  imports: LegacyImports,
+  source: LegacySource,
+  path: string | undefined,
+  legacy: LegacyState,
+  pass: string,
   note = '',
 ): DoctorCheck {
-  const marker = imports?.find((entry) => entry.source === source);
+  const marker = legacy?.imports.find((entry) => entry.source === source);
   if (marker !== undefined) {
+    if (path === undefined) return { name, status: 'PASS', detail: pass };
     return path !== ':memory:' && resolve(path) !== marker.path
       ? {
           name,
@@ -49,19 +67,33 @@ export function legacyStoreCheck(
           detail: `deprecated key: ${marker.rows} row(s) moved into the receipt database at ${marker.importedAt}; remove the key${note}`,
         };
   }
+  // A source in `missing` makes start refuse an unset key or a missing file
+  const forgotten = legacy?.missing.includes(source) === true;
   if (path === ':memory:') {
     return {
       name,
       status: 'WARN',
-      detail: `deprecated key: an in-memory store has nothing to import; remove the key${note}`,
+      detail: forgotten
+        ? `deprecated key: an in-memory store has nothing to import. Start the gateway once with this key set, then remove it${note}`
+        : `deprecated key: an in-memory store has nothing to import; remove the key${note}`,
     };
   }
-  if (!existsSync(path)) {
-    return {
-      name,
-      status: 'WARN',
-      detail: `deprecated key: no file at "${path}", so there is nothing to import; remove the key${note}`,
-    };
+  if (path === undefined || !existsSync(path)) {
+    if (forgotten) {
+      const { feature, key } = LEGACY_KEYS[source];
+      return {
+        name,
+        status: 'FAIL',
+        detail: `${feature} ran on this receipt database before and its records were never imported, so start refuses ${path === undefined ? 'the unset key' : `"${path}", which does not exist`}. Set ${key} to the file the previous version used, or to an empty file to accept the loss${note}`,
+      };
+    }
+    return path === undefined
+      ? { name, status: 'PASS', detail: pass }
+      : {
+          name,
+          status: 'WARN',
+          detail: `deprecated key: no file at "${path}", so there is nothing to import; remove the key${note}`,
+        };
   }
   if (!isWritableFile(path)) {
     return {
@@ -74,7 +106,7 @@ export function legacyStoreCheck(
     name,
     status: 'WARN',
     detail:
-      imports === undefined
+      legacy === undefined
         ? `deprecated key: start imports "${path}" into the receipt database once; the receipt database could not be read to tell whether it has${note}`
         : `deprecated key: rows in "${path}" are not moved yet. Start the gateway once with this key set, then remove it${note}`,
   };
@@ -99,7 +131,7 @@ function refusedSchema(err: unknown): { schemaVersion: number; expected: number 
 
 export interface StorageReport {
   readonly checks: DoctorCheck[];
-  readonly legacyImports: LegacyImports;
+  readonly legacy: LegacyState;
 }
 
 export async function storageChecks(
@@ -110,7 +142,7 @@ export async function storageChecks(
   if (config === undefined) {
     return {
       checks: [{ name: 'Storage', status: 'WARN', detail: 'skipped: config invalid' }],
-      legacyImports: undefined,
+      legacy: undefined,
     };
   }
   const path = config.storage.receipts.path;
@@ -126,7 +158,7 @@ export async function storageChecks(
           detail: `${missingStoreDetail(path)}. If the gateway is already running, this path does not match the one it uses.`,
         },
       ],
-      legacyImports: [],
+      legacy: { imports: [], missing: [] },
     };
   }
 
@@ -183,7 +215,8 @@ export async function storageChecks(
   } catch (err) {
     const refused = refusedSchema(err);
     if (refused !== undefined && refused.schemaVersion < refused.expected) {
-      // Imports begin at schema v5; report none for an older schema
+      // Imports begin at schema v5, so an older schema has none recorded
+      const missing = readMissingLegacyImports(path);
       return {
         checks: [
           {
@@ -192,7 +225,7 @@ export async function storageChecks(
             detail: `sqlite schema v${refused.schemaVersion}; the next start migrates it to v${refused.expected}, which earlier versions cannot open. Run agent-commerce backup first to keep a copy they can`,
           },
         ],
-        legacyImports: [],
+        legacy: missing !== undefined ? { imports: [], missing } : undefined,
       };
     }
     checks.push({
@@ -210,7 +243,13 @@ export async function storageChecks(
   }
 
   if (summary !== undefined) checks.push(...summaryChecks(summary));
-  return { checks, legacyImports: summary?.legacyImports };
+  return {
+    checks,
+    legacy:
+      summary !== undefined
+        ? { imports: summary.legacyImports, missing: summary.missingLegacyImports }
+        : undefined,
+  };
 }
 
 function summaryChecks(summary: SqliteReceiptStoreSummary): DoctorCheck[] {

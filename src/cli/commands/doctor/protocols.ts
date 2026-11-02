@@ -15,7 +15,7 @@ import {
 } from '../../../protocols/acp/constants';
 import { ACP_UNSUPPORTED } from '../../../protocols/acp/descriptor';
 import type { GatewayConfig } from '../../lib/config-client';
-import { type LegacyImports, legacyStoreCheck } from './storage';
+import { type LegacyState, legacyStoreCheck } from './storage';
 import type { DoctorCheck, WellKnownResult } from './types';
 
 /**
@@ -61,7 +61,7 @@ function acpMappingCheck(
 export function protocolChecks(
   config: GatewayConfig | undefined,
   wellKnown: WellKnownResult | undefined,
-  legacyImports: LegacyImports,
+  legacy: LegacyState,
 ): DoctorCheck[] {
   const checks: DoctorCheck[] = [];
   // 5. Protocols
@@ -124,19 +124,14 @@ export function protocolChecks(
     });
 
     checks.push(
-      acp.idempotency.path === undefined
-        ? {
-            name: 'ACP idempotency',
-            status: 'PASS',
-            detail: `claims in the receipt database (retention ${acp.idempotency.retentionHours}h)`,
-          }
-        : legacyStoreCheck(
-            'ACP idempotency',
-            'acp-idempotency',
-            acp.idempotency.path,
-            legacyImports,
-            ` (retention ${acp.idempotency.retentionHours}h)`,
-          ),
+      legacyStoreCheck(
+        'ACP idempotency',
+        'acp-idempotency',
+        acp.idempotency.path,
+        legacy,
+        `claims in the receipt database (retention ${acp.idempotency.retentionHours}h)`,
+        ` (retention ${acp.idempotency.retentionHours}h)`,
+      ),
     );
     checks.push(acpMappingCheck(config, acp.checkout.operations));
 

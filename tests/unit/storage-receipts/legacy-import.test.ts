@@ -423,25 +423,70 @@ describe('import of deprecated store files', () => {
       await start({ enabled: { ap2: true, acp: true } });
     });
 
-    it('lets a feature start that is disabled, unused, or already holds rows', async () => {
-      await start({ enabled: {} });
+    it('restarts a fresh ACP deployment whose claims are all gone', async () => {
+      // GET requests claim no keys, and released claims are deleted. Events
+      // still show that ACP used this database.
       const fresh = join(dir, 'fresh.sqlite');
-      store = createSqliteReceiptStore({
-        path: fresh,
-        clock,
-        legacyStores: { enabled: { ap2: true, acp: true } },
-      });
-      await store.init();
-      await store.reserveAuthorizationHold({
-        method: 'ap2',
-        ...MANDATE(1),
-        bindingReference: 'jti_1',
-      });
-      await store.claimIdempotencyKey(SCOPE('k'), 'fp', '2027-01-01T00:00:00.000Z');
-      await store.close();
-      store = undefined;
+      const open = async () => {
+        await store?.close();
+        store = createSqliteReceiptStore({
+          path: fresh,
+          clock,
+          legacyStores: { enabled: { acp: true } },
+        });
+        await store.init();
+        return store;
+      };
+      const s = await open();
+      await s.appendEvent({
+        id: 'event_get',
+        type: 'resource.requested',
+        requestId: 'req_get',
+        at: new Date(START_MS).toISOString(),
+        adapter: 'acp',
+      } as Parameters<SqliteReceiptStore['appendEvent']>[0]);
+      expect(dumpTables(fresh).idempotency_keys).toEqual([]);
 
-      // The 2.5.0 deployment, once its new tables hold rows
+      await expect(open()).resolves.toBeDefined();
+    });
+
+    it('lets a disabled feature start, recording nothing for it', async () => {
+      await start({ enabled: {} });
+      expect(markers()).toEqual([]);
+    });
+
+    it('records the first start with nothing to import, so a later start needs no key', async () => {
+      const fresh = join(dir, 'fresh.sqlite');
+      const open = async () => {
+        await store?.close();
+        store = createSqliteReceiptStore({
+          path: fresh,
+          clock,
+          legacyStores: { enabled: { ap2: true, acp: true } },
+        });
+        await store.init();
+        return store;
+      };
+      await open();
+      expect(dumpTables(fresh).legacy_imports).toEqual([
+        {
+          source: 'ap2-replay',
+          path: null,
+          rows: 0,
+          imported_at: new Date(START_MS).toISOString(),
+        },
+        {
+          source: 'acp-idempotency',
+          path: null,
+          rows: 0,
+          imported_at: new Date(START_MS).toISOString(),
+        },
+      ]);
+      await expect(open()).resolves.toBeDefined();
+    });
+
+    it('refuses a 2.5.0 database that another opener seeded without importing its files', async () => {
+      // New holds and claims do not prove that the legacy files were imported
       const seeded = createSqliteReceiptStore({ path: receipts, clock });
       await seeded.init();
       await seeded.reserveAuthorizationHold({
@@ -451,7 +496,47 @@ describe('import of deprecated store files', () => {
       });
       await seeded.claimIdempotencyKey(SCOPE('k'), 'fp', '2027-01-01T00:00:00.000Z');
       await seeded.close();
+
+      await expect(start({ enabled: { ap2: true } })).rejects.toMatchObject({
+        code: 'STORAGE_ERROR',
+        details: { key: 'authorization.ap2.replay.path' },
+      });
+    });
+
+    it('accepts an in-memory key on a database that used the feature, which a 2.5 memory store lost anyway', async () => {
+      await start({
+        ap2Replay: ':memory:',
+        acpIdempotency: ':memory:',
+        enabled: { ap2: true, acp: true },
+      });
+      expect(markers()).toEqual([
+        {
+          source: 'ap2-replay',
+          path: null,
+          rows: 0,
+          imported_at: new Date(START_MS).toISOString(),
+        },
+        {
+          source: 'acp-idempotency',
+          path: null,
+          rows: 0,
+          imported_at: new Date(START_MS).toISOString(),
+        },
+      ]);
+      // The recorded check allows later starts to omit the keys
       await start({ enabled: { ap2: true, acp: true } });
+    });
+
+    it('imports a file named after a start with nothing to import', async () => {
+      await start({ ap2Replay: ':memory:', enabled: { ap2: true } });
+      writeAp2File(ap2);
+
+      const s = await start({ ap2Replay: ap2, enabled: { ap2: true } });
+
+      expect(await s.getAuthorizationHoldState('sha256:ref_2')).toBe('consumed');
+      expect(markers()).toEqual([
+        { source: 'ap2-replay', path: ap2, rows: 4, imported_at: new Date(START_MS).toISOString() },
+      ]);
     });
   });
 

@@ -20,9 +20,9 @@ To upgrade from 2.5, keep the legacy paths set and their files in place.
 In 2.6.0, ACP idempotency records and AP2 mandate holds use the receipt
 database. The settings for their separate files are deprecated:
 `protocols.acp.idempotency.path` and `authorization.ap2.replay.path`. For an
-enabled feature, config warns when its key is set. It rejects identical path
-values for these files and the receipt database, except `:memory:`. The
-3.0.0 plan removes both keys.
+enabled feature, config warns when its key is set. It rejects legacy paths
+that resolve to the same path as another legacy source or the receipt
+database, except `:memory:`. The 3.0.0 plan removes both keys.
 
 `agent-commerce start` imports the files:
 
@@ -45,18 +45,26 @@ values for these files and the receipt database, except `:memory:`. The
 - Remove a key after its import succeeds and no 2.5 gateway uses the file.
   Changing a recorded source path is refused.
 
-For an enabled feature with neither an import nor feature rows recorded,
-`start` also checks for past use in the receipt database. If it finds that
-evidence and the legacy key is unset or names a missing file, startup fails
-with `STORAGE_ERROR`. Point the key at the file used by the previous version,
-or at an empty file to explicitly accept the loss of its records.
+When an enabled feature has no recorded import or prior check, `start`
+checks for past use in the receipt database. For AP2, it looks for a receipt
+or transaction with an `authorization`; for ACP, it looks for an ACP event.
+If that evidence exists and the legacy key is unset or names a missing file,
+startup fails with `STORAGE_ERROR`.
+
+Point the key at the previous version's file to import it, or at an empty
+file to accept the loss of its records. `:memory:` also accepts the loss,
+since a 2.5 in-memory store retained nothing across restarts. If no file is
+available and the check passes, `start` records that result so later starts
+can omit the key. A file supplied later can still be imported.
 
 `agent-commerce doctor` opens the receipt file read-only, without migrating
 its schema or importing legacy records. If the schema is older than v5,
 such as a 2.5 database, it warns that the next start will migrate it. For each
-legacy key set on an enabled feature, it reports whether an import is recorded
-or notes when that information is unavailable. A configured file path that
-resolves to a different path from the recorded source gets `FAIL`.
+enabled AP2 or ACP feature, it checks legacy settings against recorded
+imports and past-use evidence. It reports recorded imports and warns when
+it cannot check whether an existing file was imported. It reports `FAIL` for
+a changed source path or an unset key or missing file that fails the
+past-use check. It also checks for past use in a 2.5 database.
 
 ## Backup
 

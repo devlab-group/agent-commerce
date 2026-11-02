@@ -309,14 +309,23 @@ describe('replay store isolation', () => {
     );
   });
 
-  it('rejects a replay path shared with the ACP idempotency store', () => {
-    const raw = withAp2({ replay: { path: './data/acp.sqlite' } });
+  it('rejects a replay path spelled differently from the receipt store path it names', () => {
+    expect(expectRejected(withAp2({ replay: { path: 'data/../data/receipts.sqlite' } }))).toContain(
+      'storage.receipts.path',
+    );
+  });
+
+  it.each([
+    ['./data/acp.sqlite', './data/acp.sqlite'],
+    ['./data/acp.sqlite', 'data/acp.sqlite'],
+  ])('rejects a replay path %s shared with the ACP idempotency path %s', (replay, idempotency) => {
+    const raw = withAp2({ replay: { path: replay } });
     const protocols = raw['protocols'] as Record<string, unknown>;
     protocols['acp'] = {
       enabled: true,
       mountPath: '/acp',
       auth: { type: 'bearer', token: 'tok' },
-      idempotency: { path: './data/acp.sqlite' },
+      idempotency: { path: idempotency },
       checkout: {
         operations: {
           createCheckoutSession: 'c1',

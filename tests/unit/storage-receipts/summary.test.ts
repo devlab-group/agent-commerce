@@ -50,6 +50,7 @@ describe('SQLite receipt store summary', () => {
       unresolvedIdempotencyKeys: 0,
       unexpiredPendingTasks: 0,
       legacyImports: [],
+      missingLegacyImports: [],
     });
   });
 
@@ -133,15 +134,32 @@ describe('SQLite receipt store summary', () => {
     });
   });
 
-  it('lists the recorded legacy imports', async () => {
+  it('lists the recorded legacy imports, not a start with nothing to import', async () => {
     const db = new Database(path);
-    db.prepare(
+    const insert = db.prepare(
       'INSERT INTO legacy_imports (source, path, rows, imported_at) VALUES (?, ?, ?, ?)',
-    ).run('ap2-replay', '/data/ap2.sqlite', 3, isoAt(0));
+    );
+    insert.run('ap2-replay', '/data/ap2.sqlite', 3, isoAt(0));
+    insert.run('acp-idempotency', null, 0, isoAt(0));
     db.close();
 
-    expect((await store.summary(AGE)).legacyImports).toEqual([
-      { source: 'ap2-replay', path: '/data/ap2.sqlite', rows: 3, importedAt: isoAt(0) },
-    ]);
+    expect(await store.summary(AGE)).toMatchObject({
+      legacyImports: [
+        { source: 'ap2-replay', path: '/data/ap2.sqlite', rows: 3, importedAt: isoAt(0) },
+      ],
+      missingLegacyImports: [],
+    });
+  });
+
+  it('names a feature that used the database with nothing recorded for it', async () => {
+    await store.appendEvent({
+      id: 'event_acp',
+      type: 'resource.requested',
+      requestId: 'req_acp',
+      at: isoAt(0),
+      adapter: 'acp',
+    } as Parameters<typeof store.appendEvent>[0]);
+
+    expect((await store.summary(AGE)).missingLegacyImports).toEqual(['acp-idempotency']);
   });
 });

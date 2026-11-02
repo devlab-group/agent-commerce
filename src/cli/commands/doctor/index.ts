@@ -159,8 +159,8 @@ export async function runDoctor(
   // 5-7. Protocols, AP2, payments and storage. Read import records first so
   // protocol and AP2 checks can report the status of deprecated store keys.
   const storage = await storageChecks(config, createStore);
-  checks.push(...protocolChecks(config, wellKnown, storage.legacyImports));
-  checks.push(...ap2Checks(config, storage.legacyImports));
+  checks.push(...protocolChecks(config, wellKnown, storage.legacy));
+  checks.push(...ap2Checks(config, storage.legacy));
   checks.push(
     ...(await paymentChecks(config, wellKnown, gatewayUrl, chainDeploy, deps.loadViemAccounts)),
   );

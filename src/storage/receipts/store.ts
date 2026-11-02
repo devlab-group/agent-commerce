@@ -36,7 +36,12 @@ import { PACKAGE_VERSION } from '../../version';
 import { openSqliteDatabase } from '../sqlite';
 import { createHoldMethods, ORPHAN_HOLD_WHERE } from './holds';
 import { createIdempotencyMethods } from './idempotency';
-import { importLegacyStores, type LegacyStoreOptions } from './legacy-import';
+import {
+  importLegacyStores,
+  type LegacySource,
+  type LegacyStoreOptions,
+  missingLegacyImports,
+} from './legacy-import';
 import { clampListLimit } from './params';
 import { createPendingTaskMethods, sweepExpiredPendingTasks } from './pending-tasks';
 import { redact } from './redact';
@@ -122,6 +127,12 @@ export interface SqliteReceiptStoreSummary {
   readonly unresolvedIdempotencyKeys: number;
   readonly unexpiredPendingTasks: number;
   readonly legacyImports: readonly SqliteLegacyImport[];
+  /**
+   * Sources with past-use evidence and no recorded import or prior check.
+   * When enabled, these features cannot start with an unset key or missing
+   * legacy file unless the loss of that history is explicitly accepted.
+   */
+  readonly missingLegacyImports: readonly LegacySource[];
 }
 
 /** Implements every optional `ReceiptStore` method */
@@ -504,7 +515,9 @@ function storeOn(db: Database.Database, options: SqliteReceiptStoreOptions): Sql
   const legacyImportsStmt = db.prepare<
     [],
     { source: string; path: string; rows: number; imported_at: string }
-  >('SELECT source, path, rows, imported_at FROM legacy_imports ORDER BY source');
+  >(
+    'SELECT source, path, rows, imported_at FROM legacy_imports WHERE path IS NOT NULL ORDER BY source',
+  );
 
   let closed = false;
   let releaseLegacyLocks: (() => void) | undefined;
@@ -811,6 +824,7 @@ function storeOn(db: Database.Database, options: SqliteReceiptStoreOptions): Sql
           rows: row.rows,
           importedAt: row.imported_at,
         })),
+        missingLegacyImports: missingLegacyImports(db),
       };
     },
 

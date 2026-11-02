@@ -1,4 +1,5 @@
 // AP2 mandate verification settings and each resource's authorization requirement
+import { resolve } from 'node:path';
 import type { z } from 'zod';
 import {
   AP2_DEFAULT_CLOCK_SKEW_SECONDS,
@@ -213,8 +214,8 @@ function validateJwk(
   return normalized;
 }
 
-// Legacy imports hold write locks, so reject identical configured paths for
-// the source files and receipt database
+// Legacy imports hold write locks, so reject source paths whose resolved
+// path matches another source or the receipt database
 export function validateLegacyStoresIsolated(
   ap2: Ap2AuthorizationConfig | undefined,
   acp: AcpProtocolConfig,
@@ -229,11 +230,13 @@ export function validateLegacyStoresIsolated(
     // Every `:memory:` handle is its own private database, so equal strings do
     // not collide
     if (path === undefined || path === ':memory:') continue;
-    const clash = others.find(([, other]) => other === path);
+    const clash = others.find(
+      ([, other]) => other !== ':memory:' && resolve(other) === resolve(path),
+    );
     if (clash !== undefined) {
       throw new CommerceError(
         'CONFIG_INVALID',
-        `${key} is the same file as ${clash[0]} ("${path}") - a deprecated store file is imported into the receipt database and then locked, so it must be a separate file`,
+        `${key} is the same file as ${clash[0]} ("${resolve(path)}") - a deprecated store file is imported into the receipt database and then locked, so it must be a separate file`,
         { details: { path: key } },
       );
     }

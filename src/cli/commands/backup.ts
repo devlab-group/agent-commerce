@@ -23,6 +23,7 @@ import { join, resolve } from 'node:path';
 import Database from 'better-sqlite3';
 import { type Clock, systemClock } from '../../core';
 import { redactedErrorText } from '../../core/errors';
+import { hasTable, SCHEMA_VERSION } from '../../storage/receipts/schema';
 import { PACKAGE_VERSION } from '../../version';
 import { type ConfigLoader, loadConfigDynamic } from '../lib/config-client';
 import type { Io } from '../lib/io';
@@ -56,8 +57,9 @@ export interface BackupManifest {
   readonly files: readonly BackupFile[];
 }
 
-// Accept v4 (2.5) so operators can back up before the first 2.6.0 start
-const SUPPORTED_SCHEMAS = new Set([4, 5]);
+// Accept schemas from 2.5's v4 through the current version so operators can
+// back up before a startup migration
+const OLDEST_SCHEMA = 4;
 
 const LEGACY = [
   { file: 'ap2-replay.sqlite', source: 'authorization.ap2.replay.path', marker: 'ap2-replay' },
@@ -167,21 +169,17 @@ async function copy(
   try {
     if (key === 'storage.receipts.path') {
       const version = db.pragma('user_version', { simple: true }) as number;
-      if (!SUPPORTED_SCHEMAS.has(version)) {
+      if (version < OLDEST_SCHEMA || version > SCHEMA_VERSION) {
         throw new BackupError(
-          `the receipt database "${resolve(source)}" is at schema v${version}; this version backs up v4 and v5`,
+          `the receipt database "${resolve(source)}" is at schema v${version}; this version backs up v${OLDEST_SCHEMA} to v${SCHEMA_VERSION}`,
         );
       }
-      const hasMarkers =
-        db
-          .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'legacy_imports'")
-          .get() !== undefined;
-      if (hasMarkers) {
-        for (const row of db.prepare('SELECT source FROM legacy_imports').all() as {
-          source: string;
-        }[]) {
-          markers.add(row.source);
-        }
+      if (hasTable(db, 'legacy_imports')) {
+        // Count only file imports; a NULL path records a check with no file
+        const rows = db
+          .prepare('SELECT source FROM legacy_imports WHERE path IS NOT NULL')
+          .all() as { source: string }[];
+        for (const row of rows) markers.add(row.source);
       }
     }
     // Pre-create the empty target at 0600; VACUUM INTO preserves its mode
