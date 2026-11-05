@@ -45,8 +45,8 @@ const ServerSchema = z
   .object({
     port: NumberOrString,
     host: z.string().min(1),
-    // Required for /api/receipts, /api/events and /api/payment-attempts;
-    // these routes return 404 when the token is unset
+    // Operator routes (/api/receipts, /api/events, /api/payment-attempts,
+    // /api/transactions and the resolve route) return 404 without this token
     adminToken: z.string().min(1).optional(),
     // Browser origins allowed to call the gateway; none by default. A request
     // with any other `Origin` gets 403 on every route. Entries match the
@@ -98,6 +98,9 @@ const RESERVED_GATEWAY_PATHS = [
   '/api/receipts',
   '/api/events',
   '/api/payment-attempts',
+  '/api/payment-attempts/:id/resolve',
+  '/api/transactions',
+  '/api/transactions/:id',
 ] as const;
 
 // A bad `mountPath` would throw inside Fastify route registration at
