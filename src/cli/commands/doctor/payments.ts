@@ -247,6 +247,8 @@ function mainnetSafetyCheck(
   payToField: 'payTo' | 'recipient',
   facilitator: X402FacilitatorConfig,
   networks: readonly string[],
+  // x402 accepts another EVM token with full metadata; MPP does not
+  assetRule: string,
 ): DoctorCheck {
   const unauthenticated = facilitator.mode === 'remote' && facilitator.auth.type === 'none';
   const where = `${describeDeploymentMode('mainnet')} on ${networks.join(', ')}`;
@@ -257,11 +259,11 @@ function mainnetSafetyCheck(
       ? `${where}: no credential is sent to the remote facilitator ` +
         '(accepted via allowUnauthenticatedFacilitator); its anonymous-access ' +
         'limits apply. Config load also requires ' +
-        `allowMainnet, HTTPS, a non-development ${payToField} and the canonical asset. ` +
+        `allowMainnet, HTTPS, a non-development ${payToField} and ${assetRule}. ` +
         'Payments fail closed.'
       : `${where}. Enforced at config load: explicit allowMainnet ` +
         `opt-in, remote facilitator over HTTPS with a credential, non-development ${payToField}, ` +
-        'and the canonical asset of each network. Payments fail closed.',
+        `and ${assetRule}. Payments fail closed.`,
   };
 }
 
@@ -533,9 +535,13 @@ export async function paymentChecks(
     if (quotes !== undefined) checks.push(quotes);
     if (mode === 'mainnet') {
       checks.push(
-        mainnetSafetyCheck('Mainnet safety', 'payTo', x402.facilitator, [
-          ...new Set(everyOption.map((option) => named(option.network))),
-        ]),
+        mainnetSafetyCheck(
+          'Mainnet safety',
+          'payTo',
+          x402.facilitator,
+          [...new Set(everyOption.map((option) => named(option.network)))],
+          "each network's USDC, or another EVM token with its own metadata",
+        ),
       );
     }
   }
@@ -587,9 +593,13 @@ export async function paymentChecks(
     }
     if (mode === 'mainnet') {
       checks.push(
-        mainnetSafetyCheck('Mainnet safety (MPP)', 'recipient', mpp.facilitator, [
-          `${findX402Network(mpp.network)?.displayName ?? 'unknown network'} (${mpp.network})`,
-        ]),
+        mainnetSafetyCheck(
+          'Mainnet safety (MPP)',
+          'recipient',
+          mpp.facilitator,
+          [`${findX402Network(mpp.network)?.displayName ?? 'unknown network'} (${mpp.network})`],
+          'the canonical asset',
+        ),
       );
     }
   }

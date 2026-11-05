@@ -557,6 +557,9 @@ describe('runDoctor: degraded scenarios report the failure', () => {
       expect(payments?.detail).toContain('paymentFlow=upfront (1 resource override)');
     });
 
+    const X402_MAINNET_ASSET_RULE =
+      "each network's USDC, or another EVM token with its own metadata";
+
     it('reports x402 on mainnet, and WARNs for an unauthenticated facilitator', async () => {
       const [withCredential] = await checksFor({
         x402: mainnetX402({ type: 'bearer', token: 'T' }),
@@ -566,6 +569,11 @@ describe('runDoctor: degraded scenarios report the failure', () => {
       const [anonymous] = await checksFor({ x402: mainnetX402({ type: 'none' }) });
       expect(anonymous).toMatchObject({ name: 'Mainnet safety', status: 'WARN' });
       expect(anonymous?.detail).toMatch(/anonymous-access limits apply/);
+      // Do not report USDC-only when x402 config accepts other EVM tokens
+      for (const check of [withCredential, anonymous]) {
+        expect(check?.detail).toContain(X402_MAINNET_ASSET_RULE);
+        expect(check?.detail).not.toMatch(/canonical asset/);
+      }
     });
 
     it('reports MPP on mainnet the same way, naming its recipient', async () => {
@@ -576,6 +584,10 @@ describe('runDoctor: degraded scenarios report the failure', () => {
       expect(withCredential?.detail).toMatch(/non-development recipient/);
       const [anonymous] = await checksFor({ mpp: mainnetMpp({ type: 'none' }) });
       expect(anonymous).toMatchObject({ name: 'Mainnet safety (MPP)', status: 'WARN' });
+      for (const check of [withCredential, anonymous]) {
+        expect(check?.detail).toContain('the canonical asset');
+        expect(check?.detail).not.toContain(X402_MAINNET_ASSET_RULE);
+      }
     });
 
     it('stays silent on the local chain and on a testnet', async () => {
