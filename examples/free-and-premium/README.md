@@ -46,7 +46,7 @@ curl -i http://localhost:8080/api/resources/premium_report/invoke -X POST
   needs no `payments` entry; fixed pricing requires a payment method.
 - Both resources declare a closed `input` schema
   (`additionalProperties: false`). The free resource still validates its one
-  field (`city`), the paid one declares an explicit empty schema rather than
-  omitting `input` (an omitted schema accepts arbitrary caller input).
+  field (`city`); the paid resource uses an empty schema. Omitting `input`
+  gives the same closed schema; declaring it makes that explicit.
 - `expose: [http, mcp]` on both: the same resource definition drives both
   protocol adapters; nothing protocol-specific lives in the resource itself.

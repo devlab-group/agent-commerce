@@ -196,9 +196,11 @@ export interface PaymentProvider {
   verify(context: PaymentVerificationContext): Promise<PaymentResult>;
 
   /**
-   * Execute settlement. Called only after `verify` returned `verified` and the
-   * replay key was reserved. A settlement verdict, including a rejection, is a
-   * returned result; the pipeline records any throw as settlement-uncertain.
+   * Called only after `verify` returns `verified` and the replay key is reserved.
+   * Return a settlement verdict, including rejection. The pipeline records a
+   * throw as `settlement-uncertain`, unless a `CommerceError` has
+   * `details.settlementNotSubmitted: true`; that records `rejected` and releases
+   * the authorization hold.
    */
   settle(context: PaymentSettlementContext): Promise<PaymentResult>;
 

@@ -1,9 +1,9 @@
 # Example: paid-mcp-tool
 
-This paid resource is exposed as an MCP tool. With
-`protocols.http.enabled: false`, the gateway has no
-`POST /api/resources/:id/invoke` route. Clients can still call the open MCP
-endpoint; this setting controls exposure, not authentication.
+This paid resource is an MCP tool. With `protocols.http.enabled: false`,
+`POST /api/resources/market_report_tool/invoke` returns 404 `RESOURCE_NOT_FOUND`.
+`GET /api/resources` still lists it, and the MCP endpoint remains open. This
+setting controls exposure, not authentication.
 
 `config.yaml` validates without environment variables, but its default
 `X402_ASSET` is a placeholder. The gateway command supplies the deployed
@@ -35,7 +35,7 @@ npm run agent-commerce -- doctor --config examples/paid-mcp-tool/config.yaml
 curl -s http://localhost:8080/mcp \
   -H 'content-type: application/json' -H 'accept: application/json, text/event-stream' \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
-# -> "market_report_tool" appears; there is no equivalent HTTP resource route.
+# -> "market_report_tool" appears; invoking it over HTTP returns 404.
 ```
 
 `tools/call` on `market_report_tool` goes through the same
@@ -47,8 +47,9 @@ challenge shape when unpaid. A real buyer completes it with
 
 ## What this demonstrates
 
-- `protocols.http.enabled: false` while `protocols.mcp.enabled: true`: HTTP
-  resource routes are off entirely, not merely unused.
+- `protocols.http.enabled: false` with `protocols.mcp.enabled: true` disables
+  HTTP invocation for every resource. The invoke route returns 404
+  `RESOURCE_NOT_FOUND`; `GET /api/resources` is unchanged.
 - `expose: [mcp]` on the resource. Setting `expose: [http]` here would fail
   `agent-commerce validate` with `CONFIG_INVALID` (`exposed via "http" but
   protocols.http.enabled is false`).

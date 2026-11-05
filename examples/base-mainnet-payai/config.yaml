@@ -64,7 +64,8 @@ payments:
     network: eip155:8453
     rpcUrl: ${X402_RPC_URL:-https://base.drpc.org}
 
-    # USDC on Base. A mainnet config may name no other asset
+    # Base USDC; other tokens need their own metadata
+    # (docs/configuration.md#the-settlement-asset)
     asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
     # The EIP-712 domain name the mainnet contract reports. Not "USDC": that
     # deployment predates the rename. Config load refuses any other name, which

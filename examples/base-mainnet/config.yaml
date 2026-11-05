@@ -71,13 +71,13 @@ payments:
     # required. Base mainnet
     network: eip155:8453
 
-    # Health checks only; the facilitator does the chain work.
+    # Used for health checks and `reconcile`; the facilitator submits payments
     # A dedicated endpoint is strongly preferred here; the public one is rate
     # limited and its outages become your readiness failures.
     rpcUrl: ${X402_RPC_URL:-https://base.drpc.org}
 
-    # required, and checked: a mainnet config may only name USDC on Base.
-    # Settling a mainnet payment in an unintended token is refused.
+    # Omit all four asset fields to use Base's USDC. Other tokens need their
+    # own metadata (docs/configuration.md#the-settlement-asset).
     asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
     # The EIP-712 domain name the mainnet contract reports. Not "USDC": that
     # deployment predates the rename. Config load refuses any other name, which

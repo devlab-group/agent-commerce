@@ -27,8 +27,8 @@ storage:
     path: ${RECEIPT_STORE_PATH:-./data/receipts.sqlite}
 
 protocols:
-  # HTTP resource routes are off entirely: this resource is reachable only
-  # as an MCP tool call, never as `POST /api/resources/:id/invoke`
+  # Disable HTTP invocation: `POST /api/resources/:id/invoke` returns 404
+  # for every resource. This resource is available only through MCP.
   http:
     enabled: false
   mcp:

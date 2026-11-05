@@ -160,10 +160,10 @@ rollback. The gateway records a `settled` payment attempt and a
 Because the key comes from the authorization rather than the request, replaying
 it against another request still collides.
 
-A resource that also requires an AP2 mandate gets a third, independent
-reservation, in its own database and on its own key. It is claimed before the
-payment replay key and released only by a failure that provably moved no money.
-See [AP2](protocols/ap2.md#replay-states).
+An AP2 mandate adds a third reservation: an authorization hold with its own
+key. The built-in SQLite store keeps it beside payment attempts. It is claimed
+before the payment replay key; failures release it only when no money could
+have moved. See [AP2](protocols/ap2.md#replay-states).
 
 ## Transactions
 

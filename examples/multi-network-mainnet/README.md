@@ -17,7 +17,7 @@ USDC, and startup refuses an Anvil development address as `payTo`.
 | Merchant addresses | `MERCHANT_WALLET` for the EVM networks, `SOLANA_MERCHANT_WALLET` with an existing USDC token account. |
 | A facilitator      | `X402_FACILITATOR_URL` and `X402_FACILITATOR_TOKEN`, listing all four networks in `/supported`.       |
 | Solana support     | `npm install @x402/svm@2.25.0 @solana/kit@5.5.1`                                                      |
-| An admin token     | `ADMIN_TOKEN`, which protects the receipts and events routes.                                         |
+| An admin token     | `ADMIN_TOKEN` protects operator routes: receipts, events, payment attempts and transactions. |
 
 Check that the facilitator's `/supported` lists every network; otherwise
 health and readiness fail.

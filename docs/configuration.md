@@ -395,7 +395,7 @@ Before paying, the buyer approves the Permit2 contract,
 sends no approval and accepts no gas-sponsoring extension. Without that
 allowance it answers [412 Precondition Failed](protocols/http.md).
 
-Other tokens require the local chain or a declared network, as above.
+For other tokens, see the [settlement asset rules](#the-settlement-asset).
 Health checks require code at Permit2 and the proxy,
 `0x402085c248EeA27D92E8b30b2C58ed07f9E20001`. For a remote facilitator they
 check only that it advertises `exact` on the network, not that it settles

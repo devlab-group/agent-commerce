@@ -63,7 +63,8 @@ resources:
 payments:
   x402:
     enabled: true
-    # No asset fields: each network's USDC, as config load requires on mainnet
+    # Each network defaults to USDC. Other EVM tokens need asset and
+    # assetDecimals; EIP-3009 also needs assetName and assetVersion.
     options:
       - network: eip155:8453
         payTo: ${MERCHANT_WALLET}

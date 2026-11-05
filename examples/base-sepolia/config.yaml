@@ -69,7 +69,7 @@ payments:
     # Base Sepolia. The local dev chain is eip155:31337 instead.
     network: eip155:84532
 
-    # Only used for health checks here; the facilitator does the chain work.
+    # Used for health checks and `reconcile`; the facilitator submits payments
     # A public endpoint is fine; a dedicated one is more reliable.
     rpcUrl: ${X402_RPC_URL:-https://base-sepolia-rpc.publicnode.com}
 

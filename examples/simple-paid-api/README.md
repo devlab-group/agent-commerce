@@ -40,9 +40,9 @@ curl -i http://localhost:8080/api/resources/premium_report/invoke -X POST
 
 ## What this demonstrates
 
-- A resource with **no `input` schema fields at all** still gets an explicit,
-  closed schema (`properties: {}, additionalProperties: false`) rather than
-  omitting `input`, because an omitted schema accepts arbitrary caller input.
+- This no-argument resource declares a closed schema
+  (`properties: {}, additionalProperties: false`). Omitting `input` gives the
+  same schema; either form refuses caller-supplied fields.
 - `protocols.mcp.enabled: false` and `expose: [http]`: this resource is not
   reachable over MCP at all, just HTTP.
 - `payments.x402.facilitator` uses Anvil's well-known local dev account #0

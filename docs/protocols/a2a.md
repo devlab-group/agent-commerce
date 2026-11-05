@@ -175,9 +175,9 @@ without an `id` returns `-32600` without running. Each A2A error carries a
 Unsupported methods are `SendStreamingMessage`, `GetTask`, `ListTasks`,
 `CancelTask`, `SubscribeToTask`, the four task-push-notification-config
 methods and `GetExtendedAgentCard`. The adapter also excludes REST and gRPC
-bindings, SSE, persistent tasks, task continuation beyond the pending x402
-payment, push delivery, multi-turn continuation, authenticated
-extended cards, A2A authentication and other artifact types.
+bindings, SSE, long-running tasks, push delivery, multi-turn continuation,
+authenticated extended cards, A2A authentication and other artifact types.
+Only pending x402 payment tasks can be stored and resumed.
 
 The A2A adapter accepts `_payment` but does not verify or settle payments
 or call merchant backends. `@a2a-js/sdk` is a test-only dependency.
