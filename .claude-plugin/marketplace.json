@@ -4,8 +4,8 @@
   "description": "The Agent Commerce Gateway skill for coding agents.",
   "plugins": [
     {
-      "name": "agent-commerce",
-      "source": ".",
+      "name": "agent-commerce-gateway",
+      "source": "./plugins/agent-commerce-gateway",
       "description": "Integrate the Agent Commerce Gateway into an existing HTTP API: configure, start and verify it."
     }
   ]

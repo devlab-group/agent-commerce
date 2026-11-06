@@ -14,7 +14,8 @@ import { RawConfigSchema } from '../../../src/config/schema/raw';
 import { createCapturingIo } from './fixtures';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
-const skillDir = join(root, 'skills', 'agent-commerce');
+const pluginDir = join(root, 'plugins', 'agent-commerce-gateway');
+const skillDir = join(pluginDir, 'skills', 'agent-commerce');
 const readJson = <T>(path: string): T => JSON.parse(readFileSync(path, 'utf8')) as T;
 const manifest = readJson<{ name: string; version: string; license: string }>(
   join(root, 'package.json'),
@@ -234,7 +235,7 @@ describe('agent skill', () => {
 
 describe('Claude Code plugin', () => {
   const plugin = readJson<{ name: string; version: string; license: string }>(
-    join(root, '.claude-plugin', 'plugin.json'),
+    join(pluginDir, '.claude-plugin', 'plugin.json'),
   );
   const marketplace = readJson<{ name: string; plugins: { name: string; source: string }[] }>(
     join(root, '.claude-plugin', 'marketplace.json'),
@@ -246,10 +247,14 @@ describe('Claude Code plugin', () => {
     expect(plugin.license).toBe(manifest.license);
   });
 
-  it('is listed in the marketplace from the repository root, beside the skill', () => {
+  it('is listed in the marketplace from its own folder, which holds the skill', () => {
+    // Installs copy only the plugin folder: the skill must be inside it, and
+    // the repository's package.json and lockfile must stay outside it
     expect(marketplace.plugins).toEqual([
-      expect.objectContaining({ name: plugin.name, source: '.' }),
+      expect.objectContaining({ name: plugin.name, source: './plugins/agent-commerce-gateway' }),
     ]);
-    expect(existsSync(join(root, 'skills', plugin.name, 'SKILL.md'))).toBe(true);
+    expect(existsSync(join(skillDir, 'SKILL.md'))).toBe(true);
+    expect(existsSync(join(pluginDir, 'README.md'))).toBe(true);
+    expect(existsSync(join(pluginDir, 'package.json'))).toBe(false);
   });
 });
