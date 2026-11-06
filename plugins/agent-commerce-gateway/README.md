@@ -27,12 +27,28 @@ with x402 stablecoin payments, which go straight to the merchant's wallet.
   which refuses to download a missing package.
 - `curl` requests to the local gateway, by default on `127.0.0.1:8080`.
 - The gateway it configures calls the merchant's API, an x402 facilitator
-  (by default `https://x402.org/facilitator`) and a chain RPC endpoint (by
-  default `https://base-sepolia-rpc.publicnode.com`, the Base Sepolia
-  testnet).
+  (by default `https://x402.org/facilitator`, which needs no credentials) and
+  a chain RPC endpoint (by default `https://base-sepolia-rpc.publicnode.com`,
+  the Base Sepolia testnet).
 
 The plugin has no hooks, MCP servers or scripts of its own, and sends no data
 anywhere.
+
+## Credentials the gateway uses
+
+The skill writes credentials only as `${VAR}` placeholders in the gateway's
+`config.yaml`, and tells Claude never to ask for a secret in chat or write one
+into a file, command or log. The user sets the values in the gateway's own
+`.env`, which the gateway CLI reads when it runs. Each value goes only to the
+party it belongs to:
+
+| Variable | What the gateway does with it |
+| --- | --- |
+| `GATEWAY_SHARED_SECRET` | Optional. Sends it as the `X-Gateway-Secret` header to the merchant's own API, so that API can reject calls that bypass the gateway. |
+| `BACKEND_TOKEN` | Optional. The merchant API's own credential, sent only to that API. |
+| `ADMIN_TOKEN` | Protects the gateway's own receipts and events routes. The operator sends it to their gateway; the gateway does not send it anywhere. |
+| `X402_FACILITATOR_TOKEN` | Optional. Bearer token for the facilitator the user configures, sent only to that facilitator. |
+| `CDP_API_KEY_ID`, `CDP_API_KEY_SECRET` | Optional. Credentials for Coinbase's CDP facilitator, sent only to `api.cdp.coinbase.com`. |
 
 ## Safety rules in the skill
 
