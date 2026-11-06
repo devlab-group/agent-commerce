@@ -179,7 +179,7 @@ claims and pending-task takes, then check that exactly one caller wins.
 ## Integrate with an AI coding agent
 
 The repository includes an experimental [Agent Skills](https://agentskills.io)
-skill, [`skills/agent-commerce`](skills/agent-commerce/SKILL.md), for adding the
+skill, [`agent-commerce`](plugins/agent-commerce-gateway/skills/agent-commerce/SKILL.md), for adding the
 gateway to an existing API. It covers Base Sepolia configuration, startup and
 checks through an unpaid 402 challenge. Its instructions keep secrets out of
 chat and leave payment signing to the user. The skill has automated CLI and
@@ -188,7 +188,7 @@ config checks.
 ```text
 # Claude Code
 /plugin marketplace add devlab-group/agent-commerce
-/plugin install agent-commerce@agent-commerce
+/plugin install agent-commerce-gateway@agent-commerce
 
 # Codex, Cursor and other agents (a third-party installer)
 DISABLE_TELEMETRY=1 npx skills add devlab-group/agent-commerce --skill agent-commerce

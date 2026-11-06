@@ -11,7 +11,8 @@ import { fileURLToPath } from 'node:url';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const manifestPath = resolve(root, 'package.json');
 const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
-const plugin = JSON.parse(readFileSync(resolve(root, '.claude-plugin', 'plugin.json'), 'utf8'));
+const pluginManifest = 'plugins/agent-commerce-gateway/.claude-plugin/plugin.json';
+const plugin = JSON.parse(readFileSync(resolve(root, pluginManifest), 'utf8'));
 
 const EXPECTED = 'github.com/devlab-group/agent-commerce';
 
@@ -19,8 +20,10 @@ const fields = [
   ['repository.url', manifest.repository?.url],
   ['bugs.url', manifest.bugs?.url],
   ['homepage', manifest.homepage],
-  ['.claude-plugin/plugin.json repository', plugin.repository],
-  ['.claude-plugin/plugin.json homepage', plugin.homepage],
+  [`${pluginManifest} repository`, plugin.repository],
+  [`${pluginManifest} homepage`, plugin.homepage],
+  [`${pluginManifest} documentationUrl`, plugin.documentationUrl],
+  [`${pluginManifest} supportUrl`, plugin.supportUrl],
 ];
 
 // Anchored at the scheme and host, because npm renders these as links: a
