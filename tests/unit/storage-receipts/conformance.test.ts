@@ -108,6 +108,8 @@ describe('the conformance runner', () => {
     expect(cases.filter((c) => c.skip?.includes('getIdempotencyKey')).map((c) => c.name)).toEqual([
       'reading an idempotency scope answers as a claim would and creates nothing',
       'an expired completed claim reads as absent, and other states never expire',
+      'recovery with an endpoint prefix leaves other endpoints alone',
+      'an endpoint prefix is literal text',
     ]);
     const groups = cases.find((c) => c.name.startsWith('implements each optional method group'));
     await expect(groups?.run()).resolves.toBeUndefined();

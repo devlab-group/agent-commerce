@@ -242,7 +242,7 @@ export interface ReceiptStore {
    */
   recoverIdempotencyKeys?(options: {
     readonly release: boolean;
-    /** Limit recovery to endpoints with this prefix; omit to include all endpoints */
+    /** Match endpoints by a literal, case-sensitive prefix; omit to include all endpoints */
     readonly endpointPrefix?: string;
   }): Promise<number>;
   /**

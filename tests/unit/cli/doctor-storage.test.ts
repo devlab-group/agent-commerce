@@ -36,6 +36,7 @@ const EMPTY_SUMMARY: SqliteReceiptStoreSummary = {
   unresolvedTransactions: {},
   orphanHolds: 0,
   unresolvedIdempotencyKeys: 0,
+  unresolvedPaymentKeys: 0,
   unexpiredPendingTasks: 0,
   legacyImports: [],
   missingLegacyImports: [],

@@ -15,6 +15,12 @@ export interface IdempotencyScope {
   readonly key: string;
 }
 
+/**
+ * Prefix reserved for paid retry claim endpoints, followed by the resource ID.
+ * ACP endpoints begin with `/`, keeping the claim namespaces distinct.
+ */
+export const PAYMENT_KEY_ENDPOINT_PREFIX = 'payment:';
+
 /** Result of claiming an idempotency key. Experimental: may change in a minor release */
 export type IdempotencyClaim =
   /** The caller owns the key and must perform the operation */

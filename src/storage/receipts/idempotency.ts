@@ -27,6 +27,12 @@ interface ClaimRow {
 type IdempotencyMethods = StoreGroupMethods<'idempotency_claims'> &
   StoreGroupMethods<'response_redelivery'>;
 
+/**
+ * Match a literal, case-sensitive endpoint prefix, including `%` and `_`.
+ * An empty `@prefix` matches every endpoint.
+ */
+export const ENDPOINT_HAS_PREFIX = 'substr(endpoint, 1, length(@prefix)) = @prefix';
+
 const scopeParams = (scope: IdempotencyScope) => ({
   deployment: scope.deployment,
   endpoint: scope.endpoint,
@@ -67,9 +73,10 @@ export function createIdempotencyMethods(db: Database.Database, clock: Clock): I
     `UPDATE idempotency_keys SET state = 'unresolved' WHERE ${SCOPE}`,
   );
   const deleteClaim = db.prepare(`DELETE FROM idempotency_keys WHERE ${SCOPE}`);
-  const releaseInFlight = db.prepare("DELETE FROM idempotency_keys WHERE state = 'in_flight'");
+  const IN_FLIGHT = `state = 'in_flight' AND ${ENDPOINT_HAS_PREFIX}`;
+  const releaseInFlight = db.prepare(`DELETE FROM idempotency_keys WHERE ${IN_FLIGHT}`);
   const unresolveInFlight = db.prepare(
-    "UPDATE idempotency_keys SET state = 'unresolved' WHERE state = 'in_flight'",
+    `UPDATE idempotency_keys SET state = 'unresolved' WHERE ${IN_FLIGHT}`,
   );
 
   // Sweep expired completed rows during the claim; no background worker is needed
@@ -133,9 +140,10 @@ export function createIdempotencyMethods(db: Database.Database, clock: Clock): I
       }
     },
 
-    async recoverIdempotencyKeys(options) {
+    async recoverIdempotencyKeys({ release, endpointPrefix = '' }) {
       try {
-        return (options.release ? releaseInFlight : unresolveInFlight).run().changes;
+        const recover = release ? releaseInFlight : unresolveInFlight;
+        return recover.run({ prefix: endpointPrefix }).changes;
       } catch (err) {
         throw toCommerceError(err, 'STORAGE_ERROR', 'Failed to recover idempotency keys');
       }

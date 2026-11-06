@@ -48,6 +48,7 @@ describe('SQLite receipt store summary', () => {
       unresolvedTransactions: {},
       orphanHolds: 0,
       unresolvedIdempotencyKeys: 0,
+      unresolvedPaymentKeys: 0,
       unexpiredPendingTasks: 0,
       legacyImports: [],
       missingLegacyImports: [],
@@ -131,6 +132,29 @@ describe('SQLite receipt store summary', () => {
       orphanHolds: 1,
       unresolvedIdempotencyKeys: 1,
       unexpiredPendingTasks: 1,
+    });
+  });
+
+  it('counts unresolved payment keys apart from other claims', async () => {
+    const scope = (endpoint: string, key: string) => ({
+      deployment: 'https://gw.example',
+      endpoint,
+      key,
+    });
+    const leaveUnresolved = async (endpoint: string, key: string) => {
+      await store.claimIdempotencyKey(scope(endpoint, key), 'fp', isoAt(60 * MINUTE));
+      await store.updateIdempotencyKey(scope(endpoint, key), { kind: 'unresolved' });
+    };
+    await leaveUnresolved('/acp/checkout_sessions', 'a');
+    await leaveUnresolved('/payment:mount/checkout_sessions', 'b');
+    await leaveUnresolved('payment:report', 'c');
+    await leaveUnresolved('payment:report', 'd');
+    await leaveUnresolved('payment:forecast', 'e');
+    await store.claimIdempotencyKey(scope('payment:report', 'running'), 'fp', isoAt(60 * MINUTE));
+
+    expect(await store.summary(AGE)).toMatchObject({
+      unresolvedIdempotencyKeys: 2,
+      unresolvedPaymentKeys: 3,
     });
   });
 

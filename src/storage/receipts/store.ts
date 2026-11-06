@@ -32,10 +32,11 @@ import {
   toCommerceError,
   transactionState,
 } from '../../core';
+import { PAYMENT_KEY_ENDPOINT_PREFIX } from '../../core/domain/store-records';
 import { PACKAGE_VERSION } from '../../version';
 import { openSqliteDatabase } from '../sqlite';
 import { createHoldMethods, ORPHAN_HOLD_WHERE } from './holds';
-import { createIdempotencyMethods } from './idempotency';
+import { createIdempotencyMethods, ENDPOINT_HAS_PREFIX } from './idempotency';
 import {
   importLegacyStores,
   type LegacySource,
@@ -123,8 +124,10 @@ export interface SqliteReceiptStoreSummary {
    * current or archived payment attempt
    */
   readonly orphanHolds: number;
-  /** Claims recorded as `unresolved` */
+  /** Unresolved claims whose endpoints do not start with `payment:` */
   readonly unresolvedIdempotencyKeys: number;
+  /** Unresolved claims whose endpoints start with `payment:` */
+  readonly unresolvedPaymentKeys: number;
   readonly unexpiredPendingTasks: number;
   readonly legacyImports: readonly SqliteLegacyImport[];
   /**
@@ -506,8 +509,13 @@ function storeOn(db: Database.Database, options: SqliteReceiptStoreOptions): Sql
   const countOrphanHoldsStmt = db.prepare<[string], { count: number }>(
     `SELECT COUNT(*) AS count FROM authorization_holds h WHERE ${ORPHAN_HOLD_WHERE}`,
   );
-  const countUnresolvedKeysStmt = db.prepare<[], { count: number }>(
-    "SELECT COUNT(*) AS count FROM idempotency_keys WHERE state = 'unresolved'",
+  const countUnresolvedKeysStmt = db.prepare<
+    { prefix: string },
+    { payment: number; other: number }
+  >(
+    `SELECT COUNT(*) FILTER (WHERE ${ENDPOINT_HAS_PREFIX}) AS payment,
+            COUNT(*) FILTER (WHERE NOT ${ENDPOINT_HAS_PREFIX}) AS other
+       FROM idempotency_keys WHERE state = 'unresolved'`,
   );
   const countLiveTasksStmt = db.prepare<[string], { count: number }>(
     'SELECT COUNT(*) AS count FROM pending_tasks WHERE expires_at > ?',
@@ -813,10 +821,12 @@ function storeOn(db: Database.Database, options: SqliteReceiptStoreOptions): Sql
         unresolvedTransactions[state] = (unresolvedTransactions[state] ?? 0) + 1;
       }
       const orphansBefore = new Date(Date.parse(now) - orphanHoldMinAgeMs).toISOString();
+      const unresolvedKeys = countUnresolvedKeysStmt.get({ prefix: PAYMENT_KEY_ENDPOINT_PREFIX });
       return {
         unresolvedTransactions,
         orphanHolds: countOrphanHoldsStmt.get(orphansBefore)?.count ?? 0,
-        unresolvedIdempotencyKeys: countUnresolvedKeysStmt.get()?.count ?? 0,
+        unresolvedIdempotencyKeys: unresolvedKeys?.other ?? 0,
+        unresolvedPaymentKeys: unresolvedKeys?.payment ?? 0,
         unexpiredPendingTasks: countLiveTasksStmt.get(now)?.count ?? 0,
         legacyImports: legacyImportsStmt.all().map((row) => ({
           source: row.source,

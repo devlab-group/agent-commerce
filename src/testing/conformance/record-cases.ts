@@ -255,6 +255,66 @@ const CLAIM_CASES: readonly CaseSpec[] = [
     },
   },
   {
+    name: 'recovery without an endpoint prefix reaches every endpoint',
+    uses: CLAIMS,
+    async run({ store }) {
+      const s = claims(store);
+      const paid = scope('b', 'payment:report');
+      await s.claimIdempotencyKey(scope('a'), 'fp', isoAt(DAY));
+      await s.claimIdempotencyKey(paid, 'fp', isoAt(DAY));
+
+      assert.equal(await s.recoverIdempotencyKeys({ release: false }), 2);
+      assert.deepEqual(await s.claimIdempotencyKey(scope('a'), 'fp', isoAt(DAY)), {
+        kind: 'unresolved',
+      });
+      assert.deepEqual(await s.claimIdempotencyKey(paid, 'fp', isoAt(DAY)), {
+        kind: 'unresolved',
+      });
+    },
+  },
+  {
+    name: 'recovery with an endpoint prefix leaves other endpoints alone',
+    uses: CLAIM_READS,
+    async run({ store }) {
+      const s = claimReads(store);
+      const checkout = scope('a');
+      const paid = scope('b', 'payment:report');
+      const running = scope('c', 'payment:report');
+      await s.claimIdempotencyKey(checkout, 'fp', isoAt(DAY));
+      await s.claimIdempotencyKey(paid, 'fp', isoAt(DAY));
+
+      const marked = { release: false, endpointPrefix: 'payment:' };
+      assert.equal(await s.recoverIdempotencyKeys(marked), 1);
+      assert.deepEqual(await s.getIdempotencyKey(paid, 'fp'), { kind: 'unresolved' });
+      assert.deepEqual(await s.getIdempotencyKey(checkout, 'fp'), { kind: 'in-flight' });
+
+      await s.claimIdempotencyKey(running, 'fp', isoAt(DAY));
+      assert.equal(await s.recoverIdempotencyKeys({ release: true, endpointPrefix: '/' }), 1);
+      assert.equal(await s.getIdempotencyKey(checkout, 'fp'), undefined);
+      assert.deepEqual(await s.getIdempotencyKey(running, 'fp'), { kind: 'in-flight' });
+      assert.deepEqual(await s.getIdempotencyKey(paid, 'fp'), { kind: 'unresolved' });
+    },
+  },
+  {
+    name: 'an endpoint prefix is literal text',
+    uses: CLAIM_READS,
+    async run({ store }) {
+      const s = claimReads(store);
+      const paid = scope('a', 'payment:report_1');
+      await s.claimIdempotencyKey(paid, 'fp', isoAt(DAY));
+
+      const misses = ['%', 'payment%', 'pay_ent:', 'PAYMENT:', 'report', 'payment:report_12'];
+      for (const endpointPrefix of misses) {
+        const changed = await s.recoverIdempotencyKeys({ release: true, endpointPrefix });
+        assert.equal(changed, 0, endpointPrefix);
+      }
+      assert.deepEqual(await s.getIdempotencyKey(paid, 'fp'), { kind: 'in-flight' });
+
+      const whole = { release: true, endpointPrefix: 'payment:report_1' };
+      assert.equal(await s.recoverIdempotencyKeys(whole), 1);
+    },
+  },
+  {
     name: 'concurrent claims of one idempotency scope reserve it once',
     uses: CLAIMS,
     async run({ store }) {
