@@ -25,7 +25,7 @@ import {
   validateResourceSchemaKeywords,
 } from './resource-schema';
 import type { NormalizedProtocols } from './types';
-import { toNumber } from './values';
+import { toBoolean, toNumber } from './values';
 import type { NormalizedX402 } from './x402';
 
 const SUPPORTED_PROTOCOLS: ReadonlySet<string> = new Set(PROTOCOL_NAMES);
@@ -235,6 +235,14 @@ export function normalizeResource(
     );
   }
 
+  if (entry.idempotency !== undefined && entry.pricing.type !== 'fixed') {
+    throw new CommerceError(
+      'CONFIG_INVALID',
+      `Resource "${id}" sets idempotency, which requires fixed pricing`,
+      { details: { path: `resources.${id}.idempotency`, resourceId: id } },
+    );
+  }
+
   const pricing: Pricing =
     entry.pricing.type === 'free'
       ? { type: 'free' }
@@ -271,6 +279,16 @@ export function normalizeResource(
     exposedVia: entry.expose as CommerceResource['exposedVia'],
     paymentMethods: paymentMethods as CommerceResource['paymentMethods'],
     ...(authorization !== undefined ? { authorization } : {}),
+    ...(entry.idempotency !== undefined
+      ? {
+          idempotency: {
+            merchantKey: toBoolean(
+              entry.idempotency.merchantKey,
+              `resources.${id}.idempotency.merchantKey`,
+            ),
+          },
+        }
+      : {}),
   };
 }
 

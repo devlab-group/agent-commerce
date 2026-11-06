@@ -85,7 +85,7 @@ export interface CommerceResource {
     readonly required: readonly AuthorizationMethodName[];
   };
   /**
-   * Settings for planned paid retries, disabled when omitted.
+   * Settings for paid retries, disabled when omitted. `redelivery` is planned.
    * Experimental: may change in a minor release.
    */
   readonly idempotency?: {

@@ -267,6 +267,7 @@ const ResourceEntrySchema = z
       .object({ required: z.array(z.string().min(1)).min(1) })
       .strict()
       .optional(),
+    idempotency: z.object({ merchantKey: BooleanOrString }).strict().optional(),
   })
   .strict();
 

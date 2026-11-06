@@ -182,13 +182,14 @@ export function createExecutionPipeline(
       deadlineAt: backendDeadline(options.clock.now(), resource),
     });
     const backendStart = options.clock.monotonicMs();
+    const idempotencyKey = request.idempotencyKey ?? settleArgs?.merchantKey;
     let backendResponse: BackendResponse;
     try {
       backendResponse = await options.backend.call(resource.handler, {
         requestId: request.requestId,
         resourceId: resource.id,
         input: validInput,
-        ...(request.idempotencyKey !== undefined ? { idempotencyKey: request.idempotencyKey } : {}),
+        ...(idempotencyKey !== undefined ? { idempotencyKey } : {}),
         ...(request.backendHeaders !== undefined ? { backendHeaders: request.backendHeaders } : {}),
       });
     } catch (error) {

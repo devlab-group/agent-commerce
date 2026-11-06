@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { parseConfig } from '../../../src/config/schema';
 import {
   type CommerceError,
+  type CommerceResource,
   isCommerceError,
   PAYMENT_METHOD_NAMES,
   RESERVED_INPUT_FIELDS,
@@ -2514,5 +2515,59 @@ describe('resource mimeType', () => {
       'resources.weather_basic.mimeType',
       'requires fixed pricing and "x402" in payments',
     );
+  });
+});
+
+describe('resource idempotency', () => {
+  function withIdempotency(id: string, idempotency: unknown): Record<string, unknown> {
+    const raw = validRawConfig();
+    const resources = raw['resources'] as Record<string, Record<string, unknown>>;
+    resources[id] = { ...resources[id], idempotency };
+    return raw;
+  }
+
+  function resource(raw: Record<string, unknown>, id: string): CommerceResource | undefined {
+    return parseConfig(raw, {}).resources.find((candidate) => candidate.id === id);
+  }
+
+  it.each([
+    [true, true],
+    [false, false],
+    ['true', true],
+    ['FALSE', false],
+  ])('reads merchantKey %s on a fixed-price resource', (merchantKey, expected) => {
+    const raw = withIdempotency('market_report', { merchantKey });
+
+    expect(resource(raw, 'market_report')?.idempotency).toEqual({ merchantKey: expected });
+  });
+
+  it('leaves a resource without the block unchanged', () => {
+    expect(resource(validRawConfig(), 'market_report')).not.toHaveProperty('idempotency');
+  });
+
+  it('refuses it on a free resource', () => {
+    expectConfigInvalid(
+      () => parseConfig(withIdempotency('weather_basic', { merchantKey: true }), {}),
+      'resources.weather_basic.idempotency',
+      'requires fixed pricing',
+    );
+  });
+
+  it('refuses a merchantKey that is not a boolean', () => {
+    expectConfigInvalid(
+      () => parseConfig(withIdempotency('market_report', { merchantKey: 'maybe' }), {}),
+      'resources.market_report.idempotency.merchantKey',
+    );
+  });
+
+  it.each([
+    ['an empty block', {}, 'resources.market_report.idempotency.merchantKey'],
+    [
+      'redelivery, which has no effect',
+      { merchantKey: true, redelivery: {} },
+      'resources.market_report.idempotency',
+    ],
+  ])('refuses %s', (_name, idempotency, path) => {
+    expectConfigInvalid(() => parseConfig(withIdempotency('market_report', idempotency), {}), path);
   });
 });

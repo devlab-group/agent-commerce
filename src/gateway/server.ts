@@ -116,6 +116,7 @@ export async function createGateway(options: GatewayOptions): Promise<GatewayIns
     logger,
     clock,
     ids,
+    deployment: options.config.merchant.publicBaseUrl,
   });
 
   const server = Fastify({

@@ -83,6 +83,21 @@ fits the body (see [security.md](security.md#backend-response-relay)); this
 setting does not change it. Config load accepts `mimeType` only on a fixed-price
 resource that lists `x402` in `payments`.
 
+Enable `idempotency.merchantKey: true` to send an `Idempotency-Key` header with
+paid backend calls. This setting is experimental and disabled by default.
+The merchant decides how to handle repeated keys.
+
+The generated key is a SHA-256 hex digest of `merchant.publicBaseUrl`, the
+resource ID, the payment's replay identity and a canonical input digest.
+Retrying a rejected x402 authorization with the same input keeps the same key.
+Changing `merchant.publicBaseUrl` changes the generated keys.
+
+An adapter's operation key takes precedence over the generated key. Either
+overrides an `Idempotency-Key` in `backend.headers`. Input with no canonical
+JSON digest, such as a string containing a lone surrogate, receives no
+generated key and can still be delivered. Config load accepts `idempotency`
+only on a fixed-price resource.
+
 `url` supports `{param}` templating from validated input; values are
 URL-encoded. Remaining input becomes query string for `GET`/`DELETE` and a JSON
 body otherwise - unless `backend.inputBindings` says otherwise, below.
@@ -773,7 +788,8 @@ resource for two operations, or maps a paid one · an ACP idempotency retention
 below 24 hours · an invalid or zero `payTo`/`asset`/`recipient` · an
 `x402.accepts` list that is empty or on a resource that cannot use it · a
 `mimeType` that is not a media type, or on a resource that is not fixed-price
-with `x402` in `payments` · an MPP `challengeSecret` with length below 32 or a
+with `x402` in `payments` · an `idempotency` block on a resource that is not
+fixed-price · an MPP `challengeSecret` with length below 32 or a
 multi-line `realm`.
 
 It exits non-zero on any of them.

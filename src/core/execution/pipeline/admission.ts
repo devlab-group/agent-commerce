@@ -7,6 +7,7 @@ import type { CanonicalRequest, PaymentRequiredOutcome } from '../../domain/requ
 import type { CommerceResource, Pricing } from '../../domain/resource';
 import { CommerceError, isCommerceError, toCommerceError } from '../../errors';
 import { type Flow, newTransaction } from '../journal';
+import { paidOperationKey } from '../merchant-key';
 import { REUSE_REJECTED_AUTHORIZATION_METADATA_KEY } from '../settlement-order';
 import { type AuthorizeAndReserve, resolveAuthorizationProviders } from './authorization';
 import { isFinishedAttempt, replayError, retryChallenge } from './challenge';
@@ -38,6 +39,7 @@ export function createPaymentAdmission(
   const { options, safeEmit, buildEvent } = ctx;
 
   return async function admitPayment(flow, request, resource, pricing, validInput) {
+    const deployment = merchantKeyDeployment(options.deployment, request, resource);
     const provider = pickProvider(options.paymentProviders, resource.paymentMethods);
     if (!provider) {
       throw new CommerceError(
@@ -254,6 +256,16 @@ export function createPaymentAdmission(
       }),
     );
 
+    const merchantKey =
+      deployment !== undefined
+        ? paidOperationKey({
+            deployment,
+            resourceId: resource.id,
+            replayKey,
+            input: validInput,
+          })
+        : undefined;
+
     return {
       kind: 'admitted',
       settleArgs: {
@@ -266,6 +278,7 @@ export function createPaymentAdmission(
         verification,
         replayKey,
         hold,
+        ...(merchantKey !== undefined ? { merchantKey } : {}),
       },
     };
   };
@@ -310,6 +323,23 @@ export function createPaymentAdmission(
       },
     );
   }
+}
+
+// Check deployment before provider calls so missing configuration is caught before upfront settlement
+function merchantKeyDeployment(
+  deployment: string | undefined,
+  request: CanonicalRequest,
+  resource: CommerceResource,
+): string | undefined {
+  if (resource.idempotency?.merchantKey !== true) return undefined;
+  if (deployment === undefined) {
+    throw new CommerceError(
+      'CONFIG_INVALID',
+      `Resource "${resource.id}" sets idempotency.merchantKey, which requires the pipeline's deployment option`,
+      { requestId: request.requestId, resourceId: resource.id },
+    );
+  }
+  return deployment;
 }
 
 function pickProvider(

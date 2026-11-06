@@ -29,8 +29,8 @@ export interface CreateExecutionPipelineOptions {
   readonly clock: Clock;
   readonly ids: IdGenerator;
   /**
-   * Gateway public base URL (`merchant.publicBaseUrl`) for planned payment retry
-   * and paid operation keys
+   * Gateway public base URL (`merchant.publicBaseUrl`). Required when
+   * `idempotency.merchantKey` is true; also intended to scope planned payment retries.
    */
   readonly deployment?: string;
 }
@@ -72,6 +72,8 @@ export interface SettleArgs {
   readonly verification: PaymentResult;
   readonly replayKey: string;
   readonly hold: AuthorizationHold | undefined;
+  /** Derived backend key for a resource with `idempotency.merchantKey` enabled */
+  readonly merchantKey?: string;
 }
 
 export interface PipelineContext {

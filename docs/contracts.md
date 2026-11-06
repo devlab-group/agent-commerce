@@ -232,13 +232,16 @@ persistence must not fail the commerce flow.
     a store without the method keeps the 402 response.
   - The method is experimental. The 3.0.0 migration plan makes it required.
 - The planned 2.7.0 API adds optional contracts for paid retries. Existing 2.6
-  resources, stores and providers need no changes. SQLite implements the claim
-  lookup and recovery filtering; paid retry execution and delivery summary
-  mapping remain planned.
-  - `CommerceResource.idempotency` defines retry settings for a paid resource.
-    `merchantKey` requests a backend `Idempotency-Key` identifying the paid
-    operation. `redelivery` sets response retention in hours (`retentionHours`);
-    when `required` is true, an x402 payment missing an `id` must receive HTTP 400.
+  resources, stores and providers need no changes. The pipeline supports
+  merchant keys; SQLite implements claim lookup and recovery filtering.
+  Client retry handling and delivery summary mapping remain planned.
+  - `CommerceResource.idempotency` configures paid retries. With `merchantKey`
+    enabled, the pipeline uses a derived backend `Idempotency-Key` for the paid
+    operation; an adapter's key takes precedence. The `deployment` option is
+    required; if omitted, payment admission throws `CONFIG_INVALID` before any
+    provider call.
+    Planned `redelivery` settings retain responses for `retentionHours` hours;
+    when `required` is true, an x402 payment without an `id` must receive HTTP 400.
   - `CanonicalRequest.retryKey` holds the client's key for retrying a paid
     request. `PaymentProvider.retryKey` extracts it from a proof without I/O.
     Treat the key as a credential: never log it or send it to a merchant or
