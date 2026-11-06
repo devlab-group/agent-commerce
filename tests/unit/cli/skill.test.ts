@@ -255,6 +255,8 @@ describe('Claude Code plugin', () => {
     ]);
     expect(existsSync(join(skillDir, 'SKILL.md'))).toBe(true);
     expect(existsSync(join(pluginDir, 'README.md'))).toBe(true);
+    // The directory takes the listing icon from here when the plugin is first submitted
+    expect(existsSync(join(pluginDir, '.claude-plugin', 'icon.png'))).toBe(true);
     expect(existsSync(join(pluginDir, 'package.json'))).toBe(false);
   });
 });
