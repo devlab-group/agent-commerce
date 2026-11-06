@@ -34,6 +34,8 @@ required in 3.0.0. Custom stores will need to implement:
 - Pending tasks: `putPendingTask`, `getPendingTask` and `takePendingTask`.
 - Payment attempts: `findPaymentAttemptByReplayKey`.
 
+The 3.0.0 plan also requires `getIdempotencyKey` from the proposed 2.7.0 API.
+
 The 3.0.0 plan removes these store settings deprecated in 2.6.0:
 
 - `authorization.ap2.replay.path` and `protocols.acp.idempotency.path`.

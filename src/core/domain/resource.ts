@@ -84,6 +84,21 @@ export interface CommerceResource {
   readonly authorization?: {
     readonly required: readonly AuthorizationMethodName[];
   };
+  /**
+   * Settings for planned paid retries, disabled when omitted.
+   * Experimental: may change in a minor release.
+   */
+  readonly idempotency?: {
+    /** Send the backend an `Idempotency-Key` identifying this paid operation */
+    readonly merchantKey?: boolean;
+    /** Store delivered responses for retries with the same client key */
+    readonly redelivery?: {
+      /** How long to retain a response, in hours */
+      readonly retentionHours: number;
+      /** If true, reject an x402 payment missing an `id` with HTTP 400 */
+      readonly required: boolean;
+    };
+  };
 }
 
 /** Read-only view of every configured resource */

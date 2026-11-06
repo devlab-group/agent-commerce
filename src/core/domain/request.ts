@@ -32,6 +32,11 @@ export interface CanonicalRequest {
    * Passed on as `BackendRequest.idempotencyKey`.
    */
   readonly idempotencyKey?: string;
+  /**
+   * Client's key for retrying this paid request. Treat it as a credential;
+   * never log it. Experimental: may change in a minor release.
+   */
+  readonly retryKey?: string;
   /** Adapter headers passed to the backend; configured headers take precedence */
   readonly backendHeaders?: Readonly<Record<string, string>>;
   /** Non-secret transport metadata, such as client id or user agent */
@@ -55,6 +60,11 @@ export interface DeliveredOutcome {
    * marks `receipt.id` as uncommitted.
    */
   readonly persistenceFailures?: readonly PersistenceFailure[];
+  /**
+   * True when this request reuses a stored response without another charge.
+   * Experimental: may change in a minor release.
+   */
+  readonly redelivered?: boolean;
 }
 
 /** The resource costs money and the request carried no payment proof */

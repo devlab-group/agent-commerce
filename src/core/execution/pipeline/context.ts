@@ -28,6 +28,11 @@ export interface CreateExecutionPipelineOptions {
   readonly logger: Logger;
   readonly clock: Clock;
   readonly ids: IdGenerator;
+  /**
+   * Gateway public base URL (`merchant.publicBaseUrl`) for planned payment retry
+   * and paid operation keys
+   */
+  readonly deployment?: string;
 }
 
 export type HoldAction = 'consume' | 'release' | 'markUncertain';

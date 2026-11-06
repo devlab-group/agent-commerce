@@ -21,9 +21,11 @@ interface ClaimRow {
   fingerprint: string;
   status: number | null;
   body_json: string | null;
+  expires_at: string;
 }
 
-type IdempotencyMethods = StoreGroupMethods<'idempotency_claims'>;
+type IdempotencyMethods = StoreGroupMethods<'idempotency_claims'> &
+  StoreGroupMethods<'response_redelivery'>;
 
 const scopeParams = (scope: IdempotencyScope) => ({
   deployment: scope.deployment,
@@ -31,11 +33,23 @@ const scopeParams = (scope: IdempotencyScope) => ({
   idempotency_key: scope.key,
 });
 
+// A different fingerprint conflicts in every claim state
+function claimOf(row: ClaimRow, fingerprint: string): IdempotencyClaim {
+  if (row.fingerprint !== fingerprint) return { kind: 'conflict' };
+  if (row.state === 'unresolved') return { kind: 'unresolved' };
+  if (row.state !== 'completed') return { kind: 'in-flight' };
+  return {
+    kind: 'replay',
+    status: row.status ?? 500,
+    body: row.body_json === null ? null : JSON.parse(row.body_json),
+  };
+}
+
 export function createIdempotencyMethods(db: Database.Database, clock: Clock): IdempotencyMethods {
   const SCOPE =
     'deployment = @deployment AND endpoint = @endpoint AND idempotency_key = @idempotency_key';
   const selectClaim = db.prepare<Record<string, unknown>, ClaimRow>(
-    `SELECT state, fingerprint, status, body_json FROM idempotency_keys WHERE ${SCOPE}`,
+    `SELECT state, fingerprint, status, body_json, expires_at FROM idempotency_keys WHERE ${SCOPE}`,
   );
   const insertClaim = db.prepare(
     `INSERT INTO idempotency_keys
@@ -73,16 +87,7 @@ export function createIdempotencyMethods(db: Database.Database, clock: Clock): I
         });
         return { kind: 'reserved' };
       }
-      // Fingerprint first: a key reused for another body conflicts whether or
-      // not the first request has finished
-      if (existing.fingerprint !== fingerprint) return { kind: 'conflict' };
-      if (existing.state === 'unresolved') return { kind: 'unresolved' };
-      if (existing.state !== 'completed') return { kind: 'in-flight' };
-      return {
-        kind: 'replay',
-        status: existing.status ?? 500,
-        body: existing.body_json === null ? null : JSON.parse(existing.body_json),
-      };
+      return claimOf(existing, fingerprint);
     },
   );
 
@@ -92,6 +97,17 @@ export function createIdempotencyMethods(db: Database.Database, clock: Clock): I
         return claim.immediate(scope, fingerprint, storedIso(expiresAt, 'expiresAt'));
       } catch (err) {
         throw toCommerceError(err, 'STORAGE_ERROR', 'Failed to claim idempotency key');
+      }
+    },
+
+    async getIdempotencyKey(scope, fingerprint) {
+      try {
+        const existing = selectClaim.get(scopeParams(scope));
+        if (existing === undefined) return undefined;
+        const expired = existing.state === 'completed' && existing.expires_at <= clock.nowIso();
+        return expired ? undefined : claimOf(existing, fingerprint);
+      } catch (err) {
+        throw toCommerceError(err, 'STORAGE_ERROR', 'Failed to read idempotency key');
       }
     },
 

@@ -180,6 +180,16 @@ export interface PaymentProvider {
   createRequirement(context: PaymentContext): Promise<PaymentRequirement>;
 
   /**
+   * Extract a client retry key from a proof without I/O. Return `undefined`
+   * if the proof has no key; throw `INPUT_INVALID` if the key is malformed.
+   * Experimental: may change in a minor release.
+   */
+  retryKey?(context: {
+    readonly resource: CommerceResource;
+    readonly submission: PaymentSubmission;
+  }): string | undefined;
+
+  /**
    * Selects a proof's offer before verification, returning its destination,
    * network, asset and metadata while preserving `id` and the full `challenge`.
    * Verification, authorization, replay reservation and settlement use the result.

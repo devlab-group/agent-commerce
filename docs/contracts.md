@@ -231,6 +231,25 @@ persistence must not fail the commerce flow.
     challenge. A lookup failure returns `STORAGE_ERROR` without a challenge;
     a store without the method keeps the 402 response.
   - The method is experimental. The 3.0.0 migration plan makes it required.
+- The planned 2.7.0 API adds optional contracts for paid retries. Existing 2.6
+  resources, stores and providers need no changes. SQLite implements the claim
+  lookup; the retry flow, recovery filter and summary mapping remain planned.
+  - `CommerceResource.idempotency` defines retry settings for a paid resource.
+    `merchantKey` requests a backend `Idempotency-Key` identifying the paid
+    operation. `redelivery` sets response retention in hours (`retentionHours`);
+    when `required` is true, an x402 payment missing an `id` must receive HTTP 400.
+  - `CanonicalRequest.retryKey` holds the client's key for retrying a paid
+    request. `PaymentProvider.retryKey` extracts it from a proof without I/O.
+    Treat the key as a credential: never log it or send it to a merchant or
+    facilitator.
+  - `ReceiptStore.getIdempotencyKey` reads a claim without writing. It returns
+    `undefined` if the claim is absent or is `completed` and expired.
+  - `recoverIdempotencyKeys` takes an optional `endpointPrefix` to restrict
+    recovery to endpoints with that prefix; omit it to include all endpoints.
+  - `redelivered` on `DeliveredOutcome` and `DeliverySummary` indicates that
+    the request reused a stored response without another charge.
+  - These fields and methods are experimental and may change in a minor
+    release. The 3.0.0 migration plan makes `getIdempotencyKey` required.
 
 ### Protocols and gateway
 

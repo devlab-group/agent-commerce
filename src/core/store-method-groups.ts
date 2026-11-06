@@ -12,6 +12,8 @@ export const STORE_METHOD_GROUPS = {
     'listOrphanAuthorizationHolds',
   ],
   pending_tasks: ['putPendingTask', 'getPendingTask', 'takePendingTask'],
+  // Separate from `idempotency_claims` so stores can support claims without redelivery
+  response_redelivery: ['getIdempotencyKey'],
 } as const satisfies Record<string, readonly (keyof ReceiptStore)[]>;
 
 export type StoreMethodGroup = keyof typeof STORE_METHOD_GROUPS;

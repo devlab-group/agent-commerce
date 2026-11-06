@@ -171,6 +171,11 @@ export interface DeliverySummary {
     readonly externalReference?: string;
     readonly network?: string;
   };
+  /**
+   * True when this request reuses a stored response without another charge.
+   * Experimental: may change in a minor release.
+   */
+  readonly redelivered?: boolean;
 }
 
 /** Build the payer-facing summary of a delivered outcome */

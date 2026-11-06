@@ -240,7 +240,20 @@ export interface ReceiptStore {
    * changed. Assumes one gateway per store. Experimental: may change in a
    * minor release.
    */
-  recoverIdempotencyKeys?(options: { readonly release: boolean }): Promise<number>;
+  recoverIdempotencyKeys?(options: {
+    readonly release: boolean;
+    /** Limit recovery to endpoints with this prefix; omit to include all endpoints */
+    readonly endpointPrefix?: string;
+  }): Promise<number>;
+  /**
+   * Read a claim without writing. Return `undefined` if the claim is absent
+   * or is `completed` and expired. Otherwise, return the same result as
+   * `claimIdempotencyKey`. Experimental: may change in a minor release.
+   */
+  getIdempotencyKey?(
+    scope: IdempotencyScope,
+    fingerprint: string,
+  ): Promise<IdempotencyClaim | undefined>;
 
   /**
    * Authorization holds for authorization providers. A store must implement
