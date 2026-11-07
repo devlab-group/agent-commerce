@@ -13,7 +13,7 @@ export interface PaidOperation {
   readonly payer?: string;
 }
 
-function sha256Hex(text: string): string {
+export function sha256Hex(text: string): string {
   return createHash('sha256').update(text).digest('hex');
 }
 

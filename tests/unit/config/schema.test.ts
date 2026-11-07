@@ -2560,14 +2560,110 @@ describe('resource idempotency', () => {
     );
   });
 
-  it.each([
-    ['an empty block', {}, 'resources.market_report.idempotency.merchantKey'],
-    [
-      'redelivery, which has no effect',
-      { merchantKey: true, redelivery: {} },
+  it('refuses an empty block, which does nothing', () => {
+    expectConfigInvalid(
+      () => parseConfig(withIdempotency('market_report', {}), {}),
       'resources.market_report.idempotency',
-    ],
-  ])('refuses %s', (_name, idempotency, path) => {
-    expectConfigInvalid(() => parseConfig(withIdempotency('market_report', idempotency), {}), path);
+      'merchantKey or redelivery',
+    );
+  });
+
+  it('refuses a key it does not know', () => {
+    expectConfigInvalid(
+      () => parseConfig(withIdempotency('market_report', { merchantKeys: true }), {}),
+      'resources.market_report.idempotency',
+    );
+  });
+
+  describe('redelivery', () => {
+    const REDELIVERY_PATH = 'resources.market_report.idempotency.redelivery';
+
+    it('defaults to 24 hours and not required', () => {
+      const raw = withIdempotency('market_report', { redelivery: {} });
+
+      expect(resource(raw, 'market_report')?.idempotency).toEqual({
+        redelivery: { retentionHours: 24, required: false },
+      });
+    });
+
+    it('reads its settings, from strings too', () => {
+      const raw = withIdempotency('market_report', {
+        merchantKey: true,
+        redelivery: { retentionHours: '48', required: 'true' },
+      });
+
+      expect(resource(raw, 'market_report')?.idempotency).toEqual({
+        merchantKey: true,
+        redelivery: { retentionHours: 48, required: true },
+      });
+    });
+
+    it('accepts one hour', () => {
+      const raw = withIdempotency('market_report', { redelivery: { retentionHours: 1 } });
+
+      expect(resource(raw, 'market_report')?.idempotency?.redelivery?.retentionHours).toBe(1);
+    });
+
+    it.each([[0], [-1], [1.5], ['soon']])('refuses a retention of %s', (retentionHours) => {
+      expectConfigInvalid(
+        () => parseConfig(withIdempotency('market_report', { redelivery: { retentionHours } }), {}),
+        `${REDELIVERY_PATH}.retentionHours`,
+      );
+    });
+
+    it('refuses a required that is not a boolean', () => {
+      expectConfigInvalid(
+        () =>
+          parseConfig(withIdempotency('market_report', { redelivery: { required: 'often' } }), {}),
+        `${REDELIVERY_PATH}.required`,
+      );
+    });
+
+    it('refuses a key it does not know', () => {
+      expectConfigInvalid(
+        () => parseConfig(withIdempotency('market_report', { redelivery: { hours: 1 } }), {}),
+        REDELIVERY_PATH,
+      );
+    });
+
+    it('refuses required on a resource without x402', () => {
+      const raw = mppResource({ required: true });
+
+      expectConfigInvalid(
+        () => parseConfig(raw, {}),
+        `${REDELIVERY_PATH}.required`,
+        'requires "x402" in payments',
+      );
+    });
+
+    it('accepts redelivery on an MPP resource', () => {
+      const idempotency = resource(mppResource({}), 'market_report')?.idempotency;
+
+      expect(idempotency?.redelivery).toEqual({ retentionHours: 24, required: false });
+    });
+
+    function mppResource(redelivery: unknown): Record<string, unknown> {
+      const raw = validRawConfig();
+      raw['payments'] = {
+        mpp: {
+          enabled: true,
+          rpcUrl: 'https://sepolia.example/v2/key',
+          asset: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+          assetName: 'USDC',
+          assetVersion: '2',
+          recipient: '0x1111111111111111111111111111111111111111',
+          realm: 'api.example.com',
+          challengeSecret: 'c'.repeat(32),
+          facilitator: { mode: 'remote', url: 'https://facilitator.example' },
+        },
+      };
+      const resources = raw['resources'] as Record<string, Record<string, unknown>>;
+      resources['market_report'] = {
+        ...resources['market_report'],
+        payments: ['mpp'],
+        idempotency: { redelivery },
+      };
+      return raw;
+    }
   });
 });

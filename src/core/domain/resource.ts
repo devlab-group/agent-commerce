@@ -85,7 +85,8 @@ export interface CommerceResource {
     readonly required: readonly AuthorizationMethodName[];
   };
   /**
-   * Settings for paid retries, disabled when omitted. `redelivery` is planned.
+   * Paid retry settings, disabled when omitted. Built-in rail key extraction
+   * is planned.
    * Experimental: may change in a minor release.
    */
   readonly idempotency?: {
@@ -93,9 +94,9 @@ export interface CommerceResource {
     readonly merchantKey?: boolean;
     /** Store delivered responses for retries with the same client key */
     readonly redelivery?: {
-      /** How long to retain a response, in hours */
+      /** Hours from the initial retry check to the stored response's expiry */
       readonly retentionHours: number;
-      /** If true, reject an x402 payment missing an `id` with HTTP 400 */
+      /** Planned: if true, reject an x402 payment missing an `id` with HTTP 400 */
       readonly required: boolean;
     };
   };

@@ -165,6 +165,7 @@ interface CommerceErrorOptions {
     readonly httpStatus?: number;
     readonly requestId?: string;
     readonly resourceId?: string;
+    readonly retryable?: boolean;
   }
 
 interface CommerceEvent {

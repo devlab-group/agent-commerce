@@ -54,7 +54,7 @@ export const COMMERCE_ERROR_HTTP_STATUS: Readonly<Record<CommerceErrorCode, numb
   INTERNAL_ERROR: 500,
 };
 
-/** Codes for which a client may reasonably retry the same request */
+/** Codes for which a client may reasonably retry the same request, by default */
 export const RETRYABLE_ERROR_CODES: ReadonlySet<CommerceErrorCode> = new Set([
   'PAYMENT_PROVIDER_UNAVAILABLE',
   // The verifier or replay store was unreachable, so the mandate got no

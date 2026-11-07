@@ -233,15 +233,19 @@ persistence must not fail the commerce flow.
   - The method is experimental. The 3.0.0 migration plan makes it required.
 - The planned 2.7.0 API adds optional contracts for paid retries. Existing 2.6
   resources, stores and providers need no changes. The pipeline supports
-  merchant keys; SQLite implements claim lookup and recovery filtering.
-  Client retry handling and delivery summary mapping remain planned.
+  merchant keys and client retry keys; SQLite implements claim lookup and
+  recovery filtering. Built-in rail key extraction and delivery summary mapping
+  remain planned; direct pipeline requests and custom provider hooks can supply keys.
   - `CommerceResource.idempotency` configures paid retries. With `merchantKey`
     enabled, the pipeline uses a derived backend `Idempotency-Key` for the paid
-    operation; an adapter's key takes precedence. The `deployment` option is
-    required; if omitted, payment admission throws `CONFIG_INVALID` before any
-    provider call.
-    Planned `redelivery` settings retain responses for `retentionHours` hours;
-    when `required` is true, an x402 payment without an `id` must receive HTTP 400.
+    operation; an adapter's key takes precedence.
+  - `redelivery` sets a retention deadline `retentionHours` hours after the
+    initial retry check, before proof verification. It requires a store with
+    the `idempotency_claims` and `response_redelivery` groups. Both `merchantKey: true`
+    and `redelivery` require the `deployment` option. Missing dependencies make
+    payment admission throw `CONFIG_INVALID` before any provider call.
+    The planned `required` check must return HTTP 400 for an x402 payment
+    without an `id`.
   - `CanonicalRequest.retryKey` holds the client's key for retrying a paid
     request. `PaymentProvider.retryKey` extracts it from a proof without I/O.
     Treat the key as a credential: never log it or send it to a merchant or
@@ -253,6 +257,14 @@ persistence must not fail the commerce flow.
     endpoints. The ACP adapter passes `/` when recovering receipt-store claims.
   - `redelivered` on `DeliveredOutcome` and `DeliverySummary` indicates that
     the request reused a stored response without another charge.
+  - `persistenceFailures` gains `response` when a delivered response cannot be
+    stored for its client key. The pipeline attempts to mark the claim
+    `unresolved`; in-flight and unresolved claims refuse retries with 409.
+  - `CommerceErrorOptions.retryable` overrides the code's default from
+    `RETRYABLE_ERROR_CODES` for one error instance, in either direction. An
+    in-flight client-key 409 sets it to true so callers can wait and resend
+    without a new payment. Other refusals from the retry gate are not retryable.
+    Omitting the override keeps the code's default.
   - These fields and methods are experimental and may change in a minor
     release. The 3.0.0 migration plan makes `getIdempotencyKey` required.
 

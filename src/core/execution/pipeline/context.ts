@@ -16,6 +16,7 @@ import type { Logger } from '../../interfaces/logger';
 import type { Clock, IdGenerator } from '../../interfaces/runtime';
 import type { ReceiptStore, TransactionStep } from '../../interfaces/store';
 import type { Flow } from '../journal';
+import type { RetryTicket } from './retry';
 
 export interface CreateExecutionPipelineOptions {
   readonly resources: ResourceRegistry;
@@ -29,8 +30,8 @@ export interface CreateExecutionPipelineOptions {
   readonly clock: Clock;
   readonly ids: IdGenerator;
   /**
-   * Gateway public base URL (`merchant.publicBaseUrl`). Required when
-   * `idempotency.merchantKey` is true; also intended to scope planned payment retries.
+   * Gateway public base URL (`merchant.publicBaseUrl`) used in merchant keys
+   * and retry scopes. Required when `merchantKey` is true or `redelivery` is configured.
    */
   readonly deployment?: string;
 }
@@ -74,6 +75,8 @@ export interface SettleArgs {
   readonly hold: AuthorizationHold | undefined;
   /** Derived backend key for a resource with `idempotency.merchantKey` enabled */
   readonly merchantKey?: string;
+  /** Retry claim to finalize after delivery or failure */
+  readonly retry?: RetryTicket;
 }
 
 export interface PipelineContext {

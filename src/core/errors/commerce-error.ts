@@ -9,6 +9,8 @@ export interface CommerceErrorOptions {
   readonly resourceId?: string;
   /** Override the default HTTP status for this code */
   readonly httpStatus?: number;
+  /** Override the code's default retryability for this error instance */
+  readonly retryable?: boolean;
 }
 
 /** Serializable wire form of a CommerceError */
@@ -35,7 +37,7 @@ export class CommerceError extends Error {
     this.name = 'CommerceError';
     this.code = code;
     this.httpStatus = options.httpStatus ?? COMMERCE_ERROR_HTTP_STATUS[code];
-    this.retryable = RETRYABLE_ERROR_CODES.has(code);
+    this.retryable = options.retryable ?? RETRYABLE_ERROR_CODES.has(code);
     if (options.details !== undefined) this.details = options.details;
     if (options.requestId !== undefined) this.requestId = options.requestId;
     if (options.resourceId !== undefined) this.resourceId = options.resourceId;

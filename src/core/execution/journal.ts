@@ -18,10 +18,15 @@ export interface Flow {
   readonly persistenceFailures: PersistenceFailure[];
   /** True when the reserved attempt matches this ID and the store provides recordTransactionStep */
   journaled: boolean;
+  /**
+   * Set before calling provider.settle. Cleared on confirmed non-submission
+   * or a non-settled result; unknown outcomes keep it true.
+   */
+  chargeRisk: boolean;
 }
 
 export function createFlow(request: CanonicalRequest, transactionId: string): Flow {
-  return { request, transactionId, persistenceFailures: [], journaled: false };
+  return { request, transactionId, persistenceFailures: [], journaled: false, chargeRisk: false };
 }
 
 /** Snapshot failure labels for events and outcomes, omitting the field when empty */

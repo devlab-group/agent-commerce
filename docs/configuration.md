@@ -87,16 +87,30 @@ Enable `idempotency.merchantKey: true` to send an `Idempotency-Key` header with
 paid backend calls. This setting is experimental and disabled by default.
 The merchant decides how to handle repeated keys.
 
-The generated key is a SHA-256 hex digest of `merchant.publicBaseUrl`, the
-resource ID, the payment's replay identity and a canonical input digest.
-Retrying a rejected x402 authorization with the same input keeps the same key.
-Changing `merchant.publicBaseUrl` changes the generated keys.
+The generated key hashes `merchant.publicBaseUrl`, the resource ID, a payment
+identity and the canonical input digest with SHA-256. When both the client
+retry key and verified payer are nonempty, the identity uses the key's hash
+and payer; otherwise it uses the payment's replay identity. The same identity
+and input keep the same key across retries. Changing `merchant.publicBaseUrl`
+changes generated keys.
 
 An adapter's operation key takes precedence over the generated key. Either
-overrides an `Idempotency-Key` in `backend.headers`. Input with no canonical
-JSON digest, such as a string containing a lone surrogate, receives no
-generated key and can still be delivered. Config load accepts `idempotency`
-only on a fixed-price resource.
+overrides an `Idempotency-Key` in `backend.headers`. Without a client retry
+key, input with no canonical JSON digest, such as a string containing a lone
+surrogate, receives no generated key and can still be delivered. Config load
+accepts `idempotency` only on a fixed-price resource.
+
+For paid requests with a client retry key, `idempotency.redelivery` stores the
+response for reuse with matching input, without another charge. It is
+experimental and disabled by default. Supply keys through
+`CanonicalRequest.retryKey` or a custom `PaymentProvider.retryKey` hook;
+built-in rail extraction is planned. With redelivery enabled, input without a
+canonical JSON digest fails with `INPUT_INVALID` when a retry key is used.
+
+`retentionHours` is a positive integer (default 24). The retention window
+starts at the initial retry check, before proof verification. `required`
+defaults to false; setting it to true requires `x402` in `payments`. Rejecting
+an x402 payment that lacks an `id` remains planned.
 
 `url` supports `{param}` templating from validated input; values are
 URL-encoded. Remaining input becomes query string for `GET`/`DELETE` and a JSON
@@ -789,8 +803,10 @@ below 24 hours · an invalid or zero `payTo`/`asset`/`recipient` · an
 `x402.accepts` list that is empty or on a resource that cannot use it · a
 `mimeType` that is not a media type, or on a resource that is not fixed-price
 with `x402` in `payments` · an `idempotency` block on a resource that is not
-fixed-price · an MPP `challengeSecret` with length below 32 or a
-multi-line `realm`.
+fixed-price, or with neither `merchantKey` nor `redelivery` · a
+`redelivery.retentionHours` that is not a positive integer ·
+`redelivery.required: true` on a resource without `x402` in `payments` · an MPP
+`challengeSecret` with length below 32 or a multi-line `realm`.
 
 It exits non-zero on any of them.
 
