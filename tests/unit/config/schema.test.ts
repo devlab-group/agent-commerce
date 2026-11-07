@@ -2604,6 +2604,23 @@ describe('resource idempotency', () => {
       expect(resource(raw, 'market_report')?.idempotency?.redelivery?.retentionHours).toBe(1);
     });
 
+    it('accepts the longest retention, one year', () => {
+      const raw = withIdempotency('market_report', { redelivery: { retentionHours: 8760 } });
+
+      expect(resource(raw, 'market_report')?.idempotency?.redelivery?.retentionHours).toBe(8760);
+    });
+
+    it.each([[8761], ['8761'], [3_000_000_000]])(
+      'refuses a retention of %s hours as too long',
+      (retentionHours) => {
+        expectConfigInvalid(
+          () =>
+            parseConfig(withIdempotency('market_report', { redelivery: { retentionHours } }), {}),
+          `${REDELIVERY_PATH}.retentionHours`,
+        );
+      },
+    );
+
     it.each([[0], [-1], [1.5], ['soon']])('refuses a retention of %s', (retentionHours) => {
       expectConfigInvalid(
         () => parseConfig(withIdempotency('market_report', { redelivery: { retentionHours } }), {}),

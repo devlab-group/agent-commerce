@@ -3,8 +3,9 @@
  * state names (`in_flight`) so legacy rows can be copied without translating
  * their states.
  *
- * Only `completed` rows expire. An unresolved row blocks retries; deleting it
- * must remain an operator's decision.
+ * `completed` rows and unresolved payment retry keys expire at their retention
+ * deadline; retries then follow the normal purchase flow. Unresolved ACP rows
+ * block retries until an operator deletes them.
  *
  * Unfinished rows keep the claimant's `owner` tag in `body_json`; completion
  * replaces it with the response.
@@ -16,6 +17,7 @@ import {
   type IdempotencyScope,
   toCommerceError,
 } from '../../core';
+import { PAYMENT_KEY_ENDPOINT_PREFIX } from '../../core/domain/store-records';
 import { isRecord } from '../../core/is-record';
 import type { StoreGroupMethods } from '../../core/store-method-groups';
 import { storedIso } from './params';
@@ -53,6 +55,14 @@ function claimOf(row: ClaimRow, fingerprint: string): IdempotencyClaim {
   return typeof owner === 'string' ? { kind, owner } : { kind };
 }
 
+function hasExpired(row: ClaimRow, endpoint: string, now: string): boolean {
+  if (row.expires_at > now) return false;
+  return (
+    row.state === 'completed' ||
+    (row.state === 'unresolved' && endpoint.startsWith(PAYMENT_KEY_ENDPOINT_PREFIX))
+  );
+}
+
 export function createIdempotencyMethods(db: Database.Database, clock: Clock): IdempotencyMethods {
   const SCOPE =
     'deployment = @deployment AND endpoint = @endpoint AND idempotency_key = @idempotency_key';
@@ -64,8 +74,10 @@ export function createIdempotencyMethods(db: Database.Database, clock: Clock): I
        (deployment, endpoint, idempotency_key, fingerprint, state, body_json, created_at, expires_at)
      VALUES (@deployment, @endpoint, @idempotency_key, @fingerprint, 'in_flight', @body_json, @created_at, @expires_at)`,
   );
-  const expireCompleted = db.prepare(
-    "DELETE FROM idempotency_keys WHERE expires_at <= ? AND state = 'completed'",
+  // The same rule as hasExpired
+  const expireFinished = db.prepare(
+    `DELETE FROM idempotency_keys WHERE expires_at <= @now
+       AND (state = 'completed' OR (state = 'unresolved' AND ${ENDPOINT_HAS_PREFIX}))`,
   );
   const completeClaim = db.prepare(
     `UPDATE idempotency_keys SET state = 'completed', status = @status, body_json = @body_json
@@ -81,7 +93,7 @@ export function createIdempotencyMethods(db: Database.Database, clock: Clock): I
     `UPDATE idempotency_keys SET state = 'unresolved' WHERE ${IN_FLIGHT}`,
   );
 
-  // Sweep expired completed rows during the claim; no background worker is needed
+  // Sweep expired rows during the claim; no background worker is needed
   const claim = db.transaction(
     (
       scope: IdempotencyScope,
@@ -90,7 +102,7 @@ export function createIdempotencyMethods(db: Database.Database, clock: Clock): I
       owner: string | undefined,
     ): IdempotencyClaim => {
       const now = clock.nowIso();
-      expireCompleted.run(now);
+      expireFinished.run({ now, prefix: PAYMENT_KEY_ENDPOINT_PREFIX });
       const existing = selectClaim.get(scopeParams(scope));
       if (existing === undefined) {
         insertClaim.run({
@@ -119,8 +131,9 @@ export function createIdempotencyMethods(db: Database.Database, clock: Clock): I
       try {
         const existing = selectClaim.get(scopeParams(scope));
         if (existing === undefined) return undefined;
-        const expired = existing.state === 'completed' && existing.expires_at <= clock.nowIso();
-        return expired ? undefined : claimOf(existing, fingerprint);
+        return hasExpired(existing, scope.endpoint, clock.nowIso())
+          ? undefined
+          : claimOf(existing, fingerprint);
       } catch (err) {
         throw toCommerceError(err, 'STORAGE_ERROR', 'Failed to read idempotency key');
       }

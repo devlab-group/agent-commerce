@@ -94,6 +94,9 @@ interface StoredDelivery {
   readonly receiptId: string;
 }
 
+/** The longest `redelivery.retentionHours` a resource may set: one year */
+export const MAX_REDELIVERY_RETENTION_HOURS = 8760;
+
 // The delay ACP gives its own in-flight answer
 const IN_FLIGHT_RETRY_AFTER_SECONDS = 1;
 
@@ -128,12 +131,23 @@ export function assertRetrySupport(
 ): RetrySupport | undefined {
   const { merchantKey, redelivery } = resource.idempotency ?? {};
   if (merchantKey !== true && redelivery === undefined) return undefined;
+  const invalid = (message: string) =>
+    new CommerceError('CONFIG_INVALID', message, {
+      ...(requestId !== undefined ? { requestId } : {}),
+      resourceId: resource.id,
+    });
   const unsupported = (needs: string) =>
-    new CommerceError(
-      'CONFIG_INVALID',
-      `Resource "${resource.id}" sets idempotency, which requires ${needs}`,
-      { ...(requestId !== undefined ? { requestId } : {}), resourceId: resource.id },
+    invalid(`Resource "${resource.id}" sets idempotency, which requires ${needs}`);
+  // Bound retention to one year before computing its deadline
+  const hours = redelivery?.retentionHours;
+  if (
+    hours !== undefined &&
+    !(Number.isInteger(hours) && hours >= 1 && hours <= MAX_REDELIVERY_RETENTION_HOURS)
+  ) {
+    throw invalid(
+      `Resource "${resource.id}" sets idempotency.redelivery.retentionHours outside 1 to ${MAX_REDELIVERY_RETENTION_HOURS}`,
     );
+  }
   if (deployment === undefined) throw unsupported("the pipeline's deployment option");
   if (redelivery === undefined) return { deployment };
   if (

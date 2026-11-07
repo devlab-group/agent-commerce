@@ -929,6 +929,30 @@ describe('retry gate: retention', () => {
     expect(calls.settle).toBe(2);
   });
 
+  it('keeps an unresolved key closed until retention ends, then sells again', async () => {
+    let settles = 0;
+    const { pipeline, calls, clock } = setup({
+      provider: {
+        settle: async () => {
+          settles += 1;
+          calls.settle += 1;
+          if (settles === 1) throw new Error('facilitator lost the response');
+          return { status: 'settled', provider: 'x402', amount: '0.01', currency: 'USDC' };
+        },
+      },
+    });
+    await refusal(pipeline.execute(paid()));
+
+    clock.advance(24 * HOUR_MS - 1);
+    const closed = await refusal(pipeline.execute(paid('alice/2')));
+    clock.advance(1);
+    const again = await delivered(pipeline.execute(paid('alice/3')));
+
+    expect(closed.details?.['reason']).toBe('payment_identifier_unresolved');
+    expect(again).not.toHaveProperty('redelivered');
+    expect(calls.settle).toBe(2);
+  });
+
   it("uses the resource's own retention", async () => {
     const { pipeline, calls, clock } = setup({
       resource: { idempotency: { redelivery: { retentionHours: 2, required: false } } },
@@ -1424,6 +1448,28 @@ describe('retry gate: a pipeline that cannot serve the resource', () => {
       expect(error).toMatchObject({ code: 'CONFIG_INVALID', requestId: request.requestId });
     }
     expect(providerCalls).toEqual([]);
+  });
+
+  it.each([[0], [1.5], [8761], [3_000_000_000], [Number.POSITIVE_INFINITY]])(
+    'refuses a retention of %s hours before any provider call',
+    async (retentionHours) => {
+      const resource = { idempotency: { redelivery: { retentionHours, required: false } } };
+      const { pipeline, providerCalls } = pipelineWith(resource, sqliteWithout(), DEPLOYMENT);
+
+      const error = await refusal(pipeline.execute(paid()));
+
+      expect(error).toMatchObject({ code: 'CONFIG_INVALID', resourceId: 'res-1' });
+      expect(providerCalls).toEqual([]);
+    },
+  );
+
+  it('accepts a retention of one year', () => {
+    const resource = makeResource({
+      ...OPTED_IN,
+      idempotency: { redelivery: { retentionHours: 8760, required: false } },
+    });
+
+    expect(assertRetrySupport(resource, sqliteWithout(), DEPLOYMENT)).toBeDefined();
   });
 
   it('names no request when a caller outside a request checks support', () => {

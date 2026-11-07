@@ -112,16 +112,21 @@ Custom providers can implement `PaymentProvider.retryKey`. With redelivery
 enabled, input without a canonical JSON digest fails with `INPUT_INVALID`
 when a retry key is used.
 
-`retentionHours` is a positive integer (default 24). The retention window
-starts at the initial retry check, before proof verification. `required`
-defaults to false. Setting it to true requires `x402` in `payments` and makes
-x402 retry-key extraction reject a missing `id` with `INPUT_INVALID` (HTTP 400).
+`retentionHours` is an integer from 1 to 8760 (one year), default 24. Config
+load rejects other values. The window starts at the initial retry check, before
+proof verification. `required` defaults to false. Setting it to true requires
+`x402` in `payments` and makes x402 retry-key extraction reject a missing `id`
+with `INPUT_INVALID` (HTTP 400).
 
 At startup, the gateway marks in-flight payment retry keys `unresolved`, even
 if no resource still enables `redelivery`, and logs a nonzero count at WARN.
-Those requests may have charged; with `redelivery` enabled, matching retries
-get 409 `payment_identifier_unresolved`. `doctor` reports unresolved keys as
-INFO. Run one gateway process per receipt database.
+Recovery includes requests that crashed before settlement. An interrupted
+request may have charged, so matching retries with `redelivery` enabled get
+409 `payment_identifier_unresolved` until the key's retention deadline. After
+expiry, retries follow the normal purchase flow, as with completed keys.
+Reconciling or resolving the payment attempt does not change the key. `doctor`
+reports unexpired unresolved keys as INFO. Run one gateway process per receipt
+database.
 
 Removing `redelivery`, renaming a resource or changing `merchant.publicBaseUrl`
 makes its stored responses and unresolved keys unavailable to new requests.
@@ -819,7 +824,7 @@ below 24 hours · an invalid or zero `payTo`/`asset`/`recipient` · an
 `mimeType` that is not a media type, or on a resource that is not fixed-price
 with `x402` in `payments` · an `idempotency` block on a resource that is not
 fixed-price, or with neither `merchantKey` nor `redelivery` · a
-`redelivery.retentionHours` that is not a positive integer ·
+`redelivery.retentionHours` that is not an integer from 1 to 8760 ·
 `redelivery.required: true` on a resource without `x402` in `payments` · an MPP
 `challengeSecret` with length below 32 or a multi-line `realm`.
 

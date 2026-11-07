@@ -222,10 +222,10 @@ export interface ReceiptStore {
    * Idempotency claims for protocol adapters. A store must implement all three
    * methods or none. Experimental: may change in a minor release.
    *
-   * Atomically claim `scope` after deleting `completed` claims whose
-   * `expiresAt` has passed. Other states do not expire. Return `reserved` for
-   * a new scope, or `conflict` for a different `fingerprint`, regardless of
-   * the existing claim's state.
+   * Atomically claim `scope` after deleting expired `completed` claims and
+   * expired `unresolved` claims on `PAYMENT_KEY_ENDPOINT_PREFIX` endpoints.
+   * Expiry occurs at `expiresAt`; other claims do not expire. Return `reserved`
+   * for a new scope, or `conflict` for a different `fingerprint` in any state.
    *
    * New claims retain `owner`, an opaque non-secret tag returned with
    * `in-flight` and `unresolved` results. Completed claims return their response
@@ -252,8 +252,8 @@ export interface ReceiptStore {
   }): Promise<number>;
   /**
    * Read a claim without writing. Return `undefined` if the claim is absent
-   * or is `completed` and expired. Otherwise, return the same result as
-   * `claimIdempotencyKey`. Experimental: may change in a minor release.
+   * or expired under `claimIdempotencyKey`'s rule. Otherwise, return the same
+   * result as `claimIdempotencyKey`. Experimental: may change in a minor release.
    */
   getIdempotencyKey?(
     scope: IdempotencyScope,

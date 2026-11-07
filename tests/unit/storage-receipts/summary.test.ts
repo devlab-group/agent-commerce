@@ -158,6 +158,22 @@ describe('SQLite receipt store summary', () => {
     });
   });
 
+  it('stops counting a payment key once its retention ends, and keeps counting other claims', async () => {
+    const scope = (endpoint: string) => ({ deployment: 'https://gw.example', endpoint, key: 'k' });
+    for (const endpoint of ['/acp/checkout_sessions', 'payment:report']) {
+      await store.claimIdempotencyKey(scope(endpoint), 'fp', isoAt(MINUTE));
+      await store.updateIdempotencyKey(scope(endpoint), { kind: 'unresolved' });
+    }
+
+    clock.advance(MINUTE - 1);
+    const before = await store.summary(AGE);
+    clock.advance(1);
+    const after = await store.summary(AGE);
+
+    expect(before).toMatchObject({ unresolvedIdempotencyKeys: 1, unresolvedPaymentKeys: 1 });
+    expect(after).toMatchObject({ unresolvedIdempotencyKeys: 1, unresolvedPaymentKeys: 0 });
+  });
+
   it('lists the recorded legacy imports, not a start with nothing to import', async () => {
     const db = new Database(path);
     const insert = db.prepare(

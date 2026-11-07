@@ -8,6 +8,7 @@ import {
   type Pricing,
   RESERVED_INPUT_FIELDS,
 } from '../../core';
+import { MAX_REDELIVERY_RETENTION_HOURS } from '../../core/execution/pipeline/retry';
 import { MPP_PROFILE } from '../../payments/mpp/constants';
 import { MCP_TOOL_NAME_PATTERN } from '../../protocols/mcp/constants';
 import { normalizeResourceAuthorization } from './ap2';
@@ -310,7 +311,7 @@ function normalizeResourceIdempotency(
       retentionHours: toNumber(
         raw.redelivery.retentionHours ?? DEFAULT_REDELIVERY_RETENTION_HOURS,
         `${path}.redelivery.retentionHours`,
-        { min: 1 },
+        { min: 1, max: MAX_REDELIVERY_RETENTION_HOURS },
       ),
       required,
     };

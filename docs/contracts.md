@@ -241,9 +241,12 @@ persistence must not fail the commerce flow.
     enabled, the pipeline uses a derived backend `Idempotency-Key` for the paid
     operation; an adapter's key takes precedence.
   - `redelivery` sets a retention deadline `retentionHours` hours after the
-    initial retry check, before proof verification. It requires a store with
-    the `idempotency_claims` and `response_redelivery` groups. Both `merchantKey: true`
-    and `redelivery` require the `deployment` option. `createGateway` throws
+    initial retry check, before proof verification. `retentionHours` is an
+    integer from 1 to 8760 (one year), default 24. Config load rejects other
+    values; a directly built pipeline throws `CONFIG_INVALID` before payment
+    work. `redelivery` requires a store with the `idempotency_claims`
+    and `response_redelivery` groups. Both `merchantKey: true` and `redelivery`
+    require the `deployment` option. `createGateway` throws
     `CONFIG_INVALID` for missing dependencies at startup; a directly built
     pipeline throws at payment admission, before any provider call.
     With `required` true, x402 retry-key extraction rejects a missing `id`
@@ -253,7 +256,8 @@ persistence must not fail the commerce flow.
     Treat the key as a credential: never log it or send it to a merchant or
     facilitator.
   - `ReceiptStore.getIdempotencyKey` reads a claim without writing. It returns
-    `undefined` if the claim is absent or is `completed` and expired.
+    `undefined` for an absent or expired claim, using `claimIdempotencyKey`'s
+    expiry rule. Otherwise, it returns the same result as `claimIdempotencyKey`.
   - `claimIdempotencyKey` takes an optional fourth argument, `owner`, an opaque,
     non-secret tag stored with a new claim. Both `claimIdempotencyKey` and
     `getIdempotencyKey` return it on `in-flight` and `unresolved` results.
@@ -262,6 +266,10 @@ persistence must not fail the commerce flow.
     as the tag and answers only that proof before verification. A store that
     omits `owner` still works, but every proof must be verified before an
     unfinished claim is refused.
+  - A claim sweep deletes expired `completed` claims and expired `unresolved`
+    claims on `payment:` endpoints, which hold client retry keys. `unresolved`
+    claims on other endpoints, including ACP's, and `in-flight` claims never
+    expire. `getIdempotencyKey` must apply the same expiry rule.
   - `recoverIdempotencyKeys` takes an optional `endpointPrefix`. Recovery
     matches the prefix literally, including case; omit it to include all
     endpoints. The ACP adapter passes `/` when recovering receipt-store claims.

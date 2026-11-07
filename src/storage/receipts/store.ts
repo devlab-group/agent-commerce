@@ -509,11 +509,12 @@ function storeOn(db: Database.Database, options: SqliteReceiptStoreOptions): Sql
   const countOrphanHoldsStmt = db.prepare<[string], { count: number }>(
     `SELECT COUNT(*) AS count FROM authorization_holds h WHERE ${ORPHAN_HOLD_WHERE}`,
   );
+  // Count only unexpired payment keys that can still block retries
   const countUnresolvedKeysStmt = db.prepare<
-    { prefix: string },
+    { prefix: string; now: string },
     { payment: number; other: number }
   >(
-    `SELECT COUNT(*) FILTER (WHERE ${ENDPOINT_HAS_PREFIX}) AS payment,
+    `SELECT COUNT(*) FILTER (WHERE ${ENDPOINT_HAS_PREFIX} AND expires_at > @now) AS payment,
             COUNT(*) FILTER (WHERE NOT ${ENDPOINT_HAS_PREFIX}) AS other
        FROM idempotency_keys WHERE state = 'unresolved'`,
   );
@@ -821,7 +822,10 @@ function storeOn(db: Database.Database, options: SqliteReceiptStoreOptions): Sql
         unresolvedTransactions[state] = (unresolvedTransactions[state] ?? 0) + 1;
       }
       const orphansBefore = new Date(Date.parse(now) - orphanHoldMinAgeMs).toISOString();
-      const unresolvedKeys = countUnresolvedKeysStmt.get({ prefix: PAYMENT_KEY_ENDPOINT_PREFIX });
+      const unresolvedKeys = countUnresolvedKeysStmt.get({
+        prefix: PAYMENT_KEY_ENDPOINT_PREFIX,
+        now,
+      });
       return {
         unresolvedTransactions,
         orphanHolds: countOrphanHoldsStmt.get(orphansBefore)?.count ?? 0,

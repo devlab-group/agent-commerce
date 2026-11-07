@@ -42,6 +42,9 @@ implementing it should follow these 2.7.0 rules, checked by the
   `getIdempotencyKey` return on `in-flight` and `unresolved` results. A store
   that omits it forces verification of every proof before the gateway refuses
   an unfinished payment key.
+- `unresolved` claims on `payment:` endpoints expire at `expiresAt`, as
+  `completed` claims do. Apply this rule in both the claim sweep and
+  `getIdempotencyKey`. Other `unresolved` claims never expire.
 
 The 3.0.0 plan removes these store settings deprecated in 2.6.0:
 

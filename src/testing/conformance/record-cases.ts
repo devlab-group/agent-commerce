@@ -7,6 +7,7 @@ import type {
   PendingTask,
   ReceiptStore,
 } from '../../core';
+import { PAYMENT_KEY_ENDPOINT_PREFIX } from '../../core/domain/store-records';
 import { STORE_METHOD_GROUPS, type StoreGroupMethods } from '../../core/store-method-groups';
 import { type CaseSpec, isoAt } from './support';
 
@@ -198,7 +199,7 @@ const CLAIM_CASES: readonly CaseSpec[] = [
     },
   },
   {
-    name: 'an expired completed claim reads as absent, and other states never expire',
+    name: 'an expired completed claim reads as absent, and other checkout claims never expire',
     uses: CLAIM_READS,
     async run({ store, clock }) {
       const s = claimReads(store);
@@ -216,6 +217,29 @@ const CLAIM_CASES: readonly CaseSpec[] = [
       assert.equal(await s.getIdempotencyKey(scope('done'), 'other'), undefined);
       assert.deepEqual(await s.getIdempotencyKey(scope('running'), 'fp'), { kind: 'in-flight' });
       assert.deepEqual(await s.getIdempotencyKey(scope('unknown'), 'fp'), { kind: 'unresolved' });
+    },
+  },
+  {
+    name: 'an expired unresolved payment key reads as absent and can be claimed again',
+    uses: CLAIM_READS,
+    async run({ store, clock }) {
+      const s = claimReads(store);
+      const paid = scope('paid', `${PAYMENT_KEY_ENDPOINT_PREFIX}report`);
+      await s.claimIdempotencyKey(paid, 'fp', isoAt(MINUTE));
+      await s.updateIdempotencyKey(paid, { kind: 'unresolved' });
+      await s.claimIdempotencyKey(scope('acp'), 'fp', isoAt(MINUTE));
+      await s.updateIdempotencyKey(scope('acp'), { kind: 'unresolved' });
+
+      clock.advance(MINUTE - 1);
+      assert.deepEqual(await s.getIdempotencyKey(paid, 'fp'), { kind: 'unresolved' });
+
+      clock.advance(1);
+      assert.equal(await s.getIdempotencyKey(paid, 'fp'), undefined);
+      assert.deepEqual(await s.getIdempotencyKey(scope('acp'), 'fp'), { kind: 'unresolved' });
+      assert.deepEqual(await s.claimIdempotencyKey(paid, 'fp', isoAt(DAY)), { kind: 'reserved' });
+      assert.deepEqual(await s.claimIdempotencyKey(scope('acp'), 'fp', isoAt(DAY)), {
+        kind: 'unresolved',
+      });
     },
   },
   {
