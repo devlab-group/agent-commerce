@@ -8,6 +8,7 @@ import { normalizeAddress, sameAddress } from '../addresses';
 import { declaredX402Version, decodePaymentSubmission, forFacilitator } from '../payload';
 import { X402_VERSION } from './constants';
 import { offerCurrency } from './offers';
+import { paymentIdentifierEchoed } from './payment-id';
 import { isProviderUnavailableError, NO_VERDICT_REASONS, sanitizeReason } from './reasons';
 import { acceptedMatchesOffer, offerIndexOf } from './requirement';
 import { readTransfer, type Transfer } from './transfer';
@@ -138,6 +139,10 @@ export function createVerify(
       (payload.resource !== undefined && payload.resource.url !== offeredUrl)
     ) {
       return refused('invalid_payment_requirements');
+    }
+    // Preserve the challenge's declared required value in the buyer's echo
+    if (!paymentIdentifierEchoed(requirement.challenge.envelope, payload)) {
+      return refused('extension_echo_mismatch');
     }
     let required: bigint;
     try {

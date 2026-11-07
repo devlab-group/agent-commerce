@@ -11,6 +11,7 @@ import type { X402Network } from '../networks';
 import { decodePaymentSubmission } from '../payload';
 import { X402_DEFAULT_PAYMENT_FLOW } from '../payment-flow';
 import { DEFAULT_MIME_TYPE, X402_PROTOCOL_VERSION, X402_VERSION } from './constants';
+import { paymentIdentifierExtensions } from './payment-id';
 import type { ProviderContext, SvmOffer } from './types';
 
 // Requirement metadata naming the offer `selectRequirement` chose, by index
@@ -99,7 +100,7 @@ export function createRequirementBuilders(
       })),
     );
     const single = offers.length === 1 ? offers[0] : undefined;
-    const extensions = await ctx.quotes?.extensionsFor(
+    const quoteExtensions = await ctx.quotes?.extensionsFor(
       context.resource.id,
       context.input,
       offers.flatMap((offer, index) => {
@@ -107,6 +108,9 @@ export function createRequirementBuilders(
         return offer.family === 'evm' && accepted ? [{ offer, amount: accepted.amount }] : [];
       }),
     );
+    const identifier = paymentIdentifierExtensions(context.resource);
+    const extensions =
+      identifier === undefined ? quoteExtensions : { ...quoteExtensions, ...identifier };
 
     // The v2 challenge document as sent on the wire. The HTTP adapter
     // base64-encodes it into `PAYMENT-REQUIRED` and MCP passes it through, so

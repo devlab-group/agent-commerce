@@ -22,6 +22,11 @@ export interface CreatePaymentProofOptions {
   readonly buyerPrivateKey: `0x${string}`;
   /** One entry from PaymentRequiredEnvelope.payment.accepts, verbatim */
   readonly accepts: Readonly<Record<string, unknown>>;
+  /**
+   * `PaymentPayload.extensions`, sent outside the signature. Echo the challenge's
+   * declarations; for `payment-identifier`, add the buyer's `id` to `info`.
+   */
+  readonly extensions?: Readonly<Record<string, unknown>>;
   /** For negative tests only: a wrong amount, recipient, nonce or validity window */
   readonly overrides?: {
     readonly value?: string;
@@ -121,6 +126,7 @@ export async function createPaymentProof(options: CreatePaymentProofOptions): Pr
         nonce,
       },
     },
+    ...(options.extensions !== undefined ? { extensions: { ...options.extensions } } : {}),
   };
 
   return Buffer.from(JSON.stringify(payload), 'utf8').toString('base64');

@@ -234,8 +234,10 @@ persistence must not fail the commerce flow.
 - The planned 2.7.0 API adds optional contracts for paid retries. Existing 2.6
   resources, stores and providers need no changes. The pipeline supports
   merchant keys and client retry keys; SQLite implements claim lookup and
-  recovery filtering. Built-in rail key extraction and delivery summary mapping
-  remain planned; direct pipeline requests and custom provider hooks can supply keys.
+  recovery filtering. The x402 provider extracts keys from `payment-identifier`.
+  Extracting MPP's `Idempotency-Key` and mapping `redelivered` to `DeliverySummary`
+  remain planned. Direct pipeline requests and custom provider hooks can also
+  supply keys.
   - `CommerceResource.idempotency` configures paid retries. With `merchantKey`
     enabled, the pipeline uses a derived backend `Idempotency-Key` for the paid
     operation; an adapter's key takes precedence.
@@ -244,8 +246,8 @@ persistence must not fail the commerce flow.
     the `idempotency_claims` and `response_redelivery` groups. Both `merchantKey: true`
     and `redelivery` require the `deployment` option. Missing dependencies make
     payment admission throw `CONFIG_INVALID` before any provider call.
-    The planned `required` check must return HTTP 400 for an x402 payment
-    without an `id`.
+    With `required` true, x402 retry-key extraction rejects a missing `id`
+    with `INPUT_INVALID` (HTTP 400).
   - `CanonicalRequest.retryKey` holds the client's key for retrying a paid
     request. `PaymentProvider.retryKey` extracts it from a proof without I/O.
     Treat the key as a credential: never log it or send it to a merchant or
@@ -1101,6 +1103,11 @@ export interface CreatePaymentProofOptions {
   readonly buyerPrivateKey: `0x${string}`;
   /** One entry from PaymentRequiredEnvelope.payment.accepts, verbatim */
   readonly accepts: Readonly<Record<string, unknown>>;
+  /**
+   * `PaymentPayload.extensions`, sent outside the signature. Echo the challenge's
+   * declarations; for `payment-identifier`, add the buyer's `id` to `info`.
+   */
+  readonly extensions?: Readonly<Record<string, unknown>>;
   /** For negative tests only: a wrong amount, recipient, nonce or validity window */
   readonly overrides?: {
     readonly value?: string;

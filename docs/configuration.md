@@ -102,15 +102,19 @@ accepts `idempotency` only on a fixed-price resource.
 
 For paid requests with a client retry key, `idempotency.redelivery` stores the
 response for reuse with matching input, without another charge. It is
-experimental and disabled by default. Supply keys through
-`CanonicalRequest.retryKey` or a custom `PaymentProvider.retryKey` hook;
-built-in rail extraction is planned. With redelivery enabled, input without a
-canonical JSON digest fails with `INPUT_INVALID` when a retry key is used.
+experimental and disabled by default. The x402 provider extracts the buyer's
+`id` from the echoed `payment-identifier` extension (see
+[x402.md](protocols/x402.md#payment-identifier)). Direct pipeline requests can
+set `CanonicalRequest.retryKey`, which takes precedence over provider
+extraction. Custom providers can implement `PaymentProvider.retryKey`;
+extracting MPP's `Idempotency-Key` is planned. With redelivery enabled, input
+without a canonical JSON digest fails with `INPUT_INVALID` when a retry key
+is used.
 
 `retentionHours` is a positive integer (default 24). The retention window
 starts at the initial retry check, before proof verification. `required`
-defaults to false; setting it to true requires `x402` in `payments`. Rejecting
-an x402 payment that lacks an `id` remains planned.
+defaults to false. Setting it to true requires `x402` in `payments` and makes
+x402 retry-key extraction reject a missing `id` with `INPUT_INVALID` (HTTP 400).
 
 `url` supports `{param}` templating from validated input; values are
 URL-encoded. Remaining input becomes query string for `GET`/`DELETE` and a JSON

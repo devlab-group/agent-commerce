@@ -85,8 +85,9 @@ export interface CommerceResource {
     readonly required: readonly AuthorizationMethodName[];
   };
   /**
-   * Paid retry settings, disabled when omitted. Built-in rail key extraction
-   * is planned.
+   * Paid retry settings, disabled when omitted. With redelivery configured,
+   * x402 reads client keys from `payment-identifier`; MPP's `Idempotency-Key`
+   * support is planned.
    * Experimental: may change in a minor release.
    */
   readonly idempotency?: {
@@ -96,7 +97,7 @@ export interface CommerceResource {
     readonly redelivery?: {
       /** Hours from the initial retry check to the stored response's expiry */
       readonly retentionHours: number;
-      /** Planned: if true, reject an x402 payment missing an `id` with HTTP 400 */
+      /** If true, reject a missing `id` during x402 retry-key extraction with HTTP 400 */
       readonly required: boolean;
     };
   };
