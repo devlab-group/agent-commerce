@@ -200,6 +200,8 @@ export function toDeliverySummary(outcome: DeliveredOutcome): DeliverySummary {
           },
         }
       : {}),
+    // Omit the flag from original deliveries to preserve the existing summary shape
+    ...(outcome.redelivered === true ? { redelivered: true } : {}),
   };
 }
 

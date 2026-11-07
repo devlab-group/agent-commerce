@@ -159,9 +159,13 @@ async function payPending(
     );
   }
   const metadata = paymentFailureMetadata(error, pending.network);
+  const reason = error.details?.['reason'];
   let text = 'Payment failed.';
   if (metadata[X402_PAYMENT_STATUS_KEY] === 'payment-completed') {
     text = 'Payment settled, but the resource could not be delivered.';
+  } else if (typeof reason === 'string' && reason.startsWith('payment_identifier_')) {
+    // Retry-key refusals make no new charge; show the specific error message
+    text = error.message;
   } else if (!error.code.startsWith('PAYMENT_')) {
     text = 'The resource could not be delivered.';
   }

@@ -126,6 +126,16 @@ in a data part as `{"data": {"input": {"_authorization": {...}}}}`. It is
 verified against the stored purchase, and the rest of that part is ignored. A
 mandate from the first message takes precedence.
 
+On a resource with [`idempotency.redelivery`](../configuration.md#resources)
+(experimental), `x402.payment.required` declares the
+[payment identifier](x402.md#payment-identifier). Each pending task accepts one
+payment submission; a resend returns `TaskNotFoundError`. To retry, start a new
+task with the same input and submit a proof with the same `id`. Redelivery
+completes the new task with `payment-completed` and the original settlement
+entry, without another settlement. A refusal fails the task and puts its
+`payment_identifier_*` reason in `x402.payment.error`. An in-flight refusal
+also consumes the task, so retry on another new task.
+
 The extension applies only to x402. An MPP resource still returns a terminal
 task.
 
@@ -139,18 +149,19 @@ These outcomes return a terminal task with one artifact:
 | Payment required on terminal path | `TASK_STATE_FAILED`    | Shared payment-required envelope                         |
 | Commerce failure                  | `TASK_STATE_FAILED`    | Shared error envelope                                    |
 
-Every `TASK_STATE_FAILED` task has a `ROLE_AGENT` status message whose text is
-the envelope's `message`; after an extension payment, the text summarizes the
-payment outcome instead. Only extension status messages carry `metadata` and
-`extensions`.
+Every `TASK_STATE_FAILED` task has a `ROLE_AGENT` status message. Ordinary
+failures and `payment_identifier_*` refusals use the envelope's `message` as
+their text. Other extension payment failures summarize the payment outcome.
+Only extension status messages carry `metadata` and `extensions`.
 
 With the x402 extension, an unpaid task is `TASK_STATE_INPUT_REQUIRED`; its
 payment terms are in the status message metadata. If the client declines,
 the task ends with no artifact.
 
-A non-object merchant body is wrapped as `{ "value": ... }`. Without the x402
-extension, payment required is terminal; the buyer sends a new message with
-the proof.
+Redelivery sets `redelivered: true` in the artifact's `agent-commerce/delivery`
+summary. A non-object merchant body is wrapped as `{ "value": ... }`. Without
+the x402 extension, payment required is terminal; the buyer sends a new message
+with the proof.
 
 The adapter returns JSON-RPC errors for invalid requests and A2A features it
 cannot serve. Alongside `-32700`, `-32600`, `-32601`, `-32602` and `-32603`, it

@@ -235,9 +235,8 @@ persistence must not fail the commerce flow.
   resources, stores and providers need no changes. The pipeline supports
   merchant keys and client retry keys; SQLite implements claim lookup and
   recovery filtering. The x402 provider extracts `payment-identifier` IDs;
-  the HTTP invoke route reads MPP's `Idempotency-Key` into `retryKey`.
-  Mapping `redelivered` to `DeliverySummary` remains planned. Direct pipeline
-  requests and custom provider hooks can also supply keys.
+  the HTTP invoke route reads MPP's `Idempotency-Key` into `retryKey`. Direct
+  pipeline requests and custom provider hooks can also supply keys.
   - `CommerceResource.idempotency` configures paid retries. With `merchantKey`
     enabled, the pipeline uses a derived backend `Idempotency-Key` for the paid
     operation; an adapter's key takes precedence.
@@ -259,6 +258,8 @@ persistence must not fail the commerce flow.
     endpoints. The ACP adapter passes `/` when recovering receipt-store claims.
   - `redelivered` on `DeliveredOutcome` and `DeliverySummary` indicates that
     the request reused a stored response without another charge.
+    `toDeliverySummary` includes the field only when true; original delivery
+    summaries omit it.
   - `persistenceFailures` gains `response` when a delivered response cannot be
     stored for its client key. The pipeline attempts to mark the claim
     `unresolved`; in-flight and unresolved claims refuse retries with 409.

@@ -103,7 +103,8 @@ const REFUSALS = {
   },
   unresolved: {
     reason: 'payment_identifier_unresolved',
-    message: 'The outcome of the request with this payment identifier is unknown',
+    message:
+      'The earlier request with this payment identifier may have been charged and has no stored response',
   },
 } as const;
 

@@ -1,7 +1,8 @@
 /**
- * Exercise HTTP retries through the gateway, x402 and MPP providers, and SQLite.
- * An injected backend controls delivery; a mocked x402 facilitator client
- * counts verification and settlement calls without contacting a chain.
+ * Exercise retries over HTTP, MCP and A2A through the gateway, the x402 and MPP
+ * providers, and SQLite. An injected backend controls delivery; a mocked x402
+ * facilitator client counts verification and settlement calls without
+ * contacting a chain.
  */
 import { Challenge } from 'mppx';
 import { charge as clientCharge } from 'mppx/evm/client';
@@ -14,7 +15,9 @@ import {
   type BackendResponse,
   type Clock,
   type CommerceResource,
+  DELIVERY_SUMMARY_META_KEY,
   PAYMENT_HEADER,
+  PAYMENT_INPUT_FIELD,
   PAYMENT_REQUIRED_HEADER,
   PAYMENT_RESPONSE_HEADER,
 } from '../../src/core';
@@ -22,6 +25,10 @@ import { createGateway, type GatewayInstance } from '../../src/gateway';
 import { createMppPaymentProvider } from '../../src/payments/mpp/provider';
 import { createPaymentProof } from '../../src/payments/x402/client';
 import { createX402PaymentProvider } from '../../src/payments/x402/provider';
+import { createA2aAdapter } from '../../src/protocols/a2a';
+import type { A2aTask } from '../../src/protocols/a2a/types';
+import { A2A_X402_EXTENSION_URI } from '../../src/protocols/a2a/x402-extension';
+import { createMcpAdapter } from '../../src/protocols/mcp';
 import { createSqliteReceiptStore } from '../../src/storage/receipts';
 
 process.env['NODE_ENV'] = 'test';
@@ -80,7 +87,7 @@ function resource(
     },
     handler: { type: 'http', method: 'POST', url: 'http://backend.local/report' },
     pricing: { type: 'fixed', amount: '0.01', currency: 'USDC' },
-    exposedVia: ['http'],
+    exposedVia: ['http', 'mcp', 'a2a'],
     paymentMethods,
     ...(idempotency !== undefined ? { idempotency } : {}),
   };
@@ -151,8 +158,8 @@ function config(resources: readonly CommerceResource[]): GatewayConfig {
     storage: { receipts: { driver: 'sqlite', path: ':memory:' } },
     protocols: {
       http: { enabled: true },
-      mcp: { enabled: false, mountPath: '/mcp' },
-      a2a: { enabled: false, mountPath: '/a2a' },
+      mcp: { enabled: true, mountPath: '/mcp' },
+      a2a: { enabled: true, mountPath: '/a2a' },
       acp: { enabled: false, mountPath: '/acp' },
     },
     resources: [...resources],
@@ -188,7 +195,7 @@ async function startGateway(resources: readonly CommerceResource[]): Promise<Gat
         clock: mppClock,
       }),
     ],
-    protocolAdapters: [],
+    protocolAdapters: [createMcpAdapter(), createA2aAdapter()],
     backend,
   });
   gateways.push(instance);
@@ -213,11 +220,16 @@ function decodeHeader(value: unknown): Record<string, unknown> {
   return JSON.parse(Buffer.from(String(value), 'base64').toString('utf8'));
 }
 
-// Sign a fresh x402 challenge, echoing its declaration with `id` when supplied
+// Sign a fresh x402 challenge from the HTTP route
 async function x402Proof(resourceId: string, id?: string, body = '{}'): Promise<string> {
-  const required = decodeHeader(
-    (await invoke(resourceId, {}, body)).headers[PAYMENT_REQUIRED_HEADER],
+  return signX402(
+    decodeHeader((await invoke(resourceId, {}, body)).headers[PAYMENT_REQUIRED_HEADER]),
+    id,
   );
+}
+
+// Sign an x402 challenge, echoing its declaration with `id` when supplied
+function signX402(required: Record<string, unknown>, id?: string): Promise<string> {
   const accepts = (required['accepts'] as Record<string, unknown>[])[0] as Record<string, unknown>;
   const declared = (required['extensions'] as Record<string, { info: object }>)[
     'payment-identifier'
@@ -231,16 +243,21 @@ async function x402Proof(resourceId: string, id?: string, body = '{}'): Promise<
   });
 }
 
-// Answer a fresh MPP challenge
+// Answer a fresh MPP challenge from the HTTP route
 async function mppCredential(
   resourceId: string,
   account: PrivateKeyAccount = buyer,
   instance: GatewayInstance = gateway,
 ): Promise<string> {
   const challenged = await invoke(resourceId, {}, '{}', instance);
-  const challenge = Challenge.deserialize(
-    String(challenged.headers['www-authenticate']),
-  ) as unknown as EvmChallenge;
+  return signMpp(challenged.headers['www-authenticate'], account);
+}
+
+async function signMpp(
+  wwwAuthenticate: unknown,
+  account: PrivateKeyAccount = buyer,
+): Promise<string> {
+  const challenge = Challenge.deserialize(String(wwwAuthenticate)) as unknown as EvmChallenge;
   const client = clientCharge({ account, authorization: AUTHORIZATION });
   return String(await client.createCredential({ challenge, context: {} }));
 }
@@ -252,6 +269,121 @@ function holdBackend(): () => void {
     release = resolve;
   });
   return release;
+}
+
+interface ToolResult {
+  readonly isError?: boolean;
+  readonly structuredContent?: Record<string, unknown>;
+  readonly _meta?: Record<string, unknown>;
+}
+
+// One MCP tools/call; Streamable HTTP may frame the reply as an SSE event
+async function callMcp(
+  resourceId: string,
+  args: Record<string, unknown>,
+  headers: Record<string, string> = {},
+): Promise<ToolResult> {
+  const res = await gateway.server.inject({
+    method: 'POST',
+    url: '/mcp',
+    headers: {
+      'content-type': 'application/json',
+      accept: 'application/json, text/event-stream',
+      ...headers,
+    },
+    payload: {
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name: resourceId, arguments: args },
+    },
+  });
+  const raw = res.body.startsWith('event:')
+    ? (res.body.split('\n').find((line) => line.startsWith('data:')) ?? '').slice(5)
+    : res.body;
+  return (JSON.parse(raw) as { result: ToolResult }).result;
+}
+
+interface A2aReply {
+  readonly result?: { readonly task: A2aTask };
+  readonly error?: { readonly code: number; readonly message: string };
+}
+
+async function sendA2a(
+  message: Record<string, unknown>,
+  headers: Record<string, string> = {},
+): Promise<A2aReply> {
+  const res = await gateway.server.inject({
+    method: 'POST',
+    url: '/a2a',
+    headers: { 'content-type': 'application/json', 'a2a-version': '1.0', ...headers },
+    payload: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 'req-1',
+      method: 'SendMessage',
+      params: { message },
+    }),
+  });
+  return res.json<A2aReply>();
+}
+
+const EXTENSION = { 'a2a-extensions': A2A_X402_EXTENSION_URI };
+
+function buyMessage(resourceId: string, input: Record<string, unknown>): Record<string, unknown> {
+  return {
+    role: 'ROLE_USER',
+    messageId: 'msg-buy',
+    parts: [{ data: { resource: resourceId, input }, mediaType: 'application/json' }],
+  };
+}
+
+function payMessage(task: A2aTask, payload: Record<string, unknown>): Record<string, unknown> {
+  return {
+    role: 'ROLE_USER',
+    messageId: 'msg-pay',
+    taskId: task.id,
+    contextId: task.contextId,
+    parts: [{ text: 'Here is the payment.' }],
+    metadata: { 'x402.payment.status': 'payment-submitted', 'x402.payment.payload': payload },
+  };
+}
+
+// A new A2A task carrying the proof in `_payment`, without the extension
+async function a2aPayment(
+  resourceId: string,
+  proof: string,
+  input: Record<string, unknown> = {},
+): Promise<A2aTask> {
+  const { result } = await sendA2a(
+    buyMessage(resourceId, { ...input, [PAYMENT_INPUT_FIELD]: proof }),
+  );
+  return result?.task as A2aTask;
+}
+
+// A new A2A task waiting for an x402 extension payment
+async function a2aChallenge(
+  resourceId: string,
+  input: Record<string, unknown> = {},
+): Promise<A2aTask> {
+  const task = (await sendA2a(buyMessage(resourceId, input), EXTENSION)).result?.task as A2aTask;
+  expect(task.status.state).toBe('TASK_STATE_INPUT_REQUIRED');
+  return task;
+}
+
+function challengeOf(task: A2aTask): Record<string, unknown> {
+  return task.status.message?.metadata?.['x402.payment.required'] as Record<string, unknown>;
+}
+
+async function a2aPay(task: A2aTask, proof: string): Promise<A2aReply> {
+  return sendA2a(payMessage(task, decodeHeader(proof)), EXTENSION);
+}
+
+function artifactData(task: A2aTask): Record<string, unknown> | undefined {
+  return task.artifacts[0]?.parts[0]?.data;
+}
+
+function summaryOf(task: A2aTask): unknown {
+  return task.artifacts[0]?.metadata?.[DELIVERY_SUMMARY_META_KEY];
 }
 
 describe('x402 retries over HTTP', () => {
@@ -568,7 +700,7 @@ describe('MPP retries over HTTP', () => {
     expect((await first).statusCode).toBe(200);
   });
 
-  it('answers a key with an unknown outcome as Problem Details without Retry-After', async () => {
+  it('answers a charged key with no stored response as Problem Details without Retry-After', async () => {
     // MPP settles before the backend, so this failure leaves a charge behind
     backendFails = true;
     const credential = await mppCredential('mpp_report');
@@ -623,5 +755,293 @@ describe('MPP retries over HTTP', () => {
     expect(
       JSON.stringify([facilitator.verify.mock.calls, facilitator.settle.mock.calls]),
     ).not.toContain('payment-identifier');
+  });
+});
+
+// Send a signed x402 proof for one input on one surface
+type Send = (
+  resourceId: string,
+  proof: string,
+  input?: Record<string, unknown>,
+) => Promise<unknown>;
+
+interface Surface {
+  readonly send: Send;
+  // Validate the refusal format and return its error envelope
+  readonly refusal: (answer: unknown, reason: string) => unknown;
+}
+
+function failedEnvelope(answer: unknown): unknown {
+  const task = answer as A2aTask;
+  expect(task.status.state).toBe('TASK_STATE_FAILED');
+  return artifactData(task);
+}
+
+const SURFACES: [string, Surface][] = [
+  [
+    'MCP',
+    {
+      send: (resourceId, proof, input = {}) =>
+        callMcp(resourceId, { ...input, [PAYMENT_INPUT_FIELD]: proof }),
+      refusal(answer) {
+        const result = answer as ToolResult;
+        expect(result.isError).toBe(true);
+        expect(result._meta?.['x402/error']).toBeUndefined();
+        expect(result.structuredContent).not.toHaveProperty('accepts');
+        return result.structuredContent;
+      },
+    },
+  ],
+  ['A2A _payment', { send: a2aPayment, refusal: failedEnvelope }],
+  [
+    'the A2A x402 extension',
+    {
+      send: async (resourceId, proof, input = {}) =>
+        (await a2aPay(await a2aChallenge(resourceId, input), proof)).result?.task,
+      refusal(answer, reason) {
+        const message = (answer as A2aTask).status.message;
+        expect(message?.metadata).toMatchObject({
+          'x402.payment.status': 'payment-failed',
+          'x402.payment.error': reason,
+        });
+        const envelope = failedEnvelope(answer) as { message: string };
+        expect(message?.parts).toEqual([{ text: envelope.message }]);
+        return envelope;
+      },
+    },
+  ],
+];
+
+interface Refusal {
+  readonly reason: string;
+  readonly code: string;
+  readonly message: string;
+  readonly retryable: boolean;
+  readonly details?: Record<string, unknown>;
+  readonly settleCalls: number;
+  // Run the retry scenario and return its final response
+  readonly act: (send: Send) => Promise<unknown>;
+}
+
+const REFUSALS: [string, Refusal][] = [
+  [
+    'a missing id where one is required',
+    {
+      reason: 'payment_identifier_required',
+      settleCalls: 0,
+      code: 'INPUT_INVALID',
+      message: 'This resource requires a payment identifier',
+      retryable: false,
+      act: async (send) => send('x402_required', await x402Proof('x402_required')),
+    },
+  ],
+  [
+    'a malformed id',
+    {
+      reason: 'payment_identifier_invalid',
+      settleCalls: 0,
+      code: 'INPUT_INVALID',
+      message: 'A payment identifier must be 16 to 128 characters of A-Z, a-z, 0-9, "_" and "-"',
+      retryable: false,
+      act: async (send) => send('x402_report', await x402Proof('x402_report', 'short-id')),
+    },
+  ],
+  [
+    'the id with other input',
+    {
+      reason: 'payment_identifier_conflict',
+      settleCalls: 1,
+      code: 'PAYMENT_REPLAYED',
+      message: 'This payment identifier belongs to another request',
+      retryable: false,
+      async act(send) {
+        await send('x402_report', await x402Proof('x402_report', ID), { city: 'Oslo' });
+        return send('x402_report', await x402Proof('x402_report', ID), { city: 'Rome' });
+      },
+    },
+  ],
+  [
+    'the id while its request is in flight',
+    {
+      reason: 'payment_identifier_in_flight',
+      settleCalls: 1,
+      code: 'PAYMENT_REPLAYED',
+      message: 'A request with this payment identifier is in progress',
+      retryable: true,
+      details: { retryAfterSeconds: 1 },
+      async act(send) {
+        const release = holdBackend();
+        const proof = await x402Proof('x402_report', ID);
+        const first = send('x402_report', proof);
+        await vi.waitFor(() => expect(backendCalls).toHaveLength(1));
+        const busy = await send('x402_report', proof);
+        release();
+        await first;
+        return busy;
+      },
+    },
+  ],
+  [
+    'the id of an unresolved request',
+    {
+      reason: 'payment_identifier_unresolved',
+      settleCalls: 1,
+      code: 'PAYMENT_REPLAYED',
+      message:
+        'The earlier request with this payment identifier may have been charged and has no stored response',
+      retryable: false,
+      async act(send) {
+        facilitator.settle.mockRejectedValueOnce(new Error('connection reset'));
+        await send('x402_report', await x402Proof('x402_report', ID));
+        return send('x402_report', await x402Proof('x402_report', ID));
+      },
+    },
+  ],
+];
+
+describe.each(SURFACES)('x402 retry-key refusals over %s', (_surface, surface) => {
+  it.each(REFUSALS)('refuses %s with its reason and no challenge', async (_case, row) => {
+    const envelope = surface.refusal(await row.act(surface.send), row.reason);
+
+    expect(envelope).toMatchObject({
+      status: 'error',
+      code: row.code,
+      message: row.message,
+      retryable: row.retryable,
+    });
+    expect((envelope as { details?: unknown }).details).toEqual({
+      reason: row.reason,
+      ...row.details,
+    });
+    expect(facilitator.settle).toHaveBeenCalledTimes(row.settleCalls);
+  });
+});
+
+describe('x402 redelivery over MCP and A2A', () => {
+  it('redelivers an MCP resend with the settlement response and a redelivered summary', async () => {
+    const proof = await x402Proof('x402_report', ID);
+    const first = await callMcp('x402_report', { [PAYMENT_INPUT_FIELD]: proof });
+
+    const resend = await callMcp('x402_report', { [PAYMENT_INPUT_FIELD]: proof });
+
+    expect(first.isError).toBeUndefined();
+    expect(first._meta?.[DELIVERY_SUMMARY_META_KEY]).not.toHaveProperty('redelivered');
+    expect(resend.isError).toBeUndefined();
+    expect(resend.structuredContent).toEqual(REPORT);
+    expect(resend._meta?.['x402/payment-response']).toEqual(first._meta?.['x402/payment-response']);
+    expect(resend._meta?.[DELIVERY_SUMMARY_META_KEY]).toMatchObject({
+      redelivered: true,
+      payment: { status: 'settled', externalReference: TX },
+    });
+    expect(facilitator.settle).toHaveBeenCalledTimes(1);
+    expect(backendCalls).toHaveLength(1);
+  });
+
+  it('completes an A2A _payment retry with a fresh proof as a redelivered task', async () => {
+    const first = await a2aPayment('x402_report', await x402Proof('x402_report', ID));
+
+    const retry = await a2aPayment('x402_report', await x402Proof('x402_report', ID));
+
+    expect(summaryOf(first)).not.toHaveProperty('redelivered');
+    expect(retry.status.state).toBe('TASK_STATE_COMPLETED');
+    expect(artifactData(retry)).toEqual(REPORT);
+    expect(summaryOf(retry)).toMatchObject({ redelivered: true, payment: { status: 'settled' } });
+    expect(facilitator.verify).toHaveBeenCalledTimes(2);
+    expect(facilitator.settle).toHaveBeenCalledTimes(1);
+  });
+
+  it('completes a new extension task paid with a fresh proof for the same id, without settling', async () => {
+    const task = await a2aChallenge('x402_report');
+    const paid = (await a2aPay(task, await signX402(challengeOf(task), ID))).result?.task;
+    const again = await a2aChallenge('x402_report');
+
+    const retry = (await a2aPay(again, await signX402(challengeOf(again), ID))).result?.task;
+
+    expect(paid?.status.state).toBe('TASK_STATE_COMPLETED');
+    expect(retry?.id).toBe(again.id);
+    expect(retry?.status.state).toBe('TASK_STATE_COMPLETED');
+    expect(retry?.status.message?.metadata).toMatchObject({
+      'x402.payment.status': 'payment-completed',
+      'x402.payment.receipts': [{ success: true, transaction: TX }],
+    });
+    expect(artifactData(retry as A2aTask)).toEqual(REPORT);
+    expect(summaryOf(retry as A2aTask)).toMatchObject({ redelivered: true });
+    expect(facilitator.verify).toHaveBeenCalledTimes(2);
+    expect(facilitator.settle).toHaveBeenCalledTimes(1);
+    expect(backendCalls).toHaveLength(1);
+  });
+
+  it('answers a resend to the consumed extension task with TaskNotFoundError', async () => {
+    const task = await a2aChallenge('x402_report');
+    const proof = await signX402(challengeOf(task), ID);
+    await a2aPay(task, proof);
+
+    const resend = await a2aPay(task, proof);
+
+    expect(resend.error?.code).toBe(-32001);
+    expect(resend.result).toBeUndefined();
+    expect(facilitator.settle).toHaveBeenCalledTimes(1);
+    expect(backendCalls).toHaveLength(1);
+  });
+
+  it.each(SURFACES.slice(1))(
+    'lets a wallet that can no longer pay recover by an exact resend over %s',
+    async (_surface, { send }) => {
+      const proof = await x402Proof('x402_report', ID);
+      await send('x402_report', proof);
+      facilitator.verify.mockResolvedValue({ isValid: false, invalidReason: 'insufficient_funds' });
+
+      const fresh = await send('x402_report', await x402Proof('x402_report', ID));
+      const resend = (await send('x402_report', proof)) as A2aTask;
+
+      expect(failedEnvelope(fresh)).toMatchObject({
+        code: 'PAYMENT_INVALID',
+        details: { reason: 'insufficient_funds' },
+      });
+      expect(resend.status.state).toBe('TASK_STATE_COMPLETED');
+      expect(artifactData(resend)).toEqual(REPORT);
+      expect(summaryOf(resend)).toMatchObject({ redelivered: true });
+      // The exact resend reuses the stored response without another verification call
+      expect(facilitator.verify).toHaveBeenCalledTimes(2);
+      expect(facilitator.settle).toHaveBeenCalledTimes(1);
+    },
+  );
+});
+
+describe('MPP over MCP and A2A', () => {
+  it('refuses an MCP credential resend as a replay, ignoring an Idempotency-Key header', async () => {
+    const challenged = await callMcp('mpp_report', {});
+    const payment = challenged.structuredContent?.['payment'] as {
+      envelope: Record<string, unknown>;
+    };
+    const credential = await signMpp(payment.envelope['wwwAuthenticate']);
+    const headers = { 'idempotency-key': KEY };
+    const paid = await callMcp('mpp_report', { [PAYMENT_INPUT_FIELD]: credential }, headers);
+
+    const resend = await callMcp('mpp_report', { [PAYMENT_INPUT_FIELD]: credential }, headers);
+
+    expect(paid.isError).toBeUndefined();
+    expect(resend.isError).toBe(true);
+    expect(resend.structuredContent).toMatchObject({ code: 'PAYMENT_REPLAYED' });
+    expect(facilitator.settle).toHaveBeenCalledTimes(1);
+    expect(backendCalls).toHaveLength(1);
+  });
+
+  it('refuses an A2A credential resend as a replay, ignoring an Idempotency-Key header', async () => {
+    const challenged = await sendA2a(buyMessage('mpp_report', {}));
+    const payment = artifactData(challenged.result?.task as A2aTask)?.['payment'] as {
+      envelope: Record<string, unknown>;
+    };
+    const credential = await signMpp(payment.envelope['wwwAuthenticate']);
+    const message = buyMessage('mpp_report', { [PAYMENT_INPUT_FIELD]: credential });
+    const headers = { 'idempotency-key': KEY };
+    const paid = (await sendA2a(message, headers)).result?.task;
+
+    const resend = (await sendA2a(message, headers)).result?.task;
+
+    expect(paid?.status.state).toBe('TASK_STATE_COMPLETED');
+    expect(failedEnvelope(resend)).toMatchObject({ code: 'PAYMENT_REPLAYED' });
+    expect(facilitator.settle).toHaveBeenCalledTimes(1);
+    expect(backendCalls).toHaveLength(1);
   });
 });

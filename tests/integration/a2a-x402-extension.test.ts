@@ -302,6 +302,7 @@ describe('x402 A2A extension', () => {
 
     const failed = body.result?.task;
     expect(failed?.status.state).toBe('TASK_STATE_FAILED');
+    expect(failed?.status.message?.parts).toEqual([{ text: 'Payment failed.' }]);
     expect(failed?.status.message?.metadata).toMatchObject({
       'x402.payment.status': 'payment-failed',
       'x402.payment.error': 'insufficient_funds',

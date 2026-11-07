@@ -146,6 +146,30 @@ describe('payment messages', () => {
     });
   });
 
+  it.each([
+    ['INPUT_INVALID', 400, 'payment_identifier_required'],
+    ['INPUT_INVALID', 400, 'payment_identifier_invalid'],
+    ['PAYMENT_REPLAYED', 409, 'payment_identifier_in_flight'],
+  ] as const)('reports a %s retry-key refusal by its reason, %s', (code, httpStatus, reason) => {
+    const refused = new CommerceError(code, 'Refused', { httpStatus, details: { reason } });
+
+    expect(paymentFailureMetadata(refused)).toMatchObject({
+      'x402.payment.status': 'payment-failed',
+      'x402.payment.error': reason,
+      'x402.payment.receipts': [{ success: false, errorReason: reason }],
+    });
+  });
+
+  it('keeps the commerce code for another input refusal', () => {
+    const refused = new CommerceError('INPUT_INVALID', 'Bad input', {
+      details: { reason: 'schema_mismatch' },
+    });
+
+    expect(paymentFailureMetadata(refused)).toMatchObject({
+      'x402.payment.error': 'input_invalid',
+    });
+  });
+
   it('fills an empty receipt network from the requirement and keeps one the error names', () => {
     const refused = new CommerceError('PAYMENT_INVALID', 'Refused', {
       details: { reason: 'insufficient_funds' },
