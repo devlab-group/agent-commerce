@@ -1,10 +1,15 @@
 {
-  "name": "agent-commerce",
+  "name": "agent-commerce-gateway",
+  "displayName": "Agent Commerce Gateway",
   "version": "2.6.0",
   "description": "Put the Agent Commerce Gateway in front of an existing HTTP API so AI agents can call and pay for it with x402.",
   "author": { "name": "devlab-group", "url": "https://github.com/devlab-group" },
   "homepage": "https://github.com/devlab-group/agent-commerce#readme",
   "repository": "https://github.com/devlab-group/agent-commerce",
+  "documentationUrl": "https://github.com/devlab-group/agent-commerce#readme",
+  "supportUrl": "https://github.com/devlab-group/agent-commerce/issues",
+  "privacyPolicyUrl": "https://acg.devlab.group/privacy",
+  "termsOfServiceUrl": "https://acg.devlab.group/terms",
   "license": "Apache-2.0",
   "keywords": ["x402", "mcp", "ai-agents", "payments", "agentic-commerce"]
 }
