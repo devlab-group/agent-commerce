@@ -77,6 +77,12 @@ resources:
   payment; `application/json` by default. The HTTP response itself carries the
   API's own `Content-Type` when it is text. Set it, as in `mimeType: text/html`,
   only on a paid x402 resource whose API returns something else.
+- **idempotency** (experimental, disabled by default, fixed-price resources only):
+  `merchantKey: true` sends a derived `Idempotency-Key` to the backend for paid
+  operations. `redelivery: { retentionHours: 24 }` stores paid responses,
+  unencrypted, in the receipt database for retrieval with the buyer's retry
+  key without another charge. Enable redelivery only if the merchant accepts
+  unencrypted storage.
 
 ## x402 networks
 

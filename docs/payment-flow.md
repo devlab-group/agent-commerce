@@ -217,7 +217,8 @@ The purchase outcome determines the key's state:
 
 Retry-key 409s carry no challenge, because a challenge could prompt a second
 payment. Only the in-flight 409 is retryable (`retryable: true`,
-`retryAfterSeconds: 1`). `reconcile` and `resolve` record the payment attempt's
+`retryAfterSeconds: 1`). Wait, then resend with the same key; a new key can
+start another purchase. `reconcile` and `resolve` record the payment attempt's
 outcome but do not change the key.
 
 Completed and unresolved keys expire `retentionHours` (1 to 8760, default 24)
