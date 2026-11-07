@@ -4,8 +4,10 @@
  * the readiness checks against a Solana RPC
  */
 import { generateKeyPairSigner, type KeyPairSigner } from '@solana/kit';
-import type { PaymentRequirements, SupportedResponse } from '@x402/core/types';
+import { x402Client } from '@x402/core/client';
+import type { PaymentRequired, PaymentRequirements, SupportedResponse } from '@x402/core/types';
 import { decodeTransactionFromPayload, transactionMessageHash } from '@x402/svm';
+import { ExactSvmScheme as ExactSvmClientScheme } from '@x402/svm/exact/client';
 import { ExactSvmScheme } from '@x402/svm/exact/server';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
@@ -13,6 +15,7 @@ import type {
   CommerceResource,
   PaymentContext,
   PaymentRequirement,
+  PaymentSubmission,
 } from '../../../src/core';
 import { isCommerceError } from '../../../src/core';
 import { createPaymentProof } from '../../../src/payments/x402/client';
@@ -126,6 +129,18 @@ async function paidRequest(provider: ReturnType<typeof makeProvider>) {
     requirement,
     transaction,
     context: { requestId: 'req-1', resource: RESOURCE, requirement, submission },
+  };
+}
+
+// Mock getAccountInfo for the USDC mint
+function mintResult(decimals: number) {
+  const account = mintAccount(USDC, decimals, 1_000_000n);
+  return {
+    context: { slot: 1 },
+    value: {
+      owner: account.owner,
+      data: [Buffer.from(account.data ?? []).toString('base64'), 'base64'],
+    },
   };
 }
 
@@ -475,17 +490,6 @@ describe('health()', () => {
     vi.unstubAllGlobals();
   });
 
-  const mintResult = (decimals: number) => {
-    const account = mintAccount(USDC, decimals, 1_000_000n);
-    return {
-      context: { slot: 1 },
-      value: {
-        owner: account.owner,
-        data: [Buffer.from(account.data ?? []).toString('base64'), 'base64'],
-      },
-    };
-  };
-
   it('passes for the named cluster, a mint with the configured decimals and a fee payer', async () => {
     rpc.mockImplementation((method: string) =>
       method === 'getGenesisHash' ? DEVNET_GENESIS : mintResult(6),
@@ -545,5 +549,94 @@ describe('health()', () => {
     const health = await makeProvider().health();
     expect(health.status).toBe('fail');
     expect(health.detail).toMatch(detail);
+  });
+});
+
+describe('payment-identifier on a Solana offer', () => {
+  const ID = 'purchase-0123456789abcdef';
+  const KEY = 'payment-identifier';
+  const STORING: CommerceResource = {
+    ...RESOURCE,
+    idempotency: { redelivery: { retentionHours: 24, required: false } },
+  };
+  const challenge = (provider: ReturnType<typeof makeProvider>) =>
+    provider.createRequirement({ ...paymentContext(), resource: STORING });
+  const verifyAs = (
+    provider: ReturnType<typeof makeProvider>,
+    requirement: PaymentRequirement,
+    submission: PaymentSubmission,
+  ) => provider.verify({ requestId: 'req-1', resource: STORING, requirement, submission });
+
+  // Supply the mint and recent blockhash requested by the SDK client
+  beforeEach(() => {
+    vi.stubGlobal('fetch', async (_url: string, init: { body: string }) => {
+      const { method } = JSON.parse(init.body) as { method: string };
+      expect(['getAccountInfo', 'getLatestBlockhash']).toContain(method);
+      const result =
+        method === 'getAccountInfo'
+          ? mintResult(6)
+          : { context: { slot: 1 }, value: { blockhash: BLOCKHASH, lastValidBlockHeight: 100 } };
+      return new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, result }));
+    });
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  // Add info to the extension echoed by the SDK's Solana client
+  async function sdkProof(
+    requirement: PaymentRequirement,
+    info: Record<string, unknown>,
+  ): Promise<PaymentSubmission> {
+    const client = new x402Client();
+    client.register(DEVNET, new ExactSvmClientScheme(buyer, { rpcUrl: RPC_URL }));
+    client.setSpendControls(false);
+    client.onBeforePaymentCreation(async ({ paymentRequired }) => {
+      const extensions = paymentRequired.extensions as Record<string, { info: object }>;
+      Object.assign((extensions[KEY] as { info: object }).info, info);
+    });
+    const envelope = structuredClone(requirement.challenge.envelope) as unknown as PaymentRequired;
+    const signed = await client.createPaymentPayload(envelope);
+    return { method: 'x402', payload: Buffer.from(JSON.stringify(signed)).toString('base64') };
+  }
+
+  it('declares the extension on a resource that stores responses', async () => {
+    const requirement = await challenge(makeProvider());
+
+    expect(requirement.challenge.envelope).toMatchObject({
+      extensions: { [KEY]: { info: { required: false } } },
+    });
+  });
+
+  it('extracts the SDK proof ID and verifies without sending the extension to the facilitator', async () => {
+    const provider = makeProvider();
+    const requirement = await challenge(provider);
+    const submission = await sdkProof(requirement, { id: ID });
+    verifyMock.mockResolvedValueOnce({ isValid: true, payer: buyer.address });
+
+    const key = provider.retryKey?.({ resource: STORING, submission });
+    const result = await verifyAs(provider, requirement, submission);
+
+    expect(key).toBe(ID);
+    expect(result.status).toBe('verified');
+    expect(verifyMock).toHaveBeenCalledTimes(1);
+    const sent = JSON.stringify(verifyMock.mock.calls[0]);
+    expect(sent).not.toContain(ID);
+    expect(sent).not.toContain(KEY);
+  });
+
+  it('rejects a changed required flag before calling the facilitator', async () => {
+    const provider = makeProvider();
+    const requirement = await challenge(provider);
+    const submission = await sdkProof(requirement, { required: true, id: ID });
+
+    const result = await verifyAs(provider, requirement, submission);
+
+    expect(result).toMatchObject({
+      status: 'rejected',
+      rejectionReason: 'extension_echo_mismatch',
+      replayKey: expect.any(String),
+    });
+    expect(verifyMock).not.toHaveBeenCalled();
   });
 });
