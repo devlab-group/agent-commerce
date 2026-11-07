@@ -64,7 +64,7 @@ describe('readLocalChainManifest', () => {
   it('throws when the manifest is not an object', () => {
     const cwd = tmpCwd();
     writeManifest(cwd, '[]');
-    expect(() => readLocalChainManifest(cwd)).toThrow(/Expected object/);
+    expect(() => readLocalChainManifest(cwd)).toThrow(/expected object/);
   });
 
   it('throws when chainId is missing or the wrong type', () => {

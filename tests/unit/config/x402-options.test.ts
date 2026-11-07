@@ -73,7 +73,7 @@ describe('payments.x402 forms', () => {
     expect(refusal(withX402({ ...operational(), options: [] })).message).toContain('is empty');
     // A schema refusal names its path in the message
     expect(refusal(withX402({ ...operational(), options: MINIMAL })).message).toContain(
-      '"payments.x402.options": Expected array',
+      '"payments.x402.options": Invalid input: expected array',
     );
   });
 

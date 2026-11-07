@@ -55,11 +55,10 @@ export interface A2aInvocation {
 }
 
 /**
- * Shape only; every semantic rule is checked below, where the failure can name
- * itself. Array elements stay `unknown`, checked after the length rules. Zod 3
- * builds one issue per failing element, so typed elements would let a body of
- * many bad elements allocate an issue for each. Every array past its first
- * element is refused anyway.
+ * Check shape here and semantic rules separately so errors identify the failed
+ * rule. Keep array elements `unknown` until length checks run. Typed elements
+ * could allocate one Zod issue per bad entry in a large array, although only
+ * one part and no task references are supported.
  */
 const MessageSchema = z.object({
   role: z.string(),
