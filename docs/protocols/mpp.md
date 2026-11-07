@@ -23,10 +23,10 @@ then checked by the x402 settlement provider. Both checks run in `verify`,
 before replay reservation; settlement broadcasts later.
 
 For an HTTP request with a body, the challenge includes an RFC 9530
-`sha-256` digest of the original body bytes. The paid retry must send the same
-bytes: even equivalent JSON with different spacing returns
-`body_digest_mismatch`. MCP and A2A challenges omit the digest because their
-payment proof travels in the request body.
+`sha-256` digest of the original body bytes. During credential verification,
+the paid request must send the same bytes: equivalent JSON with different
+spacing returns `body_digest_mismatch`. MCP and A2A challenges omit the digest
+because their payment proof travels in the request body.
 
 MPP and x402 derive the same replay identity for the same EIP-3009
 authorization, so reuse across rails collides in one receipt store.
@@ -64,3 +64,41 @@ Base mainnet deployments must satisfy the
 Unsupported variants are listed in `src/payments/mpp/descriptor.ts`: non-EVM
 methods, Permit2/transaction/hash credentials, splits, subscriptions, EVM
 sessions and the discovery extension.
+
+## Idempotency-Key
+
+Experimental and disabled by default. On a resource with
+[`idempotency.redelivery`](../configuration.md#resources), the HTTP invoke
+route reads the buyer's `Idempotency-Key` header. Quoted values follow RFC 9651
+String syntax: `"abc"` and `abc` are the same key, and `\"` and `\\` are
+unescaped. Bare keys, as sent by ACP clients, are also accepted. The decoded
+key must contain 1 to 255 printable ASCII characters, as in ACP; invalid keys
+return HTTP 400 `bad-request` with reason `payment_identifier_invalid`.
+
+After delivery, reuse the key and input to retrieve the stored response without
+another charge. An exact resend of `Authorization` skips verification, so an
+expired challenge still works while the response is retained. A new credential
+must answer a fresh challenge and verify as the same payer; it is not settled
+again. Invalid credentials get the usual 402 without revealing whether the key
+exists. See
+[retry after a lost response](../payment-flow.md#retry-after-a-lost-response).
+
+Make the key random and keep it secret: with the original credential, it
+unlocks the stored response. The gateway's logger redacts the header; keep it
+out of proxy, APM and access logs too. The MCP and A2A adapters do not extract
+this header, and `redelivery.required` does not apply to MPP.
+
+Conflict, in-flight and unresolved refusals use Problem Details with
+`type: about:blank` and the HTTP status phrase as `title`. An `invalid-challenge`
+response could prompt another payment. Reusing a key with other input or
+another payer returns 422 `Unprocessable Content`, following section 2.7 of
+`draft-ietf-httpapi-idempotency-key-header-08`. A client may interpret 409 as
+"retry unchanged" and keep retrying a request that cannot succeed. x402 uses
+409 for this case. `details.reason` identifies the state:
+
+- `payment_identifier_conflict` (422): the key belongs to different input or another payer.
+- `payment_identifier_in_flight` (409 `Conflict`, with `Retry-After`): a request with the key is still running.
+- `payment_identifier_unresolved` (409 `Conflict`): the earlier request may have been charged but has no
+  usable stored response.
+
+[http.md](http.md) lists the redelivery headers.

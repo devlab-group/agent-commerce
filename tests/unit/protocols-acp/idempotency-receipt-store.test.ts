@@ -422,9 +422,10 @@ describe('ACP idempotency recovery on the receipt store', () => {
   const expiresAt = new Date(START + 24 * HOUR).toISOString();
 
   // A claim an earlier process left in flight, as it sits on disk after a crash
-  async function leaveOrphan(): Promise<void> {
+  async function leaveOrphan(endpoint = ENDPOINT): Promise<void> {
     const earlier = openStore();
-    await earlier.claimIdempotencyKey(scope, requestFingerprint(CREATE), expiresAt);
+    const orphan = { ...scope, endpoint };
+    await earlier.claimIdempotencyKey(orphan, requestFingerprint(CREATE), expiresAt);
     await earlier.close();
     stores = [];
   }
@@ -473,6 +474,40 @@ describe('ACP idempotency recovery on the receipt store', () => {
     expect(retry.status).toBe(201);
     expect(execute).toHaveBeenCalledTimes(1);
     await adapter.stop();
+  });
+
+  it('frees only ACP claims, so a restart cannot reopen a paid retry key', async () => {
+    await leaveOrphan();
+    const store = openStore();
+    const payment = { ...scope, endpoint: 'payment:market_report', key: 'client-key-digest' };
+    await store.claimIdempotencyKey(payment, 'input-digest', expiresAt);
+    const { context } = setup(deliveredFor('createCheckoutSession'));
+    const adapter = createAcpAdapter(
+      adapterOptions({ store, idempotency: { retentionHours: 24, merchantIdempotent: true } }),
+    );
+
+    await adapter.start(context);
+    await adapter.stop();
+
+    expect(await store.getIdempotencyKey(scope, requestFingerprint(CREATE))).toBeUndefined();
+    // Releasing this claim would allow the retry key to be reserved again
+    expect(await store.claimIdempotencyKey(payment, 'input-digest', expiresAt)).toEqual({
+      kind: 'in-flight',
+    });
+  });
+
+  it('recovers a claim left under an earlier mount path', async () => {
+    await leaveOrphan('/old-mount/checkout_sessions');
+    const store = openStore();
+    const { context } = setup(deliveredFor('createCheckoutSession'));
+    const adapter = createAcpAdapter(
+      adapterOptions({ store, idempotency: { retentionHours: 24 } }),
+    );
+
+    await adapter.start(context);
+    await adapter.stop();
+
+    expect(rowStates()).toEqual(['unresolved']);
   });
 
   it('stays silent when nothing was left in flight', async () => {

@@ -3,9 +3,17 @@
  * readiness, with the remote facilitator mocked at the SDK HTTP client.
  */
 import { KeyPair } from '@near-js/crypto';
-import type { SupportedResponse } from '@x402/core/types';
+import { x402Client } from '@x402/core/client';
+import type { PaymentRequired, SupportedResponse } from '@x402/core/types';
+import { ExactNearScheme } from '@x402/near/exact/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { CommerceError, CommerceResource, PaymentContext } from '../../../src/core';
+import type {
+  CommerceError,
+  CommerceResource,
+  PaymentContext,
+  PaymentRequirement,
+  PaymentSubmission,
+} from '../../../src/core';
 import { isCommerceError, NOOP_LOGGER } from '../../../src/core';
 import {
   createX402PaymentProvider,
@@ -289,6 +297,8 @@ describe('the NEAR locator', () => {
     const provider = makeProvider({ logger: { ...NOOP_LOGGER, warn } });
     const { context } = await paidRequest(provider);
     verifyMock.mockResolvedValueOnce({ isValid: true, payer: BUYER });
+    // verify() imports the NEAR module on first use, and that load would wait on a faked timer
+    await import('../../../src/payments/x402/near');
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     try {
       const pending = provider.verify(context);
@@ -506,5 +516,87 @@ describe('health()', () => {
     const health = await makeProvider().health();
     expect(health.status).toBe('fail');
     expect(health.detail).toMatch(/does not advertise/);
+  });
+});
+
+describe('payment-identifier on a NEAR offer', () => {
+  const ID = 'purchase-0123456789abcdef';
+  const KEY = 'payment-identifier';
+  const STORING: CommerceResource = {
+    ...RESOURCE,
+    idempotency: { redelivery: { retentionHours: 24, required: false } },
+  };
+  const challenge = (provider: ReturnType<typeof makeProvider>) =>
+    provider.createRequirement({ ...paymentContext(), resource: STORING });
+  const verifyAs = (
+    provider: ReturnType<typeof makeProvider>,
+    requirement: PaymentRequirement,
+    submission: PaymentSubmission,
+  ) => provider.verify({ requestId: 'req-1', resource: STORING, requirement, submission });
+
+  // Add info to the extension echoed by the SDK's NEAR client. Sign the fixture delegate
+  // offline; the default signer would fetch the access-key nonce and block height from RPC.
+  async function sdkProof(
+    requirement: PaymentRequirement,
+    info: Record<string, unknown>,
+  ): Promise<PaymentSubmission> {
+    const { signedDelegateAction } = await buildSignedDelegate({
+      senderId: BUYER,
+      ftReceiver: PAY_TO,
+    });
+    const client = new x402Client();
+    client.register(
+      NETWORK,
+      new ExactNearScheme({ createSignedDelegateAction: async () => signedDelegateAction }),
+    );
+    client.setSpendControls(false);
+    client.onBeforePaymentCreation(async ({ paymentRequired }) => {
+      const extensions = paymentRequired.extensions as Record<string, { info: object }>;
+      Object.assign((extensions[KEY] as { info: object }).info, info);
+    });
+    const envelope = structuredClone(requirement.challenge.envelope) as unknown as PaymentRequired;
+    const signed = await client.createPaymentPayload(envelope);
+    return { method: 'x402', payload: Buffer.from(JSON.stringify(signed)).toString('base64') };
+  }
+
+  it('declares the extension on a resource that stores responses', async () => {
+    const requirement = await challenge(makeProvider());
+
+    expect(requirement.challenge.envelope).toMatchObject({
+      extensions: { [KEY]: { info: { required: false } } },
+    });
+  });
+
+  it('extracts the SDK proof ID and verifies with the delegate sender as payer, excluding the extension from the facilitator call', async () => {
+    const provider = makeProvider();
+    const requirement = await challenge(provider);
+    const submission = await sdkProof(requirement, { id: ID });
+    // Derive the payer from the signed delegate when the facilitator omits it
+    verifyMock.mockResolvedValueOnce({ isValid: true });
+
+    const key = provider.retryKey?.({ resource: STORING, submission });
+    const result = await verifyAs(provider, requirement, submission);
+
+    expect(key).toBe(ID);
+    expect(result).toMatchObject({ status: 'verified', payer: BUYER });
+    expect(verifyMock).toHaveBeenCalledTimes(1);
+    const sent = JSON.stringify(verifyMock.mock.calls[0]);
+    expect(sent).not.toContain(ID);
+    expect(sent).not.toContain(KEY);
+  });
+
+  it('rejects a changed required flag before calling the facilitator', async () => {
+    const provider = makeProvider();
+    const requirement = await challenge(provider);
+    const submission = await sdkProof(requirement, { required: true, id: ID });
+
+    const result = await verifyAs(provider, requirement, submission);
+
+    expect(result).toMatchObject({
+      status: 'rejected',
+      rejectionReason: 'extension_echo_mismatch',
+      replayKey: expect.any(String),
+    });
+    expect(verifyMock).not.toHaveBeenCalled();
   });
 });

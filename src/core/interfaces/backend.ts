@@ -15,10 +15,11 @@ export interface BackendRequest {
    * `requestId`, which is fresh per call and would make every retry look like
    * new work.
    *
-   * An adapter sets it only when the value survives a client retry, a
-   * reconnect and a gateway restart. The HTTP executor sends it as the
-   * `Idempotency-Key` header, replacing one set in `BackendHandler.headers`;
-   * when absent, the executor adds none.
+   * An adapter may supply this key, or the pipeline may derive it when
+   * `idempotency.merchantKey` is true. The value must survive client retries,
+   * reconnects and gateway restarts. An adapter's key takes precedence.
+   * The HTTP executor sends it as the `Idempotency-Key` header, replacing one
+   * set in `BackendHandler.headers`; when absent, the executor adds none.
    */
   readonly idempotencyKey?: string;
   /**

@@ -1968,6 +1968,7 @@ describe('runDoctor: AP2', () => {
           unresolvedTransactions: {},
           orphanHolds: 0,
           unresolvedIdempotencyKeys: 0,
+          unresolvedPaymentKeys: 0,
           unexpiredPendingTasks: 0,
           missingLegacyImports: [],
           legacyImports: [

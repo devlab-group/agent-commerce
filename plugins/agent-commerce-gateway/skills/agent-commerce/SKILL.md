@@ -142,18 +142,17 @@ resources:
 Install only what the config enables, at the exact versions
 `npx --no -- agent-commerce version` prints:
 
-| Enabled in config            | Install                              |
-| ---------------------------- | ------------------------------------ |
-| `payments.x402`              | `@x402/core @x402/evm viem`          |
-| an x402 Solana offer         | x402 peers + `@x402/svm @solana/kit` |
-| an x402 NEAR offer           | x402 peers + `@x402/near`            |
-| `payments.mpp`               | x402 peers + `mppx`                  |
-| `protocols.mcp`              | `@modelcontextprotocol/server`       |
-| facilitator `auth.type: cdp` | `@coinbase/x402`                     |
+| Enabled in config    | Install                              |
+| -------------------- | ------------------------------------ |
+| `payments.x402`      | `@x402/core @x402/evm viem`          |
+| an x402 Solana offer | x402 peers + `@x402/svm @solana/kit` |
+| an x402 NEAR offer   | x402 peers + `@x402/near`            |
+| `payments.mpp`       | x402 peers + `mppx`                  |
+| `protocols.mcp`      | `@modelcontextprotocol/server`       |
 
 Missing x402 or MCP startup imports stop `start` with an error naming the
-package. Solana, NEAR and CDP imports begin during provider construction, but
-their failures surface through health checks or payment requests. Inspect
+package. Solana and NEAR imports begin during provider construction; failures
+surface through health checks or payment requests. Inspect
 `/ready` and the payment checks in `doctor`; a listening server alone does not
 establish readiness.
 

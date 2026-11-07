@@ -21,8 +21,8 @@ USER node
 # Manifest first, so the dependency install caches independently of source
 COPY --chown=node:node package.json package-lock.json ./
 
-# --ignore-scripts skips every dependency install script, such as the
-# postinstall steps of @coinbase/x402 and esbuild. None is needed here:
+# --ignore-scripts skips every dependency install script, such as esbuild's
+# postinstall step. None is needed here:
 # - better-sqlite3@13 ships its binaries in the tarball (`prebuilds/`) and sets
 #   `"gypfile": false`, so npm does not add its implicit `node-gyp rebuild`,
 #   which would need a toolchain this slim image lacks.

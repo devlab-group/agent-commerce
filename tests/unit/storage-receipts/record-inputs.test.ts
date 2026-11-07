@@ -1,8 +1,8 @@
-// SQLite-specific input checks on the 2.6.0 record methods, which the
-// conformance suite leaves to each store
+// SQLite-specific input checks left to each store by the conformance suite
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createSqliteReceiptStore, type SqliteReceiptStore } from '../../../src/storage/receipts';
 import {
@@ -41,6 +41,30 @@ describe('SQLite record method inputs', () => {
       store.putPendingTask({ ...task, expiresAt: isoAt(MINUTE) }, { maxTasks }),
     ).rejects.toMatchObject({ code: 'STORAGE_ERROR' });
     expect(dumpTables(path).pending_tasks).toEqual([]);
+  });
+
+  it('writes nothing when reading a claim, even one past its expiry', async () => {
+    await store.claimIdempotencyKey(SCOPE, 'fp', isoAt(MINUTE));
+    await store.updateIdempotencyKey(SCOPE, { kind: 'completed', status: 200, body: {} });
+    clock.advance(MINUTE);
+    const before = dumpTables(path);
+
+    expect(await store.getIdempotencyKey(SCOPE, 'fp')).toBeUndefined();
+
+    expect(before.idempotency_keys).toHaveLength(1);
+    expect(dumpTables(path)).toEqual(before);
+  });
+
+  it('answers STORAGE_ERROR when a stored claim body cannot be parsed', async () => {
+    await store.claimIdempotencyKey(SCOPE, 'fp', isoAt(MINUTE));
+    await store.updateIdempotencyKey(SCOPE, { kind: 'completed', status: 200, body: {} });
+    const db = new Database(path);
+    db.prepare("UPDATE idempotency_keys SET body_json = '{'").run();
+    db.close();
+
+    await expect(store.getIdempotencyKey(SCOPE, 'fp')).rejects.toMatchObject({
+      code: 'STORAGE_ERROR',
+    });
   });
 
   it('refuses an unparseable timestamp on each method that stores or compares one', async () => {

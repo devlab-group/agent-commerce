@@ -35,10 +35,13 @@ const REPLAY_CODES: Readonly<Record<string, string>> = {
 };
 
 /**
- * Returns the provider's refusal reason, or the paid network family's replay
- * code. Unknown networks use EVM's replay code.
+ * Preserve `payment_identifier_` refusal reasons: they do not indicate a spent
+ * authorization. Other `PAYMENT_REPLAYED` errors use the network family's
+ * replay code, defaulting to EVM for unknown networks. Otherwise use the
+ * provider's reason, or `unexpected_verify_error` if it is not a string.
  */
 export function x402ErrorCode(code: string, reason: unknown, network?: unknown): string {
+  if (typeof reason === 'string' && reason.startsWith('payment_identifier_')) return reason;
   if (code === 'PAYMENT_REPLAYED') {
     const namespace = typeof network === 'string' ? network.split(':')[0] : undefined;
     return (

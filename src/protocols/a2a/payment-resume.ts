@@ -116,6 +116,20 @@ export async function resumePayment(
   );
 }
 
+// The follow-up consumes the task before the pipeline runs; resends get TaskNotFoundError.
+// Suppress its retry delay so the client starts a new task with the same payment id.
+function withoutRetryDelay(error: CommerceError): CommerceError {
+  if (error.details?.['reason'] !== 'payment_identifier_in_flight') return error;
+  const { retryAfterSeconds: _delay, ...details } = error.details;
+  return new CommerceError(error.code, error.message, {
+    httpStatus: error.httpStatus,
+    retryable: false,
+    details,
+    ...(error.requestId !== undefined ? { requestId: error.requestId } : {}),
+    ...(error.resourceId !== undefined ? { resourceId: error.resourceId } : {}),
+  });
+}
+
 // The pending purchase, now with the x402 `PaymentPayload` as its proof
 async function payPending(
   context: ProtocolAdapterContext,
@@ -152,16 +166,20 @@ async function payPending(
     // payment this task can report
     error = new CommerceError('PAYMENT_INVALID', 'The payment was not accepted.', { requestId });
   } catch (err) {
-    error = toCommerceError(err);
+    error = withoutRetryDelay(toCommerceError(err));
     context.logger.warn(
       { resourceId: pending.resourceId, requestId, err: toLogInfo(error) },
       'a2a adapter: x402 extension payment failed',
     );
   }
   const metadata = paymentFailureMetadata(error, pending.network);
+  const reason = error.details?.['reason'];
   let text = 'Payment failed.';
   if (metadata[X402_PAYMENT_STATUS_KEY] === 'payment-completed') {
     text = 'Payment settled, but the resource could not be delivered.';
+  } else if (typeof reason === 'string' && reason.startsWith('payment_identifier_')) {
+    // Retry-key refusals make no new charge; show the specific error message
+    text = error.message;
   } else if (!error.code.startsWith('PAYMENT_')) {
     text = 'The resource could not be delivered.';
   }

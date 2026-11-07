@@ -11,6 +11,7 @@ import type {
   ExecutionPipeline,
   IdGenerator,
   Logger,
+  ReceiptStore,
 } from '../../../src/core';
 import {
   DELIVERY_SUMMARY_META_KEY,
@@ -1534,6 +1535,68 @@ describe('createGateway HTTP surface', () => {
 
     await gateway.close();
     gateways = gateways.filter((g) => g !== gateway);
+  });
+});
+
+describe('createGateway startup with payment retry keys', () => {
+  // Support claims without the optional lookup used for redelivery
+  function storeWithoutRedelivery(
+    recover: NonNullable<ReceiptStore['recoverIdempotencyKeys']>,
+  ): ReceiptStore {
+    return {
+      ...createFakeStore(),
+      claimIdempotencyKey: async () => ({ kind: 'reserved' }),
+      updateIdempotencyKey: async () => {},
+      recoverIdempotencyKeys: recover,
+    };
+  }
+
+  function withRedelivery(): ReturnType<typeof makeGatewayConfig> {
+    const config = makeGatewayConfig();
+    return {
+      ...config,
+      resources: config.resources.map((resource) =>
+        resource.id === 'market_report'
+          ? { ...resource, idempotency: { redelivery: { retentionHours: 24, required: false } } }
+          : resource,
+      ),
+    };
+  }
+
+  it('starts a 2.6-era store without the opt-in and never asks it to recover', async () => {
+    const recover = vi.fn(async () => 0);
+
+    await buildGateway({ store: storeWithoutRedelivery(recover) });
+
+    // Avoid recovery through stores that may ignore the payment prefix
+    expect(recover).not.toHaveBeenCalled();
+  });
+
+  it('refuses a 2.6-era store for a resource with redelivery, before recovering', async () => {
+    const recover = vi.fn(async () => 0);
+
+    await expect(
+      buildGateway({ config: withRedelivery(), store: storeWithoutRedelivery(recover) }),
+    ).rejects.toMatchObject({
+      code: 'CONFIG_INVALID',
+      message:
+        'Resource "market_report" sets idempotency, which requires a store with idempotency claims and getIdempotencyKey',
+    });
+    expect(recover).not.toHaveBeenCalled();
+  });
+
+  it('stops startup when payment key recovery fails', async () => {
+    const store: ReceiptStore = {
+      ...storeWithoutRedelivery(async () => {
+        throw new Error('disk I/O error');
+      }),
+      getIdempotencyKey: async () => undefined,
+    };
+
+    await expect(buildGateway({ store })).rejects.toMatchObject({
+      code: 'STORAGE_ERROR',
+      message: 'Payment retry keys could not be recovered',
+    });
   });
 });
 

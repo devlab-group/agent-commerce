@@ -48,6 +48,7 @@ describe('SQLite receipt store summary', () => {
       unresolvedTransactions: {},
       orphanHolds: 0,
       unresolvedIdempotencyKeys: 0,
+      unresolvedPaymentKeys: 0,
       unexpiredPendingTasks: 0,
       legacyImports: [],
       missingLegacyImports: [],
@@ -132,6 +133,45 @@ describe('SQLite receipt store summary', () => {
       unresolvedIdempotencyKeys: 1,
       unexpiredPendingTasks: 1,
     });
+  });
+
+  it('counts unresolved payment keys apart from other claims', async () => {
+    const scope = (endpoint: string, key: string) => ({
+      deployment: 'https://gw.example',
+      endpoint,
+      key,
+    });
+    const leaveUnresolved = async (endpoint: string, key: string) => {
+      await store.claimIdempotencyKey(scope(endpoint, key), 'fp', isoAt(60 * MINUTE));
+      await store.updateIdempotencyKey(scope(endpoint, key), { kind: 'unresolved' });
+    };
+    await leaveUnresolved('/acp/checkout_sessions', 'a');
+    await leaveUnresolved('/payment:mount/checkout_sessions', 'b');
+    await leaveUnresolved('payment:report', 'c');
+    await leaveUnresolved('payment:report', 'd');
+    await leaveUnresolved('payment:forecast', 'e');
+    await store.claimIdempotencyKey(scope('payment:report', 'running'), 'fp', isoAt(60 * MINUTE));
+
+    expect(await store.summary(AGE)).toMatchObject({
+      unresolvedIdempotencyKeys: 2,
+      unresolvedPaymentKeys: 3,
+    });
+  });
+
+  it('stops counting a payment key once its retention ends, and keeps counting other claims', async () => {
+    const scope = (endpoint: string) => ({ deployment: 'https://gw.example', endpoint, key: 'k' });
+    for (const endpoint of ['/acp/checkout_sessions', 'payment:report']) {
+      await store.claimIdempotencyKey(scope(endpoint), 'fp', isoAt(MINUTE));
+      await store.updateIdempotencyKey(scope(endpoint), { kind: 'unresolved' });
+    }
+
+    clock.advance(MINUTE - 1);
+    const before = await store.summary(AGE);
+    clock.advance(1);
+    const after = await store.summary(AGE);
+
+    expect(before).toMatchObject({ unresolvedIdempotencyKeys: 1, unresolvedPaymentKeys: 1 });
+    expect(after).toMatchObject({ unresolvedIdempotencyKeys: 1, unresolvedPaymentKeys: 0 });
   });
 
   it('lists the recorded legacy imports, not a start with nothing to import', async () => {

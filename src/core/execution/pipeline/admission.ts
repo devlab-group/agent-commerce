@@ -3,14 +3,20 @@
 import type { PaymentMethodName } from '../../domain/common';
 import type { PaymentProvider, PaymentRequirement, PaymentResult } from '../../domain/payment';
 import type { PaymentAttempt } from '../../domain/receipt';
-import type { CanonicalRequest, PaymentRequiredOutcome } from '../../domain/request';
+import type {
+  CanonicalRequest,
+  DeliveredOutcome,
+  PaymentRequiredOutcome,
+} from '../../domain/request';
 import type { CommerceResource, Pricing } from '../../domain/resource';
 import { CommerceError, isCommerceError, toCommerceError } from '../../errors';
-import { type Flow, newTransaction } from '../journal';
+import { type Flow, inputDigest, newTransaction } from '../journal';
+import { paidOperationKey } from '../merchant-key';
 import { REUSE_REJECTED_AUTHORIZATION_METADATA_KEY } from '../settlement-order';
 import { type AuthorizeAndReserve, resolveAuthorizationProviders } from './authorization';
 import { isFinishedAttempt, replayError, retryChallenge } from './challenge';
 import type { PipelineContext, SettleArgs } from './context';
+import { assertRetrySupport, type RetryGate } from './retry';
 
 /** A verified payment whose authorization and replay identity are reserved */
 export interface AdmittedPayment {
@@ -24,20 +30,28 @@ export type AdmitPayment = (
   resource: CommerceResource,
   pricing: Extract<Pricing, { type: 'fixed' }>,
   validInput: unknown,
-) => Promise<PaymentRequiredOutcome | AdmittedPayment>;
+  pipelineStart: number,
+) => Promise<PaymentRequiredOutcome | DeliveredOutcome | AdmittedPayment>;
 
 /**
- * Builds the payment phase. It returns the challenge when the request carries
- * no proof, and otherwise verifies the proof and reserves the authorization
- * and replay identity, or throws.
+ * Build payment admission. Return a challenge, a stored retry response or
+ * verified claims for delivery; failures throw.
  */
 export function createPaymentAdmission(
   ctx: PipelineContext,
   authorizeAndReserve: AuthorizeAndReserve,
+  retryGate: RetryGate,
 ): AdmitPayment {
   const { options, safeEmit, buildEvent } = ctx;
 
-  return async function admitPayment(flow, request, resource, pricing, validInput) {
+  return async function admitPayment(flow, request, resource, pricing, validInput, pipelineStart) {
+    // Check retry dependencies before provider calls and before upfront settlement can charge
+    const support = assertRetrySupport(
+      resource,
+      options.store,
+      options.deployment,
+      request.requestId,
+    );
     const provider = pickProvider(options.paymentProviders, resource.paymentMethods);
     if (!provider) {
       throw new CommerceError(
@@ -51,13 +65,23 @@ export function createPaymentAdmission(
       );
     }
 
-    // Resolved before the challenge so the 402 can name what the retry must
-    // also carry, and so an uncheckable method fails before payment starts
+    // Resolve authorization before building the challenge, so the 402 lists required
+    // methods and unsupported methods fail before payment starts
     const authProviders = resolveAuthorizationProviders(
       options.authorizationProviders ?? [],
       resource,
       request.requestId,
     );
+
+    const retry = await retryGate.open(
+      flow,
+      resource,
+      provider,
+      validInput,
+      support,
+      pipelineStart,
+    );
+    if (retry?.kind === 'delivered') return retry;
 
     let requirement: PaymentRequirement;
     try {
@@ -184,90 +208,124 @@ export function createPaymentAdmission(
       });
     }
     const replayKey = verification.replayKey;
+    // Reuse one input digest for the retry claim, journal and merchant key
+    const digest = retry?.fingerprint ?? inputDigest(validInput);
 
-    const hold = await authorizeAndReserve(
-      flow,
-      request,
-      resource,
-      authProviders,
-      requirement,
-      validInput,
-    );
-
-    try {
-      const attempt = await options.store.reservePaymentAttempt({
-        requestId: request.requestId,
-        resourceId: resource.id,
-        provider: provider.name,
-        replayKey,
-        amount: verification.amount,
-        currency: verification.currency,
-        ...(verification.payer !== undefined ? { payer: verification.payer } : {}),
-        ...(verification.payee !== undefined ? { payee: verification.payee } : {}),
-        ...(requirement.metadata?.[REUSE_REJECTED_AUTHORIZATION_METADATA_KEY] === true
-          ? { reclaimRejected: true }
-          : {}),
-        transaction: newTransaction(
-          flow,
-          resource,
-          requirement,
-          verification,
-          validInput,
-          hold !== undefined ? { ...hold.record, reservationId: hold.reservationId } : undefined,
-        ),
-      });
-      // Require a matching transaction ID and recordTransactionStep before enabling
-      // journaling, so legacy stores can ignore the transaction data
-      flow.journaled =
-        attempt.transactionId === flow.transactionId &&
-        options.store.recordTransactionStep !== undefined;
-    } catch (error) {
-      // A duplicate replayKey arrives as PAYMENT_REPLAYED and is kept. Any
-      // other failure (a full disk, a dropped connection) is STORAGE_ERROR,
-      // never a replay.
-      const mapped = toCommerceError(
-        error,
-        'STORAGE_ERROR',
-        'Payment attempt could not be recorded',
+    // Claim the retry key before authorization holds or replay reservations, so a losing
+    // request has no new reservation to release
+    if (retry !== undefined) {
+      const stored = await retryGate.claim(
+        flow,
+        resource,
+        provider,
+        retry,
+        verification,
+        pipelineStart,
       );
-      await hold?.finalize('release');
-      await safeEmit(
-        buildEvent(flow, {
-          type: 'payment.rejected',
-          resourceId: resource.id,
-          adapter: request.protocol,
-          paymentProvider: provider.name,
-          status: 'error',
-          data: { reason: mapped.code },
-        }),
-      );
-      throw replayError(mapped, requirement);
+      if (stored !== undefined) return stored;
     }
 
-    await safeEmit(
-      buildEvent(flow, {
-        type: 'payment.verified',
-        resourceId: resource.id,
-        adapter: request.protocol,
-        paymentProvider: provider.name,
-        status: 'ok',
-      }),
-    );
-
-    return {
-      kind: 'admitted',
-      settleArgs: {
+    try {
+      const hold = await authorizeAndReserve(
         flow,
         request,
         resource,
-        provider,
+        authProviders,
         requirement,
-        payment,
-        verification,
-        replayKey,
-        hold,
-      },
-    };
+        validInput,
+      );
+
+      try {
+        const attempt = await options.store.reservePaymentAttempt({
+          requestId: request.requestId,
+          resourceId: resource.id,
+          provider: provider.name,
+          replayKey,
+          amount: verification.amount,
+          currency: verification.currency,
+          ...(verification.payer !== undefined ? { payer: verification.payer } : {}),
+          ...(verification.payee !== undefined ? { payee: verification.payee } : {}),
+          ...(requirement.metadata?.[REUSE_REJECTED_AUTHORIZATION_METADATA_KEY] === true
+            ? { reclaimRejected: true }
+            : {}),
+          transaction: newTransaction(
+            flow,
+            resource,
+            requirement,
+            verification,
+            digest,
+            hold !== undefined ? { ...hold.record, reservationId: hold.reservationId } : undefined,
+          ),
+        });
+        // Require a matching transaction ID and recordTransactionStep before enabling
+        // journaling; legacy stores can then ignore the transaction data
+        flow.journaled =
+          attempt.transactionId === flow.transactionId &&
+          options.store.recordTransactionStep !== undefined;
+      } catch (error) {
+        // Preserve CommerceError codes, including PAYMENT_REPLAYED; map untyped
+        // storage failures to STORAGE_ERROR
+        const mapped = toCommerceError(
+          error,
+          'STORAGE_ERROR',
+          'Payment attempt could not be recorded',
+        );
+        await hold?.finalize('release');
+        await safeEmit(
+          buildEvent(flow, {
+            type: 'payment.rejected',
+            resourceId: resource.id,
+            adapter: request.protocol,
+            paymentProvider: provider.name,
+            status: 'error',
+            data: { reason: mapped.code },
+          }),
+        );
+        throw replayError(mapped, requirement);
+      }
+
+      await safeEmit(
+        buildEvent(flow, {
+          type: 'payment.verified',
+          resourceId: resource.id,
+          adapter: request.protocol,
+          paymentProvider: provider.name,
+          status: 'ok',
+        }),
+      );
+
+      const merchantKey =
+        support !== undefined && resource.idempotency?.merchantKey === true
+          ? paidOperationKey({
+              deployment: support.deployment,
+              resourceId: resource.id,
+              replayKey,
+              inputDigest: digest,
+              ...(retry !== undefined ? { clientKey: retry.clientKey } : {}),
+              ...(verification.payer !== undefined ? { payer: verification.payer } : {}),
+            })
+          : undefined;
+
+      return {
+        kind: 'admitted',
+        settleArgs: {
+          flow,
+          request,
+          resource,
+          provider,
+          requirement,
+          payment,
+          verification,
+          replayKey,
+          hold,
+          ...(merchantKey !== undefined ? { merchantKey } : {}),
+          ...(retry !== undefined ? { retry } : {}),
+        },
+      };
+    } catch (error) {
+      if (retry !== undefined) await retryGate.finishFailed(flow, retry);
+      throw error;
+    }
   };
 
   // A spent authorization can fail verification before reaching the replay

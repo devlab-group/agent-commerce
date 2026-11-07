@@ -97,4 +97,23 @@ describe('the conformance runner', () => {
     expect(replayCases).toHaveLength(2);
     for (const c of replayCases) await expect(c.run()).rejects.toBeInstanceOf(AssertionError);
   });
+
+  it('skips the claim reads for a store without getIdempotencyKey, whose claim group stays whole', async () => {
+    const cases = await receiptStoreConformanceCases(({ clock }) => ({
+      store: Object.assign(createSqliteReceiptStore({ path: ':memory:', clock }), {
+        getIdempotencyKey: undefined,
+      }),
+    }));
+
+    expect(cases.filter((c) => c.skip?.includes('getIdempotencyKey')).map((c) => c.name)).toEqual([
+      'reading an idempotency scope answers as a claim would and creates nothing',
+      'an expired completed claim reads as absent, and other checkout claims never expire',
+      'an expired unresolved payment key reads as absent and can be claimed again',
+      'an unfinished claim returns its owner until it completes, and a conflict never does',
+      'recovery with an endpoint prefix leaves other endpoints alone',
+      'an endpoint prefix is literal text',
+    ]);
+    const groups = cases.find((c) => c.name.startsWith('implements each optional method group'));
+    await expect(groups?.run()).resolves.toBeUndefined();
+  });
 });

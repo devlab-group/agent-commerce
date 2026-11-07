@@ -7,13 +7,15 @@
  *    (INPUT_INVALID, or BACKEND_ERROR for an illegal configured header)
  * 3. resolve price
  * 4. free: straight to the backend
- * 5. paid: pick provider and createRequirement, then return a challenge, or
- *    select the offer the proof pays, verify it, and reserve authorization and
- *    replay identities
+ * 5. paid: validate retry support, pick provider and resolve authorization
+ *    providers, then check retry state for an exact proof resend. Otherwise
+ *    createRequirement and return a challenge for a missing proof, or select
+ *    the offer and verify the proof. Claim the retry key, which may also return
+ *    a stored response, before reserving authorization and replay identities
  * 6. settle before calling the backend, or call the backend first and settle
  *    only if it succeeds. Finalize authorization according to the outcome
  *    (BACKEND_TIMEOUT / BACKEND_ERROR)
- * 7. persist receipt, emit events, return outcome
+ * 7. persist receipt, finish the retry claim, emit events, return outcome
  */
 
 import type { AuthorizationRecord } from '../../domain/authorization';
@@ -36,6 +38,7 @@ import {
   createPipelineContext,
   type SettleArgs,
 } from './context';
+import { createRetryGate } from './retry';
 import { createSettlement } from './settlement';
 
 export type { CreateExecutionPipelineOptions } from './context';
@@ -56,7 +59,8 @@ export function createExecutionPipeline(
   const ctx = createPipelineContext(options);
   const { safeEmit, safePersist, recordStep, buildEvent } = ctx;
   const { settle, abandonSettlement } = createSettlement(ctx);
-  const admitPayment = createPaymentAdmission(ctx, createAuthorizeAndReserve(ctx));
+  const retryGate = createRetryGate(ctx);
+  const admitPayment = createPaymentAdmission(ctx, createAuthorizeAndReserve(ctx), retryGate);
 
   async function execute(request: CanonicalRequest): Promise<ExecutionOutcome> {
     const pipelineStart = options.clock.monotonicMs();
@@ -142,13 +146,23 @@ export function createExecutionPipeline(
 
     let settleArgs: SettleArgs | undefined;
     if (resource.pricing.type === 'fixed') {
-      const admission = await admitPayment(flow, request, resource, resource.pricing, validInput);
-      if (admission.kind === 'payment-required') return admission;
+      const admission = await admitPayment(
+        flow,
+        request,
+        resource,
+        resource.pricing,
+        validInput,
+        pipelineStart,
+      );
+      if (admission.kind !== 'admitted') return admission;
       settleArgs = admission.settleArgs;
     }
 
     try {
       return await settleAndDeliver(flow, resource, validInput, settleArgs, pipelineStart);
+    } catch (error) {
+      if (settleArgs?.retry !== undefined) await retryGate.finishFailed(flow, settleArgs.retry);
+      throw error;
     } finally {
       // Attempt the final journal step after settleAndDeliver returns or throws.
       // A failure is logged after the outcome and event snapshots are built, so
@@ -182,13 +196,14 @@ export function createExecutionPipeline(
       deadlineAt: backendDeadline(options.clock.now(), resource),
     });
     const backendStart = options.clock.monotonicMs();
+    const idempotencyKey = request.idempotencyKey ?? settleArgs?.merchantKey;
     let backendResponse: BackendResponse;
     try {
       backendResponse = await options.backend.call(resource.handler, {
         requestId: request.requestId,
         resourceId: resource.id,
         input: validInput,
-        ...(request.idempotencyKey !== undefined ? { idempotencyKey: request.idempotencyKey } : {}),
+        ...(idempotencyKey !== undefined ? { idempotencyKey } : {}),
         ...(request.backendHeaders !== undefined ? { backendHeaders: request.backendHeaders } : {}),
       });
     } catch (error) {
@@ -303,6 +318,15 @@ export function createExecutionPipeline(
     };
 
     await saveReceipt(flow, receipt, 'saveReceipt');
+    if (settleArgs?.retry !== undefined) {
+      await retryGate.finishDelivered(
+        flow,
+        settleArgs.retry,
+        settleArgs.verification,
+        backendResponse,
+        receipt,
+      );
+    }
 
     const totalDurationMs = Math.round(options.clock.monotonicMs() - pipelineStart);
     const failures = failuresOf(flow);

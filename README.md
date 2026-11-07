@@ -120,7 +120,6 @@ free HTTP resources does not install MCP, EVM, JOSE or SD-JWT packages.
 | accept x402 on NEAR                     | x402 peers `+ @x402/near`            | (no import - loaded for a NEAR offer)      |
 | accept MPP payments                     | `+ mppx viem @x402/core @x402/evm`   | `from '@devlab.group/agent-commerce/mpp'`  |
 | verify AP2 mandates, sign checkout JWTs | `+ jose @sd-jwt/core canonicalize`   | `from '@devlab.group/agent-commerce/ap2'`  |
-| authenticate to a CDP facilitator       | `+ @coinbase/x402`                   | (no import - loaded on demand)             |
 
 The x402 entry needs `@x402/core`, `@x402/evm` and `viem` even when every
 offer is on Solana or NEAR. MPP settles through an x402 facilitator, so its
@@ -143,10 +142,6 @@ Peers are pinned exactly: x402's schemas and EIP-712 domains cross this
 boundary, so a version skew is a correctness problem rather than a convenience
 one. Importing a subpath without its peer fails at load time and names the
 missing package.
-
-`@coinbase/x402` has no subpath import. It is loaded dynamically only for
-`facilitator.auth.type: cdp` and brings the larger CDP dependency tree. A
-facilitator with a static token can use `auth.type: bearer` without it.
 
 ### Testing a custom store
 
@@ -341,7 +336,8 @@ prints the `unsupported` lists for A2A, ACP and AP2 when they are enabled.
 Minor releases may break experimental configurations, integrations or types:
 MPP, A2A, ACP, AP2, ERC-8409 quotes, `agent-commerce import openapi`,
 `PaymentProvider.reconcile`, the `ReceiptStore` methods and types added in
-2.6.0, and the `./testing` entry.
+2.6.0, the `idempotency` resource settings with the store and provider methods
+added in 2.7.0, and the `./testing` entry.
 
 The journal's `Transaction` type, `ReceiptStore` journal methods and
 `/api/transactions` response shape are supported. The `transactionId` fields,
@@ -365,6 +361,14 @@ differ from 2.0; see [Upgrading from 2.0 to 2.x](docs/migration-2.1.md).
 - **Replay-safe twice over.** The EIP-3009 or Permit2 nonce stops a double
   spend on-chain; the gateway additionally reserves a `replayKey` derived from
   the authorization before it settles anything.
+- **Retry after a lost response (experimental, disabled by default).** With
+  `idempotency.redelivery`, buyers can retrieve a stored response without
+  another charge using the same wallet, input and x402 `payment-identifier`
+  `id` or MPP `Idempotency-Key`. Matching exact resends skip verification
+  until retention ends, an exception to fail closed. Responses are stored
+  unencrypted in the receipt database. `idempotency.merchantKey` sends a
+  derived `Idempotency-Key` to the merchant for paid operations. See
+  [Retry after a lost response](docs/payment-flow.md#retry-after-a-lost-response).
 - **On-chain settlement in CI.** The end-to-end test asserts the buyer's balance
   falls and the merchant's rises by exactly the price, with a real transaction
   hash in the receipt. A log line saying "payment successful" would not count.
@@ -426,9 +430,9 @@ EIP-3009 authorization without ETH, and the facilitator pays gas. Because the
 authorization fixes the recipient, amount and chain, the facilitator cannot
 redirect the transfer. It can see authorizations and refuse service.
 
-Remote facilitator auth supports `none`, `bearer` and `cdp`. `cdp` loads the
-optional peer `@coinbase/x402`, which signs a fresh JWT per request; bearer auth
-needs no extra peer. Other types are rejected at config load.
+Remote facilitator auth supports `none`, `bearer` and `cdp`. CDP auth signs a
+fresh JWT per request with the CDP API key. No auth mode needs an extra peer
+package. Config load rejects other types.
 
 ### Base Sepolia
 
@@ -671,7 +675,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 mainnet, Solana devnet and Solana mainnet, receipts, doctor, deterministic
 demo, experimental A2A v1.0.1 and ACP `2026-04-17` checkout adapters,
 experimental AP2 v0.2.0 mandate verification, experimental MPP `charge`
-payments, and experimental OpenAPI import.
+payments, experimental OpenAPI import, and experimental retries after a lost
+response.
 
 **Next** - a `doctor` GitHub Action · UCP ·
 autonomous-mode AP2 (open mandates, agent key binding, constraint evaluation) ·

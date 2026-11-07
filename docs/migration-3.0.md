@@ -34,6 +34,18 @@ required in 3.0.0. Custom stores will need to implement:
 - Pending tasks: `putPendingTask`, `getPendingTask` and `takePendingTask`.
 - Payment attempts: `findPaymentAttemptByReplayKey`.
 
+The 3.0.0 plan also requires `getIdempotencyKey`, added in 2.7.0. Custom stores
+implementing it should follow these 2.7.0 rules, checked by the
+`@devlab.group/agent-commerce/testing` conformance cases:
+
+- `claimIdempotencyKey` takes an optional `owner` tag, which both it and
+  `getIdempotencyKey` return on `in-flight` and `unresolved` results. A store
+  that omits it forces verification of every proof before the gateway refuses
+  an unfinished payment key.
+- `unresolved` claims on `payment:` endpoints expire at `expiresAt`, as
+  `completed` claims do. Apply this rule in both the claim sweep and
+  `getIdempotencyKey`. Other `unresolved` claims never expire.
+
 The 3.0.0 plan removes these store settings deprecated in 2.6.0:
 
 - `authorization.ap2.replay.path` and `protocols.acp.idempotency.path`.

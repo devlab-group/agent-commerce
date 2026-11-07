@@ -83,6 +83,64 @@ fits the body (see [security.md](security.md#backend-response-relay)); this
 setting does not change it. Config load accepts `mimeType` only on a fixed-price
 resource that lists `x402` in `payments`.
 
+Enable `idempotency.merchantKey: true` to send an `Idempotency-Key` header with
+paid backend calls. This setting is experimental and disabled by default.
+The merchant decides how to handle repeated keys.
+
+The generated key hashes `merchant.publicBaseUrl`, the resource ID, a payment
+identity and the canonical input digest with SHA-256. The identity defaults to
+the payment's replay identity. With `redelivery`, requests that have both a
+client retry key and a verified payer use the key's hash and payer instead.
+The retry claim prevents concurrent purchases under that key, and re-signed
+retries keep the same merchant key. With `merchantKey` alone, the client key
+is ignored; a different replay identity produces a different merchant key.
+Changing `merchant.publicBaseUrl` also changes generated keys.
+
+An adapter's operation key takes precedence over the generated key. Either
+overrides an `Idempotency-Key` in `backend.headers`. Without a client retry
+key, input with no canonical JSON digest, such as a string containing a lone
+surrogate, receives no generated key and can still be delivered. Config load
+accepts `idempotency` only on a fixed-price resource.
+
+For paid requests with a client retry key, `idempotency.redelivery` stores the
+response for reuse with matching input, without another charge. It is
+experimental and disabled by default. The x402 provider extracts the buyer's
+`id` from the echoed `payment-identifier` extension (see
+[x402.md](protocols/x402.md#payment-identifier)), and the HTTP invoke route
+reads MPP's `Idempotency-Key` header (see
+[mpp.md](protocols/mpp.md#idempotency-key)). Direct pipeline requests can set
+`CanonicalRequest.retryKey`, which takes precedence over provider extraction.
+Custom providers can implement `PaymentProvider.retryKey`. With redelivery
+enabled, input without a canonical JSON digest fails with `INPUT_INVALID`
+when a retry key is used.
+
+`retentionHours` is an integer from 1 to 8760 (one year), default 24. Config
+load rejects other values. The window starts at the initial retry check, before
+proof verification. Until it ends, a matching exact resend gets the stored
+response without verification, even after the proof or challenge expires. A
+verified fresh proof from the same payer can also retrieve it. After expiry,
+retries follow the normal purchase flow. Stored responses are unencrypted in
+the receipt database and its backups; expiry does not erase them immediately.
+See [security.md](security.md#buyer-protection). `required` defaults to false.
+Setting it to true requires `x402` in `payments` and makes x402 retry-key
+extraction reject a missing `id` with `INPUT_INVALID` (HTTP 400).
+[Retry after a lost response](payment-flow.md#retry-after-a-lost-response)
+describes the rules.
+
+At startup, the gateway marks in-flight payment retry keys `unresolved`, even
+if no resource still enables `redelivery`, and logs a nonzero count at WARN.
+Recovery includes requests that crashed before settlement. An interrupted
+request may have charged, so matching retries with `redelivery` enabled get
+409 `payment_identifier_unresolved` until the key's retention deadline. After
+expiry, retries follow the normal purchase flow, as with completed keys.
+Reconciling or resolving the payment attempt does not change the key. `doctor`
+reports unexpired unresolved keys as INFO. Run one gateway process per receipt
+database.
+
+Removing `redelivery`, renaming a resource or changing `merchant.publicBaseUrl`
+makes its stored responses and unresolved keys unavailable to new requests.
+Reusing a key can then start a new purchase.
+
 `url` supports `{param}` templating from validated input; values are
 URL-encoded. Remaining input becomes query string for `GET`/`DELETE` and a JSON
 body otherwise - unless `backend.inputBindings` says otherwise, below.
@@ -687,9 +745,10 @@ facilitator:
 Omitting `auth` is equivalent to `type: none`: the gateway sends no credential.
 Use it only with a facilitator that accepts anonymous requests. Supported types
 are `none`, `bearer` (a static token) and `cdp` (a fresh JWT per request).
-The `cdp` type requires the optional `@coinbase/x402` peer. It signs each
-request for `https://api.cdp.coinbase.com/platform/v2/x402`, so config load
-refuses `cdp` with any other `url`.
+For `cdp`, `apiKeySecret` must be CDP's PEM EC P-256 private key or base64
+Ed25519 key. JWTs bind requests to CDP's host and path, so config load rejects
+any `url` other than `https://api.cdp.coinbase.com/platform/v2/x402`. An
+unreadable secret fails the health check with a detail naming `apiKeySecret`.
 
 Deployment mode - `local`, `testnet` or `mainnet` - comes from the network:
 `eip155:31337` is local, and every other network is the testnet or mainnet it
@@ -773,8 +832,11 @@ resource for two operations, or maps a paid one · an ACP idempotency retention
 below 24 hours · an invalid or zero `payTo`/`asset`/`recipient` · an
 `x402.accepts` list that is empty or on a resource that cannot use it · a
 `mimeType` that is not a media type, or on a resource that is not fixed-price
-with `x402` in `payments` · an MPP `challengeSecret` with length below 32 or a
-multi-line `realm`.
+with `x402` in `payments` · an `idempotency` block on a resource that is not
+fixed-price, or with neither `merchantKey` nor `redelivery` · a
+`redelivery.retentionHours` that is not an integer from 1 to 8760 ·
+`redelivery.required: true` on a resource without `x402` in `payments` · an MPP
+`challengeSecret` with length below 32 or a multi-line `realm`.
 
 It exits non-zero on any of them.
 

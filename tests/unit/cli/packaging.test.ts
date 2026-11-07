@@ -160,36 +160,22 @@ describe('published package metadata', () => {
     // and CI install with `npm ci`, which fails without package-lock.json.
     expect(existsSync(resolve(pkgRoot, 'package-lock.json'))).toBe(true);
     expect(existsSync(resolve(pkgRoot, 'pnpm-lock.yaml'))).toBe(false);
-  });
-
-  it('pins zod for the x402 packages, per package rather than repo-wide', () => {
-    // Two zod majors in one graph break `instanceof` across module
-    // boundaries, so every package that shares zod values with ours resolves
-    // to *our* zod. Not repo-wide: `@scalar/openapi-parser` and `mppx` need
-    // zod 4 and get their own nested copies, and only plain values cross those
-    // seams.
-    const overrides = manifest.overrides as Record<string, unknown> | undefined;
-    expect(overrides?.['zod']).toBeUndefined();
-    for (const pkg of ['@x402/core', '@x402/evm', '@coinbase/x402']) {
-      expect((overrides?.[pkg] as Record<string, string> | undefined)?.['zod']).toBe(
-        manifest.dependencies?.['zod'],
-      );
-    }
     expect(manifest.pnpm).toBeUndefined();
   });
 
-  it('pins every @x402 package to one version older than 2.26.0', () => {
+  it('pins every @x402 package to one version outside 2.26.0-2.28.0', () => {
     // Keep the @x402 pins aligned. The EVM facilitator in 2.26.0-2.28.0 can
-    // leave a failed `eth_getCode` promise unhandled, exiting Node. Raise the
-    // bound only for a release that fixes this
+    // leave a failed `eth_getCode` promise unhandled, exiting Node; 2.29.0
+    // attaches a handler
     const versions = new Set(
       Object.entries({ ...manifest.peerDependencies, ...manifest.devDependencies })
         .filter(([name]) => name.startsWith('@x402/'))
         .map(([, version]) => version),
     );
     expect(versions.size).toBe(1);
-    const [major, minor] = ([...versions][0] as string).split('.').map(Number);
-    expect(major === 2 && (minor as number) < 26).toBe(true);
+    const [major, minor] = ([...versions][0] as string).split('.').map(Number) as [number, number];
+    expect(major).toBe(2);
+    expect(minor < 26 || minor > 28).toBe(true);
   });
 
   it('keeps the AP2 crypto libraries optional and exactly pinned', () => {
@@ -225,7 +211,6 @@ describe('published package metadata', () => {
       expect(exportsField?.[subpath]).toBeDefined();
     }
     for (const peer of [
-      '@coinbase/x402',
       '@modelcontextprotocol/server',
       '@sd-jwt/core',
       '@solana/kit',
@@ -642,11 +627,9 @@ describe.skipIf(!existsSync(libEntry))('optional-peer subpaths', () => {
 
   it('imports only its own peer, in each subpath', () => {
     expect(bareImportsOf(mcpEntry)).toEqual(['@modelcontextprotocol/server']);
-    // Dynamic imports: `@coinbase/x402` loads only for facilitator auth.type
-    // `cdp`, `@x402/svm` and `@solana/kit` only for a Solana offer,
-    // `@x402/near` only for a NEAR offer
+    // Dynamic imports: `@x402/svm` and `@solana/kit` load only for a Solana
+    // offer, `@x402/near` only for a NEAR offer
     expect(bareImportsOf(x402Entry).sort()).toEqual([
-      '@coinbase/x402',
       '@solana/kit',
       '@x402/core',
       '@x402/evm',
@@ -656,7 +639,6 @@ describe.skipIf(!existsSync(libEntry))('optional-peer subpaths', () => {
     ]);
     // MPP settles through an x402 facilitator, so its entry also imports the x402 peers
     expect(bareImportsOf(mppEntry).sort()).toEqual([
-      '@coinbase/x402',
       '@solana/kit',
       '@x402/core',
       '@x402/evm',

@@ -290,7 +290,9 @@ export class AcpProtocolAdapter implements HttpProtocolAdapter {
     const store = this.store;
     // Select the receipt store only when all idempotency methods are present
     if (hasMethodGroup(store, 'idempotency_claims')) {
-      const recovered = await store.recoverIdempotencyKeys({ release });
+      // Recover ACP HTTP paths (`/`) separately from paid retry claims (`payment:`).
+      // Releasing a paid retry claim could allow duplicate settlement.
+      const recovered = await store.recoverIdempotencyKeys({ release, endpointPrefix: '/' });
       warnOrphanedClaims(context.logger, recovered, release);
       return backendOverReceiptStore(store, context.clock, retentionHours);
     }

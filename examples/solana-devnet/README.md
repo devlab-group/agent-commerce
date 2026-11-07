@@ -8,7 +8,7 @@ out the asset fields, so payments settle in Circle's devnet USDC mint.
 The gateway loads Solana support only when a Solana offer is configured:
 
 ```bash
-npm install @x402/svm@2.25.0 @solana/kit@5.5.1
+npm install @x402/svm@2.30.0 @solana/kit@8.6.0
 ```
 
 ## What you need

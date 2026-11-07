@@ -1,5 +1,5 @@
 // The Zod schemas for `config.yaml`: shape only, before any business rule
-import { type ZodTypeAny, z } from 'zod';
+import { z } from 'zod';
 import { X402_PAYMENT_FLOWS } from '../../payments/x402/payment-flow';
 import { ACP_WELL_KNOWN_PATH } from '../../protocols/acp/constants';
 
@@ -142,7 +142,9 @@ const AcpIdempotencySchema = z
 
 // Operation names are checked against `ACP_CHECKOUT_OPERATIONS` in the
 // business pass, which names a missing or misspelled operation
-const AcpCheckoutSchema = z.object({ operations: z.record(z.string().min(1)) }).strict();
+const AcpCheckoutSchema = z
+  .object({ operations: z.record(z.string(), z.string().min(1)) })
+  .strict();
 
 // Optional discovery metadata, omitted when not configured
 const AcpDiscoverySchema = z
@@ -228,7 +230,7 @@ const PricingSchema = z.discriminatedUnion('type', [
     .strict(),
 ]);
 
-const JsonSchemaValueSchema: ZodTypeAny = z.record(z.string(), z.unknown());
+const JsonSchemaValueSchema = z.record(z.string(), z.unknown());
 
 // Settlement network, payee and token, resolved by x402/options.ts. Network
 // and payee fields follow the SDK's `PaymentOption`; asset fields override defaults
@@ -267,6 +269,19 @@ const ResourceEntrySchema = z
       .object({ required: z.array(z.string().min(1)).min(1) })
       .strict()
       .optional(),
+    idempotency: z
+      .object({
+        merchantKey: BooleanOrString.optional(),
+        redelivery: z
+          .object({
+            retentionHours: NumberOrString.optional(),
+            required: BooleanOrString.optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 
@@ -277,8 +292,7 @@ const ResourcesMapSchema = z.record(z.string().min(1), ResourceEntrySchema);
 const FacilitatorAuthSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('none') }).strict(),
   z.object({ type: z.literal('bearer'), token: z.string().min(1) }).strict(),
-  // Coinbase Developer Platform. Needs the optional peer `@coinbase/x402`,
-  // which signs a fresh JWT per request.
+  // Coinbase Developer Platform: the gateway signs a fresh JWT per request
   z
     .object({
       type: z.literal('cdp'),

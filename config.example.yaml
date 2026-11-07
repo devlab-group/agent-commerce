@@ -110,6 +110,15 @@ resources:
     # What the backend returns, declared in each x402 challenge before payment;
     # an HTTP delivery keeps the backend's own Content-Type when it is text
     # mimeType: application/json
+    # Experimental paid retries, off by default. merchantKey sends the backend
+    # an Idempotency-Key derived from the purchase. redelivery stores the
+    # response, so a retry with the buyer's key gets it without another charge.
+    # See docs/configuration.md#resources.
+    # idempotency:
+    #   merchantKey: true
+    #   redelivery:
+    #     retentionHours: 24
+    #     required: false
 
 payments:
   x402:

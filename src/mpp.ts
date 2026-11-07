@@ -7,8 +7,7 @@
  *
  * MPP checks the credential locally, then verifies and settles through the x402
  * facilitator named in its options. That install covers the local facilitator
- * and remote facilitators with `none` or `bearer` auth; `auth.type: cdp` also
- * needs `@coinbase/x402`.
+ * and every remote facilitator auth type.
  */
 
 export {

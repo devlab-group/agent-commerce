@@ -28,7 +28,6 @@ const PINS: readonly (readonly [name: string, via: string])[] = [
   ['@x402/svm', 'payments/x402'],
   ['@solana/kit', 'payments/x402'],
   ['@x402/near', 'payments/x402'],
-  ['@coinbase/x402', 'payments/x402'],
   ['viem', 'payments/x402'],
   ['mppx', 'payments/mpp'],
   ['jose', 'authorization/ap2'],

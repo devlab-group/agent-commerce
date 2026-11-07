@@ -63,24 +63,25 @@ function merge(base: unknown, patch: unknown): unknown {
 }
 
 // Every key path the config schema accepts, with `*` for a record key
-function schemaPaths(schema: z.ZodTypeAny, prefix: string[] = [], out = new Set<string>()) {
+function schemaPaths(schema: z.ZodType, prefix: string[] = [], out = new Set<string>()) {
   if (prefix.length > 8) return out;
   if (prefix.length > 0) out.add(prefix.join('.'));
-  const def = schema._def as Record<string, unknown>;
-  const inner = [def['innerType'], def['schema'], def['type'], def['in'], def['out']];
+  // Optional, nullable and default wrappers keep their schema in `innerType`, pipes in `in` and `out`
+  const def = schema._def as unknown as Record<string, unknown>;
+  const inner = [def['innerType'], def['in'], def['out']];
   if (schema instanceof z.ZodObject) {
-    for (const [key, value] of Object.entries(schema.shape as Record<string, z.ZodTypeAny>)) {
+    for (const [key, value] of Object.entries(schema.shape as Record<string, z.ZodType>)) {
       schemaPaths(value, [...prefix, key], out);
     }
   } else if (schema instanceof z.ZodRecord) {
-    schemaPaths(schema.valueSchema as z.ZodTypeAny, [...prefix, '*'], out);
+    schemaPaths(schema.valueType as z.ZodType, [...prefix, '*'], out);
   } else if (schema instanceof z.ZodUnion || schema instanceof z.ZodDiscriminatedUnion) {
-    for (const option of schema.options as z.ZodTypeAny[]) schemaPaths(option, prefix, out);
+    for (const option of schema.options as z.ZodType[]) schemaPaths(option, prefix, out);
   } else if (schema instanceof z.ZodIntersection) {
-    schemaPaths(schema._def.left, prefix, out);
-    schemaPaths(schema._def.right, prefix, out);
+    schemaPaths(schema._def.left as z.ZodType, prefix, out);
+    schemaPaths(schema._def.right as z.ZodType, prefix, out);
   } else if (schema instanceof z.ZodLazy) {
-    schemaPaths(schema.schema, prefix, out);
+    schemaPaths(schema.unwrap() as z.ZodType, prefix, out);
   } else if (!(schema instanceof z.ZodArray)) {
     for (const next of inner) if (next instanceof z.ZodType) schemaPaths(next, prefix, out);
   }

@@ -8,6 +8,7 @@ import {
   type Pricing,
   RESERVED_INPUT_FIELDS,
 } from '../../core';
+import { MAX_REDELIVERY_RETENTION_HOURS } from '../../core/execution/pipeline/retry';
 import { MPP_PROFILE } from '../../payments/mpp/constants';
 import { MCP_TOOL_NAME_PATTERN } from '../../protocols/mcp/constants';
 import { normalizeResourceAuthorization } from './ap2';
@@ -25,12 +26,13 @@ import {
   validateResourceSchemaKeywords,
 } from './resource-schema';
 import type { NormalizedProtocols } from './types';
-import { toNumber } from './values';
+import { toBoolean, toNumber } from './values';
 import type { NormalizedX402 } from './x402';
 
 const SUPPORTED_PROTOCOLS: ReadonlySet<string> = new Set(PROTOCOL_NAMES);
 
 const SUPPORTED_PAYMENT_METHODS: ReadonlySet<string> = new Set(PAYMENT_METHOD_NAMES);
+const DEFAULT_REDELIVERY_RETENTION_HOURS = 24;
 
 export function normalizeResource(
   id: string,
@@ -235,6 +237,8 @@ export function normalizeResource(
     );
   }
 
+  const idempotency = normalizeResourceIdempotency(id, entry, paymentMethods);
+
   const pricing: Pricing =
     entry.pricing.type === 'free'
       ? { type: 'free' }
@@ -271,6 +275,52 @@ export function normalizeResource(
     exposedVia: entry.expose as CommerceResource['exposedVia'],
     paymentMethods: paymentMethods as CommerceResource['paymentMethods'],
     ...(authorization !== undefined ? { authorization } : {}),
+    ...(idempotency !== undefined ? { idempotency } : {}),
+  };
+}
+
+function normalizeResourceIdempotency(
+  id: string,
+  entry: RawResourceEntry,
+  paymentMethods: readonly string[],
+): CommerceResource['idempotency'] {
+  const raw = entry.idempotency;
+  if (raw === undefined) return undefined;
+  const path = `resources.${id}.idempotency`;
+  const refuse = (problem: string, at: string) =>
+    new CommerceError('CONFIG_INVALID', `Resource "${id}" sets ${problem}`, {
+      details: { path: at, resourceId: id },
+    });
+  if (entry.pricing.type !== 'fixed') {
+    throw refuse('idempotency, which requires fixed pricing', path);
+  }
+  if (raw.merchantKey === undefined && raw.redelivery === undefined) {
+    throw refuse('idempotency without merchantKey or redelivery', path);
+  }
+
+  let redelivery: { readonly retentionHours: number; readonly required: boolean } | undefined;
+  if (raw.redelivery !== undefined) {
+    const required = toBoolean(raw.redelivery.required ?? false, `${path}.redelivery.required`);
+    if (required && !paymentMethods.includes('x402')) {
+      throw refuse(
+        'idempotency.redelivery.required, which requires "x402" in payments',
+        `${path}.redelivery.required`,
+      );
+    }
+    redelivery = {
+      retentionHours: toNumber(
+        raw.redelivery.retentionHours ?? DEFAULT_REDELIVERY_RETENTION_HOURS,
+        `${path}.redelivery.retentionHours`,
+        { min: 1, max: MAX_REDELIVERY_RETENTION_HOURS },
+      ),
+      required,
+    };
+  }
+  return {
+    ...(raw.merchantKey !== undefined
+      ? { merchantKey: toBoolean(raw.merchantKey, `${path}.merchantKey`) }
+      : {}),
+    ...(redelivery !== undefined ? { redelivery } : {}),
   };
 }
 

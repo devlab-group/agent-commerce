@@ -51,9 +51,14 @@ const SECRET_FIELD_NAMES = [
   'token',
 ] as const;
 
-// Credential and proof headers. The proof headers come from the wire constants,
-// so a renamed one stays redacted; `agent-authorization` carries an AP2 mandate.
-const SECRET_HEADERS = ['authorization', PAYMENT_HEADER, AUTHORIZATION_HEADER] as const;
+// Proof headers use wire constants so renames stay redacted. agent-authorization
+// carries an AP2 mandate; MPP's idempotency-key is a retry credential on redelivery resources.
+const SECRET_HEADERS = [
+  'authorization',
+  PAYMENT_HEADER,
+  AUTHORIZATION_HEADER,
+  'idempotency-key',
+] as const;
 
 export const REDACT_PATHS: readonly string[] = [
   ...SECRET_HEADERS.map((name) => `req.headers[${JSON.stringify(name)}]`),

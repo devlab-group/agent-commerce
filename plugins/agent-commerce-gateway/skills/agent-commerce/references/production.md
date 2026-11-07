@@ -59,8 +59,8 @@ payments:
         apiKeySecret: ${CDP_API_KEY_SECRET}
 ```
 
-`auth.type: cdp` needs the `@coinbase/x402` peer. For an unauthenticated
-facilitator, see
+`auth.type: cdp` signs with your CDP API key and needs no extra peer. For an
+unauthenticated facilitator, see
 [examples/base-mainnet-payai](https://github.com/devlab-group/agent-commerce/tree/master/examples/base-mainnet-payai).
 After the change, `npx --no -- agent-commerce doctor --env-file .env` prints
 `LIVE MAINNET MODE - REAL FUNDS`.

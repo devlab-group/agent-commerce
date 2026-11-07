@@ -69,7 +69,13 @@ describe('createGatewayLogger', () => {
     // Asserts the redaction, not the spelling of the path: a new header
     // constant with no path has to fail here, and rewriting an existing path
     // in another notation that still redacts must not
-    for (const header of ['authorization', PAYMENT_HEADER, AUTHORIZATION_HEADER]) {
+    for (const header of [
+      'authorization',
+      PAYMENT_HEADER,
+      AUTHORIZATION_HEADER,
+      // Redelivery makes this header a credential for the stored response
+      'idempotency-key',
+    ]) {
       const { pino: root, core } = createGatewayLogger({ level: 'info', prettyPrint: false });
       const lines = captureLines(root);
 

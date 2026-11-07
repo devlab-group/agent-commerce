@@ -30,6 +30,7 @@ export function createSettlement(ctx: PipelineContext): Settlement {
       hold,
     } = args;
     await recordStep(flow, { kind: 'settling' });
+    flow.chargeRisk = true;
     let settlement: PaymentResult;
     try {
       settlement = await provider.settle({
@@ -44,6 +45,7 @@ export function createSettlement(ctx: PipelineContext): Settlement {
       // it for retry and report the provider failure.
       const notSubmitted = notSubmittedReason(error);
       if (notSubmitted !== undefined) {
+        flow.chargeRisk = false;
         await finalizeHold(flow, hold, 'release');
         await safePersist(
           flow,
@@ -122,6 +124,7 @@ export function createSettlement(ctx: PipelineContext): Settlement {
     }
 
     if (settlement.status !== 'settled') {
+      flow.chargeRisk = false;
       await finalizeHold(flow, hold, 'release');
       await safePersist(
         flow,

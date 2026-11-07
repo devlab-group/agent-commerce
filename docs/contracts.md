@@ -231,6 +231,74 @@ persistence must not fail the commerce flow.
     challenge. A lookup failure returns `STORAGE_ERROR` without a challenge;
     a store without the method keeps the 402 response.
   - The method is experimental. The 3.0.0 migration plan makes it required.
+- 2.7.0 adds optional contracts for paid retries. Existing 2.6 resources,
+  stores and providers need no changes. The pipeline supports merchant keys
+  and client retry keys; SQLite implements claim lookup, claim owners and
+  recovery filtering. The x402 provider extracts `payment-identifier` IDs;
+  the HTTP invoke route reads MPP's `Idempotency-Key` into `retryKey`. Direct
+  pipeline requests and custom provider hooks can also supply keys.
+  - `CommerceResource.idempotency` configures paid retries. With `merchantKey`
+    enabled, the pipeline uses a derived backend `Idempotency-Key` for the paid
+    operation; an adapter's key takes precedence.
+  - `redelivery` sets a retention deadline `retentionHours` hours after the
+    initial retry check, before proof verification. `retentionHours` is an
+    integer from 1 to 8760 (one year), default 24. Config load rejects other
+    values; a directly built pipeline throws `CONFIG_INVALID` before payment
+    work. `redelivery` requires a store with the `idempotency_claims`
+    and `response_redelivery` groups. Both `merchantKey: true` and `redelivery`
+    require the `deployment` option. `createGateway` throws
+    `CONFIG_INVALID` for missing dependencies at startup; a directly built
+    pipeline throws at payment admission, before any provider call.
+    With `required` true, x402 retry-key extraction rejects a missing `id`
+    with `INPUT_INVALID` (HTTP 400). Missing required IDs, malformed IDs and
+    non-I-JSON input used with a key produce errors carrying `requestId` and
+    emit `payment.rejected`. The event's `data.reason` is the error's reason
+    token, or its code if no reason is set.
+  - `CanonicalRequest.retryKey` holds the client's key for retrying a paid
+    request. `PaymentProvider.retryKey` extracts it from a proof without I/O.
+    Treat the key as a credential: never log it or send it to a merchant or
+    facilitator.
+  - `ReceiptStore.getIdempotencyKey` reads a claim without writing. It returns
+    `undefined` for an absent or expired claim, using `claimIdempotencyKey`'s
+    expiry rule. Otherwise, it returns the same result as `claimIdempotencyKey`.
+  - `claimIdempotencyKey` takes an optional fourth argument, `owner`, an opaque,
+    non-secret tag stored with a new claim. Both `claimIdempotencyKey` and
+    `getIdempotencyKey` return it on `in-flight` and `unresolved` results.
+    Completed claims return their response instead. The tag is unavailable
+    after release or expiry. The retry gate uses the claiming proof's digest
+    as the tag and answers only that proof before verification. A store that
+    omits `owner` still works, but every proof must be verified before an
+    unfinished claim is refused.
+  - A claim sweep deletes expired `completed` claims and expired `unresolved`
+    claims on `payment:` endpoints, which hold client retry keys. `unresolved`
+    claims on other endpoints, including ACP's, and `in-flight` claims never
+    expire. `getIdempotencyKey` must apply the same expiry rule.
+  - `recoverIdempotencyKeys` takes an optional `endpointPrefix`. Recovery
+    matches the prefix literally, including case; omit it to include all
+    endpoints. The ACP adapter passes `/` when recovering receipt-store claims.
+    At startup, `createGateway` recovers `payment:` claims with `release: false`
+    only from stores that also implement `getIdempotencyKey`. These stores must
+    honor `endpointPrefix`.
+  - `redelivered` on `DeliveredOutcome` and `DeliverySummary` indicates that
+    the request reused a stored response without another charge.
+    `toDeliverySummary` includes the field only when true; original delivery
+    summaries omit it. The outcome and its events use the redelivery request's
+    `transactionId`. The original purchase's ID remains `receipt.transactionId`
+    and is copied to `resource.delivered` as `data.originalTransactionId` when
+    available.
+  - `persistenceFailures` gains `response` when a delivered response cannot be
+    stored for its client key. The pipeline attempts to mark the claim
+    `unresolved`; in-flight and unresolved claims refuse retries with 409.
+    Resolving or reconciling the payment attempt does not change the claim.
+  - `CommerceErrorOptions.retryable` overrides the code's default from
+    `RETRYABLE_ERROR_CODES` for one error instance, in either direction. An
+    in-flight client-key 409 sets it to true so callers can wait and resend
+    without a new payment. Other refusals from the retry gate are not retryable.
+    The A2A x402 extension reports the in-flight refusal with `retryable: false`
+    and no `retryAfterSeconds`, because the proof's task has been consumed.
+    Omitting the override keeps the code's default.
+  - These fields and methods are experimental and may change in a minor
+    release. The 3.0.0 migration plan makes `getIdempotencyKey` required.
 
 ### Protocols and gateway
 
@@ -450,14 +518,14 @@ persistence must not fail the commerce flow.
 
 ## Published entry points
 
-| Entry                                  | Surface                                                             | Imported optional peers                                                                                                                                                  |
-| -------------------------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `@devlab.group/agent-commerce`         | Core contract, config, gateway, receipt store, A2A and ACP adapters | None                                                                                                                                                                     |
-| `@devlab.group/agent-commerce/ap2`     | AP2 verification and checkout signing                               | `jose`, `@sd-jwt/core`, `canonicalize`                                                                                                                                   |
-| `@devlab.group/agent-commerce/mcp`     | MCP adapter                                                         | `@modelcontextprotocol/server`                                                                                                                                           |
-| `@devlab.group/agent-commerce/mpp`     | MPP provider and profile metadata                                   | `@coinbase/x402` (only for `auth.type: cdp`), `@x402/core`, `@x402/evm`, `mppx`, `viem`                                                                                  |
-| `@devlab.group/agent-commerce/x402`    | x402 provider and client proof helper                               | `@x402/core`, `@x402/evm`, `viem`; `@coinbase/x402` only for `auth.type: cdp`; `@x402/svm` and `@solana/kit` only for a Solana offer; `@x402/near` only for a NEAR offer |
-| `@devlab.group/agent-commerce/testing` | Experimental `ReceiptStore` conformance cases                       | None; imports neither a test runner nor a SQLite driver                                                                                                                  |
+| Entry                                  | Surface                                                             | Imported optional peers                                                                                                      |
+| -------------------------------------- | ------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `@devlab.group/agent-commerce`         | Core contract, config, gateway, receipt store, A2A and ACP adapters | None                                                                                                                         |
+| `@devlab.group/agent-commerce/ap2`     | AP2 verification and checkout signing                               | `jose`, `@sd-jwt/core`, `canonicalize`                                                                                       |
+| `@devlab.group/agent-commerce/mcp`     | MCP adapter                                                         | `@modelcontextprotocol/server`                                                                                               |
+| `@devlab.group/agent-commerce/mpp`     | MPP provider and profile metadata                                   | `@x402/core`, `@x402/evm`, `mppx`, `viem`                                                                                    |
+| `@devlab.group/agent-commerce/x402`    | x402 provider and client proof helper                               | `@x402/core`, `@x402/evm`, `viem`; `@x402/svm` and `@solana/kit` only for a Solana offer; `@x402/near` only for a NEAR offer |
+| `@devlab.group/agent-commerce/testing` | Experimental `ReceiptStore` conformance cases                       | None; imports neither a test runner nor a SQLite driver                                                                      |
 
 The main entry and CLI must not import optional peers. `package.json` is the
 authoritative export and dependency map.
@@ -506,7 +574,10 @@ pending task input before writing it. Hold `metadata` values under
 secret-shaped keys are redacted, as with other metadata. Idempotency bodies,
 the remaining task input and `adapterData` are stored as JSON without
 redaction so they can be replayed or resumed. Callers must keep secrets out
-of those fields.
+of those fields. For completed `redelivery` claims, the idempotency body holds
+the unencrypted paid merchant response. Expiry ends reuse; a later claim sweep
+deletes the row.
+Backups persist separately; see [security](security.md#buyer-protection).
 
 With `legacyStores`, `init()` imports each source once. Each file's rows
 and its `legacy_imports` marker commit in one transaction. Later starts skip
@@ -1065,6 +1136,11 @@ export interface CreatePaymentProofOptions {
   readonly buyerPrivateKey: `0x${string}`;
   /** One entry from PaymentRequiredEnvelope.payment.accepts, verbatim */
   readonly accepts: Readonly<Record<string, unknown>>;
+  /**
+   * `PaymentPayload.extensions`, sent outside the signature. Echo the challenge's
+   * declarations; for `payment-identifier`, add the buyer's `id` to `info`.
+   */
+  readonly extensions?: Readonly<Record<string, unknown>>;
   /** For negative tests only: a wrong amount, recipient, nonce or validity window */
   readonly overrides?: {
     readonly value?: string;

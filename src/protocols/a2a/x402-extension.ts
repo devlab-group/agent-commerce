@@ -297,10 +297,14 @@ export function paymentFailureMetadata(
       [X402_PAYMENT_RECEIPTS_KEY]: [settled],
     };
   }
-  // A backend failure before settlement keeps its own commerce error code.
-  const code = error.code.startsWith('PAYMENT_')
-    ? x402ErrorCode(error.code, error.details?.['reason'], error.details?.['network'])
-    : error.code.toLowerCase();
+  // Retry-key refusals retain their reason, including INPUT_INVALID refusals.
+  // Backend failures before settlement keep their lowercase commerce code.
+  const reason = error.details?.['reason'];
+  const code =
+    error.code.startsWith('PAYMENT_') ||
+    (typeof reason === 'string' && reason.startsWith('payment_identifier_'))
+      ? x402ErrorCode(error.code, reason, error.details?.['network'])
+      : error.code.toLowerCase();
   const failure = settlementFailure(error.details);
   const receipt =
     failure['network'] === '' && network !== undefined ? { ...failure, network } : failure;

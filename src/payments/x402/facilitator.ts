@@ -1,7 +1,6 @@
 /**
  * Shared facilitator interface and remote HTTP binding. The in-process EVM
  * binding lives in `local-facilitator.ts` to keep EVM peers out of this module.
- * `@x402/core` loads statically; `@coinbase/x402` loads only for `auth.type: cdp`.
  * Both bindings use the SDK to verify authorizations and broadcast transfers.
  *
  * Each verify or settle call gets a session with its own `transportFailed()`
@@ -19,6 +18,7 @@ import {
   type VerifyResponse,
 } from '@x402/core/types';
 import { CommerceError } from '../../core';
+import { createCdpAuthHeaders } from './cdp-auth';
 import type { FacilitatorAuth } from './guardrails';
 
 /** One verify or one settle, with its own transport-failure flag */
@@ -71,45 +71,6 @@ export interface RemoteFacilitatorOptions {
 
 // The SDK's path-keyed auth-header shape. A flat object throws inside it
 type AuthHeaderFactory = () => Promise<Record<string, Record<string, string>>>;
-
-/**
- * CDP needs a fresh JWT per request over method, host and path, which a static
- * header cannot express. The optional peer `@coinbase/x402` does the signing.
- * It is imported dynamically, so only `auth.type: cdp` pulls in the CDP SDK and
- * its Solana, axios and JOSE dependencies.
- *
- * The import starts at construction, so a missing peer fails the health check
- * before any payment needs it. A payment that arrives first fails as
- * `PAYMENT_PROVIDER_UNAVAILABLE`, never as a rejection blamed on the buyer.
- */
-function cdpAuthHeaders(apiKeyId: string, apiKeySecret: string): AuthHeaderFactory {
-  const loading = import('@coinbase/x402').then(
-    (mod) => mod.createCdpAuthHeaders(apiKeyId, apiKeySecret),
-    (cause: unknown) => {
-      throw new CommerceError(
-        'CONFIG_INVALID',
-        'x402 provider: facilitator.auth.type is "cdp", which needs the optional peer ' +
-          '"@coinbase/x402". Install it (npm install @coinbase/x402), or use a facilitator ' +
-          'that accepts a static token with auth.type "bearer".',
-        { cause },
-      );
-    },
-  );
-  // Nothing awaits this before the first call, so without a handler a failed
-  // import would be an unhandled rejection at startup
-  loading.catch(() => {});
-
-  return async () => {
-    const create = await loading;
-    if (!create) {
-      throw new CommerceError(
-        'PAYMENT_PROVIDER_UNAVAILABLE',
-        'x402 provider: @coinbase/x402 returned no auth-header factory',
-      );
-    }
-    return (await create()) as Record<string, Record<string, string>>;
-  };
-}
 
 /**
  * A 400 from `/verify` whose body names an `invalidReason` is the facilitator
@@ -174,7 +135,9 @@ export function createRemoteFacilitatorBinding(
       return { verify: headers, settle: headers, supported: headers };
     };
   } else if (auth.type === 'cdp') {
-    createAuthHeaders = cdpAuthHeaders(auth.apiKeyId, auth.apiKeySecret);
+    // CDP JWTs bind method, host and path. Unreadable secrets cause
+    // PAYMENT_PROVIDER_UNAVAILABLE during payment, rather than a payer rejection.
+    createAuthHeaders = createCdpAuthHeaders(auth.apiKeyId, auth.apiKeySecret);
   }
 
   const client = new HTTPFacilitatorClient({

@@ -18,10 +18,15 @@ export interface Flow {
   readonly persistenceFailures: PersistenceFailure[];
   /** True when the reserved attempt matches this ID and the store provides recordTransactionStep */
   journaled: boolean;
+  /**
+   * Set before calling provider.settle. Cleared on confirmed non-submission
+   * or a non-settled result; unknown outcomes keep it true.
+   */
+  chargeRisk: boolean;
 }
 
 export function createFlow(request: CanonicalRequest, transactionId: string): Flow {
-  return { request, transactionId, persistenceFailures: [], journaled: false };
+  return { request, transactionId, persistenceFailures: [], journaled: false, chargeRisk: false };
 }
 
 /** Snapshot failure labels for events and outcomes, omitting the field when empty */
@@ -73,7 +78,7 @@ export function newTransaction(
   resource: CommerceResource,
   requirement: PaymentRequirement,
   verification: PaymentResult,
-  validInput: unknown,
+  digest: string | undefined,
   authorization: NewTransaction['authorization'],
 ): NewTransaction {
   const raw = verification.metadata?.[RECONCILIATION_METADATA_KEY];
@@ -81,7 +86,6 @@ export function newTransaction(
   const expiresAt = typeof locator?.['expiresAt'] === 'string' ? locator['expiresAt'] : undefined;
   const network = verification.network ?? requirement.network;
   const asset = verification.asset ?? requirement.asset;
-  const digest = inputDigest(validInput);
   return {
     id: flow.transactionId,
     protocol: flow.request.protocol,

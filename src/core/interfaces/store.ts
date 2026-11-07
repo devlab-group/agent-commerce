@@ -222,15 +222,20 @@ export interface ReceiptStore {
    * Idempotency claims for protocol adapters. A store must implement all three
    * methods or none. Experimental: may change in a minor release.
    *
-   * Atomically claim `scope` after deleting `completed` claims whose
-   * `expiresAt` has passed. Other states do not expire. Return `reserved` for
-   * a new scope, or `conflict` for a different `fingerprint`, regardless of
-   * the existing claim's state.
+   * Atomically claim `scope` after deleting expired `completed` claims and
+   * expired `unresolved` claims on `PAYMENT_KEY_ENDPOINT_PREFIX` endpoints.
+   * Expiry occurs at `expiresAt`; other claims do not expire. Return `reserved`
+   * for a new scope, or `conflict` for a different `fingerprint` in any state.
+   *
+   * New claims retain `owner`, an opaque non-secret tag returned with
+   * `in-flight` and `unresolved` results. Completed claims return their response
+   * instead; the tag is unavailable after release or expiry.
    */
   claimIdempotencyKey?(
     scope: IdempotencyScope,
     fingerprint: string,
     expiresAt: IsoTimestamp,
+    owner?: string,
   ): Promise<IdempotencyClaim>;
   /** Record a claim's outcome. Experimental: may change in a minor release */
   updateIdempotencyKey?(scope: IdempotencyScope, update: IdempotencyUpdate): Promise<void>;
@@ -240,7 +245,20 @@ export interface ReceiptStore {
    * changed. Assumes one gateway per store. Experimental: may change in a
    * minor release.
    */
-  recoverIdempotencyKeys?(options: { readonly release: boolean }): Promise<number>;
+  recoverIdempotencyKeys?(options: {
+    readonly release: boolean;
+    /** Match endpoints by a literal, case-sensitive prefix; omit to include all endpoints */
+    readonly endpointPrefix?: string;
+  }): Promise<number>;
+  /**
+   * Read a claim without writing. Return `undefined` if the claim is absent
+   * or expired under `claimIdempotencyKey`'s rule. Otherwise, return the same
+   * result as `claimIdempotencyKey`. Experimental: may change in a minor release.
+   */
+  getIdempotencyKey?(
+    scope: IdempotencyScope,
+    fingerprint: string,
+  ): Promise<IdempotencyClaim | undefined>;
 
   /**
    * Authorization holds for authorization providers. A store must implement

@@ -7,6 +7,7 @@ import {
   type AuthorizationProvider,
   type BackendExecutor,
   type Clock,
+  CommerceError,
   type CommerceResource,
   type ExecutionPipeline,
   type IdGenerator,
@@ -18,12 +19,15 @@ import {
   type ResourceRegistry,
   systemClock,
 } from '../core';
+import { PAYMENT_KEY_ENDPOINT_PREFIX } from '../core/domain/store-records';
 import {
+  assertRetrySupport,
   createExecutionPipeline,
   createResourceRegistry,
   createStoreEventSink,
   HttpBackendExecutor,
 } from '../core/execution';
+import { hasMethodGroup } from '../core/store-method-groups';
 import { buildAccessControlHook } from './access-control';
 import {
   type AdapterRuntime,
@@ -92,6 +96,32 @@ function withProviderBackedMethodsFirst(
     : resource;
 }
 
+// Mark interrupted payment claims unresolved: a retry then returns 409 after a possible charge.
+// Require getIdempotencyKey too: the retry gate cannot write payment claims without it, and older
+// claim stores may ignore endpointPrefix and mark ACP claims unresolved.
+async function recoverPaymentKeys(store: ReceiptStore, logger: Logger): Promise<void> {
+  if (
+    !hasMethodGroup(store, 'idempotency_claims') ||
+    !hasMethodGroup(store, 'response_redelivery')
+  ) {
+    return;
+  }
+  let recovered: number;
+  try {
+    recovered = await store.recoverIdempotencyKeys({
+      release: false,
+      endpointPrefix: PAYMENT_KEY_ENDPOINT_PREFIX,
+    });
+  } catch (error) {
+    throw new CommerceError('STORAGE_ERROR', 'Payment retry keys could not be recovered', {
+      cause: error,
+    });
+  }
+  if (recovered > 0) {
+    logger.warn({ recovered }, 'Payment retry keys left in flight are now unresolved');
+  }
+}
+
 export async function createGateway(options: GatewayOptions): Promise<GatewayInstance> {
   const clock = options.clock ?? systemClock;
   const ids = options.ids ?? createDefaultIdGenerator();
@@ -105,6 +135,13 @@ export async function createGateway(options: GatewayOptions): Promise<GatewayIns
       withProviderBackedMethodsFirst(resource, options.paymentProviders),
     ),
   );
+  // Validate retry dependencies before accepting requests. Recover payment keys even
+  // when no resource enables redelivery; removing the option then leaves no keys in flight.
+  for (const resource of resources.list()) {
+    assertRetrySupport(resource, options.store, options.config.merchant.publicBaseUrl);
+  }
+  await recoverPaymentKeys(options.store, logger);
+
   const events = createStoreEventSink({ store: options.store, logger });
   const pipeline = createExecutionPipeline({
     resources,
@@ -116,6 +153,7 @@ export async function createGateway(options: GatewayOptions): Promise<GatewayIns
     logger,
     clock,
     ids,
+    deployment: options.config.merchant.publicBaseUrl,
   });
 
   const server = Fastify({

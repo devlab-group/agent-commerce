@@ -7,10 +7,12 @@ import type {
   PendingTask,
   ReceiptStore,
 } from '../../core';
+import { PAYMENT_KEY_ENDPOINT_PREFIX } from '../../core/domain/store-records';
 import { STORE_METHOD_GROUPS, type StoreGroupMethods } from '../../core/store-method-groups';
 import { type CaseSpec, isoAt } from './support';
 
 const CLAIMS = STORE_METHOD_GROUPS.idempotency_claims;
+const CLAIM_READS = [...CLAIMS, ...STORE_METHOD_GROUPS.response_redelivery];
 const HOLDS = STORE_METHOD_GROUPS.authorization_holds;
 const TASKS = STORE_METHOD_GROUPS.pending_tasks;
 
@@ -19,9 +21,11 @@ const DAY = 24 * 60 * MINUTE;
 
 // Cases list these methods in `uses`; runners must skip cases missing them
 type Claims = StoreGroupMethods<'idempotency_claims'>;
+type ClaimReads = Claims & StoreGroupMethods<'response_redelivery'>;
 type Holds = StoreGroupMethods<'authorization_holds'>;
 type Tasks = StoreGroupMethods<'pending_tasks'>;
 const claims = (store: ReceiptStore) => store as ReceiptStore & Claims;
+const claimReads = (store: ReceiptStore) => store as ReceiptStore & ClaimReads;
 const holds = (store: ReceiptStore) => store as ReceiptStore & Holds;
 const tasks = (store: ReceiptStore) => store as ReceiptStore & Tasks;
 
@@ -165,6 +169,111 @@ const CLAIM_CASES: readonly CaseSpec[] = [
     },
   },
   {
+    name: 'reading an idempotency scope answers as a claim would and creates nothing',
+    uses: CLAIM_READS,
+    async run({ store }) {
+      const s = claimReads(store);
+      assert.equal(await s.getIdempotencyKey(scope('k1'), 'fp'), undefined);
+      assert.deepEqual(await s.claimIdempotencyKey(scope('k1'), 'fp', isoAt(DAY)), {
+        kind: 'reserved',
+      });
+
+      assert.deepEqual(await s.getIdempotencyKey(scope('k1'), 'fp'), { kind: 'in-flight' });
+      assert.deepEqual(await s.getIdempotencyKey(scope('k1'), 'other'), { kind: 'conflict' });
+
+      await s.updateIdempotencyKey(scope('k1'), { kind: 'unresolved' });
+      assert.deepEqual(await s.getIdempotencyKey(scope('k1'), 'fp'), { kind: 'unresolved' });
+      assert.deepEqual(await s.getIdempotencyKey(scope('k1'), 'other'), { kind: 'conflict' });
+
+      await s.claimIdempotencyKey(scope('k2'), 'fp', isoAt(DAY));
+      await s.updateIdempotencyKey(scope('k2'), {
+        kind: 'completed',
+        status: 201,
+        body: { id: 'cs_1' },
+      });
+      assert.deepEqual(await s.getIdempotencyKey(scope('k2'), 'fp'), {
+        kind: 'replay',
+        status: 201,
+        body: { id: 'cs_1' },
+      });
+    },
+  },
+  {
+    name: 'an expired completed claim reads as absent, and other checkout claims never expire',
+    uses: CLAIM_READS,
+    async run({ store, clock }) {
+      const s = claimReads(store);
+      await s.claimIdempotencyKey(scope('done'), 'fp', isoAt(MINUTE));
+      await s.updateIdempotencyKey(scope('done'), { kind: 'completed', status: 200, body: {} });
+      await s.claimIdempotencyKey(scope('running'), 'fp', isoAt(MINUTE));
+      await s.claimIdempotencyKey(scope('unknown'), 'fp', isoAt(MINUTE));
+      await s.updateIdempotencyKey(scope('unknown'), { kind: 'unresolved' });
+
+      clock.advance(MINUTE - 1);
+      assert.equal((await s.getIdempotencyKey(scope('done'), 'fp'))?.kind, 'replay');
+
+      clock.advance(1);
+      assert.equal(await s.getIdempotencyKey(scope('done'), 'fp'), undefined);
+      assert.equal(await s.getIdempotencyKey(scope('done'), 'other'), undefined);
+      assert.deepEqual(await s.getIdempotencyKey(scope('running'), 'fp'), { kind: 'in-flight' });
+      assert.deepEqual(await s.getIdempotencyKey(scope('unknown'), 'fp'), { kind: 'unresolved' });
+    },
+  },
+  {
+    name: 'an expired unresolved payment key reads as absent and can be claimed again',
+    uses: CLAIM_READS,
+    async run({ store, clock }) {
+      const s = claimReads(store);
+      const paid = scope('paid', `${PAYMENT_KEY_ENDPOINT_PREFIX}report`);
+      await s.claimIdempotencyKey(paid, 'fp', isoAt(MINUTE));
+      await s.updateIdempotencyKey(paid, { kind: 'unresolved' });
+      await s.claimIdempotencyKey(scope('acp'), 'fp', isoAt(MINUTE));
+      await s.updateIdempotencyKey(scope('acp'), { kind: 'unresolved' });
+
+      clock.advance(MINUTE - 1);
+      assert.deepEqual(await s.getIdempotencyKey(paid, 'fp'), { kind: 'unresolved' });
+
+      clock.advance(1);
+      assert.equal(await s.getIdempotencyKey(paid, 'fp'), undefined);
+      assert.deepEqual(await s.getIdempotencyKey(scope('acp'), 'fp'), { kind: 'unresolved' });
+      assert.deepEqual(await s.claimIdempotencyKey(paid, 'fp', isoAt(DAY)), { kind: 'reserved' });
+      assert.deepEqual(await s.claimIdempotencyKey(scope('acp'), 'fp', isoAt(DAY)), {
+        kind: 'unresolved',
+      });
+    },
+  },
+  {
+    name: 'an unfinished claim returns its owner until it completes, and a conflict never does',
+    uses: CLAIM_READS,
+    async run({ store }) {
+      const s = claimReads(store);
+      const owned = { kind: 'in-flight', owner: 'proof-1' } as const;
+      assert.deepEqual(await s.claimIdempotencyKey(scope('k1'), 'fp', isoAt(DAY), 'proof-1'), {
+        kind: 'reserved',
+      });
+      assert.deepEqual(
+        await s.claimIdempotencyKey(scope('k1'), 'fp', isoAt(DAY), 'proof-2'),
+        owned,
+      );
+      assert.deepEqual(await s.getIdempotencyKey(scope('k1'), 'fp'), owned);
+      assert.deepEqual(await s.getIdempotencyKey(scope('k1'), 'other'), { kind: 'conflict' });
+
+      assert.equal(await s.recoverIdempotencyKeys({ release: false }), 1);
+      assert.deepEqual(await s.getIdempotencyKey(scope('k1'), 'fp'), {
+        kind: 'unresolved',
+        owner: 'proof-1',
+      });
+
+      await s.claimIdempotencyKey(scope('k2'), 'fp', isoAt(DAY), 'proof-3');
+      await s.updateIdempotencyKey(scope('k2'), { kind: 'completed', status: 200, body: 'ok' });
+      assert.deepEqual(await s.getIdempotencyKey(scope('k2'), 'fp'), {
+        kind: 'replay',
+        status: 200,
+        body: 'ok',
+      });
+    },
+  },
+  {
     name: 'recovery marks in-flight claims unresolved and counts them',
     uses: CLAIMS,
     async run({ store }) {
@@ -198,6 +307,66 @@ const CLAIM_CASES: readonly CaseSpec[] = [
       assert.deepEqual(await s.claimIdempotencyKey(scope('unknown'), 'fp', isoAt(DAY)), {
         kind: 'unresolved',
       });
+    },
+  },
+  {
+    name: 'recovery without an endpoint prefix reaches every endpoint',
+    uses: CLAIMS,
+    async run({ store }) {
+      const s = claims(store);
+      const paid = scope('b', 'payment:report');
+      await s.claimIdempotencyKey(scope('a'), 'fp', isoAt(DAY));
+      await s.claimIdempotencyKey(paid, 'fp', isoAt(DAY));
+
+      assert.equal(await s.recoverIdempotencyKeys({ release: false }), 2);
+      assert.deepEqual(await s.claimIdempotencyKey(scope('a'), 'fp', isoAt(DAY)), {
+        kind: 'unresolved',
+      });
+      assert.deepEqual(await s.claimIdempotencyKey(paid, 'fp', isoAt(DAY)), {
+        kind: 'unresolved',
+      });
+    },
+  },
+  {
+    name: 'recovery with an endpoint prefix leaves other endpoints alone',
+    uses: CLAIM_READS,
+    async run({ store }) {
+      const s = claimReads(store);
+      const checkout = scope('a');
+      const paid = scope('b', 'payment:report');
+      const running = scope('c', 'payment:report');
+      await s.claimIdempotencyKey(checkout, 'fp', isoAt(DAY));
+      await s.claimIdempotencyKey(paid, 'fp', isoAt(DAY));
+
+      const marked = { release: false, endpointPrefix: 'payment:' };
+      assert.equal(await s.recoverIdempotencyKeys(marked), 1);
+      assert.deepEqual(await s.getIdempotencyKey(paid, 'fp'), { kind: 'unresolved' });
+      assert.deepEqual(await s.getIdempotencyKey(checkout, 'fp'), { kind: 'in-flight' });
+
+      await s.claimIdempotencyKey(running, 'fp', isoAt(DAY));
+      assert.equal(await s.recoverIdempotencyKeys({ release: true, endpointPrefix: '/' }), 1);
+      assert.equal(await s.getIdempotencyKey(checkout, 'fp'), undefined);
+      assert.deepEqual(await s.getIdempotencyKey(running, 'fp'), { kind: 'in-flight' });
+      assert.deepEqual(await s.getIdempotencyKey(paid, 'fp'), { kind: 'unresolved' });
+    },
+  },
+  {
+    name: 'an endpoint prefix is literal text',
+    uses: CLAIM_READS,
+    async run({ store }) {
+      const s = claimReads(store);
+      const paid = scope('a', 'payment:report_1');
+      await s.claimIdempotencyKey(paid, 'fp', isoAt(DAY));
+
+      const misses = ['%', 'payment%', 'pay_ent:', 'PAYMENT:', 'report', 'payment:report_12'];
+      for (const endpointPrefix of misses) {
+        const changed = await s.recoverIdempotencyKeys({ release: true, endpointPrefix });
+        assert.equal(changed, 0, endpointPrefix);
+      }
+      assert.deepEqual(await s.getIdempotencyKey(paid, 'fp'), { kind: 'in-flight' });
+
+      const whole = { release: true, endpointPrefix: 'payment:report_1' };
+      assert.equal(await s.recoverIdempotencyKeys(whole), 1);
     },
   },
   {

@@ -21,6 +21,7 @@ import {
 } from './fee-payer';
 import { createHealthCheck } from './health';
 import { resolveOffers } from './offers';
+import { paymentRetryKey } from './payment-id';
 import { createQuoteIssuer, QUOTE_EXTENSION, QUOTE_REQUEST_SCHEME } from './quote';
 import { createReconcile } from './reconcile';
 import { createRequirementBuilders } from './requirement';
@@ -168,6 +169,7 @@ export function createX402PaymentProvider(
     createRequirement,
     // A single offer needs no selection
     ...(severalOffers ? { selectRequirement } : {}),
+    retryKey: paymentRetryKey,
     verify,
     settle,
     reconcile: createReconcile(ctx),

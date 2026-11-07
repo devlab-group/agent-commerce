@@ -1,5 +1,5 @@
-// A failed receipt write adds receiptCommitted: false while keeping receiptId;
-// other persistence failures leave the wire format unchanged
+// Receipt failures add receiptCommitted: false while retaining receiptId.
+// Redelivery adds redelivered: true; other persistence failures leave the summary unchanged.
 import { describe, expect, it } from 'vitest';
 import { type DeliveredOutcome, toDeliverySummary } from '../../../../src/core';
 
@@ -44,6 +44,14 @@ describe('toDeliverySummary', () => {
       persistenceFailures: ['payment-attempt', 'journal'],
     });
     expect(JSON.stringify(summary)).toBe(UNCHANGED);
+  });
+
+  it('marks a redelivery and leaves redelivered: false out of the summary', () => {
+    expect(toDeliverySummary({ ...outcome, redelivered: true })).toStrictEqual({
+      ...JSON.parse(UNCHANGED),
+      redelivered: true,
+    });
+    expect(JSON.stringify(toDeliverySummary({ ...outcome, redelivered: false }))).toBe(UNCHANGED);
   });
 
   it('keeps the receipt id and adds receiptCommitted: false when the receipt write failed', () => {

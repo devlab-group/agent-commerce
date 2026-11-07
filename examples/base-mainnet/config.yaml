@@ -105,9 +105,8 @@ payments:
       # required to be something other than `none` on mainnet, unless
       # allowUnauthenticatedFacilitator is set (see examples/base-mainnet-payai)
       #
-      # `cdp` needs the optional peer @coinbase/x402, which signs a fresh JWT
-      # per request. For any facilitator that takes a static token, set its
-      # url and use:
+      # `cdp` signs each request with a fresh JWT using your CDP API key.
+      # For a facilitator with a static token, set its url and use:
       #   auth:
       #     type: bearer
       #     token: ${X402_FACILITATOR_TOKEN}

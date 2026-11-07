@@ -140,6 +140,7 @@ interface CanonicalRequest {
     readonly receivedAt: string;
     readonly requestId: string;
     readonly resourceId: string;
+    readonly retryKey?: string;
   }
 
 interface Clock {
@@ -164,6 +165,7 @@ interface CommerceErrorOptions {
     readonly httpStatus?: number;
     readonly requestId?: string;
     readonly resourceId?: string;
+    readonly retryable?: boolean;
   }
 
 interface CommerceEvent {
@@ -200,6 +202,7 @@ interface CommerceResource {
     readonly exposedVia: ReadonlyArray<ProtocolName>;
     readonly handler: BackendHandler;
     readonly id: string;
+    readonly idempotency?: { readonly merchantKey?: boolean; readonly redelivery?: { readonly retentionHours: number; readonly required: boolean; }; };
     readonly inputSchema?: JsonSchema;
     readonly name: string;
     readonly outputSchema?: JsonSchema;
@@ -216,6 +219,7 @@ interface DeliveredOutcome {
     readonly payment?: PaymentResult;
     readonly persistenceFailures?: ReadonlyArray<PersistenceFailure>;
     readonly receipt: CommerceReceipt;
+    readonly redelivered?: boolean;
     readonly requestId: string;
     readonly resourceId: string;
     readonly transactionId?: string;
@@ -226,6 +230,7 @@ interface DeliverySummary {
     readonly payment?: { readonly status: "verified" | "settled" | "rejected"; readonly amount: DecimalAmount; readonly currency: string; readonly externalReference?: string; readonly network?: string; };
     readonly receiptCommitted?: false;
     readonly receiptId: string;
+    readonly redelivered?: boolean;
     readonly requestId: string;
     readonly resourceId: string;
   }
@@ -379,6 +384,7 @@ interface PaymentProvider {
     readonly descriptor: AdapterDescriptor;
     readonly name: PaymentMethodName;
     reconcile?: (context: PaymentReconciliationContext) => Promise<PaymentReconciliationResult>;
+    retryKey?: (context: { readonly resource: CommerceResource; readonly submission: PaymentSubmission; }) => string | undefined;
     selectRequirement?: (context: PaymentVerificationContext) => Promise<PaymentRequirement>;
     settle: (context: PaymentSettlementContext) => Promise<PaymentResult>;
     verify: (context: PaymentVerificationContext) => Promise<PaymentResult>;
@@ -503,13 +509,14 @@ interface ReceiptListOptions {
 
 interface ReceiptStore {
     appendEvent: (event: CommerceEvent) => Promise<void>;
-    claimIdempotencyKey?: (scope: IdempotencyScope, fingerprint: string, expiresAt: IsoTimestamp) => Promise<IdempotencyClaim>;
+    claimIdempotencyKey?: (scope: IdempotencyScope, fingerprint: string, expiresAt: IsoTimestamp, owner?: string) => Promise<IdempotencyClaim>;
     close: () => Promise<void>;
     countReceipts: () => Promise<number>;
     countUncertainPaymentAttempts: () => Promise<number>;
     countUndeliveredReceipts: () => Promise<number>;
     findPaymentAttemptByReplayKey?: (replayKey: string) => Promise<PaymentAttempt | undefined>;
     getAuthorizationHoldState?: (reference: string) => Promise<AuthorizationHoldState | undefined>;
+    getIdempotencyKey?: (scope: IdempotencyScope, fingerprint: string) => Promise<IdempotencyClaim | undefined>;
     getPaymentAttempt?: (id: string) => Promise<PaymentAttempt | undefined>;
     getPendingTask?: (id: string) => Promise<PendingTask | undefined>;
     getReceipt: (id: string) => Promise<CommerceReceipt | undefined>;
@@ -524,7 +531,7 @@ interface ReceiptStore {
     putPendingTask?: (task: PendingTask, options: { readonly maxTasks: number; }) => Promise<boolean>;
     readonly descriptor: AdapterDescriptor;
     recordTransactionStep?: (step: TransactionStep) => Promise<void>;
-    recoverIdempotencyKeys?: (options: { readonly release: boolean; }) => Promise<number>;
+    recoverIdempotencyKeys?: (options: { readonly release: boolean; readonly endpointPrefix?: string; }) => Promise<number>;
     reserveAuthorizationHold?: (reservation: AuthorizationHoldReservation) => Promise<AuthorizationHoldResult>;
     reservePaymentAttempt: (reservation: PaymentAttemptReservation) => Promise<PaymentAttempt>;
     resolvePaymentAttempt?: (request: PaymentAttemptResolveRequest) => Promise<boolean>;
