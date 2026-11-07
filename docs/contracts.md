@@ -234,10 +234,10 @@ persistence must not fail the commerce flow.
 - The planned 2.7.0 API adds optional contracts for paid retries. Existing 2.6
   resources, stores and providers need no changes. The pipeline supports
   merchant keys and client retry keys; SQLite implements claim lookup and
-  recovery filtering. The x402 provider extracts keys from `payment-identifier`.
-  Extracting MPP's `Idempotency-Key` and mapping `redelivered` to `DeliverySummary`
-  remain planned. Direct pipeline requests and custom provider hooks can also
-  supply keys.
+  recovery filtering. The x402 provider extracts `payment-identifier` IDs;
+  the HTTP invoke route reads MPP's `Idempotency-Key` into `retryKey`.
+  Mapping `redelivered` to `DeliverySummary` remains planned. Direct pipeline
+  requests and custom provider hooks can also supply keys.
   - `CommerceResource.idempotency` configures paid retries. With `merchantKey`
     enabled, the pipeline uses a derived backend `Idempotency-Key` for the paid
     operation; an adapter's key takes precedence.

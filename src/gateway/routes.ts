@@ -346,6 +346,11 @@ async function handleInvoke(
       paymentValue !== undefined && paymentMethod !== undefined
         ? { method: paymentMethod, payload: paymentValue }
         : undefined;
+    // MPP carries its retry key in Idempotency-Key, separately from the credential
+    const retryKey =
+      paymentMethod === 'mpp' && resource.idempotency?.redelivery !== undefined
+        ? mppRetryKey(request, resourceId)
+        : undefined;
 
     // Its own header rather than a reserved body field: HTTP already carries
     // the payment proof out of band, and an authorization inside the body
@@ -363,6 +368,7 @@ async function handleInvoke(
       protocol: 'http',
       receivedAt: options.clock.nowIso(),
       ...(payment !== undefined ? { payment } : {}),
+      ...(retryKey !== undefined ? { retryKey } : {}),
       ...(authorization !== undefined ? { authorization } : {}),
       ...(digest !== undefined ? { metadata: { [CONTENT_DIGEST_METADATA_KEY]: digest } } : {}),
     };
@@ -416,13 +422,22 @@ async function handleInvoke(
         encodeHeaderDocument(settlementResponse(outcome.payment)),
       );
       const receipt = outcome.payment.metadata?.['receipt'];
-      if (outcome.payment.provider === 'mpp' && typeof receipt === 'string') {
+      // On redelivery, send Payment-Receipt only for 2xx responses. Preserve the
+      // original-delivery behavior for compatibility.
+      const success = outcome.backendStatus >= 200 && outcome.backendStatus < 300;
+      if (
+        outcome.payment.provider === 'mpp' &&
+        typeof receipt === 'string' &&
+        (success || outcome.redelivered !== true)
+      ) {
         reply.header('payment-receipt', receipt);
       }
       // Payment headers identify this buyer's payment; MPP also requires
       // private caching for responses carrying `Payment-Receipt`
       reply.header('cache-control', 'private');
     }
+    // Mark redelivery with the same replay header as ACP
+    if (outcome.redelivered === true) reply.header('idempotent-replayed', 'true');
     const contentType = relayedContentType(outcome.headers?.['content-type'], outcome.body);
     if (contentType !== undefined) reply.type(contentType);
     if (typeof outcome.body === 'string') {
@@ -473,7 +488,7 @@ const PROVIDER_UNAVAILABLE_CODES: ReadonlySet<string> = new Set([
 ]);
 const PROVIDER_RETRY_AFTER_SECONDS = 5;
 
-// Codes whose MPP response body is a Problem Details document
+// These codes and payment_identifier_ reasons produce MPP Problem Details
 const MPP_PROBLEM_CODES: ReadonlySet<string> = new Set([
   'PAYMENT_INVALID',
   'PAYMENT_REPLAYED',
@@ -487,8 +502,14 @@ function sendInvokeError(
   paymentMethod: PaymentMethodName | undefined,
 ): void {
   const details = error.details;
+  const reason = typeof details?.['reason'] === 'string' ? details['reason'] : undefined;
   if (PROVIDER_UNAVAILABLE_CODES.has(error.code)) {
     reply.header('retry-after', String(PROVIDER_RETRY_AFTER_SECONDS));
+  }
+  // In-flight retry claims supply this delay so the client can wait for completion
+  const retryAfter = details?.['retryAfterSeconds'];
+  if (typeof retryAfter === 'number' && Number.isSafeInteger(retryAfter) && retryAfter >= 0) {
+    reply.header('retry-after', String(retryAfter));
   }
   // Report a settled payment even if backend delivery fails. MPP forbids a
   // `Payment-Receipt` header on error responses, so send only this summary
@@ -519,11 +540,13 @@ function sendInvokeError(
   }
 
   const envelope = toErrorEnvelope(error);
-  if (paymentMethod === 'mpp' && MPP_PROBLEM_CODES.has(error.code)) {
+  if (
+    paymentMethod === 'mpp' &&
+    (MPP_PROBLEM_CODES.has(error.code) || reason?.startsWith('payment_identifier_') === true)
+  ) {
     // RFC 9457 `status` is the HTTP status, so it replaces the envelope's
     // `status: 'error'`; the other envelope fields stay as extension members
     const { status: _envelopeStatus, ...members } = envelope;
-    const reason = typeof details?.['reason'] === 'string' ? details['reason'] : undefined;
     reply
       .header('content-type', 'application/problem+json')
       .status(error.httpStatus)
@@ -542,6 +565,21 @@ function sendInvokeError(
       ? x402RefusalStatus(error.code, error.httpStatus, details?.['reason'])
       : error.httpStatus;
   reply.status(status).send(envelope);
+}
+
+// Use ACP's printable-ASCII length limit. The key unlocks a stored response,
+// so validation errors must not quote it.
+const IDEMPOTENCY_KEY_PATTERN = /^[\x20-\x7e]{1,255}$/;
+
+function mppRetryKey(request: FastifyRequest, resourceId: string): string | undefined {
+  const value = request.headers['idempotency-key'];
+  if (value === undefined) return undefined;
+  if (typeof value === 'string' && IDEMPOTENCY_KEY_PATTERN.test(value)) return value;
+  throw new CommerceError(
+    'INPUT_INVALID',
+    'The Idempotency-Key header must be 1 to 255 printable ASCII characters',
+    { requestId: request.id, resourceId, details: { reason: 'payment_identifier_invalid' } },
+  );
 }
 
 // Each rail has its own proof header. MPP uses HTTP authentication, and an

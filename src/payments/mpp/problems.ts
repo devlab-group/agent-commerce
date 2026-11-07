@@ -1,7 +1,7 @@
 /**
- * Map MPP payment errors to the Problem Details types in
- * `draft-httpauth-payment-01`. This module has no optional peer imports, so
- * the main HTTP route can use it.
+ * Map MPP payment errors to Problem Details using `draft-httpauth-payment-01`
+ * types and generic retry-key conflicts. No optional peers are imported, so
+ * the main HTTP route can use this module.
  */
 
 export const MPP_PROBLEM_BASE_URI = 'https://paymentauth.org/problems/';
@@ -12,7 +12,8 @@ export type MppProblemType =
   | 'invalid-challenge'
   | 'payment-expired'
   | 'verification-failed'
-  | 'internal-payment-error';
+  | 'internal-payment-error'
+  | 'bad-request';
 
 const TITLES: Readonly<Record<MppProblemType, string>> = {
   'payment-required': 'Payment Required',
@@ -21,6 +22,7 @@ const TITLES: Readonly<Record<MppProblemType, string>> = {
   'payment-expired': 'Payment Expired',
   'verification-failed': 'Verification Failed',
   'internal-payment-error': 'Internal Payment Error',
+  'bad-request': 'Bad Request',
 };
 
 // Map known MPP refusal reasons to problem types; other reasons use
@@ -35,7 +37,12 @@ const REASON_TYPES: ReadonlyMap<string, MppProblemType> = new Map([
   ['challenge_already_used', 'invalid-challenge'],
   ['challenge_expired', 'payment-expired'],
   ['authorization_expired', 'payment-expired'],
+  ['payment_identifier_invalid', 'bad-request'],
 ]);
+
+// Use a generic conflict so clients do not treat a retry key's refusal as an
+// invalid challenge and risk paying again with a new key
+const RETRY_KEY_CONFLICT = { type: 'about:blank', title: 'Conflict' } as const;
 
 /** The Problem Details `type` URI and `title` for an MPP payment error */
 export function mppProblem(
@@ -43,11 +50,12 @@ export function mppProblem(
   httpStatus: number,
   reason?: string,
 ): { readonly type: string; readonly title: string } {
+  if (httpStatus === 409 && reason?.startsWith('payment_identifier_')) return RETRY_KEY_CONFLICT;
   const problem = problemType(code, httpStatus, reason);
   return { type: `${MPP_PROBLEM_BASE_URI}${problem}`, title: TITLES[problem] };
 }
 
-// Descriptions for MPP reasons and two x402 facilitator refusals
+// Descriptions for MPP, retry-key and x402 facilitator refusal reasons
 const REASON_DETAILS: ReadonlyMap<string, string> = new Map([
   ['wrong_provider', 'The challenge was issued for another payment method.'],
   ['missing_challenge', 'No challenge is available for this request.'],
@@ -82,6 +90,19 @@ const REASON_DETAILS: ReadonlyMap<string, string> = new Map([
   [
     'invalid_exact_evm_transaction_simulation_failed',
     'The transfer failed in simulation, so it was not submitted.',
+  ],
+  [
+    'payment_identifier_invalid',
+    'The Idempotency-Key header must be 1 to 255 printable ASCII characters.',
+  ],
+  [
+    'payment_identifier_conflict',
+    'The Idempotency-Key belongs to a request with other input or another payer.',
+  ],
+  ['payment_identifier_in_flight', 'A request with this Idempotency-Key is still in progress.'],
+  [
+    'payment_identifier_unresolved',
+    'The earlier request with this Idempotency-Key may have been charged and has no stored response.',
   ],
 ]);
 

@@ -20,6 +20,7 @@ describe('mppProblem', () => {
     ['PAYMENT_SETTLEMENT_FAILED', 402, 'insufficient_funds', 'verification-failed'],
     ['PAYMENT_SETTLEMENT_FAILED', 502, undefined, 'internal-payment-error'],
     ['PAYMENT_PROVIDER_UNAVAILABLE', 503, undefined, 'internal-payment-error'],
+    ['INPUT_INVALID', 400, 'payment_identifier_invalid', 'bad-request'],
   ] as const)('%s %i %s -> %s', (code, status, reason, expected) => {
     expect(mppProblem(code, status, reason).type).toBe(type(expected));
   });
@@ -32,6 +33,23 @@ describe('mppProblem', () => {
     });
   });
 
+  it.each([
+    'payment_identifier_conflict',
+    'payment_identifier_in_flight',
+    'payment_identifier_unresolved',
+  ])('answers the retry-key 409 %s with about:blank, not invalid-challenge', (reason) => {
+    expect(mppProblem('PAYMENT_REPLAYED', 409, reason)).toEqual({
+      type: 'about:blank',
+      title: 'Conflict',
+    });
+  });
+
+  it('titles a bad retry key Bad Request', () => {
+    expect(mppProblem('INPUT_INVALID', 400, 'payment_identifier_invalid').title).toBe(
+      'Bad Request',
+    );
+  });
+
   it('titles the unpaid challenge Payment Required', () => {
     expect(mppProblem('PAYMENT_REQUIRED', 402).title).toBe('Payment Required');
   });
@@ -42,6 +60,24 @@ describe('mppProblemDetail', () => {
     expect(mppProblemDetail('wrong_nonce', 'fallback')).toBe(
       'The authorization nonce is not derived from the challenge.',
     );
+  });
+
+  it.each([
+    [
+      'payment_identifier_invalid',
+      'The Idempotency-Key header must be 1 to 255 printable ASCII characters.',
+    ],
+    [
+      'payment_identifier_conflict',
+      'The Idempotency-Key belongs to a request with other input or another payer.',
+    ],
+    ['payment_identifier_in_flight', 'A request with this Idempotency-Key is still in progress.'],
+    [
+      'payment_identifier_unresolved',
+      'The earlier request with this Idempotency-Key may have been charged and has no stored response.',
+    ],
+  ])('describes the retry-key reason %s', (reason, sentence) => {
+    expect(mppProblemDetail(reason, 'fallback')).toBe(sentence);
   });
 
   it('quotes a reason it has no sentence for, without reading Object.prototype', () => {

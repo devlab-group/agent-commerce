@@ -85,9 +85,9 @@ export interface CommerceResource {
     readonly required: readonly AuthorizationMethodName[];
   };
   /**
-   * Paid retry settings, disabled when omitted. With redelivery configured,
-   * x402 reads client keys from `payment-identifier`; MPP's `Idempotency-Key`
-   * support is planned.
+   * Paid retry settings, disabled when omitted. For redelivery, the x402 provider
+   * extracts `payment-identifier` IDs; the HTTP invoke route reads MPP's
+   * `Idempotency-Key` header.
    * Experimental: may change in a minor release.
    */
   readonly idempotency?: {

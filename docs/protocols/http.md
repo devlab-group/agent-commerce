@@ -1,17 +1,17 @@
 # HTTP surface
 
-| Route                                              | Purpose                                                    |
-| -------------------------------------------------- | ---------------------------------------------------------- |
-| `GET /health`                                      | liveness                                                   |
-| `GET /ready`                                       | readiness for the store, adapters and configured providers |
-| `GET /.well-known/agent-commerce`                  | merchant, protocol and provider discovery                  |
-| `GET /api/resources`                               | canonical resource list                                    |
-| `POST /api/resources/:id/invoke`                   | invoke; returns 402 when proof is absent                   |
-| `GET /api/receipts`, `GET /api/events`             | operator audit                                             |
+| Route                                              | Purpose                                                       |
+| -------------------------------------------------- | ------------------------------------------------------------- |
+| `GET /health`                                      | liveness                                                      |
+| `GET /ready`                                       | readiness for the store, adapters and configured providers    |
+| `GET /.well-known/agent-commerce`                  | merchant, protocol and provider discovery                     |
+| `GET /api/resources`                               | canonical resource list                                       |
+| `POST /api/resources/:id/invoke`                   | invoke; returns 402 when proof is absent                      |
+| `GET /api/receipts`, `GET /api/events`             | operator audit                                                |
 | `GET /api/payment-attempts`                        | operator payment ledger; `?uncertain=true` for reconciliation |
-| `/mcp`                                             | MCP Streamable HTTP when enabled                           |
-| `/.well-known/agent-card.json`, `/a2a`             | A2A discovery and JSON-RPC when enabled                    |
-| `/.well-known/acp.json`, `/acp/checkout_sessions…` | ACP discovery and checkout when enabled                    |
+| `/mcp`                                             | MCP Streamable HTTP when enabled                              |
+| `/.well-known/agent-card.json`, `/a2a`             | A2A discovery and JSON-RPC when enabled                       |
+| `/.well-known/acp.json`, `/acp/checkout_sessions…` | ACP discovery and checkout when enabled                       |
 
 The invoke route uses the selected rail's headers:
 
@@ -43,3 +43,13 @@ retry challenge. Other outcomes:
 - A settled `PAYMENT-RESPONSE` includes `amount` in base units when the
   provider supplies it. Paid deliveries use `Cache-Control: private`; fresh
   402 challenges use `no-store`.
+- On a resource with [`idempotency.redelivery`](../configuration.md#resources)
+  (experimental), clients supply a retry key through the x402
+  [`payment-identifier`](x402.md#payment-identifier) `id` or the MPP
+  [`Idempotency-Key`](mpp.md#idempotency-key) header. Redelivery returns the
+  stored status and body, relays the stored `Content-Type` under the
+  [backend response relay rules](../security.md#backend-response-relay), and
+  includes `PAYMENT-RESPONSE`, `Cache-Control: private`
+  and `Idempotent-Replayed: true`. MPP also includes `Payment-Receipt` on 2xx
+  redeliveries. Retry-key 409s omit the challenge; only an in-flight refusal
+  includes `Retry-After`.
