@@ -219,6 +219,37 @@ const CLAIM_CASES: readonly CaseSpec[] = [
     },
   },
   {
+    name: 'an unfinished claim returns its owner until it completes, and a conflict never does',
+    uses: CLAIM_READS,
+    async run({ store }) {
+      const s = claimReads(store);
+      const owned = { kind: 'in-flight', owner: 'proof-1' } as const;
+      assert.deepEqual(await s.claimIdempotencyKey(scope('k1'), 'fp', isoAt(DAY), 'proof-1'), {
+        kind: 'reserved',
+      });
+      assert.deepEqual(
+        await s.claimIdempotencyKey(scope('k1'), 'fp', isoAt(DAY), 'proof-2'),
+        owned,
+      );
+      assert.deepEqual(await s.getIdempotencyKey(scope('k1'), 'fp'), owned);
+      assert.deepEqual(await s.getIdempotencyKey(scope('k1'), 'other'), { kind: 'conflict' });
+
+      assert.equal(await s.recoverIdempotencyKeys({ release: false }), 1);
+      assert.deepEqual(await s.getIdempotencyKey(scope('k1'), 'fp'), {
+        kind: 'unresolved',
+        owner: 'proof-1',
+      });
+
+      await s.claimIdempotencyKey(scope('k2'), 'fp', isoAt(DAY), 'proof-3');
+      await s.updateIdempotencyKey(scope('k2'), { kind: 'completed', status: 200, body: 'ok' });
+      assert.deepEqual(await s.getIdempotencyKey(scope('k2'), 'fp'), {
+        kind: 'replay',
+        status: 200,
+        body: 'ok',
+      });
+    },
+  },
+  {
     name: 'recovery marks in-flight claims unresolved and counts them',
     uses: CLAIMS,
     async run({ store }) {

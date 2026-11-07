@@ -5,6 +5,9 @@
  *
  * Only `completed` rows expire. An unresolved row blocks retries; deleting it
  * must remain an operator's decision.
+ *
+ * Unfinished rows keep the claimant's `owner` tag in `body_json`; completion
+ * replaces it with the response.
  */
 import type Database from 'better-sqlite3';
 import {
@@ -13,6 +16,7 @@ import {
   type IdempotencyScope,
   toCommerceError,
 } from '../../core';
+import { isRecord } from '../../core/is-record';
 import type { StoreGroupMethods } from '../../core/store-method-groups';
 import { storedIso } from './params';
 
@@ -42,13 +46,11 @@ const scopeParams = (scope: IdempotencyScope) => ({
 // A different fingerprint conflicts in every claim state
 function claimOf(row: ClaimRow, fingerprint: string): IdempotencyClaim {
   if (row.fingerprint !== fingerprint) return { kind: 'conflict' };
-  if (row.state === 'unresolved') return { kind: 'unresolved' };
-  if (row.state !== 'completed') return { kind: 'in-flight' };
-  return {
-    kind: 'replay',
-    status: row.status ?? 500,
-    body: row.body_json === null ? null : JSON.parse(row.body_json),
-  };
+  const body: unknown = row.body_json === null ? null : JSON.parse(row.body_json);
+  if (row.state === 'completed') return { kind: 'replay', status: row.status ?? 500, body };
+  const kind = row.state === 'unresolved' ? 'unresolved' : 'in-flight';
+  const owner = isRecord(body) ? body['owner'] : undefined;
+  return typeof owner === 'string' ? { kind, owner } : { kind };
 }
 
 export function createIdempotencyMethods(db: Database.Database, clock: Clock): IdempotencyMethods {
@@ -59,8 +61,8 @@ export function createIdempotencyMethods(db: Database.Database, clock: Clock): I
   );
   const insertClaim = db.prepare(
     `INSERT INTO idempotency_keys
-       (deployment, endpoint, idempotency_key, fingerprint, state, created_at, expires_at)
-     VALUES (@deployment, @endpoint, @idempotency_key, @fingerprint, 'in_flight', @created_at, @expires_at)`,
+       (deployment, endpoint, idempotency_key, fingerprint, state, body_json, created_at, expires_at)
+     VALUES (@deployment, @endpoint, @idempotency_key, @fingerprint, 'in_flight', @body_json, @created_at, @expires_at)`,
   );
   const expireCompleted = db.prepare(
     "DELETE FROM idempotency_keys WHERE expires_at <= ? AND state = 'completed'",
@@ -81,7 +83,12 @@ export function createIdempotencyMethods(db: Database.Database, clock: Clock): I
 
   // Sweep expired completed rows during the claim; no background worker is needed
   const claim = db.transaction(
-    (scope: IdempotencyScope, fingerprint: string, expiresAt: string): IdempotencyClaim => {
+    (
+      scope: IdempotencyScope,
+      fingerprint: string,
+      expiresAt: string,
+      owner: string | undefined,
+    ): IdempotencyClaim => {
       const now = clock.nowIso();
       expireCompleted.run(now);
       const existing = selectClaim.get(scopeParams(scope));
@@ -89,6 +96,7 @@ export function createIdempotencyMethods(db: Database.Database, clock: Clock): I
         insertClaim.run({
           ...scopeParams(scope),
           fingerprint,
+          body_json: owner !== undefined ? JSON.stringify({ owner }) : null,
           created_at: now,
           expires_at: expiresAt,
         });
@@ -99,9 +107,9 @@ export function createIdempotencyMethods(db: Database.Database, clock: Clock): I
   );
 
   return {
-    async claimIdempotencyKey(scope, fingerprint, expiresAt) {
+    async claimIdempotencyKey(scope, fingerprint, expiresAt, owner) {
       try {
-        return claim.immediate(scope, fingerprint, storedIso(expiresAt, 'expiresAt'));
+        return claim.immediate(scope, fingerprint, storedIso(expiresAt, 'expiresAt'), owner);
       } catch (err) {
         throw toCommerceError(err, 'STORAGE_ERROR', 'Failed to claim idempotency key');
       }

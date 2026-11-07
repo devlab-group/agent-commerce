@@ -108,6 +108,7 @@ describe('the conformance runner', () => {
     expect(cases.filter((c) => c.skip?.includes('getIdempotencyKey')).map((c) => c.name)).toEqual([
       'reading an idempotency scope answers as a claim would and creates nothing',
       'an expired completed claim reads as absent, and other states never expire',
+      'an unfinished claim returns its owner until it completes, and a conflict never does',
       'recovery with an endpoint prefix leaves other endpoints alone',
       'an endpoint prefix is literal text',
     ]);

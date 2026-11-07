@@ -509,7 +509,7 @@ interface ReceiptListOptions {
 
 interface ReceiptStore {
     appendEvent: (event: CommerceEvent) => Promise<void>;
-    claimIdempotencyKey?: (scope: IdempotencyScope, fingerprint: string, expiresAt: IsoTimestamp) => Promise<IdempotencyClaim>;
+    claimIdempotencyKey?: (scope: IdempotencyScope, fingerprint: string, expiresAt: IsoTimestamp, owner?: string) => Promise<IdempotencyClaim>;
     close: () => Promise<void>;
     countReceipts: () => Promise<number>;
     countUncertainPaymentAttempts: () => Promise<number>;

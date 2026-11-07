@@ -132,7 +132,8 @@ On a resource with [`idempotency.redelivery`](../configuration.md#resources)
 payment submission; a resend returns `TaskNotFoundError`. To retry, start a new
 task with the same input and submit a proof with the same `id`. Redelivery
 completes the new task with `payment-completed` and the original settlement
-entry, without another settlement. A refusal fails the task and puts its
+entry, without another settlement. If the resource requires a mandate, the new
+task must carry the same `_authorization`. A refusal fails the task and puts its
 `payment_identifier_*` reason in `x402.payment.error`. An in-flight refusal
 also consumes the task, so retry on another new task.
 

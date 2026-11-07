@@ -38,14 +38,17 @@ export interface RetryTicket {
   readonly expiresAt: string;
   /** A credential: never log it, and never send it to a merchant or facilitator */
   readonly clientKey: string;
+  /** Tags the claim; only this proof gets an answer before verification */
   readonly proofDigest: string;
+  readonly authorizationDigest?: string;
 }
 
 export interface RetryGate {
   /**
-   * Inspect retry state without changing the claim. Return a stored response
-   * for an exact proof resend, or a ticket for verification. Return `undefined`
-   * if redelivery is disabled or a proof or key is missing; unusable claims throw.
+   * Read retry state without changing the claim. For the owning proof, return
+   * the stored response or refuse an unfinished claim. Otherwise, return a
+   * ticket for verification, or `undefined` if redelivery is disabled or the
+   * proof or key is missing.
    */
   readonly open: (
     flow: Flow,
@@ -58,7 +61,8 @@ export interface RetryGate {
   /**
    * Claim the key after proof verification. Return `undefined` when this request
    * owns the purchase. Reuse a stored response only if the verified payer is
-   * defined and matches its recorded payer.
+   * defined and matches its recorded payer, and any required authorization is
+   * the one recorded with it.
    */
   readonly claim: (
     flow: Flow,
@@ -83,6 +87,7 @@ export interface RetryGate {
 // The stored row's body. Of the backend's headers, it keeps only the content type
 interface StoredDelivery {
   readonly proofDigest: string;
+  readonly authorizationDigest?: string;
   readonly payer?: string;
   readonly contentType?: string;
   readonly body: unknown;
@@ -170,6 +175,7 @@ export function createRetryGate(ctx: PipelineContext): RetryGate {
     }
 
     const { store } = support;
+    const { authorization } = request;
     const ticket: RetryTicket = {
       kind: 'retry',
       store,
@@ -184,16 +190,23 @@ export function createRetryGate(ctx: PipelineContext): RetryGate {
       ).toISOString(),
       clientKey,
       proofDigest: sha256Hex(`${payment.method}:${payment.payload}`),
+      ...(authorization !== undefined
+        ? { authorizationDigest: sha256Hex(`${authorization.method}:${authorization.payload}`) }
+        : {}),
     };
 
     const existing = await reading(flow, resource, () =>
       store.getIdempotencyKey(ticket.scope, fingerprint),
     );
-    const replay = await acceptOrRefuse(flow, resource, provider, existing);
-    if (replay === undefined) return ticket;
-    const stored = await storedDelivery(flow, resource, provider, replay);
-    return stored.proofDigest === ticket.proofDigest
-      ? redeliver(flow, resource, provider, replay.status, stored, pipelineStart)
+    // Refusing an unverified proof would reveal the key's existence or input
+    if (existing?.kind === 'in-flight' || existing?.kind === 'unresolved') {
+      if (existing.owner !== ticket.proofDigest) return ticket;
+      throw await refusal(flow, resource, provider, existing.kind);
+    }
+    if (existing?.kind !== 'replay') return ticket;
+    const stored = readStoredDelivery(existing.body);
+    return stored?.proofDigest === ticket.proofDigest && authorizes(resource, stored, ticket)
+      ? redeliver(flow, resource, provider, existing.status, stored, pipelineStart)
       : ticket;
   }
 
@@ -205,14 +218,15 @@ export function createRetryGate(ctx: PipelineContext): RetryGate {
     verification: PaymentResult,
     pipelineStart: number,
   ): Promise<DeliveredOutcome | undefined> {
-    const { scope, fingerprint, expiresAt } = ticket;
+    const { scope, fingerprint, expiresAt, proofDigest } = ticket;
     const claimed = await reading(flow, resource, () =>
-      ticket.store.claimIdempotencyKey(scope, fingerprint, expiresAt),
+      ticket.store.claimIdempotencyKey(scope, fingerprint, expiresAt, proofDigest),
     );
     const replay = await acceptOrRefuse(flow, resource, provider, claimed);
     if (replay === undefined) return undefined;
     const stored = await storedDelivery(flow, resource, provider, replay);
-    if (verification.payer === undefined || verification.payer !== stored.payer) {
+    const samePayer = verification.payer !== undefined && verification.payer === stored.payer;
+    if (!samePayer || !authorizes(resource, stored, ticket)) {
       throw await refusal(flow, resource, provider, 'conflict');
     }
     return redeliver(flow, resource, provider, replay.status, stored, pipelineStart);
@@ -228,6 +242,9 @@ export function createRetryGate(ctx: PipelineContext): RetryGate {
     const contentType = response.headers['content-type'];
     const stored: StoredDelivery = {
       proofDigest: ticket.proofDigest,
+      ...(ticket.authorizationDigest !== undefined
+        ? { authorizationDigest: ticket.authorizationDigest }
+        : {}),
       // Record the verified buyer; settlement may name a fee payer instead
       ...(verification.payer !== undefined ? { payer: verification.payer } : {}),
       // Keep only Content-Type; never persist a backend Set-Cookie header
@@ -375,14 +392,32 @@ export function createRetryGate(ctx: PipelineContext): RetryGate {
   return { open, claim, finishDelivered, finishFailed };
 }
 
+// Match required authorization by its original bytes: the purchase consumed
+// the mandate, so it cannot be verified again
+function authorizes(
+  resource: CommerceResource,
+  stored: StoredDelivery,
+  ticket: RetryTicket,
+): boolean {
+  if ((resource.authorization?.required.length ?? 0) === 0) return true;
+  return (
+    stored.authorizationDigest !== undefined &&
+    stored.authorizationDigest === ticket.authorizationDigest
+  );
+}
+
 function readStoredDelivery(value: unknown): StoredDelivery | undefined {
   if (!isRecord(value) || !Object.hasOwn(value, 'body')) return undefined;
-  const { proofDigest, payer, contentType, body, receiptId } = value;
+  const { proofDigest, authorizationDigest, payer, contentType, body, receiptId } = value;
   if (typeof proofDigest !== 'string' || typeof receiptId !== 'string') return undefined;
+  if (authorizationDigest !== undefined && typeof authorizationDigest !== 'string') {
+    return undefined;
+  }
   if (payer !== undefined && typeof payer !== 'string') return undefined;
   if (contentType !== undefined && typeof contentType !== 'string') return undefined;
   return {
     proofDigest,
+    ...(authorizationDigest !== undefined ? { authorizationDigest } : {}),
     ...(payer !== undefined ? { payer } : {}),
     ...(contentType !== undefined ? { contentType } : {}),
     body,

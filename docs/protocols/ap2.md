@@ -60,6 +60,13 @@ settlement. A backend failure under the `authorization` flow also releases the
 mandate because settlement has not started. Otherwise the settlement outcome
 determines its final state.
 
+On a resource with [`idempotency.redelivery`](../configuration.md#resources), a
+retry with the purchase's client key and original authorization submission,
+byte for byte, can retrieve the stored response. The mandate is not verified
+or reserved again because the purchase consumed it. A missing or different
+mandate prevents redelivery, as does a purchase made before the resource
+required one.
+
 ## Agent Commerce checkout profile
 
 AP2 leaves the checkout payload to the implementation. This gateway requires:

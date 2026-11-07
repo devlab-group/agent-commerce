@@ -226,11 +226,16 @@ export interface ReceiptStore {
    * `expiresAt` has passed. Other states do not expire. Return `reserved` for
    * a new scope, or `conflict` for a different `fingerprint`, regardless of
    * the existing claim's state.
+   *
+   * New claims retain `owner`, an opaque non-secret tag returned with
+   * `in-flight` and `unresolved` results. Completed claims return their response
+   * instead; the tag is unavailable after release or expiry.
    */
   claimIdempotencyKey?(
     scope: IdempotencyScope,
     fingerprint: string,
     expiresAt: IsoTimestamp,
+    owner?: string,
   ): Promise<IdempotencyClaim>;
   /** Record a claim's outcome. Experimental: may change in a minor release */
   updateIdempotencyKey?(scope: IdempotencyScope, update: IdempotencyUpdate): Promise<void>;

@@ -254,6 +254,14 @@ persistence must not fail the commerce flow.
     facilitator.
   - `ReceiptStore.getIdempotencyKey` reads a claim without writing. It returns
     `undefined` if the claim is absent or is `completed` and expired.
+  - `claimIdempotencyKey` takes an optional fourth argument, `owner`, an opaque,
+    non-secret tag stored with a new claim. Both `claimIdempotencyKey` and
+    `getIdempotencyKey` return it on `in-flight` and `unresolved` results.
+    Completed claims return their response instead. The tag is unavailable
+    after release or expiry. The retry gate uses the claiming proof's digest
+    as the tag and answers only that proof before verification. A store that
+    omits `owner` still works, but every proof must be verified before an
+    unfinished claim is refused.
   - `recoverIdempotencyKeys` takes an optional `endpointPrefix`. Recovery
     matches the prefix literally, including case; omit it to include all
     endpoints. The ACP adapter passes `/` when recovering receipt-store claims.

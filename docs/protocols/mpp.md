@@ -77,7 +77,8 @@ After delivery, reuse the key and input to retrieve the stored response without
 another charge. An exact resend of `Authorization` skips verification, so an
 expired challenge still works while the response is retained. A new credential
 must answer a fresh challenge and verify as the same payer; it is not settled
-again.
+again. Invalid credentials get the usual 402 without revealing whether the key
+exists.
 
 Make the key random and keep it secret: with the original credential, it
 unlocks the stored response. The MCP and A2A adapters do not extract this

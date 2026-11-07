@@ -55,6 +55,8 @@ const MERCHANT_KEY_FOR_ANON_PROOF =
   'c60d2bf5d522d82f49c16d5e6771ae799127a6ed083dd3c3c2dd0bc130024b6f';
 // sha256sum of x402:alice/1
 const PROOF_DIGEST = '847918077efb9a729f6444e770b7b22a980d287fff7fa938dc5814f119fff09b';
+const proofDigest = (payload: string) =>
+  createHash('sha256').update(`x402:${payload}`).digest('hex');
 
 const REDELIVERY = { redelivery: { retentionHours: 24, required: false } };
 const OPTED_IN: Partial<CommerceResource> = {
@@ -369,6 +371,63 @@ describe.each([
     expect(again.body).toEqual(first.body);
   });
 
+  it.each([
+    ['an exact resend without the mandate', 'alice/1', undefined],
+    ['a fresh proof without the mandate', 'alice/2', undefined],
+    ['a fresh proof with another mandate', 'alice/2', 'other-mandate'],
+  ])('refuses %s the purchase used, serving nothing', async (_name, payload, mandate) => {
+    const { pipeline, calls } = setup({
+      settleAfterBackend,
+      authorization: true,
+      resource: { authorization: { required: ['ap2'] } },
+    });
+    await delivered(
+      pipeline.execute(paid('alice/1', { authorization: { method: 'ap2', payload: 'mandate' } })),
+    );
+    const before = { ...calls };
+    const retried = paid(payload, {
+      ...(mandate !== undefined ? { authorization: { method: 'ap2', payload: mandate } } : {}),
+    });
+
+    const error = await refusal(pipeline.execute(retried));
+
+    // The fake accepts the spent proof to exercise retry conflict handling
+    expect(error).toMatchObject({ code: 'PAYMENT_REPLAYED', httpStatus: 409 });
+    expect(error.details).toEqual({ reason: 'payment_identifier_conflict' });
+    expect(JSON.stringify(toErrorEnvelope(error))).not.toContain('paid data');
+    expect(calls).toMatchObject({
+      settle: before.settle,
+      backend: before.backend,
+      ap2: before.ap2,
+    });
+  });
+
+  it.each([
+    ['an exact resend without a mandate', 'alice/1', false],
+    ['a fresh proof with a mandate', 'alice/2', true],
+  ])(
+    'serves %s nothing once the resource requires a mandate it did not when it paid',
+    async (_name, payload, withMandate) => {
+      const path = join(mkdtempSync(join(tmpdir(), 'retry-gate-')), 'receipts.sqlite');
+      const before = setup({ settleAfterBackend, path });
+      await delivered(before.pipeline.execute(paid()));
+      const after = setup({
+        settleAfterBackend,
+        path,
+        authorization: true,
+        resource: { authorization: { required: ['ap2'] } },
+      });
+      const authorization = { method: 'ap2', payload: 'mandate' } as const;
+      const retried = paid(payload, withMandate ? { authorization } : {});
+
+      const error = await refusal(after.pipeline.execute(retried));
+
+      // The fake accepts the spent proof to exercise retry conflict handling
+      expect(error.details).toEqual({ reason: 'payment_identifier_conflict' });
+      expect(after.calls).toMatchObject({ settle: 0, backend: 0 });
+    },
+  );
+
   it('rebuilds the original outcome, apart from the request id and duration', async () => {
     const { pipeline } = setup({
       settleAfterBackend,
@@ -459,16 +518,31 @@ describe.each([
     expect((await row(store))?.kind).toBe('replay');
   });
 
-  it('refuses the same key with other input before any provider call', async () => {
+  it('refuses the same key with other input once the proof verifies, settling nothing', async () => {
     const { pipeline, calls } = setup({ settleAfterBackend });
     await delivered(pipeline.execute(paid()));
     const before = { ...calls };
 
-    const error = await refusal(pipeline.execute(paid('alice/1', { input: { city: 'Oslo' } })));
+    const error = await refusal(pipeline.execute(paid('alice/2', { input: { city: 'Oslo' } })));
 
     expect(error).toMatchObject({ code: 'PAYMENT_REPLAYED', httpStatus: 409 });
     expect(error.details).toEqual({ reason: 'payment_identifier_conflict' });
-    expect(calls).toEqual(before);
+    expect(calls).toEqual({
+      ...before,
+      createRequirement: before.createRequirement + 1,
+      verify: before.verify + 1,
+    });
+  });
+
+  it('tells a junk proof with a used key and other input nothing about the key', async () => {
+    const { pipeline, calls } = setup({ settleAfterBackend });
+    await delivered(pipeline.execute(paid()));
+
+    const error = await refusal(pipeline.execute(paid('forged/1', { input: { city: 'Oslo' } })));
+
+    expect(error.code).toBe('PAYMENT_INVALID');
+    expect(error.details?.['reason']).toBe('invalid_signature');
+    expect(calls.settle).toBe(1);
   });
 });
 
@@ -532,8 +606,60 @@ describe('retry gate: an unresolved or concurrent key', () => {
       reason: 'payment_identifier_in_flight',
       retryAfterSeconds: 1,
     });
-    expect(calls.verify).toBe(before.verify);
+    expect(calls.verify).toBe(before.verify + 1);
     expect(settles).toBe(1);
+  });
+
+  it('refuses an exact resend of an in-flight purchase before verifying it', async () => {
+    const settling = deferred();
+    const entered = deferred();
+    const { pipeline, calls } = setup({
+      provider: {
+        settle: async () => {
+          entered.resolve();
+          await settling.promise;
+          return { status: 'settled', provider: 'x402', amount: '0.01', currency: 'USDC' };
+        },
+      },
+    });
+
+    const first = pipeline.execute(paid());
+    await entered.promise;
+    const before = { ...calls };
+    const error = await refusal(pipeline.execute(paid()));
+    const after = { ...calls };
+    settling.resolve();
+    await delivered(first);
+
+    expect(error).toMatchObject({ retryable: true });
+    expect(error.details?.['reason']).toBe('payment_identifier_in_flight');
+    expect(after).toEqual(before);
+  });
+
+  it('tells a junk proof nothing about an in-flight key', async () => {
+    const settling = deferred();
+    const entered = deferred();
+    const { pipeline } = setup({
+      provider: {
+        settle: async () => {
+          entered.resolve();
+          await settling.promise;
+          return { status: 'settled', provider: 'x402', amount: '0.01', currency: 'USDC' };
+        },
+      },
+    });
+
+    const first = pipeline.execute(paid());
+    await entered.promise;
+    const sameInput = await refusal(pipeline.execute(paid('forged/1')));
+    const otherInput = await refusal(pipeline.execute(paid('forged/2', { input: { a: 1 } })));
+    settling.resolve();
+    await delivered(first);
+
+    for (const error of [sameInput, otherInput]) {
+      expect(error.code).toBe('PAYMENT_INVALID');
+      expect(error.details?.['reason']).toBe('invalid_signature');
+    }
   });
 
   it('lets one settle when both pass the read before either claims', async () => {
@@ -574,14 +700,18 @@ describe('retry gate: an unresolved or concurrent key', () => {
     const lost = await Promise.race(runs);
     const during = await row(store);
     settling.resolve();
-    await Promise.all(runs);
+    const results = await Promise.all(runs);
+    const won = results.findIndex((result) => (result as DeliveredOutcome).kind === 'delivered');
 
     expect(lost).toMatchObject({ details: { reason: 'payment_identifier_in_flight' } });
-    expect(during).toEqual({ kind: 'in-flight' });
+    expect(during).toEqual({
+      kind: 'in-flight',
+      owner: proofDigest(won === 0 ? 'alice/1' : 'alice/2'),
+    });
     expect((await row(store))?.kind).toBe('replay');
   });
 
-  it('answers an unresolved key with 409 and no challenge, calling no provider', async () => {
+  it('answers an unresolved key with 409 and no challenge, verifying only a fresh proof', async () => {
     const { pipeline, calls } = setup({
       settleAfterBackend: true,
       provider: {
@@ -594,13 +724,36 @@ describe('retry gate: an unresolved or concurrent key', () => {
     const before = { ...calls };
 
     const resend = await refusal(pipeline.execute(paid()));
+    const afterResend = { ...calls };
     const fresh = await refusal(pipeline.execute(paid('alice/2')));
 
     for (const error of [resend, fresh]) {
       expect(error).toMatchObject({ code: 'PAYMENT_REPLAYED', httpStatus: 409, retryable: false });
       expect(error.details).toEqual({ reason: 'payment_identifier_unresolved' });
     }
-    expect(calls).toEqual(before);
+    expect(afterResend).toEqual(before);
+    expect(calls).toEqual({
+      ...before,
+      createRequirement: before.createRequirement + 1,
+      verify: before.verify + 1,
+    });
+  });
+
+  it('tells a junk proof nothing about an unresolved key', async () => {
+    const { pipeline, store } = setup({
+      provider: {
+        settle: async () => {
+          throw new Error('facilitator lost the response');
+        },
+      },
+    });
+    await refusal(pipeline.execute(paid()));
+
+    const error = await refusal(pipeline.execute(paid('forged/1')));
+
+    expect(error.code).toBe('PAYMENT_INVALID');
+    expect(error.details?.['reason']).toBe('invalid_signature');
+    expect((await row(store))?.kind).toBe('unresolved');
   });
 
   it('marks every refusal as a rejected payment, by reason', async () => {
@@ -846,7 +999,7 @@ describe('retry gate: how a claim ends', () => {
         },
       },
       'PAYMENT_SETTLEMENT_FAILED',
-      { kind: 'unresolved' },
+      { kind: 'unresolved', owner: PROOF_DIGEST },
     ],
     [
       'settlement uncertain after the backend',
@@ -859,7 +1012,7 @@ describe('retry gate: how a claim ends', () => {
         },
       },
       'PAYMENT_SETTLEMENT_FAILED',
-      { kind: 'unresolved' },
+      { kind: 'unresolved', owner: PROOF_DIGEST },
     ],
     [
       'backend failed after an upfront settlement',
@@ -869,7 +1022,7 @@ describe('retry gate: how a claim ends', () => {
         },
       },
       'BACKEND_ERROR',
-      { kind: 'unresolved' },
+      { kind: 'unresolved', owner: PROOF_DIGEST },
     ],
   ] as const)('leaves the expected claim after: %s', async (_name, options, code, expected) => {
     const { pipeline, store } = setup(options as Setup);
@@ -997,7 +1150,7 @@ describe('retry gate: store writes that fail after a charge', () => {
     expect(outcome.body).toEqual({ report: 'paid data' });
     expect(outcome.persistenceFailures).toEqual(['receipt', 'response']);
     expect(attempted).toEqual(['unresolved']);
-    expect(await row(store)).toEqual({ kind: 'unresolved' });
+    expect(await row(store)).toEqual({ kind: 'unresolved', owner: PROOF_DIGEST });
   });
 
   it('delivers, and closes the key, when the completed write fails', async () => {
@@ -1047,7 +1200,7 @@ describe('retry gate: store writes that fail after a charge', () => {
     const error = await refusal(pipeline.execute(paid()));
 
     expect(error.code).toBe('BACKEND_ERROR');
-    expect(await row(store)).toEqual({ kind: 'in-flight' });
+    expect(await row(store)).toEqual({ kind: 'in-flight', owner: PROOF_DIGEST });
     const { transactions } = await store.listTransactions({});
     expect(transactions[0]?.persistenceFailures).toEqual(['response']);
   });
@@ -1062,7 +1215,7 @@ describe('retry gate: store writes that fail after a charge', () => {
     const error = await refusal(pipeline.execute(paid()));
 
     expect(error.code).toBe('STORAGE_ERROR');
-    expect(await row(store)).toEqual({ kind: 'in-flight' });
+    expect(await row(store)).toEqual({ kind: 'in-flight', owner: PROOF_DIGEST });
   });
 
   it('keeps the original error when the unresolved write fails', async () => {
@@ -1078,7 +1231,7 @@ describe('retry gate: store writes that fail after a charge', () => {
     const error = await refusal(pipeline.execute(paid()));
 
     expect(error.code).toBe('PAYMENT_SETTLEMENT_FAILED');
-    expect(await row(store)).toEqual({ kind: 'in-flight' });
+    expect(await row(store)).toEqual({ kind: 'in-flight', owner: PROOF_DIGEST });
     const { transactions } = await store.listTransactions({});
     expect(transactions[0]?.persistenceFailures).toEqual(['response']);
   });
@@ -1115,8 +1268,9 @@ describe('retry gate: a stored row it cannot serve', () => {
     ['a receipt id that is not text', { ...STORED, receiptId: 7 }],
     ['no body', { ...STORED, body: undefined }],
     ['a payer that is not text', { ...STORED, payer: 7 }],
+    ['an authorization digest that is not text', { ...STORED, authorizationDigest: 7 }],
     ['a content type that is not text', { ...STORED, contentType: 7 }],
-  ])('answers unresolved for a row with %s, calling no provider', async (_name, body) => {
+  ])('answers unresolved for a row with %s, settling nothing', async (_name, body) => {
     const { pipeline, store, calls } = setup();
     await plantRow(store, body);
     // With the receipt present, only the row's own fields can refuse
@@ -1126,7 +1280,8 @@ describe('retry gate: a stored row it cannot serve', () => {
 
     expect(error.code).toBe('PAYMENT_REPLAYED');
     expect(error.details).toEqual({ reason: 'payment_identifier_unresolved' });
-    expect(calls).toMatchObject({ createRequirement: 0, verify: 0, settle: 0 });
+    // Verify first when the stored row cannot identify its owning proof
+    expect(calls).toMatchObject({ createRequirement: 1, verify: 1, settle: 0 });
   });
 
   it.each([

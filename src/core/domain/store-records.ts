@@ -21,14 +21,17 @@ export interface IdempotencyScope {
  */
 export const PAYMENT_KEY_ENDPOINT_PREFIX = 'payment:';
 
-/** Result of claiming an idempotency key. Experimental: may change in a minor release */
+/**
+ * Result of claiming an idempotency key. `owner` is the tag the claim was
+ * created with, if any. Experimental: may change in a minor release.
+ */
 export type IdempotencyClaim =
   /** The caller owns the key and must perform the operation */
   | { readonly kind: 'reserved' }
   /** Same fingerprint; an earlier claim is still in flight */
-  | { readonly kind: 'in-flight' }
+  | { readonly kind: 'in-flight'; readonly owner?: string }
   /** Same fingerprint; an earlier attempt's outcome is unknown */
-  | { readonly kind: 'unresolved' }
+  | { readonly kind: 'unresolved'; readonly owner?: string }
   /** A different fingerprint, regardless of the claim's state */
   | { readonly kind: 'conflict' }
   /** Same fingerprint; replay the stored response */
