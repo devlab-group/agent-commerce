@@ -69,9 +69,11 @@ sessions and the discovery extension.
 
 Experimental and disabled by default. On a resource with
 [`idempotency.redelivery`](../configuration.md#resources), the HTTP invoke
-route reads the buyer's `Idempotency-Key` header. It accepts 1 to 255 printable
-ASCII characters; invalid values return HTTP 400 `bad-request` with reason
-`payment_identifier_invalid`.
+route reads the buyer's `Idempotency-Key` header. Quoted values follow RFC 9651
+String syntax: `"abc"` and `abc` are the same key, and `\"` and `\\` are
+unescaped. Bare keys, as sent by ACP clients, are also accepted. The decoded
+key must contain 1 to 255 printable ASCII characters, as in ACP; invalid keys
+return HTTP 400 `bad-request` with reason `payment_identifier_invalid`.
 
 After delivery, reuse the key and input to retrieve the stored response without
 another charge. An exact resend of `Authorization` skips verification, so an
@@ -81,16 +83,21 @@ again. Invalid credentials get the usual 402 without revealing whether the key
 exists.
 
 Make the key random and keep it secret: with the original credential, it
-unlocks the stored response. The MCP and A2A adapters do not extract this
-header, and `redelivery.required` does not apply to MPP.
+unlocks the stored response. The gateway's logger redacts the header; keep it
+out of proxy, APM and access logs too. The MCP and A2A adapters do not extract
+this header, and `redelivery.required` does not apply to MPP.
 
-Retry-key 409s use Problem Details with `type: about:blank` and title `Conflict`.
-Using `invalid-challenge` could prompt a new challenge and another payment.
-`details.reason` identifies the state:
+Conflict, in-flight and unresolved refusals use Problem Details with
+`type: about:blank` and the HTTP status phrase as `title`. An `invalid-challenge`
+response could prompt another payment. Reusing a key with other input or
+another payer returns 422 `Unprocessable Content`, following section 2.7 of
+`draft-ietf-httpapi-idempotency-key-header-08`. A client may interpret 409 as
+"retry unchanged" and keep retrying a request that cannot succeed. x402 uses
+409 for this case. `details.reason` identifies the state:
 
-- `payment_identifier_conflict`: the key belongs to different input or another payer.
-- `payment_identifier_in_flight`: a request with the key is still running.
-- `payment_identifier_unresolved`: the earlier request may have been charged but has no
+- `payment_identifier_conflict` (422): the key belongs to different input or another payer.
+- `payment_identifier_in_flight` (409 `Conflict`, with `Retry-After`): a request with the key is still running.
+- `payment_identifier_unresolved` (409 `Conflict`): the earlier request may have been charged but has no
   usable stored response.
 
 [http.md](http.md) lists the redelivery headers.

@@ -40,9 +40,12 @@ const REASON_TYPES: ReadonlyMap<string, MppProblemType> = new Map([
   ['payment_identifier_invalid', 'bad-request'],
 ]);
 
-// Use a generic conflict so clients do not treat a retry key's refusal as an
-// invalid challenge and risk paying again with a new key
-const RETRY_KEY_CONFLICT = { type: 'about:blank', title: 'Conflict' } as const;
+// Use about:blank so clients do not mistake retry-key refusals for invalid
+// challenges and pay again. RFC 9457 section 4.2.1 uses the HTTP status phrase as its title.
+const RETRY_KEY_TITLES: ReadonlyMap<number, string> = new Map([
+  [409, 'Conflict'],
+  [422, 'Unprocessable Content'],
+]);
 
 /** The Problem Details `type` URI and `title` for an MPP payment error */
 export function mppProblem(
@@ -50,7 +53,10 @@ export function mppProblem(
   httpStatus: number,
   reason?: string,
 ): { readonly type: string; readonly title: string } {
-  if (httpStatus === 409 && reason?.startsWith('payment_identifier_')) return RETRY_KEY_CONFLICT;
+  const retryKeyTitle = reason?.startsWith('payment_identifier_')
+    ? RETRY_KEY_TITLES.get(httpStatus)
+    : undefined;
+  if (retryKeyTitle !== undefined) return { type: 'about:blank', title: retryKeyTitle };
   const problem = problemType(code, httpStatus, reason);
   return { type: `${MPP_PROBLEM_BASE_URI}${problem}`, title: TITLES[problem] };
 }

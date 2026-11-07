@@ -548,12 +548,15 @@ function sendInvokeError(
     // RFC 9457 `status` is the HTTP status, which replaces the envelope's
     // `status: 'error'`; the other envelope fields stay as extension members
     const { status: _envelopeStatus, ...members } = envelope;
+    // draft-ietf-httpapi-idempotency-key-header-08 section 2.7 uses 422 for payload conflicts.
+    // A client may treat 409 as "retry unchanged" and loop on a permanent conflict.
+    const problemStatus = reason === 'payment_identifier_conflict' ? 422 : error.httpStatus;
     reply
       .header('content-type', 'application/problem+json')
-      .status(error.httpStatus)
+      .status(problemStatus)
       .send({
-        ...mppProblem(error.code, error.httpStatus, reason),
-        status: error.httpStatus,
+        ...mppProblem(error.code, problemStatus, reason),
+        status: problemStatus,
         // The reason token stays in `message` and `details.reason`
         detail: mppProblemDetail(reason, error.message),
         ...members,
@@ -568,11 +571,23 @@ function sendInvokeError(
   reply.status(status).send(envelope);
 }
 
-// The key unlocks a stored response, so validation errors must not quote it
+// RFC 9651 section 4.2.5: a quoted string of printable ASCII, where only `"`
+// and `\` are escaped
+const SF_STRING = /^"((?:[\x20\x21\x23-\x5b\x5d-\x7e]|\\["\\])*)"$/;
+
+// Accept Structured Field Strings from the Idempotency-Key draft and bare keys
+// from ACP/Stripe clients. Normalize "abc" and abc to the same purchase key.
+// The key unlocks a stored response, so validation errors must not quote it.
 function mppRetryKey(request: FastifyRequest, resourceId: string): string | undefined {
   const value = request.headers['idempotency-key'];
   if (value === undefined) return undefined;
-  if (typeof value === 'string' && isUsableIdempotencyKey(value)) return value;
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    const key = trimmed.startsWith('"')
+      ? SF_STRING.exec(trimmed)?.[1]?.replace(/\\(["\\])/g, '$1')
+      : trimmed;
+    if (key !== undefined && isUsableIdempotencyKey(key)) return key;
+  }
   throw new CommerceError(
     'INPUT_INVALID',
     'The Idempotency-Key header must be 1 to 255 printable ASCII characters',

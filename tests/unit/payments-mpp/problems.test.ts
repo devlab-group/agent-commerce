@@ -44,6 +44,19 @@ describe('mppProblem', () => {
     });
   });
 
+  it('answers a retry key reused with other input as 422 about:blank', () => {
+    expect(mppProblem('PAYMENT_REPLAYED', 422, 'payment_identifier_conflict')).toEqual({
+      type: 'about:blank',
+      title: 'Unprocessable Content',
+    });
+  });
+
+  it('does not give a retry-key title to a status it has none for', () => {
+    expect(mppProblem('PAYMENT_REPLAYED', 402, 'payment_identifier_conflict').type).toBe(
+      type('invalid-challenge'),
+    );
+  });
+
   it('titles a bad retry key Bad Request', () => {
     expect(mppProblem('INPUT_INVALID', 400, 'payment_identifier_invalid').title).toBe(
       'Bad Request',

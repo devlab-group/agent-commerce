@@ -676,15 +676,80 @@ describe('MPP retries over HTTP', () => {
   });
 
   it.each([
+    ['an unterminated quote', '"secretkey'],
+    ['text after the closing quote', '"secret"key"'],
+    ['an unknown escape', '"secret\\key"'],
+    ['an empty quoted string', '""'],
+    ['a quoted key of 256 characters', `"${'k'.repeat(256)}"`],
+  ])('refuses %s without quoting the key', async (_case, key) => {
+    const refused = await invoke('mpp_report', { 'idempotency-key': key });
+
+    expect(refused.statusCode).toBe(400);
+    expect(refused.json()).toMatchObject({
+      type: 'https://paymentauth.org/problems/bad-request',
+      status: 400,
+      code: 'INPUT_INVALID',
+      details: { reason: 'payment_identifier_invalid' },
+    });
+    expect(refused.body).not.toContain('secret');
+  });
+
+  it.each([
     ['1', 'k'],
     ['255', 'k'.repeat(255)],
+    ['a quoted 255', `"${'k'.repeat(255)}"`],
+    // Only a leading quote selects the quoted form
+    ['a bare 3', 'k"k'],
   ])('accepts a %s-character key', async (_length, key) => {
     const challenged = await invoke('mpp_report', { 'idempotency-key': key });
 
     expect(challenged.statusCode).toBe(402);
   });
 
-  it('answers a key used by another payer with about:blank, never invalid-challenge', async () => {
+  it.each([
+    ['a quoted retry of a bare key', KEY, `"${KEY}"`],
+    ['a bare retry of a quoted key', `"${KEY}"`, KEY],
+    // RFC 9651 escapes: \" is a quote and \\ is a backslash
+    ['an escaped quote', '"a\\"b"', 'a"b'],
+    ['an escaped backslash', '"a\\\\b"', 'a\\b'],
+  ])('reads %s as the same key', async (_case, firstKey, retryKey) => {
+    const credential = await mppCredential('mpp_report');
+    const first = await invoke('mpp_report', {
+      authorization: credential,
+      'idempotency-key': firstKey,
+    });
+    mppNowMs += 301_000;
+
+    const retry = await invoke('mpp_report', {
+      authorization: credential,
+      'idempotency-key': retryKey,
+    });
+
+    expect(first.statusCode).toBe(200);
+    expect(retry.statusCode).toBe(200);
+    expect(retry.json()).toEqual(REPORT);
+    expect(retry.headers['idempotent-replayed']).toBe('true');
+    expect(facilitator.settle).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(backendCalls)).not.toContain(KEY);
+  });
+
+  it('keeps a quoted key distinct from another key', async () => {
+    await invoke('mpp_report', {
+      authorization: await mppCredential('mpp_report'),
+      'idempotency-key': `"${KEY}"`,
+    });
+
+    const other = await invoke('mpp_report', {
+      authorization: await mppCredential('mpp_report', otherBuyer),
+      'idempotency-key': `${KEY}-2`,
+    });
+
+    expect(other.statusCode).toBe(200);
+    expect(other.headers['idempotent-replayed']).toBeUndefined();
+    expect(facilitator.settle).toHaveBeenCalledTimes(2);
+  });
+
+  it('answers a key used by another payer with a 422 about:blank, never invalid-challenge', async () => {
     await invoke('mpp_report', {
       authorization: await mppCredential('mpp_report'),
       'idempotency-key': KEY,
@@ -695,12 +760,13 @@ describe('MPP retries over HTTP', () => {
       'idempotency-key': KEY,
     });
 
-    expect(conflict.statusCode).toBe(409);
+    // The Idempotency-Key draft uses 422 for different input; clients may read 409 as "retry unchanged"
+    expect(conflict.statusCode).toBe(422);
     expect(conflict.headers['content-type']).toMatch(/^application\/problem\+json/);
     expect(conflict.json()).toMatchObject({
       type: 'about:blank',
-      title: 'Conflict',
-      status: 409,
+      title: 'Unprocessable Content',
+      status: 422,
       code: 'PAYMENT_REPLAYED',
       retryable: false,
       details: { reason: 'payment_identifier_conflict' },
