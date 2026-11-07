@@ -170,7 +170,7 @@ describe('published package metadata', () => {
     // seams.
     const overrides = manifest.overrides as Record<string, unknown> | undefined;
     expect(overrides?.['zod']).toBeUndefined();
-    for (const pkg of ['@x402/core', '@x402/evm', '@coinbase/x402']) {
+    for (const pkg of ['@x402/core', '@x402/evm']) {
       expect((overrides?.[pkg] as Record<string, string> | undefined)?.['zod']).toBe(
         manifest.dependencies?.['zod'],
       );
@@ -225,7 +225,6 @@ describe('published package metadata', () => {
       expect(exportsField?.[subpath]).toBeDefined();
     }
     for (const peer of [
-      '@coinbase/x402',
       '@modelcontextprotocol/server',
       '@sd-jwt/core',
       '@solana/kit',
@@ -642,11 +641,9 @@ describe.skipIf(!existsSync(libEntry))('optional-peer subpaths', () => {
 
   it('imports only its own peer, in each subpath', () => {
     expect(bareImportsOf(mcpEntry)).toEqual(['@modelcontextprotocol/server']);
-    // Dynamic imports: `@coinbase/x402` loads only for facilitator auth.type
-    // `cdp`, `@x402/svm` and `@solana/kit` only for a Solana offer,
-    // `@x402/near` only for a NEAR offer
+    // Dynamic imports: `@x402/svm` and `@solana/kit` load only for a Solana
+    // offer, `@x402/near` only for a NEAR offer
     expect(bareImportsOf(x402Entry).sort()).toEqual([
-      '@coinbase/x402',
       '@solana/kit',
       '@x402/core',
       '@x402/evm',
@@ -656,7 +653,6 @@ describe.skipIf(!existsSync(libEntry))('optional-peer subpaths', () => {
     ]);
     // MPP settles through an x402 facilitator, so its entry also imports the x402 peers
     expect(bareImportsOf(mppEntry).sort()).toEqual([
-      '@coinbase/x402',
       '@solana/kit',
       '@x402/core',
       '@x402/evm',

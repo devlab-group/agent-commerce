@@ -7,9 +7,8 @@
  *   npm install @devlab.group/agent-commerce @x402/core @x402/evm viem
  *   import { x402 } from '@devlab.group/agent-commerce/x402';
  *
- * Solana offers also need `@x402/svm` and `@solana/kit`, NEAR offers
- * `@x402/near`, and a remote facilitator with `auth.type: cdp` needs
- * `@coinbase/x402`. Each loads only when used.
+ * Solana offers also need `@x402/svm` and `@solana/kit`, and NEAR offers
+ * `@x402/near`. Each loads only when used.
  *
  * The peers are pinned exactly: x402's zod schemas and EIP-712 domain
  * construction cross this boundary, so version skew is a correctness problem.

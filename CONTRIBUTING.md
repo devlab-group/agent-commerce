@@ -112,11 +112,9 @@ The repository has one `package.json` and publishes
 binary and five library paths - `.`, `./ap2`, `./mcp`, `./mpp` and `./x402` -
 built from `src/` into `dist/`.
 
-The main entry and the CLI must import no optional peer. Peers load only
-through the subpaths that use them, and `@coinbase/x402` only for
-`auth.type: cdp`;
-[published entry points](docs/contracts.md#published-entry-points) lists which
-entry imports which peer.
+The main entry and CLI must not statically import optional peers. Load peers
+through the subpaths that use them; see
+[published entry points](docs/contracts.md#published-entry-points) for the import map.
 Architectural boundaries are directories under `src/`, not package manifests.
 The packaging tests enforce both, and reject a `pnpm-workspace.yaml` file or a
 `packages/` directory.

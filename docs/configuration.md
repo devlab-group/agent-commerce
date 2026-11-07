@@ -745,9 +745,10 @@ facilitator:
 Omitting `auth` is equivalent to `type: none`: the gateway sends no credential.
 Use it only with a facilitator that accepts anonymous requests. Supported types
 are `none`, `bearer` (a static token) and `cdp` (a fresh JWT per request).
-The `cdp` type requires the optional `@coinbase/x402` peer. It signs each
-request for `https://api.cdp.coinbase.com/platform/v2/x402`, so config load
-refuses `cdp` with any other `url`.
+For `cdp`, `apiKeySecret` must be CDP's PEM EC P-256 private key or base64
+Ed25519 key. JWTs bind requests to CDP's host and path, so config load rejects
+any `url` other than `https://api.cdp.coinbase.com/platform/v2/x402`. An
+unreadable secret fails the health check with a detail naming `apiKeySecret`.
 
 Deployment mode - `local`, `testnet` or `mainnet` - comes from the network:
 `eip155:31337` is local, and every other network is the testnet or mainnet it

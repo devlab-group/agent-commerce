@@ -62,8 +62,8 @@ gateway treats that option like one that omits the asset: price its resources in
 Config load refuses two settings that 2.0 accepted but could not use:
 
 - `facilitator.auth.type: cdp` with a `url` other than
-  `https://api.cdp.coinbase.com/platform/v2/x402`, the URL `@coinbase/x402`
-  signs for.
+  `https://api.cdp.coinbase.com/platform/v2/x402`, the only facilitator URL
+  the gateway signs CDP requests for.
 - An `rpcUrl` that is not an `http://` or `https://` URL.
 
 ### MPP settles before the backend

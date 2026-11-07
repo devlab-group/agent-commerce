@@ -16,13 +16,13 @@ Two things are structurally different from the local and testnet examples:
 
 ## What you need
 
-|                                    |                                                                                                                                                          |
-| ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `MERCHANT_WALLET`                  | your wallet. Address only: the gateway never takes a merchant key. See [Paying into a contract](#paying-into-a-contract-address).                        |
-| `ALLOW_X402_MAINNET=true`          | the explicit opt-in. Never a default.                                                                                                                    |
-| CDP credentials, or a bearer token | `cdp` requires the optional `@coinbase/x402` peer and CDP's URL, already configured. `bearer` needs no extra package; set its facilitator's https `url`. |
-| `ADMIN_TOKEN`                      | required here: it guards the receipt routes, which carry your ledger.                                                                                    |
-| A Base RPC                         | health checks only. Use a dedicated endpoint: the public one's outages become your readiness failures.                                                   |
+|                                    |                                                                                                                                                |
+| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `MERCHANT_WALLET`                  | your wallet. Address only: the gateway never takes a merchant key. See [Paying into a contract](#paying-into-a-contract-address).              |
+| `ALLOW_X402_MAINNET=true`          | the explicit opt-in. Never a default.                                                                                                          |
+| CDP credentials, or a bearer token | `cdp` uses your CDP API key and the configured CDP URL. For `bearer`, set the facilitator's HTTPS `url`. Neither needs an extra peer. |
+| `ADMIN_TOKEN`                      | required here: it guards the receipt routes, which carry your ledger.                                                                          |
+| A Base RPC                         | health checks only. Use a dedicated endpoint: the public one's outages become your readiness failures.                                         |
 
 To run without a facilitator credential, see [base-mainnet-payai](../base-mainnet-payai/),
 which sets `allowUnauthenticatedFacilitator`.

@@ -7,7 +7,7 @@ says ordinary exact payments need no API key within a free credit allowance.
 The allowance is per receiving wallet and never resets; beyond it, PayAI
 requires credits and
 [authentication](https://docs.payai.network/x402/facilitators/authentication).
-The gateway still needs its x402 peers, but not `@coinbase/x402`.
+The gateway still needs its x402 peers.
 
 Check the payment kinds PayAI advertises before spending real USDC:
 

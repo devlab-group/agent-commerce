@@ -258,10 +258,9 @@ Runtime dependencies are pinned exactly, and the release workflow runs
 `npm audit`. Review the current audit rather than relying on a count recorded in
 this document.
 
-`@coinbase/x402` is loaded dynamically only for facilitator `auth.type: cdp`.
-It adds `@coinbase/cdp-sdk`, `axios`, and a Solana dependency tree, so audit that
-optional installation before using it. Static-token facilitators can use
-`auth.type: bearer` without this peer.
+Facilitator `auth.type: cdp` signs JWTs with Node's built-in crypto, without an
+extra package. Auth error messages and the binding's description omit the API
+key secret.
 
 ## Development keys
 

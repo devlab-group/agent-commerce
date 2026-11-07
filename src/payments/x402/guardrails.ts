@@ -28,8 +28,8 @@ import {
  * - `none`: send no credential; use it when the facilitator accepts
  *   anonymous requests.
  * - `bearer`: send a static token; no extra peer package is needed.
- * - `cdp`: Coinbase Developer Platform. The optional peer `@coinbase/x402`,
- *   imported only for this type, signs a fresh JWT per request.
+ * - `cdp`: Coinbase Developer Platform. The gateway signs a fresh JWT per
+ *   request with the API key; no extra peer package is needed.
  *
  * Any other auth type is refused at config load.
  */
@@ -121,8 +121,7 @@ export function resolveX402Deployment(input: X402DeploymentInput): X402Deploymen
 
   if (input.facilitator.mode === 'remote') {
     assertFacilitatorUrlIsSafe(input.facilitator.url, mode, at);
-    // `@coinbase/x402` signs each request for CDP's own host and route,
-    // whatever URL is configured, so no other facilitator can accept the credential
+    // CDP JWTs bind requests to CDP's host and route, so reject other URLs
     if (input.facilitator.auth.type === 'cdp' && !isCdpFacilitatorUrl(input.facilitator.url)) {
       throw invalid(
         `${at}: facilitator.auth.type "cdp" signs requests for ${CDP_FACILITATOR_URL} only, so facilitator ${describeOrigin(input.facilitator.url)} cannot accept its credential. Set facilitator.url to ${CDP_FACILITATOR_URL}, or use auth.type "bearer" or "none".`,
@@ -245,7 +244,7 @@ function assertFacilitatorUrlIsSafe(url: string, mode: DeploymentMode, at: strin
   );
 }
 
-/** The facilitator URL `@coinbase/x402` signs its JWTs for */
+/** The facilitator URL that `auth.type: cdp` signs its JWTs for */
 export const CDP_FACILITATOR_URL = 'https://api.cdp.coinbase.com/platform/v2/x402';
 
 // The SDK client strips trailing slashes before appending its route

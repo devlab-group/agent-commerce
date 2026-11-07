@@ -647,7 +647,7 @@ describe('parseConfig', () => {
       expect(message).toContain('apiKeySecret is empty');
     });
 
-    // `@coinbase/x402` signs for CDP's host and route whatever URL is set
+    // The CDP JWT names CDP's host and route whatever URL is set
     it.each([
       ['another host', 'https://facilitator.example.com'],
       ['another CDP route', 'https://api.cdp.coinbase.com/platform/v1/x402'],

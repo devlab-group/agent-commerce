@@ -127,8 +127,8 @@ payments:
         token: ${X402_FACILITATOR_TOKEN}
 ```
 
-`auth.type` is `none`, `bearer` or `cdp` (Coinbase, which needs the
-`@coinbase/x402` peer). `https://x402.org/facilitator` advertises Base Sepolia
+`auth.type` is `none`, `bearer` or `cdp` (Coinbase, signed with the CDP API
+key). `https://x402.org/facilitator` advertises Base Sepolia
 and Solana Devnet with no API authentication; check its `/supported` response
 and gateway readiness before relying on it. `mode: local` signs inside the
 gateway and accepts only `eip155:31337`; health checks also require an Anvil
