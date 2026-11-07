@@ -8,6 +8,8 @@
   "repository": "https://github.com/devlab-group/agent-commerce",
   "documentationUrl": "https://github.com/devlab-group/agent-commerce#readme",
   "supportUrl": "https://github.com/devlab-group/agent-commerce/issues",
+  "privacyPolicyUrl": "https://acg.devlab.group/privacy",
+  "termsOfServiceUrl": "https://acg.devlab.group/terms",
   "license": "Apache-2.0",
   "keywords": ["x402", "mcp", "ai-agents", "payments", "agentic-commerce"]
 }
