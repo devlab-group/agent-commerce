@@ -802,6 +802,8 @@ interface Surface {
   readonly send: Send;
   // Validate the refusal format and return its error envelope
   readonly refusal: (answer: unknown, reason: string) => unknown;
+  // Protocol-specific retry flags and details, keyed by refusal reason
+  readonly refusalOverrides?: Record<string, Pick<Refusal, 'retryable' | 'details'>>;
 }
 
 function failedEnvelope(answer: unknown): unknown {
@@ -829,6 +831,10 @@ const SURFACES: [string, Surface][] = [
   [
     'the A2A x402 extension',
     {
+      // The consumed task requires a new task with the same payment id
+      refusalOverrides: {
+        payment_identifier_in_flight: { retryable: false, details: {} },
+      },
       send: async (resourceId, proof, input = {}) =>
         (await a2aPay(await a2aChallenge(resourceId, input), proof)).result?.task,
       refusal(answer, reason) {
@@ -933,7 +939,8 @@ const REFUSALS: [string, Refusal][] = [
 ];
 
 describe.each(SURFACES)('x402 retry-key refusals over %s', (_surface, surface) => {
-  it.each(REFUSALS)('refuses %s with its reason and no challenge', async (_case, row) => {
+  it.each(REFUSALS)('refuses %s with its reason and no challenge', async (_case, original) => {
+    const row = { ...original, ...surface.refusalOverrides?.[original.reason] };
     const envelope = surface.refusal(await row.act(surface.send), row.reason);
 
     expect(envelope).toMatchObject({

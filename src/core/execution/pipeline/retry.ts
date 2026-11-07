@@ -1,5 +1,5 @@
 // The retry gate: a client key either unlocks a stored response or claims the purchase
-import type { PaymentProvider, PaymentResult } from '../../domain/payment';
+import type { PaymentProvider, PaymentResult, PaymentSubmission } from '../../domain/payment';
 import type { CommerceReceipt } from '../../domain/receipt';
 import type { DeliveredOutcome } from '../../domain/request';
 import type { CommerceResource } from '../../domain/resource';
@@ -9,7 +9,7 @@ import {
   type IdempotencyUpdate,
   PAYMENT_KEY_ENDPOINT_PREFIX,
 } from '../../domain/store-records';
-import { CommerceError } from '../../errors';
+import { CommerceError, isCommerceError } from '../../errors';
 import type { BackendResponse } from '../../interfaces/backend';
 import type { ReceiptStore } from '../../interfaces/store';
 import { isRecord } from '../../is-record';
@@ -176,15 +176,21 @@ export function createRetryGate(ctx: PipelineContext): RetryGate {
     if (support?.store === undefined || retentionHours === undefined || payment === undefined) {
       return undefined;
     }
-    const clientKey = request.retryKey ?? provider.retryKey?.({ resource, submission: payment });
+    const clientKey =
+      request.retryKey ?? (await providerRetryKey(flow, resource, provider, payment));
     if (clientKey === undefined) return undefined;
 
     const fingerprint = inputDigest(validInput);
     if (fingerprint === undefined) {
-      throw new CommerceError(
-        'INPUT_INVALID',
-        `Input for resource "${resource.id}" is not I-JSON, so a retry key cannot identify it`,
-        { requestId: request.requestId, resourceId: resource.id },
+      throw await rejected(
+        flow,
+        resource,
+        provider,
+        new CommerceError(
+          'INPUT_INVALID',
+          `Input for resource "${resource.id}" is not I-JSON, so a retry key cannot identify it`,
+          { requestId: request.requestId, resourceId: resource.id },
+        ),
       );
     }
 
@@ -330,13 +336,38 @@ export function createRetryGate(ctx: PipelineContext): RetryGate {
 
   // These 409s omit a payment challenge to avoid prompting another charge.
   // Only in-flight claims are retryable; the active request may finish on its own.
-  async function refusal(
+  function refusal(
     flow: Flow,
     resource: CommerceResource,
     provider: PaymentProvider,
     kind: RefusedClaim,
   ): Promise<CommerceError> {
     const { reason, message } = REFUSALS[kind];
+    const inFlight = kind === 'in-flight';
+    return rejected(
+      flow,
+      resource,
+      provider,
+      new CommerceError('PAYMENT_REPLAYED', message, {
+        requestId: flow.request.requestId,
+        resourceId: resource.id,
+        details: {
+          reason,
+          ...(inFlight ? { retryAfterSeconds: IN_FLIGHT_RETRY_AFTER_SECONDS } : {}),
+        },
+        ...(inFlight ? { retryable: true } : {}),
+      }),
+    );
+  }
+
+  // Emit the admission refusal with this request's ID
+  async function rejected(
+    flow: Flow,
+    resource: CommerceResource,
+    provider: PaymentProvider,
+    error: CommerceError,
+  ): Promise<CommerceError> {
+    const reason = error.details?.['reason'];
     await safeEmit(
       buildEvent(flow, {
         type: 'payment.rejected',
@@ -344,22 +375,42 @@ export function createRetryGate(ctx: PipelineContext): RetryGate {
         adapter: flow.request.protocol,
         paymentProvider: provider.name,
         status: 'error',
-        data: { reason },
+        data: { reason: typeof reason === 'string' ? reason : error.code },
       }),
     );
-    const inFlight = kind === 'in-flight';
-    return new CommerceError('PAYMENT_REPLAYED', message, {
+    if (error.requestId !== undefined) return error;
+    return new CommerceError(error.code, error.message, {
       requestId: flow.request.requestId,
-      resourceId: resource.id,
-      details: {
-        reason,
-        ...(inFlight ? { retryAfterSeconds: IN_FLIGHT_RETRY_AFTER_SECONDS } : {}),
-      },
-      ...(inFlight ? { retryable: true } : {}),
+      resourceId: error.resourceId ?? resource.id,
+      httpStatus: error.httpStatus,
+      retryable: error.retryable,
+      ...(error.details !== undefined ? { details: error.details } : {}),
+      ...(error.cause !== undefined ? { cause: error.cause } : {}),
     });
   }
 
-  // Writes no receipt, attempt or journal row: the original purchase holds them
+  // Treat an untyped provider error as provider unavailability
+  async function providerRetryKey(
+    flow: Flow,
+    resource: CommerceResource,
+    provider: PaymentProvider,
+    submission: PaymentSubmission,
+  ): Promise<string | undefined> {
+    try {
+      return provider.retryKey?.({ resource, submission });
+    } catch (error) {
+      const typed = isCommerceError(error)
+        ? error
+        : new CommerceError('PAYMENT_PROVIDER_UNAVAILABLE', 'Payment provider is unavailable', {
+            cause: error,
+          });
+      throw await rejected(flow, resource, provider, typed);
+    }
+  }
+
+  // Write no new receipt, payment attempt or journal row. The outcome and events use
+  // this request's transaction ID; the receipt and, when available, the event's
+  // originalTransactionId identify the original purchase.
   async function redeliver(
     flow: Flow,
     resource: CommerceResource,
@@ -374,7 +425,7 @@ export function createRetryGate(ctx: PipelineContext): RetryGate {
       throw await refusal(flow, resource, provider, 'unresolved');
     }
     const durationMs = Math.round(options.clock.monotonicMs() - pipelineStart);
-    const { transactionId } = receipt;
+    const original = receipt.transactionId;
     await safeEmit(
       buildEvent(flow, {
         type: 'resource.delivered',
@@ -384,14 +435,14 @@ export function createRetryGate(ctx: PipelineContext): RetryGate {
         durationMs,
         data: {
           redelivered: true,
-          ...(transactionId !== undefined ? { originalTransactionId: transactionId } : {}),
+          ...(original !== undefined ? { originalTransactionId: original } : {}),
         },
       }),
     );
     return {
       kind: 'delivered',
       requestId: request.requestId,
-      ...(transactionId !== undefined ? { transactionId } : {}),
+      transactionId: flow.transactionId,
       resourceId: resource.id,
       backendStatus: status,
       body: stored.body,

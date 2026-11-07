@@ -250,7 +250,10 @@ persistence must not fail the commerce flow.
     `CONFIG_INVALID` for missing dependencies at startup; a directly built
     pipeline throws at payment admission, before any provider call.
     With `required` true, x402 retry-key extraction rejects a missing `id`
-    with `INPUT_INVALID` (HTTP 400).
+    with `INPUT_INVALID` (HTTP 400). Missing required IDs, malformed IDs and
+    non-I-JSON input used with a key produce errors carrying `requestId` and
+    emit `payment.rejected`. The event's `data.reason` is the error's reason
+    token, or its code if no reason is set.
   - `CanonicalRequest.retryKey` holds the client's key for retrying a paid
     request. `PaymentProvider.retryKey` extracts it from a proof without I/O.
     Treat the key as a credential: never log it or send it to a merchant or
@@ -279,7 +282,10 @@ persistence must not fail the commerce flow.
   - `redelivered` on `DeliveredOutcome` and `DeliverySummary` indicates that
     the request reused a stored response without another charge.
     `toDeliverySummary` includes the field only when true; original delivery
-    summaries omit it.
+    summaries omit it. The outcome and its events use the redelivery request's
+    `transactionId`. The original purchase's ID remains `receipt.transactionId`
+    and is copied to `resource.delivered` as `data.originalTransactionId` when
+    available.
   - `persistenceFailures` gains `response` when a delivered response cannot be
     stored for its client key. The pipeline attempts to mark the claim
     `unresolved`; in-flight and unresolved claims refuse retries with 409.
@@ -287,6 +293,8 @@ persistence must not fail the commerce flow.
     `RETRYABLE_ERROR_CODES` for one error instance, in either direction. An
     in-flight client-key 409 sets it to true so callers can wait and resend
     without a new payment. Other refusals from the retry gate are not retryable.
+    The A2A x402 extension reports the in-flight refusal with `retryable: false`
+    and no `retryAfterSeconds`, because the proof's task has been consumed.
     Omitting the override keeps the code's default.
   - These fields and methods are experimental and may change in a minor
     release. The 3.0.0 migration plan makes `getIdempotencyKey` required.

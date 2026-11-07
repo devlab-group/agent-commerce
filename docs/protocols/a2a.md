@@ -133,9 +133,11 @@ payment submission; a resend returns `TaskNotFoundError`. To retry, start a new
 task with the same input and submit a proof with the same `id`. Redelivery
 completes the new task with `payment-completed` and the original settlement
 entry, without another settlement. If the resource requires a mandate, the new
-task must carry the same `_authorization`. A refusal fails the task and puts its
-`payment_identifier_*` reason in `x402.payment.error`. An in-flight refusal
-also consumes the task, so retry on another new task.
+task must carry the same `_authorization`. A refusal fails the task and records
+its `payment_identifier_*` reason in `x402.payment.error`. An in-flight refusal
+reports `retryable: false` without `retryAfterSeconds`, because the task has
+been consumed. Start a new task with the same payment `id`. For the same refusal,
+a `_payment` call reports `retryable: true` and `retryAfterSeconds: 1`.
 
 The extension applies only to x402. An MPP resource still returns a terminal
 task.

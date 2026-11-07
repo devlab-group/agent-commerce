@@ -306,25 +306,51 @@ describe('retry gate: requests it leaves alone', () => {
         details: { reason: 'payment_identifier_invalid' },
       });
     };
-    const { pipeline, calls } = setup({ provider: { retryKey } });
+    const { pipeline, calls, events } = setup({ provider: { retryKey } });
+    const request = paid('alice/1', { retryKey: undefined as never });
 
-    const error = await refusal(
-      pipeline.execute(paid('alice/1', { retryKey: undefined as never })),
-    );
+    const error = await refusal(pipeline.execute(request));
 
-    expect(error.code).toBe('INPUT_INVALID');
+    expect(error).toMatchObject({
+      code: 'INPUT_INVALID',
+      requestId: request.requestId,
+      resourceId: 'res-1',
+    });
     expect(error.details?.['reason']).toBe('payment_identifier_invalid');
+    expect(calls.createRequirement).toBe(0);
+    const rejected = events.filter((event) => event.type === 'payment.rejected');
+    expect(rejected.map((event) => event.data)).toEqual([{ reason: 'payment_identifier_invalid' }]);
+  });
+
+  it("reports a provider's untyped key failure as the provider's, before any payment work", async () => {
+    const retryKey: NonNullable<PaymentProvider['retryKey']> = () => {
+      throw new Error('decoder bug');
+    };
+    const { pipeline, calls } = setup({ provider: { retryKey } });
+    const request = paid('alice/1', { retryKey: undefined as never });
+
+    const error = await refusal(pipeline.execute(request));
+
+    expect(error).toMatchObject({
+      code: 'PAYMENT_PROVIDER_UNAVAILABLE',
+      requestId: request.requestId,
+    });
+    expect(error.message).not.toContain('decoder bug');
     expect(calls.createRequirement).toBe(0);
   });
 
   it('refuses input that is not I-JSON before any payment work', async () => {
-    const { pipeline, calls, store } = setup();
+    const { pipeline, calls, store, events } = setup();
+    const request = paid('alice/1', { input: { text: '\uD800' } });
 
-    const error = await refusal(pipeline.execute(paid('alice/1', { input: { text: '\uD800' } })));
+    const error = await refusal(pipeline.execute(request));
 
-    expect(error.code).toBe('INPUT_INVALID');
+    expect(error).toMatchObject({ code: 'INPUT_INVALID', requestId: request.requestId });
     expect(calls).toMatchObject({ createRequirement: 0, verify: 0, settle: 0 });
     expect(await store.countReceipts()).toBe(0);
+    expect(events.find((event) => event.type === 'payment.rejected')?.data).toEqual({
+      reason: 'INPUT_INVALID',
+    });
   });
 });
 
@@ -428,7 +454,7 @@ describe.each([
     },
   );
 
-  it('rebuilds the original outcome, apart from the request id and duration', async () => {
+  it('rebuilds the original outcome, apart from the request and transaction ids and duration', async () => {
     const { pipeline } = setup({
       settleAfterBackend,
       backend: async () => ({
@@ -446,9 +472,13 @@ describe.each([
     expect(again).toEqual({
       ...first,
       requestId: request.requestId,
+      transactionId: again.transactionId,
       durationMs: again.durationMs,
       redelivered: true,
     });
+    expect(again.transactionId).toEqual(expect.any(String));
+    expect(again.transactionId).not.toBe(first.transactionId);
+    expect(again.receipt.transactionId).toBe(first.transactionId);
     expect(again.payment?.metadata).toMatchObject({
       receipt: 'mpp-receipt',
       amountBaseUnits: '10000',
@@ -473,13 +503,18 @@ describe.each([
     const first = await delivered(pipeline.execute(paid()));
     events.length = 0;
 
-    await delivered(pipeline.execute(paid()));
+    const again = await delivered(pipeline.execute(paid()));
 
     expect(events.map((event) => event.type)).toEqual(['resource.requested', 'resource.delivered']);
     expect(events[1]?.data).toEqual({
       redelivered: true,
       originalTransactionId: first.transactionId,
     });
+    // Redelivery uses a new transaction ID; event data keeps the purchase ID
+    expect(events.map((event) => event.transactionId)).toEqual([
+      again.transactionId,
+      again.transactionId,
+    ]);
   });
 
   it('refuses another payer, with no stored body in the error', async () => {
@@ -1332,14 +1367,14 @@ describe('retry gate: a stored row it cannot serve', () => {
     expect(calls.settle).toBe(0);
   });
 
-  it('serves a receipt that has no transaction id', async () => {
+  it('serves a receipt that has no transaction id, naming no original', async () => {
     const { pipeline, store, events } = setup();
     await plantRow(store, STORED);
     await store.saveReceipt({ ...RECEIPT, payment: PAYMENT });
 
     const again = await delivered(pipeline.execute(paid()));
 
-    expect(again).not.toHaveProperty('transactionId');
+    expect(again.transactionId).toBe(events.at(-1)?.transactionId);
     expect(events.at(-1)?.data).toEqual({ redelivered: true });
   });
 
