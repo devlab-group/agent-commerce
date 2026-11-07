@@ -51,5 +51,9 @@ retry challenge. Other outcomes:
   [backend response relay rules](../security.md#backend-response-relay), and
   includes `PAYMENT-RESPONSE`, `Cache-Control: private`
   and `Idempotent-Replayed: true`. MPP also includes `Payment-Receipt` on 2xx
-  redeliveries. Retry-key 409s omit the challenge; only an in-flight refusal
-  includes `Retry-After`.
+  redeliveries. Retry-key refusals omit challenges. Reusing a key with other
+  input or another payer returns 409 on x402 and 422 on MPP. On either rail,
+  in-flight claims return 409 with `Retry-After: 1`; unresolved claims return
+  409 without it. Matching exact resends are answered before verification;
+  other proofs are verified first. See
+  [retry after a lost response](../payment-flow.md#retry-after-a-lost-response).

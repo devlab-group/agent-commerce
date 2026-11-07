@@ -231,9 +231,9 @@ persistence must not fail the commerce flow.
     challenge. A lookup failure returns `STORAGE_ERROR` without a challenge;
     a store without the method keeps the 402 response.
   - The method is experimental. The 3.0.0 migration plan makes it required.
-- The planned 2.7.0 API adds optional contracts for paid retries. Existing 2.6
-  resources, stores and providers need no changes. The pipeline supports
-  merchant keys and client retry keys; SQLite implements claim lookup and
+- 2.7.0 adds optional contracts for paid retries. Existing 2.6 resources,
+  stores and providers need no changes. The pipeline supports merchant keys
+  and client retry keys; SQLite implements claim lookup, claim owners and
   recovery filtering. The x402 provider extracts `payment-identifier` IDs;
   the HTTP invoke route reads MPP's `Idempotency-Key` into `retryKey`. Direct
   pipeline requests and custom provider hooks can also supply keys.
@@ -289,6 +289,7 @@ persistence must not fail the commerce flow.
   - `persistenceFailures` gains `response` when a delivered response cannot be
     stored for its client key. The pipeline attempts to mark the claim
     `unresolved`; in-flight and unresolved claims refuse retries with 409.
+    Resolving or reconciling the payment attempt does not change the claim.
   - `CommerceErrorOptions.retryable` overrides the code's default from
     `RETRYABLE_ERROR_CODES` for one error instance, in either direction. An
     in-flight client-key 409 sets it to true so callers can wait and resend
@@ -573,7 +574,10 @@ pending task input before writing it. Hold `metadata` values under
 secret-shaped keys are redacted, as with other metadata. Idempotency bodies,
 the remaining task input and `adapterData` are stored as JSON without
 redaction so they can be replayed or resumed. Callers must keep secrets out
-of those fields.
+of those fields. For completed `redelivery` claims, the idempotency body holds
+the unencrypted paid merchant response. Expiry ends reuse; a later claim sweep
+deletes the row.
+Backups persist separately; see [security](security.md#buyer-protection).
 
 With `legacyStores`, `init()` imports each source once. Each file's rows
 and its `legacy_imports` marker commit in one transaction. Later starts skip

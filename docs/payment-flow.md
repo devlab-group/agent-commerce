@@ -165,6 +165,77 @@ key. The built-in SQLite store keeps it beside payment attempts. It is claimed
 before the payment replay key; failures release it only when no money could
 have moved. See [AP2](protocols/ap2.md#replay-states).
 
+## Retry after a lost response
+
+Experimental and disabled by default. A resource with
+[`idempotency.redelivery`](configuration.md#resources) stores delivered
+response under a buyer-chosen key so a lost response can be retrieved without
+another charge. The key is the x402
+[`payment-identifier`](protocols/x402.md#payment-identifier) `id`, the MPP
+[`Idempotency-Key`](protocols/mpp.md#idempotency-key) header, or
+`CanonicalRequest.retryKey` from a direct caller. Requests without a key follow
+the flow above.
+
+A key identifies one purchase of one resource with one input. Its row is
+scoped by `merchant.publicBaseUrl`, the resource and the key's hash. The
+fingerprint covers only the input digest. A fresh proof from the same payer
+can retrieve the response even if the network, asset or amount has changed,
+provided it verifies against a current offer.
+
+For a request with a proof and a key:
+
+1. Before verification, the gateway reads the row without writing. Only the
+   exact proof that owns it can retrieve the stored response or get 409
+   `payment_identifier_in_flight` or `payment_identifier_unresolved` for an
+   unfinished claim. This path performs no verification, settlement or backend
+   call, even if the proof or challenge has expired.
+2. Other proofs are verified first. Invalid or forged proofs get the normal
+   refusal, without revealing whether the key exists or what input it holds.
+3. A verified proof claims the key before authorization holds and replay
+   reservations. A new key proceeds as an ordinary purchase; an unfinished
+   claim refuses as in step 1. A completed claim returns the response for the
+   same input and verified payer, without settling the fresh proof. Different
+   input, a different or unknown payer, or a different mandate gets 409
+   `payment_identifier_conflict` after one `verify()` that moves no funds.
+
+If the resource requires authorization, both routes require the purchase's
+original authorization submission, byte for byte. The mandate is not verified
+again because the purchase consumed it. Without it, an exact resend falls
+through to verification; a verified fresh proof gets 409
+`payment_identifier_conflict`. Purchases made before the resource required
+authorization cannot be redelivered.
+
+The purchase outcome determines the key's state:
+
+| Purchase outcome                                                                                             | Key state                                                                                                       |
+| ------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------- |
+| Delivered                                                                                                    | `completed`: retries get the stored response                                                                    |
+| Uncharged failure: AP2 or replay refusal, refused settlement, or backend failure in the `authorization` flow | Released: the key can buy again                                                                                 |
+| Uncertain settlement, or backend failure after `upfront` settlement                                          | `unresolved`: retries get 409 without a stored response                                                         |
+| Delivered, but the response or receipt could not be stored                                                   | `unresolved`, or in flight until the next start if that write also fails; the buyer still received the response |
+| Crash or restart while in flight                                                                             | `unresolved` at the next start, even if the crash preceded settlement                                           |
+
+Retry-key 409s carry no challenge, because a challenge could prompt a second
+payment. Only the in-flight 409 is retryable (`retryable: true`,
+`retryAfterSeconds: 1`). `reconcile` and `resolve` record the payment attempt's
+outcome but do not change the key.
+
+Completed and unresolved keys expire `retentionHours` (1 to 8760, default 24)
+after the claiming request first reads the key, which is before verification.
+After expiry, retries follow the normal purchase flow. Removing `redelivery`
+from a resource, renaming it or changing `merchant.publicBaseUrl` also hides
+its rows. ACP's unresolved records never expire.
+
+A redelivery writes no receipt, payment attempt or journal row. Its outcome
+carries its own `transactionId`, as do its events. When available, the purchase's
+ID is `receipt.transactionId` and is copied to the `resource.delivered` event's
+`data.originalTransactionId`.
+
+An exact resend is an exception to the fail-closed rule: it retrieves an
+already-paid response without verification, settlement or a new backend call.
+[Security](security.md#buyer-protection) covers what the key protects and how to
+treat it.
+
 ## Transactions
 
 After `execute()` resolves a resource, core allocates a `transactionId` for the

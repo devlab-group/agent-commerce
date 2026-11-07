@@ -88,11 +88,13 @@ paid backend calls. This setting is experimental and disabled by default.
 The merchant decides how to handle repeated keys.
 
 The generated key hashes `merchant.publicBaseUrl`, the resource ID, a payment
-identity and the canonical input digest with SHA-256. When both the client
-retry key and verified payer are nonempty, the identity uses the key's hash
-and payer; otherwise it uses the payment's replay identity. The same identity
-and input keep the same key across retries. Changing `merchant.publicBaseUrl`
-changes generated keys.
+identity and the canonical input digest with SHA-256. The identity defaults to
+the payment's replay identity. With `redelivery`, requests that have both a
+client retry key and a verified payer use the key's hash and payer instead.
+The retry claim prevents concurrent purchases under that key, and re-signed
+retries keep the same merchant key. With `merchantKey` alone, the client key
+is ignored; a different replay identity produces a different merchant key.
+Changing `merchant.publicBaseUrl` also changes generated keys.
 
 An adapter's operation key takes precedence over the generated key. Either
 overrides an `Idempotency-Key` in `backend.headers`. Without a client retry
@@ -114,9 +116,16 @@ when a retry key is used.
 
 `retentionHours` is an integer from 1 to 8760 (one year), default 24. Config
 load rejects other values. The window starts at the initial retry check, before
-proof verification. `required` defaults to false. Setting it to true requires
-`x402` in `payments` and makes x402 retry-key extraction reject a missing `id`
-with `INPUT_INVALID` (HTTP 400).
+proof verification. Until it ends, a matching exact resend gets the stored
+response without verification, even after the proof or challenge expires. A
+verified fresh proof from the same payer can also retrieve it. After expiry,
+retries follow the normal purchase flow. Stored responses are unencrypted in
+the receipt database and its backups; expiry does not erase them immediately.
+See [security.md](security.md#buyer-protection). `required` defaults to false.
+Setting it to true requires `x402` in `payments` and makes x402 retry-key
+extraction reject a missing `id` with `INPUT_INVALID` (HTTP 400).
+[Retry after a lost response](payment-flow.md#retry-after-a-lost-response)
+describes the rules.
 
 At startup, the gateway marks in-flight payment retry keys `unresolved`, even
 if no resource still enables `redelivery`, and logs a nonzero count at WARN.

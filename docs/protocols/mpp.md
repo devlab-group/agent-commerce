@@ -80,7 +80,8 @@ another charge. An exact resend of `Authorization` skips verification, so an
 expired challenge still works while the response is retained. A new credential
 must answer a fresh challenge and verify as the same payer; it is not settled
 again. Invalid credentials get the usual 402 without revealing whether the key
-exists.
+exists. See
+[retry after a lost response](../payment-flow.md#retry-after-a-lost-response).
 
 Make the key random and keep it secret: with the original credential, it
 unlocks the stored response. The gateway's logger redacts the header; keep it

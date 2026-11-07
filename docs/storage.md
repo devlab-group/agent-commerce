@@ -7,6 +7,10 @@ across restarts:
   journal;
 - from 2.6.0, AP2 mandate holds, ACP idempotency claims and A2A x402 tasks
   waiting for payment;
+- from 2.7.0, payment retry keys and, on a resource with
+  [`idempotency.redelivery`](configuration.md#resources), responses delivered
+  with a client retry key, unencrypted. `retentionHours` limits reuse; a later
+  claim sweep deletes expired rows (see [security.md](security.md#buyer-protection));
 - a record of each deprecated store file it imported.
 
 The gateway creates the file at 0600, and any missing directory at 0700, and
@@ -81,7 +85,7 @@ does not migrate or import records, or take a write lock on the sources.
   permissions.
 - It writes `receipts.sqlite`, a consistent snapshot taken with
   `VACUUM INTO`. It refuses a receipt database at a schema other than v4 (2.5)
-  or v5 (2.6).
+  or v5 (2.6). The snapshot includes the database's unencrypted stored responses.
 - For enabled AP2 or ACP, it also copies any configured legacy file that
   exists, is not `:memory:` and has no recorded import. The copies are named
   `ap2-replay.sqlite` or `acp-idempotency.sqlite`. Before the first 2.6.0
@@ -121,6 +125,9 @@ Restoring a backup discards local records written after its snapshot:
   until it expires. That purchase still requires payment.
 - Retrying an ACP checkout under a key claimed after the backup reaches the
   merchant again with the same derived `Idempotency-Key`.
+- Payment retry keys claimed after the snapshot are lost. A fresh proof with
+  such a key follows the normal purchase flow; an exact resend faces the
+  spent-proof checks above.
 
 A transaction recorded as unresolved in the backup still needs `reconcile`
 or `resolve` to establish its outcome.

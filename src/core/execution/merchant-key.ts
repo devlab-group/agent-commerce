@@ -8,7 +8,10 @@ export interface PaidOperation {
   readonly replayKey: string;
   /** `inputDigest` of the validated input */
   readonly inputDigest: string | undefined;
-  /** Client retry credential; only its hash enters the payment identity */
+  /**
+   * Client retry credential; only its hash enters the payment identity. Pass it
+   * only with `redelivery`, so the retry gate reserves it before the merchant call.
+   */
   readonly clientKey?: string;
   readonly payer?: string;
 }

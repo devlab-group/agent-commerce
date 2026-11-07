@@ -65,7 +65,8 @@ retry with the purchase's client key and original authorization submission,
 byte for byte, can retrieve the stored response. The mandate is not verified
 or reserved again because the purchase consumed it. A missing or different
 mandate prevents redelivery, as does a purchase made before the resource
-required one.
+required one. See
+[retry after a lost response](../payment-flow.md#retry-after-a-lost-response).
 
 ## Agent Commerce checkout profile
 

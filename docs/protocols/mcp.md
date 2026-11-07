@@ -101,11 +101,15 @@ On a resource with [`idempotency.redelivery`](../configuration.md#resources)
 (experimental), x402 can redeliver a stored result for the same
 [payment identifier](x402.md#payment-identifier) and input. The result includes
 the original `_meta["x402/payment-response"]` and sets `redelivered: true` in
-its `agent-commerce/delivery` summary. Refusals with a `payment_identifier_*`
-reason return the error envelope without a challenge or `_meta["x402/error"]`.
-Only an in-flight refusal sets `retryable: true` and `details.retryAfterSeconds`.
-MPP calls carry no retry key
-([mpp.md](mpp.md#idempotency-key)).
+its `agent-commerce/delivery` summary. An exact resend retrieves the stored
+result without verification until retention ends; other proofs are verified
+first. The proof contains the identifier, so keep it out of logs. If the
+resource requires a mandate, include the same `_authorization`. Refusals with a
+`payment_identifier_*` reason return the error envelope without a challenge or
+`_meta["x402/error"]`. Only an in-flight refusal sets `retryable: true` and
+`details.retryAfterSeconds: 1`. MPP calls carry no retry key
+([mpp.md](mpp.md#idempotency-key)). See
+[retry after a lost response](../payment-flow.md#retry-after-a-lost-response).
 
 For payment-required and error results, `content[0].text` is a JSON copy of
 `structuredContent`; `content[1].text` is a sentence for readers. Unexpected

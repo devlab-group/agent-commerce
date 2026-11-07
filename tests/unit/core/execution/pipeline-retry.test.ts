@@ -517,6 +517,31 @@ describe.each([
     ]);
   });
 
+  it('serves a fresh proof from the same payer on other payment terms, settling nothing', async () => {
+    // Fingerprint only input to allow fresh proofs, unlike the spec's payload check
+    const { pipeline, calls } = setup({
+      settleAfterBackend,
+      provider: {
+        verify: async ({ submission }) => ({
+          status: 'verified',
+          provider: 'x402',
+          payer: 'alice',
+          replayKey: `replay-${submission.payload}`,
+          ...(submission.payload === 'alice/1'
+            ? { amount: '0.01', currency: 'USDC', network: 'eip155:8453' }
+            : { amount: '0.02', currency: 'USDT', network: 'eip155:137' }),
+        }),
+      },
+    });
+    const first = await delivered(pipeline.execute(paid()));
+
+    const again = await delivered(pipeline.execute(paid('alice/2')));
+
+    expect(again.redelivered).toBe(true);
+    expect(again.payment).toEqual(first.payment);
+    expect(calls.settle).toBe(1);
+  });
+
   it('refuses another payer, with no stored body in the error', async () => {
     const { pipeline, store, calls } = setup({ settleAfterBackend });
     await delivered(pipeline.execute(paid()));
