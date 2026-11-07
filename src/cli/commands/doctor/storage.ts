@@ -277,5 +277,12 @@ function summaryChecks(summary: SqliteReceiptStoreSummary): DoctorCheck[] {
       detail: `${summary.unresolvedIdempotencyKeys} unresolved; a retry with the same Idempotency-Key gets 409 idempotency_unresolved`,
     });
   }
+  if (summary.unresolvedPaymentKeys > 0) {
+    checks.push({
+      name: 'Payment retry keys',
+      status: 'INFO',
+      detail: `${summary.unresolvedPaymentKeys} unresolved; a paid retry with the same key gets 409 payment_identifier_unresolved`,
+    });
+  }
   return checks;
 }

@@ -243,8 +243,9 @@ persistence must not fail the commerce flow.
   - `redelivery` sets a retention deadline `retentionHours` hours after the
     initial retry check, before proof verification. It requires a store with
     the `idempotency_claims` and `response_redelivery` groups. Both `merchantKey: true`
-    and `redelivery` require the `deployment` option. Missing dependencies make
-    payment admission throw `CONFIG_INVALID` before any provider call.
+    and `redelivery` require the `deployment` option. `createGateway` throws
+    `CONFIG_INVALID` for missing dependencies at startup; a directly built
+    pipeline throws at payment admission, before any provider call.
     With `required` true, x402 retry-key extraction rejects a missing `id`
     with `INPUT_INVALID` (HTTP 400).
   - `CanonicalRequest.retryKey` holds the client's key for retrying a paid
@@ -256,6 +257,9 @@ persistence must not fail the commerce flow.
   - `recoverIdempotencyKeys` takes an optional `endpointPrefix`. Recovery
     matches the prefix literally, including case; omit it to include all
     endpoints. The ACP adapter passes `/` when recovering receipt-store claims.
+    At startup, `createGateway` recovers `payment:` claims with `release: false`
+    only from stores that also implement `getIdempotencyKey`. These stores must
+    honor `endpointPrefix`.
   - `redelivered` on `DeliveredOutcome` and `DeliverySummary` indicates that
     the request reused a stored response without another charge.
     `toDeliverySummary` includes the field only when true; original delivery

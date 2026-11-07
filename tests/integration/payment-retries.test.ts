@@ -4,6 +4,9 @@
  * facilitator client counts verification and settlement calls without
  * contacting a chain.
  */
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { Challenge } from 'mppx';
 import { charge as clientCharge } from 'mppx/evm/client';
 import { generatePrivateKey, type PrivateKeyAccount, privateKeyToAccount } from 'viem/accounts';
@@ -16,10 +19,13 @@ import {
   type Clock,
   type CommerceResource,
   DELIVERY_SUMMARY_META_KEY,
+  type Logger,
   PAYMENT_HEADER,
   PAYMENT_INPUT_FIELD,
   PAYMENT_REQUIRED_HEADER,
   PAYMENT_RESPONSE_HEADER,
+  type ProtocolAdapter,
+  type ReceiptStore,
 } from '../../src/core';
 import { createGateway, type GatewayInstance } from '../../src/gateway';
 import { createMppPaymentProvider } from '../../src/payments/mpp/provider';
@@ -28,8 +34,9 @@ import { createX402PaymentProvider } from '../../src/payments/x402/provider';
 import { createA2aAdapter } from '../../src/protocols/a2a';
 import type { A2aTask } from '../../src/protocols/a2a/types';
 import { A2A_X402_EXTENSION_URI } from '../../src/protocols/a2a/x402-extension';
+import { createAcpAdapter } from '../../src/protocols/acp';
 import { createMcpAdapter } from '../../src/protocols/mcp';
-import { createSqliteReceiptStore } from '../../src/storage/receipts';
+import { createSqliteReceiptStore, type SqliteReceiptStore } from '../../src/storage/receipts';
 
 process.env['NODE_ENV'] = 'test';
 
@@ -124,6 +131,9 @@ const backend: BackendExecutor = {
 
 let gateways: GatewayInstance[] = [];
 let gateway: GatewayInstance;
+let dir: string | undefined;
+let fileStores: SqliteReceiptStore[] = [];
+let stopped: { readonly release: () => void; readonly request: Promise<unknown> } | undefined;
 
 beforeEach(async () => {
   mppNowMs = Date.now();
@@ -146,14 +156,26 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  // Finish the paused purchase before resetting mocks for the next test
+  if (stopped !== undefined) {
+    stopped.release();
+    await stopped.request;
+    stopped = undefined;
+  }
   await Promise.all(gateways.map((instance) => instance.close().catch(() => {})));
   gateways = [];
+  await Promise.all(fileStores.map((store) => store.close()));
+  fileStores = [];
+  if (dir !== undefined) rmSync(dir, { recursive: true, force: true });
+  dir = undefined;
 });
 
-function config(resources: readonly CommerceResource[]): GatewayConfig {
+const BASE_URL = 'https://gw.example';
+
+function config(resources: readonly CommerceResource[], publicBaseUrl = BASE_URL): GatewayConfig {
   return {
     version: 1,
-    merchant: { id: 'shop', name: 'Shop', publicBaseUrl: 'https://gw.example' },
+    merchant: { id: 'shop', name: 'Shop', publicBaseUrl },
     server: { port: 0, host: '127.0.0.1', allowedOrigins: [] },
     storage: { receipts: { driver: 'sqlite', path: ':memory:' } },
     protocols: {
@@ -167,10 +189,20 @@ function config(resources: readonly CommerceResource[]): GatewayConfig {
   };
 }
 
-async function startGateway(resources: readonly CommerceResource[]): Promise<GatewayInstance> {
+interface StartOptions {
+  readonly store?: ReceiptStore;
+  readonly publicBaseUrl?: string;
+  readonly adapters?: readonly ProtocolAdapter[];
+  readonly logger?: Logger;
+}
+
+async function startGateway(
+  resources: readonly CommerceResource[],
+  options: StartOptions = {},
+): Promise<GatewayInstance> {
   const instance = await createGateway({
-    config: config(resources),
-    store: createSqliteReceiptStore({ path: ':memory:' }),
+    config: config(resources, options.publicBaseUrl),
+    store: options.store ?? createSqliteReceiptStore({ path: ':memory:' }),
     paymentProviders: [
       createX402PaymentProvider({
         network: 'eip155:31337',
@@ -195,8 +227,9 @@ async function startGateway(resources: readonly CommerceResource[]): Promise<Gat
         clock: mppClock,
       }),
     ],
-    protocolAdapters: [createMcpAdapter(), createA2aAdapter()],
+    protocolAdapters: [createMcpAdapter(), createA2aAdapter(), ...(options.adapters ?? [])],
     backend,
+    ...(options.logger !== undefined ? { logger: options.logger } : {}),
   });
   gateways.push(instance);
   return instance;
@@ -1043,5 +1076,176 @@ describe('MPP over MCP and A2A', () => {
     expect(failedEnvelope(resend)).toMatchObject({ code: 'PAYMENT_REPLAYED' });
     expect(facilitator.settle).toHaveBeenCalledTimes(1);
     expect(backendCalls).toHaveLength(1);
+  });
+});
+
+const ACP_OPERATIONS = {
+  createCheckoutSession: 'acp_create',
+  updateCheckoutSession: 'acp_update',
+  getCheckoutSession: 'acp_get',
+  completeCheckoutSession: 'acp_complete',
+  cancelCheckoutSession: 'acp_cancel',
+} as const;
+
+const CHECKOUT_RESOURCES: CommerceResource[] = Object.values(ACP_OPERATIONS).map((id) => ({
+  id,
+  name: id,
+  handler: { type: 'http', method: 'POST', url: `http://backend.local/${id}` },
+  pricing: { type: 'free' },
+  exposedVia: ['acp'],
+  paymentMethods: [],
+}));
+
+// Keep the receipt database across gateway restarts
+function openStore(): SqliteReceiptStore {
+  dir ??= mkdtempSync(join(tmpdir(), 'oac-retries-'));
+  const store = createSqliteReceiptStore({ path: join(dir, 'receipts.sqlite') });
+  fileStores.push(store);
+  return store;
+}
+
+// Pause after the retry key is claimed to simulate a crash
+async function stopMidPurchase(instance: GatewayInstance, proof: string): Promise<void> {
+  const release = holdBackend();
+  const request = invoke('x402_report', { [PAYMENT_HEADER]: proof }, '{}', instance);
+  await vi.waitFor(() => expect(backendCalls).toHaveLength(1));
+  // Let later requests reach the backend while this one waits
+  hold = undefined;
+  stopped = { release, request };
+}
+
+function recordingLogger(warnings: unknown[]): Logger {
+  const logger: Logger = {
+    debug() {},
+    info() {},
+    error() {},
+    warn: (obj, msg) => {
+      warnings.push([obj, msg]);
+    },
+    child: () => logger,
+  };
+  return logger;
+}
+
+function fresh402Proof(): Promise<string> {
+  return x402Proof('x402_report', ID);
+}
+
+describe('payment retry keys across a restart', () => {
+  it('marks a key left in flight unresolved at start, so a retry gets 409', async () => {
+    const cleanStart: unknown[] = [];
+    await stopMidPurchase(
+      await startGateway(RESOURCES, { store: openStore(), logger: recordingLogger(cleanStart) }),
+      await fresh402Proof(),
+    );
+    const warnings: unknown[] = [];
+
+    const restarted = await startGateway(RESOURCES, {
+      store: openStore(),
+      logger: recordingLogger(warnings),
+    });
+    const retry = await invoke(
+      'x402_report',
+      { [PAYMENT_HEADER]: await fresh402Proof() },
+      '{}',
+      restarted,
+    );
+
+    expect(cleanStart).toEqual([]);
+    expect(warnings).toEqual([
+      [{ recovered: 1 }, 'Payment retry keys left in flight are now unresolved'],
+    ]);
+    expect(retry.statusCode).toBe(409);
+    expect(retry.json()).toMatchObject({
+      code: 'PAYMENT_REPLAYED',
+      retryable: false,
+      details: { reason: 'payment_identifier_unresolved' },
+    });
+    expect(retry.headers[PAYMENT_REQUIRED_HEADER]).toBeUndefined();
+    expect(facilitator.settle).not.toHaveBeenCalled();
+    expect(backendCalls).toHaveLength(1);
+  });
+
+  it('frees an ACP claim under merchantIdempotent and still marks the payment key unresolved', async () => {
+    const before = openStore();
+    await stopMidPurchase(await startGateway(RESOURCES, { store: before }), await fresh402Proof());
+    const acpScope = { deployment: BASE_URL, endpoint: '/checkout_sessions', key: 'k'.repeat(64) };
+    const expiresAt = new Date(Date.now() + 3_600_000).toISOString();
+    await before.claimIdempotencyKey(acpScope, 'fingerprint', expiresAt);
+    const after = openStore();
+
+    const restarted = await startGateway([...RESOURCES, ...CHECKOUT_RESOURCES], {
+      store: after,
+      adapters: [
+        createAcpAdapter({
+          mountPath: '/acp',
+          token: 'acp-token',
+          operations: ACP_OPERATIONS,
+          idempotency: { retentionHours: 24, merchantIdempotent: true },
+          store: after,
+        }),
+      ],
+    });
+    const retry = await invoke(
+      'x402_report',
+      { [PAYMENT_HEADER]: await fresh402Proof() },
+      '{}',
+      restarted,
+    );
+
+    expect(await after.getIdempotencyKey(acpScope, 'fingerprint')).toBeUndefined();
+    expect(retry.statusCode).toBe(409);
+    expect(retry.json()).toMatchObject({ details: { reason: 'payment_identifier_unresolved' } });
+    expect(facilitator.settle).not.toHaveBeenCalled();
+  });
+
+  // Count unresolved keys independently of the gateway's retry settings
+  async function unresolvedPaymentKeys(): Promise<number> {
+    return (await openStore().summary({ orphanHoldMinAgeMs: 0 })).unresolvedPaymentKeys;
+  }
+
+  it('recovers the key without the opt-in, sells again, and doctor still counts the key', async () => {
+    await stopMidPurchase(
+      await startGateway(RESOURCES, { store: openStore() }),
+      await fresh402Proof(),
+    );
+
+    const withoutOptIn = await startGateway([resource('x402_report', ['x402'])], {
+      store: openStore(),
+    });
+    const purchase = await invoke(
+      'x402_report',
+      { [PAYMENT_HEADER]: await fresh402Proof() },
+      '{}',
+      withoutOptIn,
+    );
+
+    expect(purchase.statusCode).toBe(200);
+    expect(purchase.headers['idempotent-replayed']).toBeUndefined();
+    expect(facilitator.settle).toHaveBeenCalledTimes(1);
+    expect(await unresolvedPaymentKeys()).toBe(1);
+  });
+
+  it('sells again after publicBaseUrl changes, and doctor still counts the key', async () => {
+    await stopMidPurchase(
+      await startGateway(RESOURCES, { store: openStore() }),
+      await fresh402Proof(),
+    );
+
+    const moved = await startGateway(RESOURCES, {
+      store: openStore(),
+      publicBaseUrl: 'https://moved.example',
+    });
+    const purchase = await invoke(
+      'x402_report',
+      { [PAYMENT_HEADER]: await fresh402Proof() },
+      '{}',
+      moved,
+    );
+
+    expect(purchase.statusCode).toBe(200);
+    expect(purchase.headers['idempotent-replayed']).toBeUndefined();
+    expect(facilitator.settle).toHaveBeenCalledTimes(1);
+    expect(await unresolvedPaymentKeys()).toBe(1);
   });
 });

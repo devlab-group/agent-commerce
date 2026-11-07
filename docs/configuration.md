@@ -117,6 +117,16 @@ starts at the initial retry check, before proof verification. `required`
 defaults to false. Setting it to true requires `x402` in `payments` and makes
 x402 retry-key extraction reject a missing `id` with `INPUT_INVALID` (HTTP 400).
 
+At startup, the gateway marks in-flight payment retry keys `unresolved`, even
+if no resource still enables `redelivery`, and logs a nonzero count at WARN.
+Those requests may have charged; with `redelivery` enabled, matching retries
+get 409 `payment_identifier_unresolved`. `doctor` reports unresolved keys as
+INFO. Run one gateway process per receipt database.
+
+Removing `redelivery`, renaming a resource or changing `merchant.publicBaseUrl`
+makes its stored responses and unresolved keys unavailable to new requests.
+Reusing a key can then start a new purchase.
+
 `url` supports `{param}` templating from validated input; values are
 URL-encoded. Remaining input becomes query string for `GET`/`DELETE` and a JSON
 body otherwise - unless `backend.inputBindings` says otherwise, below.

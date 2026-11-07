@@ -267,6 +267,7 @@ describe('runDoctor: checks from the store summary', () => {
     });
     expect(check(report, 'Authorization holds')).toBeUndefined();
     expect(check(report, 'ACP claims')).toBeUndefined();
+    expect(check(report, 'Payment retry keys')).toBeUndefined();
   });
 
   it('warns with the count of each unresolved state and where to resolve them', async () => {
@@ -307,6 +308,22 @@ describe('runDoctor: checks from the store summary', () => {
       status: 'INFO',
       detail: '2 unresolved; a retry with the same Idempotency-Key gets 409 idempotency_unresolved',
     });
+  });
+
+  it('reports unresolved payment retry keys as INFO, apart from ACP claims', async () => {
+    const report = await doctorWith(
+      makeGatewayConfig({ storage: { receipts: { driver: 'sqlite', path: receipts } } }),
+      withSummary({ unresolvedPaymentKeys: 3, unresolvedIdempotencyKeys: 1 }),
+    );
+
+    expect(check(report, 'Payment retry keys')).toEqual({
+      name: 'Payment retry keys',
+      status: 'INFO',
+      detail: '3 unresolved; a paid retry with the same key gets 409 payment_identifier_unresolved',
+    });
+    expect(check(report, 'ACP claims')?.detail).toBe(
+      '1 unresolved; a retry with the same Idempotency-Key gets 409 idempotency_unresolved',
+    );
   });
 
   it('adds no summary check, and leaves the import state unknown, when the summary throws', async () => {

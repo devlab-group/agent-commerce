@@ -14,6 +14,7 @@ export {
 } from './backend-request';
 export type { CreateExecutionPipelineOptions } from './pipeline';
 export { createExecutionPipeline } from './pipeline';
+export { assertRetrySupport } from './pipeline/retry';
 export { createResourceRegistry } from './registry';
 export type { CreateStoreEventSinkOptions } from './store-event-sink';
 export { createStoreEventSink } from './store-event-sink';
