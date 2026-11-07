@@ -30,7 +30,7 @@ const NONCE = `0x${'01'.repeat(32)}` as const;
 const PINNED_ID = 'pay_0123456789abcdef';
 const KEY = 'payment-identifier';
 
-// declarePaymentIdentifierExtension(required) from @x402/extensions 2.25.0
+// declarePaymentIdentifierExtension(required) from @x402/extensions 2.30.0
 function declared(required: boolean): Record<string, unknown> {
   return {
     info: { required },

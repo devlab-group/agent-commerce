@@ -8,7 +8,7 @@ Omitting asset fields selects the built-in testnet USDC profile.
 The gateway loads NEAR support only when a NEAR offer is configured:
 
 ```bash
-npm install @x402/near@2.25.0
+npm install @x402/near@2.30.0
 ```
 
 ## What you need

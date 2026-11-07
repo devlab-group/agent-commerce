@@ -123,11 +123,11 @@
   "peerDependencies": {
     "@modelcontextprotocol/server": "2.3.0",
     "@sd-jwt/core": "0.20.1",
-    "@solana/kit": "5.5.1",
-    "@x402/core": "2.25.0",
-    "@x402/evm": "2.25.0",
-    "@x402/near": "2.25.0",
-    "@x402/svm": "2.25.0",
+    "@solana/kit": "8.6.0",
+    "@x402/core": "2.30.0",
+    "@x402/evm": "2.30.0",
+    "@x402/near": "2.30.0",
+    "@x402/svm": "2.30.0",
     "canonicalize": "5.0.0",
     "jose": "6.2.12",
     "mppx": "0.13.1",
@@ -180,18 +180,18 @@
     "@near-js/signers": "2.5.1",
     "@near-js/transactions": "2.5.1",
     "@sd-jwt/core": "0.20.1",
-    "@solana/kit": "5.5.1",
+    "@solana/kit": "8.6.0",
     "@types/better-sqlite3": "9.6.0",
     "@types/node": "24.13.3",
     "@types/react": "19.2.18",
     "@types/react-dom": "19.2.4",
     "@vitejs/plugin-react": "6.0.5",
     "@vitest/coverage-v8": "4.1.12",
-    "@x402/core": "2.25.0",
-    "@x402/evm": "2.25.0",
-    "@x402/mcp": "2.25.0",
-    "@x402/near": "2.25.0",
-    "@x402/svm": "2.25.0",
+    "@x402/core": "2.30.0",
+    "@x402/evm": "2.30.0",
+    "@x402/mcp": "2.30.0",
+    "@x402/near": "2.30.0",
+    "@x402/svm": "2.30.0",
     "canonicalize": "5.0.0",
     "jose": "6.2.12",
     "mppx": "0.13.1",
@@ -208,12 +208,6 @@
   "overrides": {
     "@sd-jwt/core": {
       "@owf/identity-common": "0.3.2"
-    },
-    "@x402/core": {
-      "zod": "3.25.76"
-    },
-    "@x402/evm": {
-      "zod": "3.25.76"
     }
   }
 }
