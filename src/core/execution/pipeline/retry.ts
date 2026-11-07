@@ -272,7 +272,7 @@ export function createRetryGate(ctx: PipelineContext): RetryGate {
       body: response.body ?? null,
       receiptId: receipt.id,
     };
-    // Redelivery needs the original receipt, so a failed receipt write must block completion
+    // Complete the claim only if its original receipt was saved
     const receiptSaved = !flow.persistenceFailures.includes('receipt');
     const update = { kind: 'completed', status: response.status, body: stored } as const;
     if (receiptSaved && (await write(flow, ticket, update))) return;

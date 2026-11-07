@@ -231,6 +231,18 @@ describe('ACP request guards', () => {
       'idempotency_key_invalid',
     ],
     [
+      'an Idempotency-Key with a DEL character',
+      { 'idempotency-key': 'k\x7fx' },
+      400,
+      'idempotency_key_invalid',
+    ],
+    [
+      'an Idempotency-Key with a non-ASCII character',
+      { 'idempotency-key': 'cl\u00e9' },
+      400,
+      'idempotency_key_invalid',
+    ],
+    [
       'a non-JSON content type',
       { 'content-type': 'application/x-www-form-urlencoded' },
       415,
@@ -256,6 +268,23 @@ describe('ACP request guards', () => {
     expect(result.body['code']).toBe(code);
     expect(result.body['type']).toBe('invalid_request');
     expect(execute).not.toHaveBeenCalled();
+  });
+
+  // ACP does not parse the RFC 9651 quoted form: the quotes belong to the key
+  it.each([
+    ['1 character', 'k'],
+    ['255 characters', 'k'.repeat(255)],
+    ['a quoted string', '"idem-key-1"'],
+    ['inner spaces', 'order 42'],
+  ])('accepts an Idempotency-Key of %s', async (_label, key) => {
+    const { context } = setup(deliveredFor('createCheckoutSession'));
+
+    const result = await checkout(context, {
+      headers: goodHeaders({ 'idempotency-key': key }),
+      body: VALID_CREATE,
+    });
+
+    expect(result.status).toBe(201);
   });
 
   it.each([

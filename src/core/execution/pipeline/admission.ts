@@ -10,7 +10,7 @@ import type {
 } from '../../domain/request';
 import type { CommerceResource, Pricing } from '../../domain/resource';
 import { CommerceError, isCommerceError, toCommerceError } from '../../errors';
-import { type Flow, newTransaction } from '../journal';
+import { type Flow, inputDigest, newTransaction } from '../journal';
 import { paidOperationKey } from '../merchant-key';
 import { REUSE_REJECTED_AUTHORIZATION_METADATA_KEY } from '../settlement-order';
 import { type AuthorizeAndReserve, resolveAuthorizationProviders } from './authorization';
@@ -65,8 +65,8 @@ export function createPaymentAdmission(
       );
     }
 
-    // Resolved before the challenge so the 402 can name what the retry must
-    // also carry, and so an uncheckable method fails before payment starts
+    // Resolve authorization before building the challenge, so the 402 lists required
+    // methods and unsupported methods fail before payment starts
     const authProviders = resolveAuthorizationProviders(
       options.authorizationProviders ?? [],
       resource,
@@ -208,9 +208,11 @@ export function createPaymentAdmission(
       });
     }
     const replayKey = verification.replayKey;
+    // Reuse one input digest for the retry claim, journal and merchant key
+    const digest = retry?.fingerprint ?? inputDigest(validInput);
 
-    // Claim before authorization holds and replay reservations so a losing request has
-    // no new reservation to release
+    // Claim the retry key before authorization holds or replay reservations, so a losing
+    // request has no new reservation to release
     if (retry !== undefined) {
       const stored = await retryGate.claim(
         flow,
@@ -251,12 +253,12 @@ export function createPaymentAdmission(
             resource,
             requirement,
             verification,
-            validInput,
+            digest,
             hold !== undefined ? { ...hold.record, reservationId: hold.reservationId } : undefined,
           ),
         });
         // Require a matching transaction ID and recordTransactionStep before enabling
-        // journaling, so legacy stores can ignore the transaction data
+        // journaling; legacy stores can then ignore the transaction data
         flow.journaled =
           attempt.transactionId === flow.transactionId &&
           options.store.recordTransactionStep !== undefined;
@@ -298,7 +300,7 @@ export function createPaymentAdmission(
               deployment: support.deployment,
               resourceId: resource.id,
               replayKey,
-              input: validInput,
+              inputDigest: digest,
               ...(retry !== undefined ? { clientKey: retry.clientKey } : {}),
               ...(verification.payer !== undefined ? { payer: verification.payer } : {}),
             })

@@ -23,7 +23,7 @@ export function paymentIdentifierExtensions(
 ): Record<string, unknown> | undefined {
   const redelivery = resource.idempotency?.redelivery;
   if (redelivery === undefined) return undefined;
-  // Build a fresh declaration so a buyer's in-place ID update cannot affect another challenge
+  // A fresh declaration keeps a buyer's in-place ID update from reaching another challenge
   return {
     [PAYMENT_IDENTIFIER]: {
       info: { required: redelivery.required },

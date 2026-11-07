@@ -23,6 +23,7 @@
  */
 import type { Database } from 'better-sqlite3';
 import { type Logger, NOOP_LOGGER } from '../../../core';
+import { MAX_IDEMPOTENCY_KEY_LENGTH } from '../../../core/idempotency-key';
 import { openSqliteDatabase } from '../../../storage/sqlite';
 
 // v2 keys rows by the deployment's public base URL; v1 keyed them by a
@@ -30,7 +31,7 @@ import { openSqliteDatabase } from '../../../storage/sqlite';
 const SCHEMA_VERSION = 2;
 
 /** Longest `Idempotency-Key` ACP allows */
-export const ACP_MAX_IDEMPOTENCY_KEY_LENGTH = 255;
+export const ACP_MAX_IDEMPOTENCY_KEY_LENGTH = MAX_IDEMPOTENCY_KEY_LENGTH;
 
 /** Scope of one claim: which deployment, which endpoint, which key */
 export interface AcpIdempotencyScope {

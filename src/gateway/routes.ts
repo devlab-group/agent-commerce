@@ -29,6 +29,7 @@ import {
   toPaymentRequiredEnvelope,
 } from '../core';
 import { journalOf, resolveManually } from '../core/execution/reconcile';
+import { isUsableIdempotencyKey } from '../core/idempotency-key';
 import { isRecord } from '../core/is-record';
 import { mppProblem, mppProblemDetail } from '../payments/mpp/problems';
 import { CONTENT_DIGEST_METADATA_KEY, contentDigest } from '../payments/mpp/transport';
@@ -506,7 +507,7 @@ function sendInvokeError(
   if (PROVIDER_UNAVAILABLE_CODES.has(error.code)) {
     reply.header('retry-after', String(PROVIDER_RETRY_AFTER_SECONDS));
   }
-  // In-flight retry claims supply this delay so the client can wait for completion
+  // Tell clients to wait before retrying an in-flight claim
   const retryAfter = details?.['retryAfterSeconds'];
   if (typeof retryAfter === 'number' && Number.isSafeInteger(retryAfter) && retryAfter >= 0) {
     reply.header('retry-after', String(retryAfter));
@@ -544,7 +545,7 @@ function sendInvokeError(
     paymentMethod === 'mpp' &&
     (MPP_PROBLEM_CODES.has(error.code) || reason?.startsWith('payment_identifier_') === true)
   ) {
-    // RFC 9457 `status` is the HTTP status, so it replaces the envelope's
+    // RFC 9457 `status` is the HTTP status, which replaces the envelope's
     // `status: 'error'`; the other envelope fields stay as extension members
     const { status: _envelopeStatus, ...members } = envelope;
     reply
@@ -567,14 +568,11 @@ function sendInvokeError(
   reply.status(status).send(envelope);
 }
 
-// Use ACP's printable-ASCII length limit. The key unlocks a stored response,
-// so validation errors must not quote it.
-const IDEMPOTENCY_KEY_PATTERN = /^[\x20-\x7e]{1,255}$/;
-
+// The key unlocks a stored response, so validation errors must not quote it
 function mppRetryKey(request: FastifyRequest, resourceId: string): string | undefined {
   const value = request.headers['idempotency-key'];
   if (value === undefined) return undefined;
-  if (typeof value === 'string' && IDEMPOTENCY_KEY_PATTERN.test(value)) return value;
+  if (typeof value === 'string' && isUsableIdempotencyKey(value)) return value;
   throw new CommerceError(
     'INPUT_INVALID',
     'The Idempotency-Key header must be 1 to 255 printable ASCII characters',

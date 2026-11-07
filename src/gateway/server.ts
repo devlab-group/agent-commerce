@@ -96,7 +96,7 @@ function withProviderBackedMethodsFirst(
     : resource;
 }
 
-// Mark interrupted payment claims unresolved so a retry returns 409 after a possible charge.
+// Mark interrupted payment claims unresolved: a retry then returns 409 after a possible charge.
 // Require getIdempotencyKey too: the retry gate cannot write payment claims without it, and older
 // claim stores may ignore endpointPrefix and mark ACP claims unresolved.
 async function recoverPaymentKeys(store: ReceiptStore, logger: Logger): Promise<void> {
@@ -136,7 +136,7 @@ export async function createGateway(options: GatewayOptions): Promise<GatewayIns
     ),
   );
   // Validate retry dependencies before accepting requests. Recover payment keys even
-  // when no resource enables redelivery, so removing it leaves no keys in flight.
+  // when no resource enables redelivery; removing the option then leaves no keys in flight.
   for (const resource of resources.list()) {
     assertRetrySupport(resource, options.store, options.config.merchant.publicBaseUrl);
   }

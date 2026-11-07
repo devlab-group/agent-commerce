@@ -1,7 +1,7 @@
 /**
  * Idempotency claims use the ACP store's rules and v2 columns. Keep its stored
- * state names (`in_flight`) so legacy rows can be copied without translating
- * their states.
+ * state names (`in_flight`) to copy legacy rows without translating their
+ * states.
  *
  * `completed` rows and unresolved payment retry keys expire at their retention
  * deadline; retries then follow the normal purchase flow. Unresolved ACP rows

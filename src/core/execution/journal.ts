@@ -78,7 +78,7 @@ export function newTransaction(
   resource: CommerceResource,
   requirement: PaymentRequirement,
   verification: PaymentResult,
-  validInput: unknown,
+  digest: string | undefined,
   authorization: NewTransaction['authorization'],
 ): NewTransaction {
   const raw = verification.metadata?.[RECONCILIATION_METADATA_KEY];
@@ -86,7 +86,6 @@ export function newTransaction(
   const expiresAt = typeof locator?.['expiresAt'] === 'string' ? locator['expiresAt'] : undefined;
   const network = verification.network ?? requirement.network;
   const asset = verification.asset ?? requirement.asset;
-  const digest = inputDigest(validInput);
   return {
     id: flow.transactionId,
     protocol: flow.request.protocol,

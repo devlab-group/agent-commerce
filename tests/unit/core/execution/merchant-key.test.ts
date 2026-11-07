@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { inputDigest } from '../../../../src/core/execution/journal';
 import { paidOperationKey } from '../../../../src/core/execution/merchant-key';
 
 // Independent sha256sum fixtures detect format changes that could break merchant deduplication.
@@ -11,7 +12,7 @@ const operation = {
   deployment: 'https://gw.example',
   resourceId: 'report',
   replayKey: '0xabc',
-  input: { city: 'Oslo' },
+  inputDigest: inputDigest({ city: 'Oslo' }),
 };
 const retried = { ...operation, clientKey: 'client-key-1', payer: '0xPAYER' };
 
@@ -31,7 +32,7 @@ describe('paidOperationKey', () => {
   it.each([
     ['payer', { payer: '0xOTHER' }],
     ['client key', { clientKey: 'client-key-2' }],
-    ['input', { input: { city: 'Bergen' } }],
+    ['input', { inputDigest: inputDigest({ city: 'Bergen' }) }],
     ['resource', { resourceId: 'other' }],
     ['deployment', { deployment: 'https://other.example' }],
   ])('gives another %s a different key', (_name, change) => {
@@ -65,6 +66,8 @@ describe('paidOperationKey', () => {
   });
 
   it('gives no key for input that is not I-JSON', () => {
-    expect(paidOperationKey({ ...operation, input: { text: '\uD800' } })).toBeUndefined();
+    expect(
+      paidOperationKey({ ...operation, inputDigest: inputDigest({ text: '\uD800' }) }),
+    ).toBeUndefined();
   });
 });

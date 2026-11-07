@@ -6,6 +6,7 @@
  * pipeline.
  */
 import type { IncomingMessage } from 'node:http';
+import { isUsableIdempotencyKey } from '../../core/idempotency-key';
 import { readCappedBody } from '../http';
 import {
   ACP_API_VERSION,
@@ -303,12 +304,6 @@ function forwardedHeaders(
     }
   }
   return forwarded;
-}
-
-function isUsableIdempotencyKey(value: string): boolean {
-  return (
-    value.length > 0 && value.length <= ACP_MAX_IDEMPOTENCY_KEY_LENGTH && isVisibleAscii(value)
-  );
 }
 
 /**
