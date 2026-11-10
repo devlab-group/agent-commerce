@@ -221,9 +221,10 @@ implemented.
 ## Health details
 
 `GET /ready` exposes fixed status terms, not dependency messages. Returned
-details are logged at `debug`. Store and provider health throws are logged at
-`error`; adapter throws become failed health results whose details are logged
-at `debug`. Only `fail` blocks readiness. Results are cached briefly and
+failures log at `warn` when the check first fails or fails again after recovery;
+other returned details use `debug`. Store and provider health throws are logged
+at `error`; adapter throws become failed results and follow the logging rules
+for returned results. Only `fail` blocks readiness. Results are cached briefly, and
 concurrent probes share one in-flight check.
 
 ## Denial of service

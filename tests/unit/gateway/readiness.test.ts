@@ -125,3 +125,59 @@ describe('createReadinessProbe', () => {
     expect((await probe.check()).ready).toBe(false);
   });
 });
+
+describe('readiness logging', () => {
+  // At the default info level, warn explains a returned failure behind /ready's 503
+  it('logs a failing detail at warn once per outage, and at debug while it lasts', async () => {
+    const lines: Array<{ level: string; entry: Record<string, unknown> }> = [];
+    const record =
+      (level: string) =>
+      (entry: Record<string, unknown>): void => {
+        lines.push({ level, entry });
+      };
+    const logger: Logger = {
+      debug: record('debug'),
+      info: record('info'),
+      warn: record('warn'),
+      error: record('error'),
+      child: () => logger,
+    };
+    let status: 'pass' | 'fail' = 'fail';
+    const provider = {
+      ...createFakePaymentProvider(),
+      health: async () => ({ status, checkedAt: 'x', detail: 'rpc https://rpc.example timed out' }),
+    };
+    const clock = createFakeClock();
+    const probe = createReadinessProbe(
+      {
+        store: createFakeStore(),
+        adapterRuntimes: [],
+        paymentProviders: [provider],
+        authorizationProviders: [],
+        clock,
+        logger,
+      },
+      100,
+    );
+    const warnings = () =>
+      lines.filter(
+        ({ level, entry }) =>
+          level === 'warn' && entry['detail'] === 'rpc https://rpc.example timed out',
+      ).length;
+
+    expect((await probe.check()).ready).toBe(false);
+    clock.advance(101);
+    await probe.check();
+    expect(warnings()).toBe(1);
+    expect(lines.filter(({ level }) => level === 'debug')).toHaveLength(1);
+
+    // Recovery clears the failure marker, so the next failure warns again
+    status = 'pass';
+    clock.advance(101);
+    expect((await probe.check()).ready).toBe(true);
+    status = 'fail';
+    clock.advance(101);
+    await probe.check();
+    expect(warnings()).toBe(2);
+  });
+});

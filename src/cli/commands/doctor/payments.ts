@@ -284,7 +284,7 @@ function railOffer(option: {
   };
 }
 
-// Discovery exposes offer statuses; reasons stay in gateway debug logs
+// Discovery exposes offer statuses; reasons stay in gateway logs
 function offerHealthCheck(
   live: RailTerms,
   named: (network: string) => string,
