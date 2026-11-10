@@ -24,7 +24,7 @@ const RpcUrl = z
   .min(1)
   .refine(isHttpUrl, { message: 'must be an http:// or https:// URL' });
 
-function isHttpUrl(value: string): boolean {
+export function isHttpUrl(value: string): boolean {
   try {
     const { protocol } = new URL(value);
     return protocol === 'http:' || protocol === 'https:';

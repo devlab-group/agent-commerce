@@ -3,7 +3,7 @@ import { CommerceError } from '../../core';
 import { normalizeAcp, validateAcpCheckoutMapping } from './acp';
 import { normalizeAp2, validateLegacyStoresIsolated } from './ap2';
 import { normalizeMpp } from './mpp';
-import { type RawConfig, SUPPORTED_CONFIG_VERSION } from './raw';
+import { isHttpUrl, type RawConfig, SUPPORTED_CONFIG_VERSION } from './raw';
 import { normalizeResource } from './resources';
 import type { GatewayConfig, NormalizedProtocols } from './types';
 import { toBoolean, toNumber } from './values';
@@ -75,6 +75,13 @@ export function normalize(raw: RawConfig): GatewayConfig {
       'CONFIG_INVALID',
       'protocols.a2a.enabled is true but no resource lists "a2a" in its expose',
       { details: { path: 'protocols.a2a.enabled' } },
+    );
+  }
+
+  // Preserve 2.x compatibility: warn about invalid URLs instead of rejecting them
+  if (!isHttpUrl(raw.merchant.publicBaseUrl)) {
+    console.warn(
+      `[agent-commerce] merchant.publicBaseUrl ${JSON.stringify(raw.merchant.publicBaseUrl)} is not an http:// or https:// URL. The Host check may then refuse every caller but loopback, and the A2A Agent Card and ACP discovery publish broken URLs.`,
     );
   }
 

@@ -1138,6 +1138,29 @@ describe('parseConfig', () => {
     }
   });
 
+  // Preserve 2.x compatibility by warning about an invalid URL
+  it.each([
+    ['https//shop.example', 1],
+    ['shop.example', 1],
+    ['ftp://shop.example', 1],
+    ['https://shop.example', 0],
+    ['http://localhost:8080', 0],
+  ])('merchant.publicBaseUrl %s warns %i time(s)', (publicBaseUrl, warnings) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const raw = validRawConfig();
+      (raw['merchant'] as Record<string, unknown>)['publicBaseUrl'] = publicBaseUrl;
+
+      expect(parseConfig(raw, {}).merchant.publicBaseUrl).toBe(publicBaseUrl);
+      const calls = warn.mock.calls.filter(([message]) =>
+        String(message).includes('merchant.publicBaseUrl'),
+      );
+      expect(calls).toHaveLength(warnings);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   describe('unsupported schema keyword warning', () => {
     let warnSpy: ReturnType<typeof vi.spyOn>;
     beforeEach(() => {

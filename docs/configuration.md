@@ -840,7 +840,8 @@ fixed-price, or with neither `merchantKey` nor `redelivery` · a
 `challengeSecret` with length below 32 or a multi-line `realm` · a remote
 facilitator `url` with a query string or fragment.
 
-It exits non-zero on any of them.
+Validation exits non-zero for these errors. It warns without failing if
+`merchant.publicBaseUrl` is not an http(s) URL.
 
 ## Environment
 
