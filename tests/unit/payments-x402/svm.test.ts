@@ -1,8 +1,12 @@
 import { generateKeyPairSigner } from '@solana/kit';
 import { decodeTransactionFromPayload, transactionMessageHash } from '@x402/svm';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { computeSvmReplayKey } from '../../../src/payments/x402/replay-key';
-import { associatedTokenAccount, inspectSvmPayload } from '../../../src/payments/x402/svm';
+import {
+  associatedTokenAccount,
+  inspectSvmPayload,
+  messageHashOf,
+} from '../../../src/payments/x402/svm';
 import {
   BLOCKHASH,
   buildSvmPayment,
@@ -77,5 +81,18 @@ describe('inspectSvmPayload', () => {
     expect(keyOf(Buffer.from([1, 2, 3]).toString('base64'))).toBe(
       'invalid_exact_svm_payload_transaction_could_not_be_decoded',
     );
+  });
+
+  // Keep malformed caller input off stderr to prevent forged log entries
+  it('keeps an undecodable transaction off the console', () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const forged = '!!\n{"level":50,"msg":"FORGED"}\n';
+      expect(keyOf(forged)).toBe('invalid_exact_svm_payload_transaction_could_not_be_decoded');
+      expect(messageHashOf(forged)).toBeUndefined();
+      expect(error).not.toHaveBeenCalled();
+    } finally {
+      error.mockRestore();
+    }
   });
 });
