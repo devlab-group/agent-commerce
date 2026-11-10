@@ -647,11 +647,28 @@ describe('parseConfig', () => {
       expect(message).toContain('apiKeySecret is empty');
     });
 
+    // The SDK appends `/verify` to the URL string, so a query or fragment
+    // would swallow the route
+    it.each([
+      ['a query string', 'https://facilitator.example.com/api?api_key=abc', 'none'],
+      ['an empty query', 'https://facilitator.example.com/api?', 'none'],
+      ['a fragment', 'https://facilitator.example.com/api#abc', 'none'],
+      ['a query on the CDP URL', 'https://api.cdp.coinbase.com/platform/v2/x402?tenant=abc', 'cdp'],
+      ['a fragment on the CDP URL', 'https://api.cdp.coinbase.com/platform/v2/x402#abc', 'cdp'],
+    ])('rejects a facilitator url with %s', (_label, url, type) => {
+      const auth =
+        type === 'cdp' ? { type, apiKeyId: 'key-id', apiKeySecret: 'key-secret' } : { type };
+      const message = messageFor(
+        withX402({ payTo: MERCHANT, facilitator: { mode: 'remote', url, auth } }),
+      );
+      expect(message).toContain('query string or fragment');
+      expect(message).not.toContain('abc');
+    });
+
     // The CDP JWT names CDP's host and route whatever URL is set
     it.each([
       ['another host', 'https://facilitator.example.com'],
       ['another CDP route', 'https://api.cdp.coinbase.com/platform/v1/x402'],
-      ['a query string', 'https://api.cdp.coinbase.com/platform/v2/x402?tenant=a'],
     ])('rejects CDP auth against %s', (_label, url) => {
       const message = messageFor(
         withX402({
@@ -666,7 +683,6 @@ describe('parseConfig', () => {
       expect(message).toContain(
         'signs requests for https://api.cdp.coinbase.com/platform/v2/x402 only',
       );
-      expect(message).not.toContain('tenant=a');
     });
 
     it('accepts CDP auth with a trailing slash on its URL', () => {

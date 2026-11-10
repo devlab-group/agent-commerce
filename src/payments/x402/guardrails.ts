@@ -226,6 +226,14 @@ function assertFacilitatorUrlIsSafe(url: string, mode: DeploymentMode, at: strin
       details: { path: `${at}.facilitator.url` },
     });
   }
+  // The SDK appends `/verify` to the URL string, which would land the route
+  // inside a query or fragment. The raw test also catches an empty `?` or `#`.
+  if (/[?#]/.test(url)) {
+    throw invalid(
+      `${at}: facilitator ${describeOrigin(url)} has a query string or fragment in facilitator.url. The x402 client appends its routes to the URL, so they would land inside it. Remove it; send a credential with facilitator.auth instead.`,
+      `${at}.facilitator.url`,
+    );
+  }
 
   if (parsed.protocol === 'https:') return;
   if (parsed.protocol !== 'http:') {
@@ -253,9 +261,7 @@ function isCdpFacilitatorUrl(url: string): boolean {
     const parsed = new URL(url);
     const expected = new URL(CDP_FACILITATOR_URL);
     return (
-      parsed.origin === expected.origin &&
-      parsed.pathname.replace(/\/+$/, '') === expected.pathname &&
-      parsed.search === ''
+      parsed.origin === expected.origin && parsed.pathname.replace(/\/+$/, '') === expected.pathname
     );
   } catch {
     return false;

@@ -836,7 +836,8 @@ with `x402` in `payments` · an `idempotency` block on a resource that is not
 fixed-price, or with neither `merchantKey` nor `redelivery` · a
 `redelivery.retentionHours` that is not an integer from 1 to 8760 ·
 `redelivery.required: true` on a resource without `x402` in `payments` · an MPP
-`challengeSecret` with length below 32 or a multi-line `realm`.
+`challengeSecret` with length below 32 or a multi-line `realm` · a remote
+facilitator `url` with a query string or fragment.
 
 It exits non-zero on any of them.
 
