@@ -841,7 +841,9 @@ fixed-price, or with neither `merchantKey` nor `redelivery` · a
 facilitator `url` with a query string or fragment.
 
 Validation exits non-zero for these errors. It warns without failing if
-`merchant.publicBaseUrl` is not an http(s) URL.
+`merchant.publicBaseUrl` is not an http(s) URL, or if
+`redelivery.required: true` is set on a resource whose first enabled rail is not
+x402.
 
 ## Environment
 

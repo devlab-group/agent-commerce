@@ -237,7 +237,13 @@ export function normalizeResource(
     );
   }
 
-  const idempotency = normalizeResourceIdempotency(id, entry, paymentMethods);
+  // The gateway serves a resource on the first rail it lists that is enabled
+  const servingRail = paymentMethods.find(
+    (method) =>
+      (method === 'x402' && x402?.config.enabled === true) ||
+      (method === 'mpp' && mpp?.enabled === true),
+  );
+  const idempotency = normalizeResourceIdempotency(id, entry, paymentMethods, servingRail);
 
   const pricing: Pricing =
     entry.pricing.type === 'free'
@@ -283,6 +289,7 @@ function normalizeResourceIdempotency(
   id: string,
   entry: RawResourceEntry,
   paymentMethods: readonly string[],
+  servingRail: string | undefined,
 ): CommerceResource['idempotency'] {
   const raw = entry.idempotency;
   if (raw === undefined) return undefined;
@@ -305,6 +312,12 @@ function normalizeResourceIdempotency(
       throw refuse(
         'idempotency.redelivery.required, which requires "x402" in payments',
         `${path}.redelivery.required`,
+      );
+    }
+    // A warning, not a refusal: 2.7.0 loads this config
+    if (required && servingRail !== undefined && servingRail !== 'x402') {
+      console.warn(
+        `[agent-commerce] Resource "${id}" sets idempotency.redelivery.required, which applies to x402 only, but the gateway serves it on ${servingRail}, the first enabled rail in its payments. The setting has no effect; list "x402" first or remove it.`,
       );
     }
     redelivery = {

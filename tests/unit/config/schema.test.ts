@@ -2698,9 +2698,44 @@ describe('resource idempotency', () => {
       expect(idempotency?.redelivery).toEqual({ retentionHours: 24, required: false });
     });
 
-    function mppResource(redelivery: unknown): Record<string, unknown> {
+    // The flag applies to x402 only, and the gateway serves a resource on the
+    // first enabled rail it lists: an enabled MPP listed first leaves it unused
+    it.each([
+      [['mpp', 'x402'], true, 1],
+      [['x402', 'mpp'], true, 0],
+      [['mpp', 'x402'], false, 0],
+    ])(
+      'with payments %j and MPP enabled %s, warns %i time(s) that required has no effect',
+      (payments, mppEnabled, warnings) => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        try {
+          const raw = mppResource({ required: true }, { keepX402: true });
+          ((raw['payments'] as Record<string, unknown>)['mpp'] as Record<string, unknown>)[
+            'enabled'
+          ] = mppEnabled;
+          const resources = raw['resources'] as Record<string, Record<string, unknown>>;
+          (resources['market_report'] as Record<string, unknown>)['payments'] = payments;
+
+          expect(resource(raw, 'market_report')?.idempotency?.redelivery?.required).toBe(true);
+          const calls = warn.mock.calls.filter(([message]) =>
+            String(message).includes('redelivery.required'),
+          );
+          expect(calls.map(([message]) => String(message).includes('serves it on mpp'))).toEqual(
+            Array(warnings).fill(true),
+          );
+        } finally {
+          warn.mockRestore();
+        }
+      },
+    );
+
+    function mppResource(
+      redelivery: unknown,
+      { keepX402 = false }: { keepX402?: boolean } = {},
+    ): Record<string, unknown> {
       const raw = validRawConfig();
       raw['payments'] = {
+        ...(keepX402 ? (raw['payments'] as Record<string, unknown>) : {}),
         mpp: {
           enabled: true,
           rpcUrl: 'https://sepolia.example/v2/key',
