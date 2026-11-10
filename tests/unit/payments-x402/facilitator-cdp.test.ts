@@ -6,10 +6,23 @@
 import { generateKeyPairSync, type KeyObject, verify } from 'node:crypto';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { isCommerceError } from '../../../src/core';
 import { createCdpAuthHeaders } from '../../../src/payments/x402/cdp-auth';
 import { createRemoteFacilitatorBinding } from '../../../src/payments/x402/facilitator';
+
+// Count signatures to verify that unread routes stay unsigned
+const signatures = vi.hoisted(() => ({ count: 0 }));
+vi.mock('node:crypto', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:crypto')>();
+  return {
+    ...actual,
+    sign: (...args: Parameters<typeof actual.sign>) => {
+      signatures.count += 1;
+      return actual.sign(...args);
+    },
+  };
+});
 
 const NOW_MS = 1_800_000_000_750;
 const NOW_S = 1_800_000_000;
@@ -99,6 +112,17 @@ describe('CDP auth headers', () => {
     expect(decode(bearer(headers['supported'])).claims.uris).toEqual([
       'GET api.cdp.coinbase.com/platform/v2/x402/supported',
     ]);
+  });
+
+  // The SDK reads `verify` to tell a path-keyed object from a flat one, then
+  // the route it calls
+  it('signs only the routes that are read, each once', async () => {
+    const create = createCdpAuthHeaders('key-id', EC_PKCS8);
+    signatures.count = 0;
+    const headers = await create();
+
+    expect(bearer(headers['settle'])).toBe(bearer(headers['settle']));
+    expect(signatures.count).toBe(1);
   });
 
   it('gives every token a fresh nonce', async () => {

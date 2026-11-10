@@ -37,13 +37,27 @@ export function createCdpAuthHeaders(
 
   return async () => {
     const issuedAt = Math.floor(now() / 1000);
-    const header = (method: string, route: string) => ({
-      Authorization: `Bearer ${signJwt(signingKey, apiKeyId, `${method} ${host}${pathname}/${route}`, issuedAt)}`,
-    });
+    // Sign a route only on its first read from this header object
+    const header = (method: string, route: string) => {
+      let value: Record<string, string> | undefined;
+      return () =>
+        (value ??= {
+          Authorization: `Bearer ${signJwt(signingKey, apiKeyId, `${method} ${host}${pathname}/${route}`, issuedAt)}`,
+        });
+    };
+    const verify = header('POST', 'verify');
+    const settle = header('POST', 'settle');
+    const supported = header('GET', 'supported');
     return {
-      verify: header('POST', 'verify'),
-      settle: header('POST', 'settle'),
-      supported: header('GET', 'supported'),
+      get verify() {
+        return verify();
+      },
+      get settle() {
+        return settle();
+      },
+      get supported() {
+        return supported();
+      },
     };
   };
 }
