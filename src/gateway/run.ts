@@ -2,7 +2,7 @@
  * Concrete startup shared by `main.ts` and `agent-commerce start`.
  *
  * Await enabled rail, AP2 and MCP imports before opening the receipt store,
- * so missing startup peers leave no database behind. Solana, NEAR and CDP loads
+ * so missing startup peers leave no database behind. Solana and NEAR loads
  * begin during provider construction, but their errors surface in health
  * checks or requests. Store failures abort startup; adapter start failures
  * are isolated. `createGateway` accepts injected implementations without

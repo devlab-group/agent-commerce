@@ -2,7 +2,7 @@
 name: agent-commerce
 description: Put the Agent Commerce Gateway (npm @devlab.group/agent-commerce) in front of an existing HTTP API so AI agents can call and pay for its endpoints over HTTP or MCP, with x402 stablecoin payments. Use when adding agent payments, x402 or paid MCP tools to an API, when configuring, validating or starting the gateway, or when fixing errors from its validate, doctor or start commands.
 license: Apache-2.0
-compatibility: Node.js >= 22 and npm >= 10; @devlab.group/agent-commerce >= 2.2.0. Needs a shell that can run npm and npx.
+compatibility: Node.js >= 22 and npm >= 10; @devlab.group/agent-commerce >= 2.7.0. Needs a shell that can run npm and npx.
 metadata:
   package: "@devlab.group/agent-commerce"
   repository: https://github.com/devlab-group/agent-commerce
@@ -57,7 +57,7 @@ npm --version                        # 10 or later
 mkdir agent-commerce && cd agent-commerce
 npm init -y
 npm install @devlab.group/agent-commerce
-npx --no -- agent-commerce --version  # below 2.2.0: stop and propose an upgrade
+npx --no -- agent-commerce --version  # below 2.7.0: stop and propose an upgrade
 npx --no -- agent-commerce start --help
 ```
 

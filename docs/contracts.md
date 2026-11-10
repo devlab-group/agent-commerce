@@ -468,7 +468,8 @@ persistence must not fail the commerce flow.
 - `GatewayOptions.authorizationProviders` and readiness reporting are additive.
   A failing authorization provider blocks readiness. `/ready` replaces its raw
   detail with `authorization-provider-unreachable`; thrown health errors are
-  logged at `error`, while returned details are logged at `debug`.
+  logged at `error`. Returned failures log at `warn` when the check first
+  fails or fails again after recovery; other returned details use `debug`.
 - The `./ap2` entry exports the AP2 provider and `createCheckoutJwt`. The signing
   helper runs in the merchant process; the gateway only verifies its result. It
   uses the same RFC 8785 input hash and rejects invalid keys or amounts before

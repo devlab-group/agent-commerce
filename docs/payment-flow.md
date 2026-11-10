@@ -168,7 +168,7 @@ have moved. See [AP2](protocols/ap2.md#replay-states).
 ## Retry after a lost response
 
 Experimental and disabled by default. A resource with
-[`idempotency.redelivery`](configuration.md#resources) stores delivered
+[`idempotency.redelivery`](configuration.md#resources) stores the delivered
 response under a buyer-chosen key so a lost response can be retrieved without
 another charge. The key is the x402
 [`payment-identifier`](protocols/x402.md#payment-identifier) `id`, the MPP

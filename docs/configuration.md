@@ -748,7 +748,8 @@ are `none`, `bearer` (a static token) and `cdp` (a fresh JWT per request).
 For `cdp`, `apiKeySecret` must be CDP's PEM EC P-256 private key or base64
 Ed25519 key. JWTs bind requests to CDP's host and path, so config load rejects
 any `url` other than `https://api.cdp.coinbase.com/platform/v2/x402`. An
-unreadable secret fails the health check with a detail naming `apiKeySecret`.
+unreadable secret stops `start` with an error naming `apiKeySecret`. PEM
+values may contain literal `\n` escapes copied from CDP's JSON key file.
 
 Deployment mode - `local`, `testnet` or `mainnet` - comes from the network:
 `eip155:31337` is local, and every other network is the testnet or mainnet it
@@ -836,9 +837,13 @@ with `x402` in `payments` · an `idempotency` block on a resource that is not
 fixed-price, or with neither `merchantKey` nor `redelivery` · a
 `redelivery.retentionHours` that is not an integer from 1 to 8760 ·
 `redelivery.required: true` on a resource without `x402` in `payments` · an MPP
-`challengeSecret` with length below 32 or a multi-line `realm`.
+`challengeSecret` with length below 32 or a multi-line `realm` · a remote
+facilitator `url` with a query string or fragment.
 
-It exits non-zero on any of them.
+Validation exits non-zero for these errors. It warns without failing if
+`merchant.publicBaseUrl` is not an http(s) URL, or if
+`redelivery.required: true` is set on a resource whose first enabled rail is not
+x402.
 
 ## Environment
 

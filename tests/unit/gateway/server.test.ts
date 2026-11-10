@@ -955,6 +955,75 @@ describe('createGateway HTTP surface', () => {
     expect(res.headers['retry-after']).toBe('5');
   });
 
+  // Responses omit the cause chain; preserve it in HTTP logs
+  it('logs a 5xx invoke error with its cause at warn, and a 4xx at debug', async () => {
+    const { CommerceError } = await import('../../../src/core');
+    const lines: Array<{ level: string; entry: Record<string, unknown> }> = [];
+    const logger: Logger = {
+      debug: (entry) => lines.push({ level: 'debug', entry }),
+      info: (entry) => lines.push({ level: 'info', entry }),
+      warn: (entry) => lines.push({ level: 'warn', entry }),
+      error: (entry) => lines.push({ level: 'error', entry }),
+      child: () => logger,
+    };
+    const provider = x402Provider({
+      verify: async () => {
+        throw new CommerceError('PAYMENT_PROVIDER_UNAVAILABLE', 'no verdict', {
+          cause: new Error('Facilitator verify failed (401)'),
+        });
+      },
+    });
+    const gateway = await buildGateway({ paymentProviders: [provider], logger });
+
+    expect((await invokePaid(gateway)).statusCode).toBe(503);
+    const failed = lines.filter(({ entry }) => entry['resourceId'] === 'market_report');
+    expect(failed).toHaveLength(1);
+    expect(failed[0]?.level).toBe('warn');
+    expect(failed[0]?.entry['err']).toMatchObject({
+      code: 'PAYMENT_PROVIDER_UNAVAILABLE',
+      cause: ['Error: Facilitator verify failed (401)'],
+    });
+
+    const missing = await gateway.server.inject({
+      method: 'POST',
+      url: '/api/resources/no_such_resource/invoke',
+      payload: {},
+    });
+    expect(missing.statusCode).toBe(404);
+    const notFound = lines.filter(({ entry }) => entry['resourceId'] === 'no_such_resource');
+    expect(notFound.map(({ level }) => level)).toEqual(['debug']);
+  });
+
+  // The client sees only INTERNAL_ERROR; the log must retain the underlying error
+  it('logs an unexpected invoke error, a 500, at warn with the original error', async () => {
+    const lines: Array<{ level: string; entry: Record<string, unknown> }> = [];
+    const logger: Logger = {
+      debug: (entry) => lines.push({ level: 'debug', entry }),
+      info: (entry) => lines.push({ level: 'info', entry }),
+      warn: (entry) => lines.push({ level: 'warn', entry }),
+      error: (entry) => lines.push({ level: 'error', entry }),
+      child: () => logger,
+    };
+    const gateway = await buildGateway({ paymentProviders: [x402Provider()], logger });
+    (gateway.pipeline as { execute: ExecutionPipeline['execute'] }).execute = async () => {
+      throw new TypeError('offer is undefined');
+    };
+
+    const res = await gateway.server.inject({
+      method: 'POST',
+      url: '/api/resources/market_report/invoke',
+      payload: {},
+    });
+
+    expect(res.statusCode).toBe(500);
+    const failed = lines.filter(({ entry }) => entry['resourceId'] === 'market_report');
+    expect(failed.map(({ level }) => level)).toEqual(['warn']);
+    expect(failed[0]?.entry['err']).toMatchObject({
+      code: 'INTERNAL_ERROR',
+      cause: ['TypeError: offer is undefined'],
+    });
+  });
+
   it('sends no Retry-After on a refused payment', async () => {
     const gateway = await buildGateway({ paymentProviders: [x402Provider()] });
     const res = await gateway.server.inject({

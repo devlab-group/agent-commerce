@@ -135,8 +135,8 @@ export function createRemoteFacilitatorBinding(
       return { verify: headers, settle: headers, supported: headers };
     };
   } else if (auth.type === 'cdp') {
-    // CDP JWTs bind method, host and path. Unreadable secrets cause
-    // PAYMENT_PROVIDER_UNAVAILABLE during payment, rather than a payer rejection.
+    // CDP JWTs bind method, host and path. An unreadable secret throws
+    // CONFIG_INVALID here, before the gateway listens
     createAuthHeaders = createCdpAuthHeaders(auth.apiKeyId, auth.apiKeySecret);
   }
 

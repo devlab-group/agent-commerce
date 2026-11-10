@@ -28,6 +28,7 @@ import {
   toErrorEnvelope,
   toPaymentRequiredEnvelope,
 } from '../core';
+import { toLogInfo } from '../core/errors';
 import { journalOf, resolveManually } from '../core/execution/reconcile';
 import { isUsableIdempotencyKey } from '../core/idempotency-key';
 import { isRecord } from '../core/is-record';
@@ -448,7 +449,16 @@ async function handleInvoke(
     }
     reply.status(outcome.backendStatus).send(outcome.body);
   } catch (error) {
-    sendInvokeError(reply, toCommerceError(error), paymentMethod);
+    const commerceError = toCommerceError(error);
+    // Preserve the cause chain omitted from responses. Log 5xx failures at warn
+    // and other errors at debug to limit noise from unauthenticated requests.
+    const entry = { resourceId, requestId: request.id, err: toLogInfo(commerceError) };
+    if (commerceError.httpStatus >= 500) {
+      options.logger.warn(entry, 'http adapter: execution failed');
+    } else {
+      options.logger.debug(entry, 'http adapter: execution failed');
+    }
+    sendInvokeError(reply, commerceError, paymentMethod);
   }
 }
 

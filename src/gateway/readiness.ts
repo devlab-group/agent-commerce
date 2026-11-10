@@ -91,16 +91,20 @@ interface Probed {
   readonly health: AdapterHealth;
 }
 
+// Names of the checks that failed at their last evaluation
+type FailingChecks = Set<string>;
+
 /**
- * One probe for the store, the adapters and both provider kinds. A `health()`
- * that throws counts as failing and is logged at error; a returned detail is
- * logged at debug.
+ * Probe the store, an adapter or a provider. A thrown `health()` error fails
+ * the check and logs at error. Returned failures log at warn on the first
+ * failure or after recovery; other returned details log at debug.
  */
 async function probe(
   target: { readonly name: string; health(): Promise<AdapterHealth> },
   kind: string,
   details: HealthDetails,
   options: Pick<CheckReadinessOptions, 'clock' | 'logger'>,
+  failing: FailingChecks,
 ): Promise<Probed> {
   let health: AdapterHealth;
   let threw = false;
@@ -112,7 +116,16 @@ async function probe(
     health = { status: 'fail', checkedAt: options.clock.nowIso() };
     threw = true;
   }
-  if (health.detail !== undefined) {
+  const key = `${kind}:${target.name}`;
+  const startsFailing = health.status === 'fail' && !failing.has(key);
+  if (health.status === 'fail') failing.add(key);
+  else failing.delete(key);
+  if (startsFailing && !threw) {
+    options.logger.warn(
+      { name: target.name, ...(health.detail !== undefined ? { detail: health.detail } : {}) },
+      `${kind} health check failed (detail not sent to the client)`,
+    );
+  } else if (health.detail !== undefined) {
     options.logger.debug(
       { name: target.name, detail: health.detail },
       `${kind} health detail (not sent to the client)`,
@@ -141,25 +154,35 @@ export interface ProbedProvider {
   readonly health: AdapterHealth;
 }
 
-async function evaluate(options: CheckReadinessOptions): Promise<Evaluation> {
+async function evaluate(
+  options: CheckReadinessOptions,
+  failing: FailingChecks,
+): Promise<Evaluation> {
   const [store, adapters, paymentProviders, authorizationProviders] = await Promise.all([
-    probe({ name: 'store', health: () => options.store.health() }, 'store', STORE_DETAIL, options),
+    probe(
+      { name: 'store', health: () => options.store.health() },
+      'store',
+      STORE_DETAIL,
+      options,
+      failing,
+    ),
     Promise.all(
       options.adapterRuntimes.map(async (runtime) => ({
         runtime,
         probed: await probe(
-          // getAdapterHealth turns a throw into a failed result, so an adapter
-          // failure is logged at debug as a detail rather than at error
+          // getAdapterHealth converts throws to failed results, which use
+          // the logging rules for returned results
           { name: runtime.adapter.name, health: () => getAdapterHealth(runtime, options.clock) },
           'adapter',
           ADAPTER_DETAIL,
           options,
+          failing,
         ),
       })),
     ),
     Promise.all(
       options.paymentProviders.map((provider) =>
-        probe(provider, 'payment provider', PAYMENT_PROVIDER_DETAIL, options),
+        probe(provider, 'payment provider', PAYMENT_PROVIDER_DETAIL, options, failing),
       ),
     ),
     // An unusable authorization provider blocks readiness on the same threshold
@@ -167,7 +190,7 @@ async function evaluate(options: CheckReadinessOptions): Promise<Evaluation> {
     // without it, and serving the challenge anyway promises what we cannot honor
     Promise.all(
       options.authorizationProviders.map((provider) =>
-        probe(provider, 'authorization provider', AUTHORIZATION_PROVIDER_DETAIL, options),
+        probe(provider, 'authorization provider', AUTHORIZATION_PROVIDER_DETAIL, options, failing),
       ),
     ),
   ]);
@@ -214,13 +237,14 @@ export function createReadinessProbe(
 ): ReadinessProbe {
   let cached: { readonly evaluation: Evaluation; readonly at: number } | undefined;
   let inFlight: Promise<Evaluation> | undefined;
+  const failing: FailingChecks = new Set();
 
   const current = async (): Promise<Evaluation> => {
     const now = options.clock.monotonicMs();
     if (cached && now - cached.at < ttlMs) return cached.evaluation;
     if (inFlight) return inFlight;
 
-    inFlight = evaluate(options)
+    inFlight = evaluate(options, failing)
       .then((evaluation) => {
         cached = { evaluation, at: options.clock.monotonicMs() };
         return evaluation;

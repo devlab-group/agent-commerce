@@ -11,10 +11,13 @@
 import {
   address,
   getAddressEncoder,
+  getBase64Encoder,
   getCompiledTransactionMessageDecoder,
   getProgramDerivedAddress,
+  getTransactionDecoder,
+  type Transaction,
 } from '@solana/kit';
-import { decodeTransactionFromPayload, transactionMessageHash } from '@x402/svm';
+import { transactionMessageHash } from '@x402/svm';
 import { isRecord } from '../../core/is-record';
 import { LOCATOR_VERSION } from './locator';
 import { computeSvmReplayKey } from './replay-key';
@@ -58,7 +61,7 @@ export function inspectSvmPayload(
   let messageHash: string;
   let recentBlockhash: string;
   try {
-    const decoded = decodeTransactionFromPayload({ transaction });
+    const decoded = decodeTransaction(transaction);
     messageHash = transactionMessageHash(decoded);
     recentBlockhash = getCompiledTransactionMessageDecoder().decode(
       decoded.messageBytes,
@@ -78,8 +81,14 @@ export function inspectSvmPayload(
  */
 export function messageHashOf(transaction: string): string | undefined {
   try {
-    return transactionMessageHash(decodeTransactionFromPayload({ transaction }));
+    return transactionMessageHash(decodeTransaction(transaction));
   } catch {
     return undefined;
   }
+}
+
+// Match decodeTransactionFromPayload without its failure logging, which exposes
+// caller input and a stack trace through console.error
+function decodeTransaction(base64: string): Transaction {
+  return getTransactionDecoder().decode(getBase64Encoder().encode(base64));
 }

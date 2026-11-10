@@ -647,11 +647,28 @@ describe('parseConfig', () => {
       expect(message).toContain('apiKeySecret is empty');
     });
 
+    // The SDK appends `/verify` to the URL string, so a query or fragment
+    // would swallow the route
+    it.each([
+      ['a query string', 'https://facilitator.example.com/api?api_key=abc', 'none'],
+      ['an empty query', 'https://facilitator.example.com/api?', 'none'],
+      ['a fragment', 'https://facilitator.example.com/api#abc', 'none'],
+      ['a query on the CDP URL', 'https://api.cdp.coinbase.com/platform/v2/x402?tenant=abc', 'cdp'],
+      ['a fragment on the CDP URL', 'https://api.cdp.coinbase.com/platform/v2/x402#abc', 'cdp'],
+    ])('rejects a facilitator url with %s', (_label, url, type) => {
+      const auth =
+        type === 'cdp' ? { type, apiKeyId: 'key-id', apiKeySecret: 'key-secret' } : { type };
+      const message = messageFor(
+        withX402({ payTo: MERCHANT, facilitator: { mode: 'remote', url, auth } }),
+      );
+      expect(message).toContain('query string or fragment');
+      expect(message).not.toContain('abc');
+    });
+
     // The CDP JWT names CDP's host and route whatever URL is set
     it.each([
       ['another host', 'https://facilitator.example.com'],
       ['another CDP route', 'https://api.cdp.coinbase.com/platform/v1/x402'],
-      ['a query string', 'https://api.cdp.coinbase.com/platform/v2/x402?tenant=a'],
     ])('rejects CDP auth against %s', (_label, url) => {
       const message = messageFor(
         withX402({
@@ -666,7 +683,6 @@ describe('parseConfig', () => {
       expect(message).toContain(
         'signs requests for https://api.cdp.coinbase.com/platform/v2/x402 only',
       );
-      expect(message).not.toContain('tenant=a');
     });
 
     it('accepts CDP auth with a trailing slash on its URL', () => {
@@ -1119,6 +1135,29 @@ describe('parseConfig', () => {
       const raw = validRawConfig();
       (raw['payments'] as { x402: Record<string, unknown> }).x402['payTo'] = payTo;
       expect(parseConfig(raw, {}).payments.x402?.payTo).toBe(payTo);
+    }
+  });
+
+  // Preserve 2.x compatibility by warning about an invalid URL
+  it.each([
+    ['https//shop.example', 1],
+    ['shop.example', 1],
+    ['ftp://shop.example', 1],
+    ['https://shop.example', 0],
+    ['http://localhost:8080', 0],
+  ])('merchant.publicBaseUrl %s warns %i time(s)', (publicBaseUrl, warnings) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const raw = validRawConfig();
+      (raw['merchant'] as Record<string, unknown>)['publicBaseUrl'] = publicBaseUrl;
+
+      expect(parseConfig(raw, {}).merchant.publicBaseUrl).toBe(publicBaseUrl);
+      const calls = warn.mock.calls.filter(([message]) =>
+        String(message).includes('merchant.publicBaseUrl'),
+      );
+      expect(calls).toHaveLength(warnings);
+    } finally {
+      warn.mockRestore();
     }
   });
 
@@ -2659,9 +2698,44 @@ describe('resource idempotency', () => {
       expect(idempotency?.redelivery).toEqual({ retentionHours: 24, required: false });
     });
 
-    function mppResource(redelivery: unknown): Record<string, unknown> {
+    // The flag applies to x402 only, and the gateway serves a resource on the
+    // first enabled rail it lists: an enabled MPP listed first leaves it unused
+    it.each([
+      [['mpp', 'x402'], true, 1],
+      [['x402', 'mpp'], true, 0],
+      [['mpp', 'x402'], false, 0],
+    ])(
+      'with payments %j and MPP enabled %s, warns %i time(s) that required has no effect',
+      (payments, mppEnabled, warnings) => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        try {
+          const raw = mppResource({ required: true }, { keepX402: true });
+          ((raw['payments'] as Record<string, unknown>)['mpp'] as Record<string, unknown>)[
+            'enabled'
+          ] = mppEnabled;
+          const resources = raw['resources'] as Record<string, Record<string, unknown>>;
+          (resources['market_report'] as Record<string, unknown>)['payments'] = payments;
+
+          expect(resource(raw, 'market_report')?.idempotency?.redelivery?.required).toBe(true);
+          const calls = warn.mock.calls.filter(([message]) =>
+            String(message).includes('redelivery.required'),
+          );
+          expect(calls.map(([message]) => String(message).includes('serves it on mpp'))).toEqual(
+            Array(warnings).fill(true),
+          );
+        } finally {
+          warn.mockRestore();
+        }
+      },
+    );
+
+    function mppResource(
+      redelivery: unknown,
+      { keepX402 = false }: { keepX402?: boolean } = {},
+    ): Record<string, unknown> {
       const raw = validRawConfig();
       raw['payments'] = {
+        ...(keepX402 ? (raw['payments'] as Record<string, unknown>) : {}),
         mpp: {
           enabled: true,
           rpcUrl: 'https://sepolia.example/v2/key',
