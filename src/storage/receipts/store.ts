@@ -126,7 +126,7 @@ export interface SqliteReceiptStoreSummary {
   readonly orphanHolds: number;
   /** Unresolved claims whose endpoints do not start with `payment:` */
   readonly unresolvedIdempotencyKeys: number;
-  /** Unresolved claims whose endpoints start with `payment:` */
+  /** Unexpired unresolved claims whose endpoints start with `payment:` */
   readonly unresolvedPaymentKeys: number;
   readonly unexpiredPendingTasks: number;
   readonly legacyImports: readonly SqliteLegacyImport[];

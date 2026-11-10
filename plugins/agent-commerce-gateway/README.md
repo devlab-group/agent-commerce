@@ -62,7 +62,7 @@ party it belongs to:
 ## Requirements
 
 Node.js 22 or later, npm 10 or later, and `@devlab.group/agent-commerce`
-2.2.0 or later.
+2.7.0 or later.
 
 ## Install in Claude Code
 

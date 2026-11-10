@@ -223,7 +223,7 @@ export interface ReceiptStore {
    * methods or none. Experimental: may change in a minor release.
    *
    * Atomically claim `scope` after deleting expired `completed` claims and
-   * expired `unresolved` claims on `PAYMENT_KEY_ENDPOINT_PREFIX` endpoints.
+   * expired `unresolved` claims on endpoints that start with `payment:`.
    * Expiry occurs at `expiresAt`; other claims do not expire. Return `reserved`
    * for a new scope, or `conflict` for a different `fingerprint` in any state.
    *
