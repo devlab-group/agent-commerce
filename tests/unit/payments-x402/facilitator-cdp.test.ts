@@ -1,7 +1,6 @@
 /**
- * CDP API-key JWTs in `@coinbase/cdp-sdk`'s format. Invalid secrets allow
- * construction but fail header generation with CONFIG_INVALID. Health checks
- * can expose this before payment.
+ * CDP API-key JWTs in `@coinbase/cdp-sdk`'s format. An invalid secret fails
+ * construction with CONFIG_INVALID, which stops `start` before it listens.
  */
 
 import { generateKeyPairSync, type KeyObject, verify } from 'node:crypto';
@@ -51,6 +50,13 @@ describe('CDP auth headers', () => {
       ec.publicKey,
     ],
     ['a base64 Ed25519 seed and public key', ED_SECRET, 'EdDSA', ed.publicKey],
+    // Simulate literal newline escapes copied from CDP's JSON key file
+    [
+      'a PEM EC key with JSON-escaped newlines',
+      EC_PKCS8.replace(/\n/g, '\\n'),
+      'ES256',
+      ec.publicKey,
+    ],
   ] as const)(
     'signs with %s a token CDP can verify',
     async (_, secret, alg, publicKey: KeyObject) => {
@@ -122,19 +128,17 @@ describe('CDP auth headers', () => {
         .toString(),
     ],
     ['a truncated PEM key', EC_PKCS8.slice(0, 80)],
-  ])(
-    'refuses %s as CONFIG_INVALID from the first request, not at construction',
-    async (_, secret) => {
-      const create = createCdpAuthHeaders('key-id', secret);
-
-      const error = await create().then(
-        () => undefined,
-        (err: unknown) => err,
-      );
-      expect(isCommerceError(error) && error.code).toBe('CONFIG_INVALID');
-      expect(String((error as Error).message)).not.toContain(secret);
-    },
-  );
+  ])('refuses %s as CONFIG_INVALID at construction', (_, secret) => {
+    let error: unknown;
+    try {
+      createCdpAuthHeaders('key-id', secret);
+    } catch (err) {
+      error = err;
+    }
+    expect(isCommerceError(error) && error.code).toBe('CONFIG_INVALID');
+    expect(String((error as Error).message)).toContain('apiKeySecret');
+    expect(String((error as Error).message)).not.toContain(secret);
+  });
 });
 
 describe('remote facilitator binding with auth.type cdp', () => {
@@ -178,29 +182,22 @@ describe('remote facilitator binding with auth.type cdp', () => {
     ).toBe(true);
   });
 
-  it('sends nothing when the secret is unreadable', async () => {
-    const binding = createRemoteFacilitatorBinding({
-      url: await listen(),
-      auth: { type: 'cdp', apiKeyId: 'key-id', apiKeySecret: 'key-secret' },
-    });
-    if (binding.kind !== 'remote') throw new Error('expected a remote binding');
-
-    const error = await binding.supported().then(
-      () => undefined,
-      (err: unknown) => err,
-    );
-
-    expect(isCommerceError(error) && error.code).toBe('CONFIG_INVALID');
-    expect(requests).toEqual([]);
+  it('refuses to build a binding whose secret is unreadable', () => {
+    expect(() =>
+      createRemoteFacilitatorBinding({
+        url: 'https://facilitator.example.com',
+        auth: { type: 'cdp', apiKeyId: 'key-id', apiKeySecret: 'key-secret' },
+      }),
+    ).toThrow(expect.objectContaining({ code: 'CONFIG_INVALID' }));
   });
 
   it('never puts the credential in anything the binding describes', () => {
     const binding = createRemoteFacilitatorBinding({
       url: 'https://facilitator.example.com',
-      auth: { type: 'cdp', apiKeyId: 'key-id', apiKeySecret: 'super-secret' },
+      auth: { type: 'cdp', apiKeyId: 'key-id', apiKeySecret: ED_SECRET },
     });
     // `describe` reaches logs, health details and doctor output
-    expect(binding.describe).not.toContain('super-secret');
+    expect(binding.describe).not.toContain(ED_SECRET);
     expect(binding.describe).not.toContain('key-id');
     expect(binding.describe).toContain('auth=cdp');
   });

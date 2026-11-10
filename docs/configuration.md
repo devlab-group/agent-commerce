@@ -748,7 +748,8 @@ are `none`, `bearer` (a static token) and `cdp` (a fresh JWT per request).
 For `cdp`, `apiKeySecret` must be CDP's PEM EC P-256 private key or base64
 Ed25519 key. JWTs bind requests to CDP's host and path, so config load rejects
 any `url` other than `https://api.cdp.coinbase.com/platform/v2/x402`. An
-unreadable secret fails the health check with a detail naming `apiKeySecret`.
+unreadable secret stops `start` with an error naming `apiKeySecret`. PEM
+values may contain literal `\n` escapes copied from CDP's JSON key file.
 
 Deployment mode - `local`, `testnet` or `mainnet` - comes from the network:
 `eip155:31337` is local, and every other network is the testnet or mainnet it
