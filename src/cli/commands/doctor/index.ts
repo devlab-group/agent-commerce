@@ -113,17 +113,27 @@ export async function runDoctor(
       detail: `unreachable at ${gatewayUrl} (${health.error ?? `HTTP ${health.status}`})`,
     });
   } else {
-    gatewayUp = true;
     const ready = await fetchJson(fetchImpl, `${gatewayUrl}/ready`, CHECK_TIMEOUT_MS);
-    checks.push(
-      ready.ok
-        ? { name: 'Gateway', status: 'PASS', detail: `healthy and ready at ${gatewayUrl}` }
-        : {
-            name: 'Gateway',
-            status: 'WARN',
-            detail: `healthy but not ready at ${gatewayUrl} (${ready.error ?? `HTTP ${ready.status}`})`,
-          },
-    );
+    // Doctor sends no Origin header, so a 403 from /ready means the Host was
+    // rejected. GET /health skips the Host check used by other routes.
+    if (ready.status === 403) {
+      checks.push({
+        name: 'Gateway',
+        status: 'FAIL',
+        detail: `rejects the Host in ${gatewayUrl} (HTTP 403): use a --gateway URL with merchant.publicBaseUrl's hostname or a loopback name`,
+      });
+    } else {
+      gatewayUp = true;
+      checks.push(
+        ready.ok
+          ? { name: 'Gateway', status: 'PASS', detail: `healthy and ready at ${gatewayUrl}` }
+          : {
+              name: 'Gateway',
+              status: 'WARN',
+              detail: `healthy but not ready at ${gatewayUrl} (${ready.error ?? `HTTP ${ready.status}`})`,
+            },
+      );
+    }
   }
 
   // 3. Backend(s)

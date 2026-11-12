@@ -122,6 +122,24 @@ describe('runDoctor: degraded scenarios report the failure', () => {
     expect(report.score).toEqual({ passed: 5, total: 6 });
   });
 
+  it('FAILs Gateway when /ready rejects the Host that /health accepts', async () => {
+    const report = await runDoctor(
+      { gatewayUrl: GATEWAY },
+      {
+        fetchImpl: healthyFetch({
+          [`${GATEWAY}/ready`]: () =>
+            jsonResponse({ status: 'error', code: 'FORBIDDEN', message: 'Host not allowed' }, 403),
+        }),
+        loadConfig: async () => makeGatewayConfig(),
+        createStore: () => makeFakeReceiptStore(),
+      },
+    );
+    const gateway = report.checks.find((c) => c.name === 'Gateway');
+    expect(gateway?.status).toBe('FAIL');
+    expect(gateway?.detail).toContain('rejects the Host');
+    expect(report.exitCode).toBe(1);
+  });
+
   it('FAILs Config and WARNs downstream config-dependent checks when the config is invalid', async () => {
     const report = await runDoctor(
       { gatewayUrl: GATEWAY },
