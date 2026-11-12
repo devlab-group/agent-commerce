@@ -89,6 +89,7 @@ export function registerRoutes(options: RegisterRoutesOptions): void {
     logger: options.logger,
   });
 
+  // access-control.ts exempts this matched route from Host validation
   server.get('/health', async () => ({ status: 'ok' }));
 
   server.get('/ready', async (_request, reply) => {

@@ -1,16 +1,16 @@
 /**
  * Two `onRequest` hooks with separate jobs:
  * - `buildAccessControlHook`, registered once on the server: the DNS-rebinding
- * Host check and allowlisted CORS. Neither depends on the path.
+ * Host check, which the `/health` route skips, and allowlisted CORS.
  * - `buildOperatorTokenHook` enforces `server.adminToken` on operator routes:
  * `/api/receipts`, `/api/events`, `/api/payment-attempts`, `/api/transactions`
  * and the resolve route.
  *
- * The token gate is per route because a global hook could only compare
- * `request.url`, which is still percent-encoded, while Fastify's router
- * decodes before matching: `/api/%72eceipts` would pass such a gate and still
- * route to `/api/receipts`. A per-route hook runs only after the router has
- * matched its route, so no path string is compared at all.
+ * Fastify routes `/api/%72eceipts` to `/api/receipts`, while `request.url`
+ * remains percent-encoded. A token gate that compares only raw paths could
+ * miss that request. Neither hook compares `request.url`: operator routes
+ * register their own token hook, and the `/health` exemption checks the
+ * matched route's pattern in `request.routeOptions.url`.
  */
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { AUTHORIZATION_HEADER, PAYMENT_HEADER } from '../core';
@@ -67,9 +67,10 @@ export function buildAccessControlHook(
   const publicHostname = hostnameOf(options.publicBaseUrl);
 
   return async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
-    // 1. Host check (DNS-rebinding defense), for every request
-    const host = request.headers.host;
-    if (!isAllowedHost(host, publicHostname)) {
+    // 1. Skip Host validation for the matched /health route so platform probes
+    // can use a container address; the route returns only a constant body
+    const isHealthRoute = request.routeOptions.url === '/health';
+    if (!isHealthRoute && !isAllowedHost(request.headers.host, publicHostname)) {
       reply.status(403).send({ status: 'error', code: 'FORBIDDEN', message: 'Host not allowed' });
       return;
     }

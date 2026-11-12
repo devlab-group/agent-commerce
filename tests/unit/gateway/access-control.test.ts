@@ -53,9 +53,12 @@ function fakeRequest(overrides: {
   origin?: string;
   authorization?: string;
 }): FastifyRequest {
+  const url = overrides.url ?? '/api/resources';
   return {
     method: overrides.method ?? 'GET',
-    url: overrides.url ?? '/health',
+    url,
+    // Model a route registered at the requested path
+    routeOptions: { url },
     headers: {
       host: overrides.host ?? 'localhost',
       ...(overrides.origin !== undefined ? { origin: overrides.origin } : {}),

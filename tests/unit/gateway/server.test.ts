@@ -1221,7 +1221,7 @@ describe('createGateway HTTP surface', () => {
     const gateway = await buildGateway();
     const res = await gateway.server.inject({
       method: 'GET',
-      url: '/health',
+      url: '/api/resources',
       headers: { host: 'attacker-controlled.example' },
     });
     expect(res.statusCode).toBe(403);
@@ -1231,10 +1231,32 @@ describe('createGateway HTTP surface', () => {
     const gateway = await buildGateway();
     const res = await gateway.server.inject({
       method: 'GET',
-      url: '/health',
+      url: '/api/resources',
       headers: { host: '127.0.0.1:8080' },
     });
     expect(res.statusCode).toBe(200);
+  });
+
+  it('serves /health to any Host, for platform health checks', async () => {
+    const gateway = await buildGateway();
+    const get = (url: string, headers: Record<string, string>) =>
+      gateway.server.inject({ method: 'GET', url, headers });
+    const foreignHost = { host: '10.0.3.7:8080' };
+
+    const health = await get('/health', foreignHost);
+    expect(health.statusCode).toBe(200);
+    expect(health.json()).toEqual({ status: 'ok' });
+    // Encoded paths receive the matched route's exemption
+    expect((await get('/%68ealth', foreignHost)).statusCode).toBe(200);
+
+    // Other routes and unmatched paths still require an allowed Host
+    expect((await get('/ready', foreignHost)).statusCode).toBe(403);
+    expect((await get('/health/x', foreignHost)).statusCode).toBe(403);
+    expect((await get('/health/../api/receipts', foreignHost)).statusCode).toBe(403);
+    // The Origin allowlist still applies to /health
+    const withOrigin = await get('/health', { ...foreignHost, origin: 'https://attacker.example' });
+    expect(withOrigin.statusCode).toBe(403);
+    expect(withOrigin.json().message).toBe('Origin not allowed');
   });
 
   it('GET /ready is 503 when store.health() itself throws, without leaking the raw error message', async () => {
