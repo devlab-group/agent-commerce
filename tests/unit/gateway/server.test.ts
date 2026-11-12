@@ -1,3 +1,5 @@
+import type { AddressInfo } from 'node:net';
+import { connect } from 'node:net';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 // Quiet output, and no pino-pretty worker thread for each of the many Fastify
@@ -1258,7 +1260,6 @@ describe('createGateway HTTP surface', () => {
     // Other routes and unmatched paths still require an allowed Host
     expect((await get('/ready', foreignHost)).statusCode).toBe(403);
     expect((await get('/health/x', foreignHost)).statusCode).toBe(403);
-    expect((await get('/health/../api/receipts', foreignHost)).statusCode).toBe(403);
     // The Origin allowlist still applies to /health
     const withOrigin = await get('/health', { ...foreignHost, origin: 'https://attacker.example' });
     expect(withOrigin.statusCode).toBe(403);
@@ -1287,6 +1288,25 @@ describe('createGateway HTTP surface', () => {
     });
     expect(res.statusCode).toBe(403);
     expect(res.json().message).toBe('Host not allowed');
+  });
+
+  it('checks the Host on a raw dot-segment path under /health', async () => {
+    // Use a socket because inject() normalizes '..' before routing
+    const gateway = await buildGateway();
+    await gateway.server.listen({ host: '127.0.0.1', port: 0 });
+    const { port } = gateway.server.server.address() as AddressInfo;
+    const statusLine = await new Promise<string>((resolve, reject) => {
+      const socket = connect(port, '127.0.0.1', () => {
+        socket.end('GET /health/../api/receipts HTTP/1.1\r\nHost: 10.0.3.7:8080\r\n\r\n');
+      });
+      let data = '';
+      socket.on('data', (chunk) => {
+        data += chunk.toString();
+      });
+      socket.on('end', () => resolve(data.split('\r\n')[0] ?? ''));
+      socket.on('error', reject);
+    });
+    expect(statusLine).toBe('HTTP/1.1 403 Forbidden');
   });
 
   it('GET /ready is 503 when store.health() itself throws, without leaking the raw error message', async () => {
