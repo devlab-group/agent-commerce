@@ -1248,6 +1248,12 @@ describe('createGateway HTTP surface', () => {
     expect(health.json()).toEqual({ status: 'ok' });
     // Encoded paths receive the matched route's exemption
     expect((await get('/%68ealth', foreignHost)).statusCode).toBe(200);
+    const head = await gateway.server.inject({
+      method: 'HEAD',
+      url: '/health',
+      headers: foreignHost,
+    });
+    expect(head.statusCode).toBe(200);
 
     // Other routes and unmatched paths still require an allowed Host
     expect((await get('/ready', foreignHost)).statusCode).toBe(403);
@@ -1257,6 +1263,30 @@ describe('createGateway HTTP surface', () => {
     const withOrigin = await get('/health', { ...foreignHost, origin: 'https://attacker.example' });
     expect(withOrigin.statusCode).toBe(403);
     expect(withOrigin.json().message).toBe('Origin not allowed');
+  });
+
+  it('checks the Host on an adapter route at /health', async () => {
+    const adapter = createFakeHttpAdapter({
+      mountPath: '/fake',
+      additionalHttpRoutes: [
+        {
+          method: 'POST',
+          path: '/health',
+          handleHttp: async (_req, res) => {
+            res.writeHead(200);
+            res.end('adapter');
+          },
+        },
+      ],
+    });
+    const gateway = await buildGateway({ protocolAdapters: [adapter] });
+    const res = await gateway.server.inject({
+      method: 'POST',
+      url: '/health',
+      headers: { host: '10.0.3.7:8080' },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res.json().message).toBe('Host not allowed');
   });
 
   it('GET /ready is 503 when store.health() itself throws, without leaking the raw error message', async () => {

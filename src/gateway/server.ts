@@ -173,8 +173,8 @@ export async function createGateway(options: GatewayOptions): Promise<GatewayIns
   // Fastify's default 404 handler logs the raw URL, query string included
   server.setNotFoundHandler(buildNotFoundHandler());
 
-  // Check Host (except on /health) and apply CORS before route handlers.
-  // By default, allowedOrigins is empty, so requests with Origin are rejected.
+  // Check Host except for GET and HEAD /health, then apply CORS before handlers.
+  // allowedOrigins defaults to [], which rejects requests with an Origin header.
   // Operator routes register their own admin-token hook in routes.ts.
   server.addHook(
     'onRequest',

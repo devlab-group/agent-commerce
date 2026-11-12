@@ -41,7 +41,7 @@ import {
   x402ErrorCode,
   x402RefusalStatus,
 } from '../payments/x402/transport';
-import { buildOperatorTokenHook } from './access-control';
+import { buildOperatorTokenHook, HEALTH_PATH } from './access-control';
 import type { AdapterRuntime } from './adapters';
 import { toPublicResource } from './public-resource';
 import { createReadinessProbe } from './readiness';
@@ -89,8 +89,8 @@ export function registerRoutes(options: RegisterRoutesOptions): void {
     logger: options.logger,
   });
 
-  // access-control.ts exempts this matched route from Host validation
-  server.get('/health', async () => ({ status: 'ok' }));
+  // GET and HEAD on this route skip the Host check in access-control.ts
+  server.get(HEALTH_PATH, async () => ({ status: 'ok' }));
 
   server.get('/ready', async (_request, reply) => {
     const readiness = await readinessProbe.check();
@@ -127,7 +127,7 @@ export function registerRoutes(options: RegisterRoutesOptions): void {
     },
   );
 
-  // The admin token gate is per route, not global; access-control.ts says why
+  // Require the admin token on each operator route below
   const tokenHook = buildOperatorTokenHook(options.config.server.adminToken);
 
   server.get(

@@ -1,7 +1,7 @@
 /**
  * Two `onRequest` hooks with separate jobs:
  * - `buildAccessControlHook`, registered once on the server: the DNS-rebinding
- * Host check, which the `/health` route skips, and allowlisted CORS.
+ * Host check, skipped by GET and HEAD requests to `/health`, and allowlisted CORS.
  * - `buildOperatorTokenHook` enforces `server.adminToken` on operator routes:
  * `/api/receipts`, `/api/events`, `/api/payment-attempts`, `/api/transactions`
  * and the resolve route.
@@ -10,11 +10,14 @@
  * remains percent-encoded. A token gate that compares only raw paths could
  * miss that request. Neither hook compares `request.url`: operator routes
  * register their own token hook, and the `/health` exemption checks the
- * matched route's pattern in `request.routeOptions.url`.
+ * matched route's pattern and method in `request.routeOptions`.
  */
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { AUTHORIZATION_HEADER, PAYMENT_HEADER } from '../core';
 import { createBearerCheck } from '../protocols/http';
+
+/** Health route path; GET and HEAD requests skip the Host check */
+export const HEALTH_PATH = '/health';
 
 const CORS_METHODS = 'GET,POST,OPTIONS';
 // Allow payment and protocol headers in browser preflights. The gateway does
@@ -67,10 +70,13 @@ export function buildAccessControlHook(
   const publicHostname = hostnameOf(options.publicBaseUrl);
 
   return async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
-    // 1. Skip Host validation for the matched /health route so platform probes
-    // can use a container address; the route returns only a constant body
-    const isHealthRoute = request.routeOptions.url === '/health';
-    if (!isHealthRoute && !isAllowedHost(request.headers.host, publicHostname)) {
+    // 1. Let GET and HEAD /health probes use a container address; the handler
+    // returns a constant response. Fastify rejects duplicate GET /health routes,
+    // while adapter POST /health routes still require an allowed Host.
+    const route = request.routeOptions;
+    const isHealthProbe =
+      route.url === HEALTH_PATH && (route.method === 'GET' || route.method === 'HEAD');
+    if (!isHealthProbe && !isAllowedHost(request.headers.host, publicHostname)) {
       reply.status(403).send({ status: 'error', code: 'FORBIDDEN', message: 'Host not allowed' });
       return;
     }

@@ -54,11 +54,12 @@ function fakeRequest(overrides: {
   authorization?: string;
 }): FastifyRequest {
   const url = overrides.url ?? '/api/resources';
+  const method = overrides.method ?? 'GET';
   return {
-    method: overrides.method ?? 'GET',
+    method,
     url,
-    // Model a route registered at the requested path
-    routeOptions: { url },
+    // Model a route registered at the requested path and method
+    routeOptions: { url, method },
     headers: {
       host: overrides.host ?? 'localhost',
       ...(overrides.origin !== undefined ? { origin: overrides.origin } : {}),
@@ -110,6 +111,19 @@ describe('buildAccessControlHook (Host and CORS only)', () => {
       await hook(fakeRequest({ host }), reply);
       expect(reply.statusCode).toBeUndefined();
     }
+  });
+
+  it('skips the Host check for GET and HEAD /health only', async () => {
+    const hook = buildAccessControlHook(BASE);
+    for (const method of ['GET', 'HEAD']) {
+      const reply = fakeReply();
+      await hook(fakeRequest({ method, url: '/health', host: '10.0.3.7:8080' }), reply);
+      expect(reply.statusCode, method).toBeUndefined();
+    }
+    // An adapter may register POST /health
+    const post = fakeReply();
+    await hook(fakeRequest({ method: 'POST', url: '/health', host: '10.0.3.7:8080' }), post);
+    expect(post.statusCode).toBe(403);
   });
 
   it('rejects a request with no Host header at all', async () => {
