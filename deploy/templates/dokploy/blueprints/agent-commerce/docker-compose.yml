@@ -1,0 +1,18 @@
+services:
+  agent-commerce:
+    image: ghcr.io/devlab-group/agent-commerce:2.7.1
+    restart: unless-stopped
+    environment:
+      - GATEWAY_PUBLIC_BASE_URL=${GATEWAY_PUBLIC_BASE_URL}
+      - MERCHANT_WALLET=${MERCHANT_WALLET:?set MERCHANT_WALLET}
+      - MERCHANT_API_URL=${MERCHANT_API_URL:?set MERCHANT_API_URL}
+      - PRICE_USDC=${PRICE_USDC}
+      - X402_NETWORK=${X402_NETWORK}
+      - X402_RPC_URL=${X402_RPC_URL}
+      - X402_FACILITATOR_URL=${X402_FACILITATOR_URL}
+      - ADMIN_TOKEN=${ADMIN_TOKEN}
+    volumes:
+      - agent-commerce-data:/app/data
+
+volumes:
+  agent-commerce-data: {}

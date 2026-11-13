@@ -1,0 +1,54 @@
+# Local K2 demo: gateway, demo API and optional n8n
+# Set MERCHANT_WALLET, ADMIN_TOKEN and GATEWAY_SHARED_SECRET; see README.md
+name: acg-demo
+
+x-image: &image ghcr.io/devlab-group/agent-commerce:2.7.1
+
+services:
+  gateway:
+    image: *image
+    restart: unless-stopped
+    environment:
+      AGENT_COMMERCE_CONFIG: /config/config.yaml
+      GATEWAY_PUBLIC_BASE_URL: ${GATEWAY_PUBLIC_BASE_URL:-http://localhost:8080}
+      MERCHANT_WALLET: ${MERCHANT_WALLET:?set MERCHANT_WALLET to a Base Sepolia address you control}
+      ADMIN_TOKEN: ${ADMIN_TOKEN:?set ADMIN_TOKEN}
+      GATEWAY_SHARED_SECRET: ${GATEWAY_SHARED_SECRET:?set GATEWAY_SHARED_SECRET}
+      N8N_WEBHOOK_URL: ${N8N_WEBHOOK_URL:-http://n8n:5678/webhook/summarize-url}
+    volumes:
+      - ./config.yaml:/config/config.yaml:ro
+      - gateway-data:/app/data
+    networks: [default, n8n]
+    ports:
+      - "127.0.0.1:${GATEWAY_HOST_PORT:-8080}:8080"
+
+  # Demo API on the default network at http://api:3001; no port is published
+  api:
+    image: *image
+    restart: unless-stopped
+    entrypoint: ["node", "/demo/api.mjs"]
+    # Disable the gateway HEALTHCHECK because this container runs the demo API
+    healthcheck:
+      disable: true
+    volumes:
+      - ./api.mjs:/demo/api.mjs:ro
+
+  # Optional: docker compose --profile n8n up -d. Import deploy/n8n/summarize-url.json
+  # in the UI at http://localhost:5678 (README.md). Because n8n fetches buyer URLs,
+  # it shares a network with the gateway but not the demo API.
+  n8n:
+    image: n8nio/n8n:2.47.6
+    profiles: [n8n]
+    restart: unless-stopped
+    networks: [n8n]
+    ports:
+      - "127.0.0.1:5678:5678"
+    volumes:
+      - n8n-data:/home/node/.n8n
+
+networks:
+  n8n:
+
+volumes:
+  gateway-data:
+  n8n-data:

@@ -151,6 +151,8 @@ jobs:
       # startup even when in-repo tests pass because peers are installed here.
       # Then install peers and check that the subpaths work with the main entry.
       - name: Install package without optional peers
+        # Enable pipefail so a failed npm pack fails the step
+        shell: bash
         run: |
           TARBALL="$(npm pack --silent | tail -1)"
           mkdir -p "$RUNNER_TEMP/bare" && cd "$RUNNER_TEMP/bare"
@@ -316,3 +318,31 @@ jobs:
       - name: Tear down
         if: always()
         run: docker compose down -v
+
+  image:
+    name: Gateway image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      # The release builds deploy/image from the npm package. CI builds the
+      # same Dockerfile from this commit's tarball.
+      - name: Build the image from the package tarball
+        # Enable pipefail so a failed npm pack fails the step
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/pkg"
+          TARBALL="$(npm pack --silent --pack-destination "$RUNNER_TEMP/pkg" | tail -1)"
+          docker build --build-context pkg="$RUNNER_TEMP/pkg" \
+            --build-arg ACG_PACKAGE="/tmp/pkg/$TARBALL" -t agent-commerce:ci deploy/image
+      # The starter config names a public RPC and facilitator, which CI must not
+      # reach. Without a network the gateway still serves the 402 challenge, and
+      # only x402's readiness check fails, on its RPC
+      - name: Serve the starter configuration offline
+        run: bash deploy/image/check.sh agent-commerce:ci
