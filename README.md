@@ -695,6 +695,7 @@ they are added to a release.
 | [Protocols](docs/protocols.md)                 | supported and unsupported protocol features |
 | [AP2](docs/protocols/ap2.md)                   | mandate verification and the trust model    |
 | [Configuration](docs/configuration.md)         | `config.yaml` reference                     |
+| [Deployment](deploy/docs/deploy.md)            | container image and platform templates      |
 | [Storage](docs/storage.md)                     | upgrade, backup, restore and shutdown       |
 | [Upgrading from 2.0](docs/migration-2.1.md)    | changes that can break a 2.0 setup          |
 | [Smoke tests](docs/smoke-tests.md)             | settling on public networks, by hand        |

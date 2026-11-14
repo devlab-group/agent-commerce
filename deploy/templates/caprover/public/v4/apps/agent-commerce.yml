@@ -1,0 +1,69 @@
+captainVersion: 4
+services:
+    $$cap_appname:
+        image: ghcr.io/devlab-group/agent-commerce:$$cap_acg_version
+        environment:
+            GATEWAY_PUBLIC_BASE_URL: https://$$cap_appname.$$cap_root_domain
+            MERCHANT_WALLET: $$cap_merchant_wallet
+            MERCHANT_API_URL: $$cap_merchant_api_url
+            PRICE_USDC: $$cap_price_usdc
+            X402_NETWORK: $$cap_x402_network
+            X402_RPC_URL: $$cap_x402_rpc_url
+            X402_FACILITATOR_URL: $$cap_x402_facilitator_url
+            ADMIN_TOKEN: $$cap_gen_random_hex(32)
+        volumes:
+            - $$cap_appname-data:/app/data
+        caproverExtra:
+            containerHttpPort: '8080'
+caproverOneClickApp:
+    variables:
+        - id: $$cap_acg_version
+          label: Gateway Version
+          defaultValue: '2.7.1'
+          description: Image tag of ghcr.io/devlab-group/agent-commerce. It matches the version of the @devlab.group/agent-commerce npm package.
+          validRegex: "/^([^\\s^\\/])+$/"
+        - id: $$cap_merchant_wallet
+          label: Merchant Wallet
+          description: Address that receives the payments (testnet by default). Use a wallet you control, never a key the gateway holds.
+          validRegex: '/^0x[0-9a-fA-F]{40}$/'
+        - id: $$cap_merchant_api_url
+          label: Merchant API URL
+          description: Full URL of the API endpoint the starter configuration calls with GET, for example https://api.example.com/v1/quote.
+          validRegex: '/^https?:\/\/\S+$/'
+        - id: $$cap_price_usdc
+          label: Price per Call (USDC)
+          defaultValue: '0.01'
+          description: Price of one call in USDC, as a decimal string.
+          validRegex: '/^[0-9]+(\.[0-9]{1,6})?$/'
+        - id: $$cap_x402_network
+          label: Payment Network
+          defaultValue: eip155:84532
+          description: CAIP-2 network. The default is Base Sepolia (testnet). Mainnet networks are refused by the starter configuration.
+          validRegex: '/^\S+$/'
+        - id: $$cap_x402_rpc_url
+          label: Network RPC URL
+          defaultValue: https://base-sepolia-rpc.publicnode.com
+          description: RPC endpoint for health checks. Change it together with the payment network.
+          validRegex: '/^https?:\/\/\S+$/'
+        - id: $$cap_x402_facilitator_url
+          label: x402 Facilitator URL
+          defaultValue: https://x402.org/facilitator
+          description: Facilitator that verifies and settles payments. The default is the public testnet facilitator.
+          validRegex: '/^https?:\/\/\S+$/'
+    instructions:
+        start: |-
+            Agent Commerce Gateway is a self-hosted, non-custodial gateway that puts x402 payments in front of an existing HTTP API, over HTTP or MCP.
+
+            This one-click app starts the gateway with a testnet starter configuration that charges for one GET endpoint of your API. All variables are described at https://acg.devlab.group/docs/deploy
+        end: |-
+            Agent Commerce Gateway has been deployed.
+
+            1. Enable HTTPS under HTTP Settings of the app (the gateway announces https://$$cap_appname.$$cap_root_domain).
+            2. Check https://$$cap_appname.$$cap_root_domain/ready. It returns 200 when the gateway is ready.
+            3. An unpaid POST to https://$$cap_appname.$$cap_root_domain/api/resources/paid_api/invoke returns 402 with a PAYMENT-REQUIRED header.
+
+            Find ADMIN_TOKEN under the app's Environment Variables. Use it for the operator routes: receipts, events, payment attempts, manual attempt resolution and transactions.
+    displayName: Agent Commerce Gateway
+    isOfficial: true
+    description: Self-hosted, non-custodial gateway that puts x402 payments in front of an existing HTTP API, over HTTP or MCP.
+    documentation: See https://acg.devlab.group and https://github.com/devlab-group/agent-commerce

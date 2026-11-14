@@ -1,0 +1,13 @@
+{
+  "id": "agent-commerce",
+  "name": "Agent Commerce Gateway",
+  "version": "2.7.1",
+  "description": "Self-hosted, non-custodial gateway that puts x402 payments in front of an existing HTTP API, over HTTP or MCP.",
+  "logo": "agent-commerce.svg",
+  "links": {
+    "github": "https://github.com/devlab-group/agent-commerce",
+    "website": "https://acg.devlab.group",
+    "docs": "https://acg.devlab.group/docs/deploy"
+  },
+  "tags": ["payments", "x402", "agents", "api"]
+}

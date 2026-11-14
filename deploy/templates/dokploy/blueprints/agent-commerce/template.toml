@@ -1,0 +1,21 @@
+[variables]
+main_domain = "${domain}"
+admin_token = "${password:32}"
+
+[config]
+mounts = []
+
+[[config.domains]]
+serviceName = "agent-commerce"
+port = 8080
+host = "${main_domain}"
+
+[config.env]
+GATEWAY_PUBLIC_BASE_URL = "https://${main_domain}"
+MERCHANT_WALLET = ""
+MERCHANT_API_URL = ""
+PRICE_USDC = "0.01"
+X402_NETWORK = "eip155:84532"
+X402_RPC_URL = "https://base-sepolia-rpc.publicnode.com"
+X402_FACILITATOR_URL = "https://x402.org/facilitator"
+ADMIN_TOKEN = "${admin_token}"

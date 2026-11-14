@@ -1,0 +1,92 @@
+# K2 demo merchant: two paid resources on Base Sepolia
+# docker-compose.yml mounts this testnet config at /config/config.yaml
+#
+# The default paymentFlow is `authorization`: verify the buyer's authorization,
+# call the backend, then settle if it returns 2xx. Backend failures, including
+# 400 and 502, settle nothing. For side effects, set `paymentFlow: upfront` on
+# payments.x402 or the resource to settle before calling the backend; that
+# payment remains settled even if the backend fails.
+version: 1
+
+merchant:
+  id: acg-demo
+  name: Agent Commerce Demo Merchant
+  publicBaseUrl: ${GATEWAY_PUBLIC_BASE_URL:-http://localhost:8080}
+
+server:
+  port: 8080
+  host: 0.0.0.0
+  adminToken: ${ADMIN_TOKEN}
+
+storage:
+  receipts:
+    driver: sqlite
+    path: /app/data/receipts.sqlite
+
+protocols:
+  http:
+    enabled: true
+  mcp:
+    enabled: true
+    mountPath: /mcp
+
+resources:
+  # Static demo API, no language model. Target for automated buyer tests
+  report:
+    name: Demo Report
+    description: Small JSON report from the demo API. Costs 0.01 USDC per call.
+    input:
+      type: object
+      properties: {}
+      additionalProperties: false
+    backend:
+      type: http
+      method: GET
+      url: http://api:3001/api/report
+      timeoutMs: 5000
+    pricing:
+      type: fixed
+      amount: "0.01"
+      currency: USDC
+    expose: [http, mcp]
+    payments: [x402]
+
+  # n8n workflow from deploy/n8n/summarize-url.json
+  # Configure its Header Auth credential with this GATEWAY_SHARED_SECRET
+  summarize_url:
+    name: Summarize URL
+    description: Fetches a public web page and returns a short summary. Costs 0.02 USDC per call.
+    input:
+      type: object
+      properties:
+        url:
+          type: string
+          description: Public https URL of the page to summarize
+      required: [url]
+      additionalProperties: false
+    backend:
+      type: http
+      method: POST
+      url: ${N8N_WEBHOOK_URL:-http://n8n:5678/webhook/summarize-url}
+      headers:
+        X-Gateway-Secret: ${GATEWAY_SHARED_SECRET}
+      timeoutMs: 60000
+    pricing:
+      type: fixed
+      amount: "0.02"
+      currency: USDC
+    expose: [http, mcp]
+    payments: [x402]
+
+payments:
+  x402:
+    enabled: true
+    network: eip155:84532
+    rpcUrl: ${X402_RPC_URL:-https://base-sepolia-rpc.publicnode.com}
+    payTo: ${MERCHANT_WALLET}
+    maxTimeoutSeconds: 300
+    facilitator:
+      mode: remote
+      url: https://x402.org/facilitator
+      auth:
+        type: none

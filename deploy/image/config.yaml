@@ -1,0 +1,63 @@
+# Starter configuration for one paid GET endpoint, using testnet payments
+# See deploy/docs/deploy.md for environment variables
+#
+# To change resources or enable mainnet, mount your own file and set
+# AGENT_COMMERCE_CONFIG to its path; this file omits allowMainnet, so a
+# mainnet X402_NETWORK fails validation
+version: 1
+
+merchant:
+  id: starter
+  name: Agent Commerce Gateway
+  publicBaseUrl: ${GATEWAY_PUBLIC_BASE_URL:-http://localhost:8080}
+
+server:
+  port: 8080
+  host: 0.0.0.0
+  adminToken: ${ADMIN_TOKEN}
+
+storage:
+  receipts:
+    driver: sqlite
+    path: /app/data/receipts.sqlite
+
+protocols:
+  http:
+    enabled: true
+  mcp:
+    enabled: true
+    mountPath: /mcp
+
+resources:
+  paid_api:
+    name: Paid API
+    description: One HTTP endpoint of the merchant API, paid per call in USDC.
+    input:
+      type: object
+      properties: {}
+      additionalProperties: false
+    backend:
+      type: http
+      method: GET
+      url: ${MERCHANT_API_URL}
+      timeoutMs: 10000
+    pricing:
+      type: fixed
+      amount: "${PRICE_USDC:-0.01}"
+      currency: USDC
+    expose: [http, mcp]
+    payments: [x402]
+
+payments:
+  x402:
+    enabled: true
+    network: ${X402_NETWORK:-eip155:84532}
+    # Health checks only; set it together with X402_NETWORK
+    rpcUrl: ${X402_RPC_URL:-https://base-sepolia-rpc.publicnode.com}
+    payTo: ${MERCHANT_WALLET}
+    maxTimeoutSeconds: 300
+    facilitator:
+      mode: remote
+      url: ${X402_FACILITATOR_URL:-https://x402.org/facilitator}
+      auth:
+        type: none

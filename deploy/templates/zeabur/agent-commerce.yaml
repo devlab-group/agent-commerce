@@ -1,0 +1,77 @@
+# yaml-language-server: $schema=https://schema.zeabur.app/template.json
+apiVersion: zeabur.com/v1
+kind: Template
+metadata:
+  name: Agent Commerce Gateway
+spec:
+  description: Self-hosted, non-custodial gateway that puts x402 payments in front of an existing HTTP API, over HTTP or MCP.
+  icon: https://acg.devlab.group/icon-512.png
+  tags:
+    - payments
+    - x402
+    - agents
+    - api
+  variables:
+    - key: PUBLIC_DOMAIN
+      type: DOMAIN
+      name: Domain
+      description: Subdomain for the gateway, for example "my-gateway" for my-gateway.zeabur.app
+    - key: MERCHANT_WALLET
+      type: STRING
+      name: Merchant wallet
+      description: Address that receives the payments. Testnet by default; use a wallet you control.
+    - key: MERCHANT_API_URL
+      type: STRING
+      name: Merchant API URL
+      description: Full URL of the API endpoint the starter configuration calls with GET, for example https://api.example.com/v1/quote
+    - key: PRICE_USDC
+      type: STRING
+      name: Price per call (USDC)
+      description: Price of one call in USDC, for example 0.01
+  readme: |-
+    # Agent Commerce Gateway
+
+    Self-hosted, non-custodial gateway that puts x402 payments in front of an existing HTTP API, over HTTP or MCP.
+
+    This template starts the gateway with a testnet starter configuration (Base Sepolia, public x402 facilitator) that charges for one GET endpoint of your API. Mainnet is not available through the starter configuration.
+
+    - Check `https://<your domain>/ready`: it returns 200 when the gateway is ready.
+    - An unpaid `POST /api/resources/paid_api/invoke` returns 402 with a `PAYMENT-REQUIRED` header.
+    - Network, RPC and facilitator are service variables with testnet defaults.
+
+    Variable reference: https://acg.devlab.group/docs/deploy
+
+    Website: https://acg.devlab.group - Source: https://github.com/devlab-group/agent-commerce
+  services:
+    - name: Agent Commerce Gateway
+      icon: https://acg.devlab.group/icon-512.png
+      template: PREBUILT
+      domainKey: PUBLIC_DOMAIN
+      spec:
+        source:
+          image: ghcr.io/devlab-group/agent-commerce:2.7.1
+        ports:
+          - id: web
+            port: 8080
+            type: HTTP
+        volumes:
+          - id: data
+            dir: /app/data
+        instructions:
+          - type: DOMAIN
+            title: Gateway URL
+            content: ${ZEABUR_WEB_URL}
+          - type: PASSWORD
+            title: Operator admin token (receipts, events, payment attempts, transactions)
+            content: ${ADMIN_TOKEN}
+        env:
+          GATEWAY_PUBLIC_BASE_URL:
+            default: ${ZEABUR_WEB_URL}
+          ADMIN_TOKEN:
+            default: ${PASSWORD}
+          X402_NETWORK:
+            default: eip155:84532
+          X402_RPC_URL:
+            default: https://base-sepolia-rpc.publicnode.com
+          X402_FACILITATOR_URL:
+            default: https://x402.org/facilitator
