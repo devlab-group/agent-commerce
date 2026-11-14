@@ -2,7 +2,7 @@
 # optional x402 and MCP peers. The release workflow publishes it as
 # ghcr.io/devlab-group/agent-commerce:<ACG_VERSION>
 #
-#   docker build -t ghcr.io/devlab-group/agent-commerce:2.7.1 deploy/image/
+#   docker build -t ghcr.io/devlab-group/agent-commerce:2.7.2 deploy/image/
 #
 # tests/unit/deploy checks ACG_VERSION and the peer versions against
 # package.json, because npm does not enforce optional peers.
@@ -13,7 +13,7 @@
 #     --build-arg ACG_PACKAGE=/tmp/pkg/<tarball> deploy/image/
 #
 # Without --build-context the `pkg` stage is empty
-ARG ACG_VERSION=2.7.1
+ARG ACG_VERSION=2.7.2
 ARG NODE_IMAGE=node:22.23.5-bookworm-slim@sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee
 
 FROM scratch AS pkg

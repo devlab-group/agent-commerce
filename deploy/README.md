@@ -15,7 +15,7 @@ Start with [docs/deploy.md](docs/deploy.md). The development stack in the reposi
 ## Image
 
 ```sh
-docker build -t ghcr.io/devlab-group/agent-commerce:2.7.1 deploy/image/
+docker build -t ghcr.io/devlab-group/agent-commerce:2.7.2 deploy/image/
 ```
 
 The image installs the published npm package at the version in `image/Dockerfile`, with pinned optional peers for x402 and MCP. Its starter configuration accepts testnets; mount your own configuration to use mainnet.

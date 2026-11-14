@@ -1,6 +1,6 @@
 services:
   agent-commerce:
-    image: ghcr.io/devlab-group/agent-commerce:2.7.1
+    image: ghcr.io/devlab-group/agent-commerce:2.7.2
     restart: unless-stopped
     environment:
       - GATEWAY_PUBLIC_BASE_URL=${GATEWAY_PUBLIC_BASE_URL}

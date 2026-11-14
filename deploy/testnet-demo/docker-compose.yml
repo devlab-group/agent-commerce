@@ -2,7 +2,7 @@
 # Set MERCHANT_WALLET, ADMIN_TOKEN and GATEWAY_SHARED_SECRET; see README.md
 name: acg-demo
 
-x-image: &image ghcr.io/devlab-group/agent-commerce:2.7.1
+x-image: &image ghcr.io/devlab-group/agent-commerce:2.7.2
 
 services:
   gateway:

@@ -19,7 +19,7 @@ caproverOneClickApp:
     variables:
         - id: $$cap_acg_version
           label: Gateway Version
-          defaultValue: '2.7.1'
+          defaultValue: '2.7.2'
           description: Image tag of ghcr.io/devlab-group/agent-commerce. It matches the version of the @devlab.group/agent-commerce npm package.
           validRegex: "/^([^\\s^\\/])+$/"
         - id: $$cap_merchant_wallet

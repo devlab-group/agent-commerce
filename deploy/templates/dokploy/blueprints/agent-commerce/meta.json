@@ -1,7 +1,7 @@
 {
   "id": "agent-commerce",
   "name": "Agent Commerce Gateway",
-  "version": "2.7.1",
+  "version": "2.7.2",
   "description": "Self-hosted, non-custodial gateway that puts x402 payments in front of an existing HTTP API, over HTTP or MCP.",
   "logo": "agent-commerce.svg",
   "links": {

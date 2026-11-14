@@ -22,7 +22,7 @@ docker run -d --name acg -p 8080:8080 -v acg-data:/app/data \
   -e MERCHANT_WALLET=0xYourTestnetAddress \
   -e MERCHANT_API_URL=https://api.example.com/v1/quote \
   -e ADMIN_TOKEN="$(openssl rand -hex 32)" \
-  ghcr.io/devlab-group/agent-commerce:2.7.1
+  ghcr.io/devlab-group/agent-commerce:2.7.2
 ```
 
 ## Variables

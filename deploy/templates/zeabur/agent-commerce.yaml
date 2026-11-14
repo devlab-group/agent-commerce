@@ -49,7 +49,7 @@ spec:
       domainKey: PUBLIC_DOMAIN
       spec:
         source:
-          image: ghcr.io/devlab-group/agent-commerce:2.7.1
+          image: ghcr.io/devlab-group/agent-commerce:2.7.2
         ports:
           - id: web
             port: 8080
