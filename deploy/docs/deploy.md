@@ -46,7 +46,7 @@ The starter configuration omits `allowMainnet`, so a mainnet `X402_NETWORK` fail
 
 The gateway compares each request's `Host` hostname with `GATEWAY_PUBLIC_BASE_URL`, also accepting `localhost`, `127.0.0.1` and `::1`. Other hosts receive `403`. Set the public URL to the domain clients use, including when a proxy sits in front.
 
-A platform health check with a different `Host` header also receives `403`. Use the image's built-in `HEALTHCHECK` or a TCP check on platforms that send their own host name.
+`GET` and `HEAD` requests to `/health` skip the `Host` check, so platform probes can use a container address or their own hostname. `/ready` and other routes return `403` for an unapproved `Host`. Requests with an `Origin` header must match `server.allowedOrigins`, including on `/health`.
 
 ## Data volume
 

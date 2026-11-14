@@ -14,13 +14,13 @@ Create and publish the template from Workspace settings, Templates, New Template
 
 Create one service named `agent-commerce`.
 
-| Setting           | Value                                                                                             |
-| ----------------- | ------------------------------------------------------------------------------------------------- |
-| Source            | Docker image `ghcr.io/devlab-group/agent-commerce:2.7.2` (public package)                         |
-| Public networking | HTTP, generate a Railway domain                                                                   |
-| Volume            | mount path `/app/data`                                                                            |
-| Healthcheck path  | leave empty (Railway's healthcheck `Host` is refused by the gateway, see `deploy/docs/deploy.md`) |
-| Start command     | leave empty                                                                                       |
+| Setting           | Value                                                                                                 |
+| ----------------- | ----------------------------------------------------------------------------------------------------- |
+| Source            | Docker image `ghcr.io/devlab-group/agent-commerce:2.7.2` (public package)                             |
+| Public networking | HTTP, generate a Railway domain                                                                       |
+| Volume            | mount path `/app/data`                                                                                |
+| Healthcheck path  | `/health` or leave empty; `/ready` rejects Railway's healthcheck `Host` (see `deploy/docs/deploy.md`) |
+| Start command     | leave empty                                                                                           |
 
 ## Variables
 

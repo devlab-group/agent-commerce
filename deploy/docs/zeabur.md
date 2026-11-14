@@ -7,4 +7,4 @@ The "Agent Commerce Gateway" template runs one prebuilt service from the [gatewa
 3. The admin token is generated and shown in the service's instructions as `ADMIN_TOKEN`.
 4. [Verify the deployment](deploy.md#verify-a-deployment).
 
-The template leaves the health check at Zeabur's TCP default. An HTTP check on `/ready` fails if it sends a different `Host` header (see [Public URL](deploy.md#public-url)).
+The template uses Zeabur's default TCP health check. HTTP probes using `GET` or `HEAD` on `/health` skip the Host check. Probes on `/ready` must use the public hostname or a loopback name. Requests with an `Origin` header must also pass the Origin check; see [Public URL](deploy.md#public-url).

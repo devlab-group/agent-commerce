@@ -9,4 +9,4 @@ The "Agent Commerce Gateway" template runs one service from the [gateway image](
 Apply these Railway settings:
 
 - `RAILWAY_RUN_UID=0` runs the gateway as root inside its container so it can write the volume Railway mounts as root. The image otherwise runs as uid 1000.
-- Leave the healthcheck path empty. Railway sends `Host: healthcheck.railway.app`, which the gateway rejects with 403. See [Public URL](deploy.md#public-url).
+- Use `/health` as the healthcheck path, or leave it empty. Railway probes send `Host: healthcheck.railway.app`; `/health` accepts this host, while `/ready` returns 403. See [Public URL](deploy.md#public-url).
