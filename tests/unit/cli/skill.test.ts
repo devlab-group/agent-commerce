@@ -261,3 +261,46 @@ describe('Claude Code plugin', () => {
     expect(existsSync(join(pluginDir, 'package.json'))).toBe(false);
   });
 });
+
+describe('Cursor plugin', () => {
+  const plugin = readJson<{
+    name: string;
+    displayName: string;
+    version: string;
+    description: string;
+    license: string;
+    logo: string;
+    skills: string;
+  }>(join(pluginDir, '.cursor-plugin', 'plugin.json'));
+  const claude = readJson<{ name: string; displayName: string; description: string }>(
+    join(pluginDir, '.claude-plugin', 'plugin.json'),
+  );
+  const marketplace = readJson<{ name: string; plugins: { name: string; source: string }[] }>(
+    join(root, '.cursor-plugin', 'marketplace.json'),
+  );
+
+  it('releases with the package version and matches the Claude Code plugin', () => {
+    expect(plugin.version).toBe(manifest.version);
+    expect(plugin.license).toBe(manifest.license);
+    expect(plugin).toMatchObject({
+      name: claude.name,
+      displayName: claude.displayName,
+      description: claude.description,
+    });
+  });
+
+  it('is listed in the marketplace from the same folder', () => {
+    expect(marketplace.plugins).toEqual([
+      expect.objectContaining({ name: plugin.name, source: './plugins/agent-commerce-gateway' }),
+    ]);
+  });
+
+  it('points at files inside the plugin folder', () => {
+    // Cursor requires relative manifest paths without `..`
+    for (const path of [plugin.logo, plugin.skills]) {
+      expect(path).not.toMatch(/^\/|^[a-z]+:|\.\./);
+      expect(existsSync(join(pluginDir, path))).toBe(true);
+    }
+    expect(existsSync(join(pluginDir, plugin.skills, 'agent-commerce', 'SKILL.md'))).toBe(true);
+  });
+});

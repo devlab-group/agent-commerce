@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Require package and Claude Code plugin links to point at the real repository.
+ * Require package, Claude Code plugin and Cursor plugin links to point at the real repository.
  * A wrong namespace could send private vulnerability reports to an attacker.
  * An allowlist rejects destinations a placeholder blocklist would miss.
  */
@@ -13,6 +13,8 @@ const manifestPath = resolve(root, 'package.json');
 const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
 const pluginManifest = 'plugins/agent-commerce-gateway/.claude-plugin/plugin.json';
 const plugin = JSON.parse(readFileSync(resolve(root, pluginManifest), 'utf8'));
+const cursorManifest = 'plugins/agent-commerce-gateway/.cursor-plugin/plugin.json';
+const cursor = JSON.parse(readFileSync(resolve(root, cursorManifest), 'utf8'));
 
 const EXPECTED = 'github.com/devlab-group/agent-commerce';
 
@@ -24,6 +26,8 @@ const fields = [
   [`${pluginManifest} homepage`, plugin.homepage],
   [`${pluginManifest} documentationUrl`, plugin.documentationUrl],
   [`${pluginManifest} supportUrl`, plugin.supportUrl],
+  [`${cursorManifest} repository`, cursor.repository],
+  [`${cursorManifest} homepage`, cursor.homepage],
 ];
 
 // Anchored at the scheme and host, because npm renders these as links: a
