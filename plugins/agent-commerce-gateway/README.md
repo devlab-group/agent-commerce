@@ -1,6 +1,6 @@
 # Agent Commerce Gateway plugin
 
-This plugin adds one skill, `agent-commerce`, that helps Claude put
+This plugin adds one skill, `agent-commerce`, that helps a coding agent put
 [Agent Commerce Gateway](https://github.com/devlab-group/agent-commerce)
 (npm `@devlab.group/agent-commerce`) in front of an existing HTTP API. AI
 agents can then call the API's endpoints over HTTP or MCP and pay for them
@@ -37,7 +37,7 @@ anywhere.
 ## Credentials the gateway uses
 
 The skill writes credentials only as `${VAR}` placeholders in the gateway's
-`config.yaml`, and tells Claude never to ask for a secret in chat or write one
+`config.yaml`, and tells the agent never to ask for a secret in chat or write one
 into a file, command or log. The user sets the values in the gateway's own
 `.env`, which the gateway CLI reads when it runs. Each value goes only to the
 party it belongs to:
