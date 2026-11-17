@@ -1,0 +1,310 @@
+{
+  "gateway": {
+    "implementationVersion": "<package-version>",
+    "supportedSpec": "agent-commerce/v1.0.0"
+  },
+  "merchant": {
+    "id": "golden-store",
+    "name": "Golden Store",
+    "publicBaseUrl": "https://gateway.example"
+  },
+  "protocols": {
+    "http": {
+      "enabled": true
+    },
+    "mcp": {
+      "enabled": true,
+      "mountPath": "/mcp"
+    },
+    "a2a": {
+      "enabled": true,
+      "mountPath": "/a2a"
+    },
+    "acp": {
+      "enabled": true,
+      "mountPath": "/acp"
+    }
+  },
+  "adapters": [
+    {
+      "name": "mcp",
+      "kind": "protocol",
+      "implementationVersion": "<package-version>",
+      "supportedSpec": "2026-07-28, 2025-11-25",
+      "capabilities": [
+        "tools/list",
+        "tools/call"
+      ],
+      "status": "stable",
+      "unsupported": [
+        "resources",
+        "prompts",
+        "sampling",
+        "completions",
+        "elicitation",
+        "roots",
+        "logging",
+        "notifications/tools/list_changed",
+        "tasks",
+        "dns-rebinding-protection",
+        "authorization",
+        "sessions",
+        "subscriptions",
+        "pagination",
+        "HTTP+SSE transport",
+        "MPP payment-required as JSON-RPC error -32042",
+        "MPP verification failure as JSON-RPC error -32043"
+      ],
+      "health": {
+        "status": "pass",
+        "checkedAt": "<timestamp>"
+      }
+    },
+    {
+      "name": "a2a",
+      "kind": "protocol",
+      "implementationVersion": "<package-version>",
+      "supportedSpec": "1.0.1",
+      "capabilities": [
+        "agent-card",
+        "jsonrpc",
+        "SendMessage",
+        "x402-extension"
+      ],
+      "status": "experimental",
+      "unsupported": [
+        "SendStreamingMessage",
+        "GetTask",
+        "ListTasks",
+        "CancelTask",
+        "SubscribeToTask",
+        "CreateTaskPushNotificationConfig",
+        "GetTaskPushNotificationConfig",
+        "ListTaskPushNotificationConfigs",
+        "DeleteTaskPushNotificationConfig",
+        "GetExtendedAgentCard",
+        "HTTP+JSON/REST binding",
+        "gRPC binding",
+        "SSE",
+        "long-running task persistence",
+        "task resumption other than an x402 extension payment",
+        "push notifications",
+        "multi-turn conversational continuation",
+        "authenticated extended agent cards",
+        "A2A authentication schemes",
+        "artifact types beyond Agent Commerce outcome data",
+        "x402 extension payments across gateway instances"
+      ],
+      "health": {
+        "status": "pass",
+        "checkedAt": "<timestamp>"
+      }
+    },
+    {
+      "name": "acp",
+      "kind": "protocol",
+      "implementationVersion": "<package-version>",
+      "supportedSpec": "2026-04-17",
+      "capabilities": [
+        "rest transport",
+        "well-known discovery",
+        "bearer authentication",
+        "API-Version enforcement",
+        "request header forwarding to the merchant",
+        "checkout service",
+        "createCheckoutSession",
+        "updateCheckoutSession",
+        "getCheckoutSession",
+        "completeCheckoutSession",
+        "cancelCheckoutSession"
+      ],
+      "status": "experimental",
+      "unsupported": [
+        "carts service",
+        "feed service",
+        "standalone orders service",
+        "delegate_payment",
+        "delegate_authentication",
+        "ACP MCP transport binding",
+        "webhooks",
+        "outbound merchant-to-agent delivery",
+        "ACP client role",
+        "Signature header verification",
+        "Timestamp replay-window verification",
+        "discount extension",
+        "general ACP extension framework",
+        "multiple ACP API versions",
+        "seller-backed payment handler integration"
+      ],
+      "health": {
+        "status": "pass",
+        "checkedAt": "<timestamp>"
+      }
+    }
+  ],
+  "paymentProviders": [
+    {
+      "name": "x402",
+      "kind": "payment",
+      "implementationVersion": "<package-version>",
+      "supportedSpec": "x402/v2 scheme=exact family=eip155",
+      "capabilities": [
+        "exact-evm",
+        "remote-facilitator",
+        "eip-3009",
+        "permit2",
+        "caip-2",
+        "mode=testnet",
+        "authorization-flow",
+        "upfront-flow",
+        "multiple-offers"
+      ],
+      "status": "stable",
+      "unsupported": [
+        "permit2 gas sponsoring extensions",
+        "upto scheme",
+        "batch-settlement scheme",
+        "auth-capture scheme"
+      ]
+    },
+    {
+      "name": "mpp",
+      "kind": "payment",
+      "implementationVersion": "<package-version>",
+      "supportedSpec": "mpp/draft-httpauth-payment-01 intent=charge method=evm",
+      "capabilities": [
+        "intent=charge",
+        "method=evm",
+        "credential=authorization",
+        "eip-3009",
+        "network=eip155:31337",
+        "network=eip155:84532",
+        "network=eip155:8453",
+        "asset=USDC",
+        "verify-before-settle",
+        "authorization-flow",
+        "upfront-flow",
+        "payment-receipt",
+        "challenge-digest-binding"
+      ],
+      "status": "experimental",
+      "unsupported": [
+        "methods other than evm",
+        "credential=permit2",
+        "credential=transaction",
+        "credential=hash",
+        "splits",
+        "intent=subscription",
+        "evm sessions",
+        "discovery extension"
+      ]
+    }
+  ],
+  "authorizationProviders": [
+    {
+      "name": "ap2",
+      "kind": "authorization",
+      "implementationVersion": "<package-version>",
+      "supportedSpec": "ap2/v0.2.0 mode=direct",
+      "capabilities": [
+        "direct-mode",
+        "trusted-agent-provider",
+        "mandate.checkout.1",
+        "sd-jwt-presentation",
+        "ES256",
+        "sha-256",
+        "static-inline-trust",
+        "merchant-checkout-jwt-binding",
+        "agent-commerce/ap2/checkout/v1",
+        "purchase-binding",
+        "replay-defence"
+      ],
+      "status": "experimental",
+      "unsupported": [
+        "autonomous mode",
+        "open checkout mandates (mandate.checkout.open.1)",
+        "payment mandates (mandate.payment.1)",
+        "spending constraint evaluation",
+        "cnf-bound agent keys",
+        "user credential delegation (OpenID4VP)",
+        "delegation chains and key-binding JWTs",
+        "JWKS and any key discovery by URL (jku, x5u)",
+        "issuer metadata fetching",
+        "key rotation without a config change",
+        "signature algorithms other than ES256",
+        "digest algorithms other than sha-256",
+        "mandate issuance",
+        "checkout receipts",
+        "AP2 over the ACP checkout adapter"
+      ]
+    }
+  ],
+  "store": {
+    "name": "sqlite-receipt-store",
+    "kind": "storage",
+    "implementationVersion": "<package-version>",
+    "supportedSpec": "sqlite-schema-v5",
+    "capabilities": [
+      "receipts",
+      "events",
+      "payment-attempts",
+      "transactions",
+      "idempotency-keys",
+      "authorization-holds",
+      "pending-tasks"
+    ],
+    "status": "stable"
+  },
+  "payments": {
+    "x402": {
+      "enabled": true,
+      "network": "eip155:84532",
+      "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+      "assetName": "USDC",
+      "assetVersion": "2",
+      "assetDecimals": 6,
+      "payTo": "0x1111111111111111111111111111111111111111",
+      "maxTimeoutSeconds": 120,
+      "facilitator": {
+        "mode": "remote"
+      },
+      "mode": "testnet",
+      "paymentFlow": "authorization",
+      "options": [
+        {
+          "network": "eip155:84532",
+          "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+          "assetName": "USDC",
+          "assetVersion": "2",
+          "assetDecimals": 6,
+          "payTo": "0x1111111111111111111111111111111111111111",
+          "status": "pass"
+        },
+        {
+          "network": "eip155:421614",
+          "asset": "0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d",
+          "assetName": "USD Coin",
+          "assetVersion": "2",
+          "assetDecimals": 6,
+          "payTo": "0x1111111111111111111111111111111111111111",
+          "assetTransferMethod": "permit2",
+          "status": "pass"
+        }
+      ]
+    },
+    "mpp": {
+      "enabled": true,
+      "network": "eip155:84532",
+      "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+      "assetName": "USDC",
+      "assetVersion": "2",
+      "assetDecimals": 6,
+      "recipient": "0x1111111111111111111111111111111111111111",
+      "facilitator": {
+        "mode": "remote"
+      },
+      "mode": "testnet",
+      "paymentFlow": "upfront"
+    }
+  }
+}

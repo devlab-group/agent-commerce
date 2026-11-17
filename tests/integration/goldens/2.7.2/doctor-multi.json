@@ -1,0 +1,119 @@
+{
+  "checks": [
+    {
+      "name": "Config",
+      "status": "PASS",
+      "detail": "valid: 8 resource(s), merchant \"Golden Store\""
+    },
+    {
+      "name": "Gateway",
+      "status": "PASS",
+      "detail": "healthy and ready at http://gateway.invalid"
+    },
+    {
+      "name": "Backend",
+      "status": "PASS",
+      "detail": "7/7 backend host(s) reachable"
+    },
+    {
+      "name": "Protocols",
+      "status": "PASS",
+      "detail": "http=on mcp=on (/mcp) a2a=on (/a2a) acp=on (/acp)"
+    },
+    {
+      "name": "A2A",
+      "status": "PASS",
+      "detail": "experimental · spec 1.0.1 · protocol 1.0 · binding JSONRPC · mount /a2a · card /.well-known/agent-card.json"
+    },
+    {
+      "name": "A2A unsupported",
+      "status": "INFO",
+      "detail": "SendStreamingMessage, GetTask, ListTasks, CancelTask, SubscribeToTask, CreateTaskPushNotificationConfig, GetTaskPushNotificationConfig, ListTaskPushNotificationConfigs, DeleteTaskPushNotificationConfig, GetExtendedAgentCard, HTTP+JSON/REST binding, gRPC binding, SSE, long-running task persistence, task resumption other than an x402 extension payment, push notifications, multi-turn conversational continuation, authenticated extended agent cards, A2A authentication schemes, artifact types beyond Agent Commerce outcome data, x402 extension payments across gateway instances"
+    },
+    {
+      "name": "ACP",
+      "status": "PASS",
+      "detail": "experimental · spec 2026-04-17 · API-Version 2026-04-17 · service checkout · mount /acp · discovery /.well-known/acp.json"
+    },
+    {
+      "name": "ACP auth",
+      "status": "PASS",
+      "detail": "bearer token configured (16 characters, not shown)"
+    },
+    {
+      "name": "ACP idempotency",
+      "status": "PASS",
+      "detail": "claims in the receipt database (retention 24h)"
+    },
+    {
+      "name": "ACP checkout mapping",
+      "status": "PASS",
+      "detail": "5 operations mapped to free acp-exposed resources (acp_create, acp_update, acp_get, acp_complete, acp_cancel)"
+    },
+    {
+      "name": "ACP unsupported",
+      "status": "INFO",
+      "detail": "carts service, feed service, standalone orders service, delegate_payment, delegate_authentication, ACP MCP transport binding, webhooks, outbound merchant-to-agent delivery, ACP client role, Signature header verification, Timestamp replay-window verification, discount extension, general ACP extension framework, multiple ACP API versions, seller-backed payment handler integration"
+    },
+    {
+      "name": "AP2",
+      "status": "PASS",
+      "detail": "experimental · spec 0.2.0 · mode direct · mandate.checkout.1 · profile agent-commerce/ap2/checkout/v1 · clock skew 60s · mandate aud optional · mandate exp optional"
+    },
+    {
+      "name": "AP2 trust",
+      "status": "PASS",
+      "detail": "mandate issuers: https://trusted-surface.example (1 key) · checkout issuers: https://merchant.example (1 key)"
+    },
+    {
+      "name": "AP2 replay store",
+      "status": "PASS",
+      "detail": "mandate holds in the receipt database"
+    },
+    {
+      "name": "AP2 resources",
+      "status": "PASS",
+      "detail": "ap2_report"
+    },
+    {
+      "name": "AP2 unsupported",
+      "status": "INFO",
+      "detail": "autonomous mode, open checkout mandates (mandate.checkout.open.1), payment mandates (mandate.payment.1), spending constraint evaluation, cnf-bound agent keys, user credential delegation (OpenID4VP), delegation chains and key-binding JWTs, JWKS and any key discovery by URL (jku, x5u), issuer metadata fetching, key rotation without a config change, signature algorithms other than ES256, digest algorithms other than sha-256, mandate issuance, checkout receipts, AP2 over the ACP checkout adapter"
+    },
+    {
+      "name": "Payments",
+      "status": "PASS",
+      "detail": "x402 v2 (scheme=exact) enabled - TESTNET, 2 options: Base Sepolia (eip155:84532) to 0x1111…1111; Arbitrum Sepolia (eip155:421614) to 0x1111…1111, facilitator=remote (auth=none), paymentFlow=authorization"
+    },
+    {
+      "name": "Payments (offers)",
+      "status": "PASS",
+      "detail": "2 offer(s) pass their health checks"
+    },
+    {
+      "name": "Payments (MPP)",
+      "status": "PASS",
+      "detail": "MPP charge/evm/authorization enabled - TESTNET on Base Sepolia (eip155:84532), asset=USDC 0x036C…CF7e, recipient=0x1111…1111, facilitator=remote (auth=none), paymentFlow=upfront, spec draft-httpauth-payment-01@806fdb8, mppx 0.13.1"
+    },
+    {
+      "name": "Storage",
+      "status": "PASS",
+      "detail": "sqlite schema v5 writable; receipts=0"
+    },
+    {
+      "name": "Transactions",
+      "status": "PASS",
+      "detail": "none unresolved"
+    },
+    {
+      "name": "Protocol versions",
+      "status": "PASS",
+      "detail": "reported by gateway /.well-known/agent-commerce"
+    }
+  ],
+  "score": {
+    "passed": 19,
+    "total": 19
+  },
+  "exitCode": 0
+}
