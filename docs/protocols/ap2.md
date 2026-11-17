@@ -381,8 +381,8 @@ does not close authorization providers.
 
 ## Not implemented
 
-`src/authorization/ap2/descriptor.ts` is authoritative for the unsupported list
-published through discovery and `doctor`. The broader implementation limits are:
+Discovery and `doctor` read the unsupported list from `src/support/ap2.json`.
+The broader implementation limits are:
 
 - autonomous mode and open Checkout Mandates (`mandate.checkout.open.1`)
 - Payment Mandates (`mandate.payment.1`)

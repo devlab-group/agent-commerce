@@ -1,19 +1,21 @@
 // Protocol checks: what is enabled, and the A2A and ACP specifics
 
-// Narrow modules, not the protocol barrels: the CLI must pull in no protocol SDK
+// Read protocol constants and support metadata directly to keep protocol SDKs
+// out of the static CLI imports
 import {
   A2A_AGENT_CARD_PATH,
   A2A_PROTOCOL_BINDING,
   A2A_PROTOCOL_VERSION,
   A2A_SPEC_VERSION,
 } from '../../../protocols/a2a/constants';
-import { A2A_UNSUPPORTED } from '../../../protocols/a2a/descriptor';
 import {
   ACP_API_VERSION,
   ACP_SPEC_VERSION,
   ACP_WELL_KNOWN_PATH,
 } from '../../../protocols/acp/constants';
-import { ACP_UNSUPPORTED } from '../../../protocols/acp/descriptor';
+import a2aRecord from '../../../support/a2a.json' with { type: 'json' };
+import acpRecord from '../../../support/acp.json' with { type: 'json' };
+import { exclusionNames } from '../../../support/claims';
 import type { GatewayConfig } from '../../lib/config-client';
 import { type LegacyState, legacyStoreCheck } from './storage';
 import type { DoctorCheck, WellKnownResult } from './types';
@@ -89,14 +91,14 @@ export function protocolChecks(
     checks.push({
       name: 'A2A',
       status: 'PASS',
-      detail: `experimental · spec ${A2A_SPEC_VERSION} · protocol ${A2A_PROTOCOL_VERSION} · binding ${A2A_PROTOCOL_BINDING} · mount ${config.protocols.a2a.mountPath} · card ${A2A_AGENT_CARD_PATH}`,
+      detail: `${a2aRecord.status} · spec ${A2A_SPEC_VERSION} · protocol ${A2A_PROTOCOL_VERSION} · binding ${A2A_PROTOCOL_BINDING} · mount ${config.protocols.a2a.mountPath} · card ${A2A_AGENT_CARD_PATH}`,
     });
     // Listed in full, as are ACP's and AP2's below: a count does not tell an
     // operator whether the one feature their client needs is missing
     checks.push({
       name: 'A2A unsupported',
       status: 'INFO',
-      detail: A2A_UNSUPPORTED.join(', '),
+      detail: exclusionNames(a2aRecord).join(', '),
     });
   }
 
@@ -112,7 +114,7 @@ export function protocolChecks(
     checks.push({
       name: 'ACP',
       status: 'PASS',
-      detail: `experimental · spec ${ACP_SPEC_VERSION} · API-Version ${ACP_API_VERSION} · service checkout · mount ${acp.mountPath} · discovery ${ACP_WELL_KNOWN_PATH}`,
+      detail: `${acpRecord.status} · spec ${ACP_SPEC_VERSION} · API-Version ${ACP_API_VERSION} · service checkout · mount ${acp.mountPath} · discovery ${ACP_WELL_KNOWN_PATH}`,
     });
 
     // Whether a token is configured and its length, never the token. Config
@@ -138,7 +140,7 @@ export function protocolChecks(
     checks.push({
       name: 'ACP unsupported',
       status: 'INFO',
-      detail: ACP_UNSUPPORTED.join(', '),
+      detail: exclusionNames(acpRecord).join(', '),
     });
   }
   return checks;

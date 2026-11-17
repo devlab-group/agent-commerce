@@ -1,12 +1,11 @@
 /**
- * Adapter self-description.
- *
- * `supportedSpec` is the pinned ACP snapshot, never this package's version.
- * Status is `experimental` while the adapter lacks the features in the
- * unsupported list below; an entry leaves that list only when its feature is
- * implemented.
+ * `supportedSpec` pins the ACP snapshot independently of the package version.
+ * Status and unsupported features come from `src/support/acp.json`.
+ * Remove an unsupported entry only after implementing its feature.
  */
 import type { AdapterDescriptor } from '../../core';
+import record from '../../support/acp.json' with { type: 'json' };
+import { descriptorStatus, exclusionNames } from '../../support/claims';
 import { ACP_CHECKOUT_OPERATIONS, ACP_SPEC_VERSION } from './constants';
 
 // What this adapter implements
@@ -22,32 +21,11 @@ const ACP_CAPABILITIES: readonly string[] = [
 ];
 
 /**
- * Major ACP features this adapter does not implement, served on
- * `/.well-known/agent-commerce` and printed by `doctor`, so no client assumes
- * full protocol support
+ * Unsupported ACP features from the support record, published at
+ * `/.well-known/agent-commerce` and printed by `doctor` to show the limits of
+ * protocol support
  */
-export const ACP_UNSUPPORTED: readonly string[] = [
-  // Services this seller does not implement, named as ACP names them. The
-  // discovery document advertises `checkout` alone, and these are the reason.
-  'carts service',
-  'feed service',
-  'standalone orders service',
-  'delegate_payment',
-  'delegate_authentication',
-  // Bindings and delivery directions
-  'ACP MCP transport binding',
-  'webhooks',
-  'outbound merchant-to-agent delivery',
-  'ACP client role',
-  // Request authentication beyond the bearer token
-  'Signature header verification',
-  'Timestamp replay-window verification',
-  // Extensions, versioning and payment handlers
-  'discount extension',
-  'general ACP extension framework',
-  'multiple ACP API versions',
-  'seller-backed payment handler integration',
-];
+export const ACP_UNSUPPORTED: readonly string[] = exclusionNames(record);
 
 export function buildDescriptor(implementationVersion: string): AdapterDescriptor {
   return {
@@ -56,7 +34,7 @@ export function buildDescriptor(implementationVersion: string): AdapterDescripto
     implementationVersion,
     supportedSpec: ACP_SPEC_VERSION,
     capabilities: ACP_CAPABILITIES,
-    status: 'experimental',
+    status: descriptorStatus(record),
     unsupported: ACP_UNSUPPORTED,
   };
 }

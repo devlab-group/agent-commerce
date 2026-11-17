@@ -18,10 +18,14 @@ import {
   resolveDeploymentMode,
 } from '../../../payments/x402/networks';
 import { X402_DEFAULT_PAYMENT_FLOW } from '../../../payments/x402/payment-flow';
+import { featureStatus } from '../../../support/claims';
+import x402Record from '../../../support/x402.json' with { type: 'json' };
 import type { GatewayConfig } from '../../lib/config-client';
 import { PLACEHOLDER_ASSET_ADDRESS } from '../../lib/init-config';
 import { maskMiddle } from '../../lib/mask';
 import type { DoctorCheck, WellKnownResult } from './types';
+
+const QUOTE_STATUS = featureStatus(x402Record, 'erc-8409-quotes');
 
 // The rail's settlement order and how many resources override it
 function describePaymentFlow(
@@ -399,7 +403,7 @@ function quoteCheck(
       ? {
           name,
           status: 'INFO',
-          detail: `ERC-8409 quotes enabled (experimental)${localIssuer !== undefined ? `, issuer=${localIssuer} from the local key` : ''}; the gateway's issuer could not be read`,
+          detail: `ERC-8409 quotes enabled (${QUOTE_STATUS})${localIssuer !== undefined ? `, issuer=${localIssuer} from the local key` : ''}; the gateway's issuer could not be read`,
         }
       : undefined;
   }
@@ -431,7 +435,7 @@ function quoteCheck(
   return {
     name,
     status: 'PASS',
-    detail: `ERC-8409 quotes (experimental) - issuer=${issuer}${local === undefined ? ' as the gateway publishes it (viem could not be loaded to check it against the local key)' : ''}, requestScheme=${quote.requestScheme}, extension=${quote.extension}`,
+    detail: `ERC-8409 quotes (${QUOTE_STATUS}) - issuer=${issuer}${local === undefined ? ' as the gateway publishes it (viem could not be loaded to check it against the local key)' : ''}, requestScheme=${quote.requestScheme}, extension=${quote.extension}`,
   };
 }
 

@@ -1,13 +1,14 @@
 // AP2 checks: settings, trust lists, the replay store and the gated resources
 
-// Constants and a descriptor only: the AP2 provider would pull the optional
-// peers `jose`, `@sd-jwt/core` and `canonicalize` into the CLI bundle
+// Read AP2 constants and support metadata directly to keep the optional peers
+// `jose`, `@sd-jwt/core` and `canonicalize` out of the static CLI imports
 import {
   AP2_CHECKOUT_MANDATE_VCT,
   AP2_CHECKOUT_PROFILE,
   AP2_SPEC_VERSION,
 } from '../../../authorization/ap2/constants';
-import { AP2_UNSUPPORTED } from '../../../authorization/ap2/descriptor';
+import ap2Record from '../../../support/ap2.json' with { type: 'json' };
+import { exclusionNames } from '../../../support/claims';
 import type { GatewayConfig } from '../../lib/config-client';
 import { type LegacyState, legacyStoreCheck } from './storage';
 import type { DoctorCheck } from './types';
@@ -39,7 +40,7 @@ export function ap2Checks(config: GatewayConfig | undefined, legacy: LegacyState
     checks.push({
       name: 'AP2',
       status: 'PASS',
-      detail: `experimental · spec ${AP2_SPEC_VERSION} · mode ${ap2.mode} · ${AP2_CHECKOUT_MANDATE_VCT} · profile ${AP2_CHECKOUT_PROFILE} · clock skew ${ap2.clockSkewSeconds}s · mandate aud ${ap2.requireMandateAudience === true ? 'required' : 'optional'} · mandate exp ${ap2.requireMandateExpiry === true ? 'required' : 'optional'}`,
+      detail: `${ap2Record.status} · spec ${AP2_SPEC_VERSION} · mode ${ap2.mode} · ${AP2_CHECKOUT_MANDATE_VCT} · profile ${AP2_CHECKOUT_PROFILE} · clock skew ${ap2.clockSkewSeconds}s · mandate aud ${ap2.requireMandateAudience === true ? 'required' : 'optional'} · mandate exp ${ap2.requireMandateExpiry === true ? 'required' : 'optional'}`,
     });
 
     // Two lists, reported separately: signing the merchant's checkout
@@ -77,7 +78,7 @@ export function ap2Checks(config: GatewayConfig | undefined, legacy: LegacyState
     checks.push({
       name: 'AP2 unsupported',
       status: 'INFO',
-      detail: AP2_UNSUPPORTED.join(', '),
+      detail: exclusionNames(ap2Record).join(', '),
     });
   }
   return checks;

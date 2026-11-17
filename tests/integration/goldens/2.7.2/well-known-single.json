@@ -90,6 +90,10 @@
         "task resumption other than an x402 extension payment",
         "push notifications",
         "multi-turn conversational continuation",
+        "text parts",
+        "file and URL parts (including inline bytes)",
+        "multi-part messages",
+        "message roles other than ROLE_USER",
         "authenticated extended agent cards",
         "A2A authentication schemes",
         "artifact types beyond Agent Commerce outcome data",
@@ -162,7 +166,16 @@
         "permit2 gas sponsoring extensions",
         "upto scheme",
         "batch-settlement scheme",
-        "auth-capture scheme"
+        "auth-capture scheme",
+        "x402 v1",
+        "payer-bound quotes",
+        "contract quote issuers (ERC-1271, ERC-6492, EIP-7702 delegates)",
+        "quote consumption, single-use enforcement or revocation",
+        "quote client nonces",
+        "quotes for MPP, Solana or NEAR",
+        "signed receipts and the x402 offer-receipt extension",
+        "remote quote signers and KMS",
+        "per-resource quote toggles"
       ]
     },
     {
@@ -228,11 +241,14 @@
         "delegation chains and key-binding JWTs",
         "JWKS and any key discovery by URL (jku, x5u)",
         "issuer metadata fetching",
+        "remote revocation",
         "key rotation without a config change",
         "signature algorithms other than ES256",
         "digest algorithms other than sha-256",
         "mandate issuance",
         "checkout receipts",
+        "AP2 transport adapter or /.well-known/ap2",
+        "AP2 as a payment rail",
         "AP2 over the ACP checkout adapter"
       ]
     }

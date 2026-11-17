@@ -12,6 +12,8 @@
  */
 import type { AdapterDescriptor } from '../../../core';
 import { CommerceError, NOOP_LOGGER, systemClock } from '../../../core';
+import { descriptorStatus, exclusionNames } from '../../../support/claims';
+import record from '../../../support/x402.json' with { type: 'json' };
 import { PACKAGE_VERSION } from '../../../version';
 import { DEFAULT_IDS, DEFAULT_MAX_TIMEOUT_SECONDS, X402_VERSION } from './constants';
 import {
@@ -112,13 +114,8 @@ export function createX402PaymentProvider(
       ...(severalOffers ? ['multiple-offers'] : []),
       ...(quotes ? ['erc-8409-quotes'] : []),
     ],
-    status: 'stable',
-    unsupported: [
-      'permit2 gas sponsoring extensions',
-      'upto scheme',
-      'batch-settlement scheme',
-      'auth-capture scheme',
-    ],
+    status: descriptorStatus(record),
+    unsupported: exclusionNames(record),
   };
 
   // Loaded only with an offer of their family, so no deployment needs the

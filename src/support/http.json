@@ -1,0 +1,15 @@
+{
+  "name": "http",
+  "kind": "protocol",
+  "title": "HTTP",
+  "status": "supported",
+  "role": "Transport that carries x402 and MPP payments on each resource's invoke route.",
+  "subset": "resource routes and rail-specific payment headers",
+  "packages": [],
+  "artifacts": [],
+  "features": [],
+  "exclusions": [],
+  "deviations": [],
+  "gaps": [],
+  "docs": ["docs/protocols/http.md"]
+}

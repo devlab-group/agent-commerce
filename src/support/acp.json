@@ -1,0 +1,89 @@
+{
+  "name": "acp",
+  "kind": "protocol",
+  "title": "ACP",
+  "status": "experimental",
+  "role": "Checkout API that forwards checkout operations to the merchant, whose payment handler receives payment_data. Gateway checkout routes are free and carry no x402 or MPP payment.",
+  "subset": "discovery and the five checkout operations",
+  "spec": {
+    "revisions": ["2026-04-17"],
+    "display": "stable snapshot `2026-04-17`; REST binding",
+    "source": {
+      "repo": "agentic-commerce-protocol/agentic-commerce-protocol",
+      "commit": "6b828681206f1f98a3faba978610ced66770d2ae"
+    },
+    "stable": false,
+    "statement": "currently in `beta`",
+    "checked": "2026-11-17"
+  },
+  "packages": [],
+  "artifacts": [
+    {
+      "path": "src/protocols/acp/spec/2026-04-17/schema.agentic_checkout.json",
+      "revision": "6b828681206f1f98a3faba978610ced66770d2ae"
+    },
+    {
+      "path": "tests/fixtures/acp/2026-04-17",
+      "revision": "6b828681206f1f98a3faba978610ced66770d2ae"
+    }
+  ],
+  "features": [
+    { "name": "rest transport", "status": "experimental" },
+    { "name": "well-known discovery", "status": "experimental" },
+    { "name": "bearer authentication", "status": "experimental" },
+    { "name": "API-Version enforcement", "status": "experimental" },
+    { "name": "request header forwarding to the merchant", "status": "experimental" },
+    { "name": "checkout service", "status": "experimental" },
+    { "name": "createCheckoutSession", "status": "experimental" },
+    { "name": "updateCheckoutSession", "status": "experimental" },
+    { "name": "getCheckoutSession", "status": "experimental" },
+    { "name": "completeCheckoutSession", "status": "experimental" },
+    { "name": "cancelCheckoutSession", "status": "experimental" }
+  ],
+  "exclusions": [
+    {
+      "name": "carts service",
+      "note": "The discovery document advertises only the checkout service."
+    },
+    { "name": "feed service" },
+    { "name": "standalone orders service" },
+    { "name": "delegate_payment" },
+    { "name": "delegate_authentication" },
+    { "name": "ACP MCP transport binding" },
+    { "name": "webhooks", "note": "The merchant backend sends ACP order webhooks itself." },
+    { "name": "outbound merchant-to-agent delivery" },
+    { "name": "ACP client role" },
+    {
+      "name": "Signature header verification",
+      "note": "The adapter forwards the header to the merchant unverified."
+    },
+    {
+      "name": "Timestamp replay-window verification",
+      "note": "The adapter forwards the header to the merchant unverified."
+    },
+    { "name": "discount extension" },
+    { "name": "general ACP extension framework" },
+    { "name": "multiple ACP API versions" },
+    { "name": "seller-backed payment handler integration" }
+  ],
+  "deviations": [
+    {
+      "summary": "After a merchant 5xx, retrying the same Idempotency-Key returns 409 idempotency_unresolved unless protocols.acp.idempotency.merchantIdempotent is true. The merchant may have acted, so another execution could duplicate the order.",
+      "spec": "ACP RFC §6.5",
+      "tests": ["tests/conformance/acp/idempotency.test.ts", "tests/conformance/acp/errors.test.ts"]
+    }
+  ],
+  "conformance": {
+    "suite": "Our tests against the vendored schema and official examples; ACP publishes no conformance suite.",
+    "tests": [
+      "tests/conformance/acp/checkout.test.ts",
+      "tests/conformance/acp/errors.test.ts",
+      "tests/conformance/acp/idempotency.test.ts",
+      "tests/conformance/acp/protocol.test.ts",
+      "tests/conformance/acp/snapshot.test.ts"
+    ],
+    "skipped": []
+  },
+  "gaps": [],
+  "docs": ["docs/protocols/acp.md"]
+}

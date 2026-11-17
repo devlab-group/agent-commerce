@@ -31,9 +31,9 @@ A new name crosses the public contract and runtime wiring. After approval:
 5. If it has distinct optional dependencies, add the narrow subpath, build
    entry, package export, optional peer and the real-package check in
    `tests/unit/cli/packaging.test.ts`.
-6. Add its descriptor, discovery and `doctor` output. Update the frozen
-   contract and conformance coverage, and add a page under `docs/protocols/`
-   that [protocols.md](protocols.md) lists.
+6. Add a support record under `src/support/`, a descriptor, and discovery and
+   `doctor` output. Update the frozen contract and conformance coverage. Add a
+   page under `docs/protocols/` and list it in [protocols.md](protocols.md).
 
 ## Protocol adapters
 
@@ -95,9 +95,9 @@ validation, authorization, payment, backend execution and receipts.
   carriers from headers.
 - Keep handler failures inside the adapter and report health through
   `health()`.
-- Pin `descriptor.supportedSpec`, list real `capabilities` and `unsupported`
-  features, and keep `status: experimental` until conformance coverage supports
-  promotion.
+- Pin `descriptor.supportedSpec` and list implemented `capabilities`. Derive
+  `status` and `unsupported` from the adapter's record in `src/support/`.
+  Keep the adapter `experimental` until conformance coverage supports promotion.
 
 ### Adapter review checklist
 

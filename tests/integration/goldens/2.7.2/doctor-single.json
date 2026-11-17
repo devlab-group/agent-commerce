@@ -28,7 +28,7 @@
     {
       "name": "A2A unsupported",
       "status": "INFO",
-      "detail": "SendStreamingMessage, GetTask, ListTasks, CancelTask, SubscribeToTask, CreateTaskPushNotificationConfig, GetTaskPushNotificationConfig, ListTaskPushNotificationConfigs, DeleteTaskPushNotificationConfig, GetExtendedAgentCard, HTTP+JSON/REST binding, gRPC binding, SSE, long-running task persistence, task resumption other than an x402 extension payment, push notifications, multi-turn conversational continuation, authenticated extended agent cards, A2A authentication schemes, artifact types beyond Agent Commerce outcome data, x402 extension payments across gateway instances"
+      "detail": "SendStreamingMessage, GetTask, ListTasks, CancelTask, SubscribeToTask, CreateTaskPushNotificationConfig, GetTaskPushNotificationConfig, ListTaskPushNotificationConfigs, DeleteTaskPushNotificationConfig, GetExtendedAgentCard, HTTP+JSON/REST binding, gRPC binding, SSE, long-running task persistence, task resumption other than an x402 extension payment, push notifications, multi-turn conversational continuation, text parts, file and URL parts (including inline bytes), multi-part messages, message roles other than ROLE_USER, authenticated extended agent cards, A2A authentication schemes, artifact types beyond Agent Commerce outcome data, x402 extension payments across gateway instances"
     },
     {
       "name": "ACP",
@@ -78,7 +78,7 @@
     {
       "name": "AP2 unsupported",
       "status": "INFO",
-      "detail": "autonomous mode, open checkout mandates (mandate.checkout.open.1), payment mandates (mandate.payment.1), spending constraint evaluation, cnf-bound agent keys, user credential delegation (OpenID4VP), delegation chains and key-binding JWTs, JWKS and any key discovery by URL (jku, x5u), issuer metadata fetching, key rotation without a config change, signature algorithms other than ES256, digest algorithms other than sha-256, mandate issuance, checkout receipts, AP2 over the ACP checkout adapter"
+      "detail": "autonomous mode, open checkout mandates (mandate.checkout.open.1), payment mandates (mandate.payment.1), spending constraint evaluation, cnf-bound agent keys, user credential delegation (OpenID4VP), delegation chains and key-binding JWTs, JWKS and any key discovery by URL (jku, x5u), issuer metadata fetching, remote revocation, key rotation without a config change, signature algorithms other than ES256, digest algorithms other than sha-256, mandate issuance, checkout receipts, AP2 transport adapter or /.well-known/ap2, AP2 as a payment rail, AP2 over the ACP checkout adapter"
     },
     {
       "name": "Payments",

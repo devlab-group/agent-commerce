@@ -61,7 +61,7 @@ issuing challenges over plain HTTP.
 Base mainnet deployments must satisfy the
 [mainnet guardrails](../configuration.md#mainnet-guardrails).
 
-Unsupported variants are listed in `src/payments/mpp/descriptor.ts`: non-EVM
+Unsupported variants are listed in `src/support/mpp.json`: non-EVM
 methods, Permit2/transaction/hash credentials, splits, subscriptions, EVM
 sessions and the discovery extension.
 

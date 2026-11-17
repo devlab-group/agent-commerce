@@ -29,12 +29,16 @@ import {
 import { x402OfferName } from '../payments/x402/options';
 import { X402_DEFAULT_PAYMENT_FLOW, type X402PaymentFlow } from '../payments/x402/payment-flow';
 import type { X402PaymentProvider } from '../payments/x402/provider/types';
+import { type FeatureStatus, featureStatus } from '../support/claims';
+import x402Record from '../support/x402.json' with { type: 'json' };
 import { PACKAGE_VERSION } from '../version';
 import type { ProbedAdapter, ProbedProvider } from './readiness';
 
 // Not derived from `PACKAGE_VERSION`: it names the wire contract a client
 // negotiates against, which changes only when that contract does
 const GATEWAY_SUPPORTED_SPEC = 'agent-commerce/v1.0.0';
+
+const QUOTE_STATUS = featureStatus(x402Record, 'erc-8409-quotes');
 
 /**
  * The protocol block as published, not as configured.
@@ -133,7 +137,7 @@ export interface WellKnownX402Quote {
   readonly requestScheme: string;
   /** The key in `PaymentRequired.extensions` that carries the quotes */
   readonly extension: string;
-  readonly status: 'experimental';
+  readonly status: FeatureStatus;
 }
 
 export interface BuildWellKnownOptions {
@@ -204,7 +208,7 @@ function publicQuote(providers: readonly PaymentProvider[]): WellKnownX402Quote 
     | undefined;
   if (x402?.quote === undefined) return undefined;
   const { issuer, requestScheme, extension } = x402.quote;
-  return { issuer, requestScheme, extension, status: 'experimental' };
+  return { issuer, requestScheme, extension, status: QUOTE_STATUS };
 }
 
 export function buildWellKnownDocument(options: BuildWellKnownOptions): WellKnownDocument {

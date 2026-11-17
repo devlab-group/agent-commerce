@@ -1,0 +1,68 @@
+{
+  "name": "mcp",
+  "kind": "protocol",
+  "title": "MCP",
+  "status": "supported",
+  "role": "Transport that carries x402 and MPP payments in tool calls.",
+  "subset": "tool discovery, invocation, payment-required and error mapping",
+  "spec": {
+    "revisions": ["2026-07-28", "2025-11-25"],
+    "display": "MCP `2026-07-28` and `2025-11-25`",
+    "source": {
+      "repo": "modelcontextprotocol/modelcontextprotocol",
+      "commit": "05aeb07b2db0c02adc4813a7c09f208ca8774152"
+    },
+    "stable": true,
+    "statement": "Current: the current protocol version, which is ready for use and may continue to receive backwards compatible changes",
+    "checked": "2026-11-17"
+  },
+  "packages": [
+    { "name": "@modelcontextprotocol/server", "use": "runtime" },
+    { "name": "@modelcontextprotocol/client", "use": "test" },
+    { "name": "@modelcontextprotocol/sdk", "use": "test" }
+  ],
+  "artifacts": [],
+  "features": [
+    { "name": "tools/list", "status": "supported" },
+    { "name": "tools/call", "status": "supported" }
+  ],
+  "exclusions": [
+    { "name": "resources" },
+    { "name": "prompts" },
+    { "name": "sampling" },
+    { "name": "completions" },
+    { "name": "elicitation" },
+    { "name": "roots" },
+    { "name": "logging" },
+    { "name": "notifications/tools/list_changed" },
+    { "name": "tasks" },
+    {
+      "name": "dns-rebinding-protection",
+      "note": "The adapter relies on the gateway's onRequest hook to validate Host and Origin for the MCP mount."
+    },
+    { "name": "authorization" },
+    { "name": "sessions" },
+    { "name": "subscriptions" },
+    { "name": "pagination" },
+    { "name": "HTTP+SSE transport" },
+    {
+      "name": "MPP payment-required as JSON-RPC error -32042",
+      "note": "mppx reads challenges from the tool result's _meta."
+    },
+    {
+      "name": "MPP verification failure as JSON-RPC error -32043",
+      "note": "mppx reads refusals from the tool result's _meta."
+    }
+  ],
+  "deviations": [],
+  "conformance": {
+    "suite": "Specification tests through the v1 and v2 SDK clients.",
+    "tests": [
+      "tests/conformance/mcp/mcp-conformance.test.ts",
+      "tests/conformance/mcp/modern-era.test.ts"
+    ],
+    "skipped": []
+  },
+  "gaps": [],
+  "docs": ["docs/protocols/mcp.md"]
+}

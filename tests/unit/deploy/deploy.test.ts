@@ -122,4 +122,21 @@ describe('deploy/', () => {
       expect(version, name).toBe(pkg.peerDependencies[name as string]);
     }
   });
+
+  it("CI's clean consumer install pins the optional peers package.json declares", () => {
+    const workflow = readFileSync(join(REPO_ROOT, '.github/workflows/ci.yml'), 'utf8');
+    const installs = [...workflow.matchAll(/^\s+npm install ((?:@?[\w./-]+@\d\S* ?)+)$/gm)];
+    expect(installs).toHaveLength(1);
+    const pins = (installs[0]?.[1] ?? '').split(' ').map((spec) => {
+      const at = spec.lastIndexOf('@');
+      return [spec.slice(0, at), spec.slice(at + 1)] as const;
+    });
+    expect(pins.map(([name]) => name)).toEqual([
+      '@modelcontextprotocol/server',
+      '@x402/core',
+      '@x402/evm',
+      'viem',
+    ]);
+    for (const [name, version] of pins) expect(version, name).toBe(pkg.peerDependencies[name]);
+  });
 });
