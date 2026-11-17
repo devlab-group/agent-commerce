@@ -78,6 +78,11 @@ export interface AdapterHealth {
 export interface AdapterHealthComponent {
   readonly name: string;
   readonly status: 'pass' | 'warn' | 'fail';
+  /**
+   * Marks a probe that received no response; `status` does not describe the
+   * target's health in this case. Experimental: may change in a minor release.
+   */
+  readonly undetermined?: 'unreachable';
 }
 
 /** Describes an adapter's supported surface for diagnostics */

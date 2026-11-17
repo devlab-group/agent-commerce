@@ -92,6 +92,7 @@ export function createPaymentAdmission(
         currency: pricing.currency,
         requestedAt: options.clock.nowIso(),
         input: validInput,
+        protocol: request.protocol,
         // Transport facts a rail may bind into its challenge, such as a body digest
         ...(request.metadata !== undefined ? { metadata: request.metadata } : {}),
       });

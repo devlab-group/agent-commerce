@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import type { EventSink, PaymentAttempt, ReceiptStore } from '../../../../src/core';
+import {
+  type EventSink,
+  type PaymentAttempt,
+  PROTOCOL_NAMES,
+  type ReceiptStore,
+} from '../../../../src/core';
 import type { CommerceEvent, CommerceEventType } from '../../../../src/core/domain/event';
 import type {
   CanonicalRequest,
@@ -238,6 +243,48 @@ describe('createExecutionPipeline', () => {
 
     expect(outcome.kind).toBe('payment-required');
     expect(inputs).toEqual([{ city: 'Paris' }]);
+  });
+
+  it('passes the request surface to createRequirement on every protocol', async () => {
+    const resource = makeResource({
+      id: 'res-1',
+      pricing: { type: 'fixed', amount: '0.01', currency: 'USDC' },
+      paymentMethods: ['x402'],
+      exposedVia: PROTOCOL_NAMES,
+    });
+    const seen: unknown[] = [];
+    const provider = createFakePaymentProvider({
+      createRequirement: async (ctx) => {
+        seen.push(ctx.protocol);
+        return {
+          id: 'r',
+          requestId: ctx.requestId,
+          resourceId: ctx.resource.id,
+          provider: 'x402',
+          amount: ctx.amount,
+          currency: ctx.currency,
+          challenge: { provider: 'x402', version: '1', accepts: [] },
+        };
+      },
+    });
+    const store = createFakeStore();
+    const pipeline = createExecutionPipeline({
+      resources: createResourceRegistry([resource]),
+      paymentProviders: [provider],
+      store,
+      backend: createFakeBackendExecutor(),
+      events: store,
+      logger: createCapturingLogger(),
+      clock: createFakeClock(),
+      ids: createFakeIdGenerator(),
+    });
+
+    for (const protocol of PROTOCOL_NAMES) {
+      const outcome = await pipeline.execute(makeRequest({ protocol }));
+      expect(outcome.kind).toBe('payment-required');
+    }
+
+    expect(seen).toEqual(PROTOCOL_NAMES);
   });
 
   it('throws INPUT_INVALID for input that fails the resource schema', async () => {

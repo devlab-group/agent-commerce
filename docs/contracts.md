@@ -299,6 +299,14 @@ persistence must not fail the commerce flow.
     Omitting the override keeps the code's default.
   - These fields and methods are experimental and may change in a minor
     release. The 3.0.0 migration plan makes `getIdempotencyKey` required.
+- 2.8.0 adds two optional, experimental fields that may change in a minor
+  release. Existing 2.7 providers and adapters need no changes.
+  - `PaymentContext.protocol` identifies the request's protocol. On each
+    `createRequirement` call, the pipeline copies it from
+    `CanonicalRequest.protocol`. Providers can ignore it.
+  - `AdapterHealthComponent.undetermined` uses `'unreachable'` for a probe
+    that received no response. When set, `status` does not describe the
+    target's health. Without the field, `status` retains its 2.7 meaning.
 
 ### Protocols and gateway
 
