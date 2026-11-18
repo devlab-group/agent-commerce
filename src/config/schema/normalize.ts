@@ -21,6 +21,7 @@ export function normalize(raw: RawConfig): GatewayConfig {
     mcp: {
       enabled: toBoolean(raw.protocols.mcp.enabled, 'protocols.mcp.enabled'),
       mountPath: raw.protocols.mcp.mountPath,
+      ...(raw.protocols.mcp.registry !== undefined ? { registry: raw.protocols.mcp.registry } : {}),
     },
     a2a: {
       enabled: toBoolean(raw.protocols.a2a?.enabled ?? false, 'protocols.a2a.enabled'),

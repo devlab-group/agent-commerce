@@ -21,6 +21,7 @@ import { readVersionReport } from '../../lib/versions';
 import { ap2Checks } from './ap2';
 import { paymentChecks } from './payments';
 import { protocolChecks } from './protocols';
+import { registryCheck } from './registry';
 import { secretsCheck } from './secrets';
 import { storageChecks } from './storage';
 import {
@@ -65,7 +66,7 @@ function substitutePathParams(url: string): string {
   return filled;
 }
 
-/** `agent-commerce doctor [--config] [--gateway] [--json]` */
+/** `agent-commerce doctor [--config] [--gateway] [--json] [--registry]` */
 export async function runDoctor(
   options: DoctorOptions,
   deps: DoctorDeps = {},
@@ -239,6 +240,9 @@ export async function runDoctor(
       ...undeterminedField(liveCause),
     });
   }
+
+  // 9. MCP Registry, only on request: it calls a third party
+  if (options.registry === true) checks.push(await registryCheck(config, fetchImpl));
 
   const scored = checks.filter((c) => c.status !== 'INFO');
   const passed = scored.filter((c) => c.status === 'PASS').length;

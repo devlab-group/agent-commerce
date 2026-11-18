@@ -32,6 +32,8 @@ export interface DoctorReport {
 export interface DoctorOptions {
   readonly configPath?: string;
   readonly gatewayUrl?: string;
+  /** Experimental. Adds a Registry check; queries the public registry when config yields a listing */
+  readonly registry?: boolean;
 }
 
 /** A receipt store for doctor to read; `summary` adds the journal and import checks */

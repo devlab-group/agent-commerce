@@ -2,6 +2,7 @@
 import { z } from 'zod';
 import { X402_PAYMENT_FLOWS } from '../../payments/x402/payment-flow';
 import { ACP_WELL_KNOWN_PATH } from '../../protocols/acp/constants';
+import { McpRegistrySchema } from './mcp-registry';
 
 export const SUPPORTED_CONFIG_VERSION = 1;
 
@@ -163,6 +164,9 @@ const ProtocolsSchema = z
       .object({
         enabled: BooleanOrString,
         mountPath: MountPathSchema,
+        // Experimental metadata for `export mcp-registry` and `doctor --registry`.
+        // Validated at config load; unused by the MCP adapter.
+        registry: McpRegistrySchema.optional(),
       })
       .strict(),
     // Optional; A2A is off unless configured

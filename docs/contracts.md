@@ -487,6 +487,12 @@ persistence must not fail the commerce flow.
     `resource` and `extensions.bazaar` to the facilitator, replacing those
     fields from the proof.
   - Without the option, challenges and facilitator bodies are unchanged.
+- 2.8.0: experimental `GatewayConfig.protocols.mcp.registry` holds the
+  `name`, `version` and `description` from `protocols.mcp.registry` and is
+  absent when that block is omitted. Config loading validates these fields
+  against the MCP Registry's name, length and version rules.
+  `agent-commerce export mcp-registry` and `doctor --registry` use the metadata;
+  the MCP adapter does not.
 
 ### Authorization and AP2
 
@@ -1039,7 +1045,16 @@ export interface GatewayConfig {
   };
   readonly protocols: {
     readonly http: { readonly enabled: boolean };
-    readonly mcp: { readonly enabled: boolean; readonly mountPath: string };
+    readonly mcp: {
+      readonly enabled: boolean;
+      readonly mountPath: string;
+      // Experimental; present only when `protocols.mcp.registry` is set
+      readonly registry?: {
+        readonly name: string;
+        readonly version: string;
+        readonly description: string;
+      };
+    };
     readonly a2a: { readonly enabled: boolean; readonly mountPath: string };
     readonly acp: AcpProtocolConfig;
   };
@@ -1059,6 +1074,9 @@ export interface GatewayConfig {
       readonly paymentFlow?: X402PaymentFlow; // default 'authorization'
       readonly resourcePaymentFlows?: Readonly<Record<string, X402PaymentFlow>>;
       readonly resourceMimeTypes?: Readonly<Record<string, string>>; // resources that set `mimeType`
+      // Experimental; filled by `publicResourceUrl` and `bazaar.enabled`
+      readonly resourceUrls?: X402ProviderOptions['resourceUrls'];
+      readonly resourceBazaar?: X402ProviderOptions['resourceBazaar'];
       readonly facilitator: X402FacilitatorConfig;
       readonly allowMainnet?: boolean;
       readonly allowUnauthenticatedFacilitator?: boolean;

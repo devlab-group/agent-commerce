@@ -2720,6 +2720,101 @@ describe('payments.x402.bazaar', () => {
   });
 });
 
+describe('protocols.mcp.registry', () => {
+  const REGISTRY = {
+    name: 'io.github.acme/weather',
+    version: '1.0.0',
+    description: 'Weather forecasts, paid per call',
+  };
+  // One code point, two UTF-16 units
+  const ASTRAL = '\u{1D538}';
+
+  function withRegistry(registry: unknown): Record<string, unknown> {
+    const raw = validRawConfig();
+    (raw['protocols'] as { mcp: Record<string, unknown> }).mcp['registry'] = registry;
+    return raw;
+  }
+
+  it('leaves protocols.mcp as before when the block is absent', () => {
+    expect(parseConfig(validRawConfig(), {}).protocols.mcp).toStrictEqual({
+      enabled: true,
+      mountPath: '/mcp',
+    });
+  });
+
+  it('keeps the block as written', () => {
+    expect(parseConfig(withRegistry(REGISTRY), {}).protocols.mcp.registry).toEqual(REGISTRY);
+  });
+
+  // The first rows are upstream's own cases in validators_test.go
+  it.each([
+    ['a dotted namespace', 'name', 'com.microsoft.azure.service/webapp-server'],
+    ['".", "_" and "-" in the name', 'name', 'io.github.acme/my_server.v-2'],
+    ['200 characters', 'name', `ab/${'c'.repeat(197)}`],
+    ['a semver version', 'version', '1.2.3'],
+    ['a prerelease', 'version', '1.2.3-alpha.1'],
+    ['a date', 'version', '2021.03.15'],
+    ['a word', 'version', 'snapshot'],
+    ['a hyphen that joins no versions', 'version', 'snapshot - 2025.09'],
+    ['a hyphen between no-break spaces, not a range in RE2', 'version', '1.0 - 2.0'],
+    ['255 characters', 'version', `1.0.0-${'a'.repeat(249)}`],
+    ['100 characters', 'description', 'd'.repeat(100)],
+    ['100 code points outside the BMP', 'description', ASTRAL.repeat(100)],
+  ])('accepts %s as %s', (_label, key, value) => {
+    const registry = parseConfig(withRegistry({ ...REGISTRY, [key]: value }), {}).protocols.mcp
+      .registry;
+    expect(registry).toEqual({ ...REGISTRY, [key]: value });
+  });
+
+  it.each([
+    ['no slash', 'name', 'io.github.acme'],
+    ['two slashes', 'name', 'com.example/server/path'],
+    ['a double slash', 'name', 'com.example//server'],
+    ['an empty namespace', 'name', '/server-name'],
+    ['an empty name', 'name', 'com.example/'],
+    ['"_" in the namespace', 'name', 'io_github.acme/weather'],
+    ['a one-character namespace', 'name', 'a/weather'],
+    ['a one-character name', 'name', 'io.github.acme/w'],
+    ['a name ending in "-"', 'name', 'io.github.acme/weather-'],
+    ['201 characters', 'name', `ab/${'c'.repeat(198)}`],
+    ['a number', 'name', 42],
+    ['an empty version', 'version', ''],
+    ['"latest"', 'version', 'latest'],
+    ['a caret range', 'version', '^1.2.3'],
+    ['a comparator and a space', 'version', '>= 1.2.3'],
+    ['an x-range', 'version', '1.x'],
+    ['a wildcard', 'version', '1.*'],
+    ['a hyphen range', 'version', '1.2.3 - 2.0.0'],
+    ['an OR range', 'version', '1.2 || 1.3'],
+    ['a prerelease holding "x"', 'version', '1.0.0-next.1'],
+    ['a range ending in U+0085, which Go trims', 'version', '1.x\u0085'],
+    ['256 characters', 'version', `1.0.0-${'a'.repeat(250)}`],
+    ['an empty description', 'description', ''],
+    ['101 characters', 'description', 'd'.repeat(101)],
+    ['101 code points outside the BMP', 'description', ASTRAL.repeat(101)],
+  ])('refuses %s, naming protocols.mcp.registry.%s', (_label, key, value) => {
+    expectConfigInvalid(
+      () => parseConfig(withRegistry({ ...REGISTRY, [key]: value }), {}),
+      `protocols.mcp.registry.${key}`,
+    );
+  });
+
+  it.each(['name', 'version', 'description'])('requires %s', (key) => {
+    const partial = Object.fromEntries(Object.entries(REGISTRY).filter(([k]) => k !== key));
+    expectConfigInvalid(
+      () => parseConfig(withRegistry(partial), {}),
+      `protocols.mcp.registry.${key}`,
+    );
+  });
+
+  it('refuses a key the block does not define', () => {
+    expectConfigInvalid(
+      () => parseConfig(withRegistry({ ...REGISTRY, title: 'Weather' }), {}),
+      'protocols.mcp.registry',
+    );
+  });
+});
+
 describe('resource idempotency', () => {
   function withIdempotency(id: string, idempotency: unknown): Record<string, unknown> {
     const raw = validRawConfig();

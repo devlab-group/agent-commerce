@@ -73,7 +73,8 @@ agent-commerce doctor
 
 Requires **Node >= 22**. The package includes the `agent-commerce` CLI
 (`init`, `validate`, `start`, `doctor`, `reconcile`, `resolve`, `demo`,
-`import openapi`, `version`) and a library for embedding the gateway.
+`import openapi`, `export mcp-registry`, `version`) and a library for embedding
+the gateway.
 The default install excludes optional protocol, payment and authorization
 peers. The OpenAPI parser is a regular dependency because import is part of the
 CLI.
@@ -86,10 +87,10 @@ agent-commerce start --config config.yaml --env-file .env
 Install the optional peers for the features you enable, listed below. Missing
 startup imports stop the gateway with an error naming the package; missing
 Solana, NEAR or CDP peers fail provider health checks or payment requests.
-`start`, `validate`, `doctor`, `reconcile` and `resolve` accept `--env-file <path>` to
-load environment variables before reading the config. Variables already set in
-the environment take precedence. To embed the gateway in your own process, use
-the library:
+`start`, `validate`, `doctor`, `reconcile`, `resolve` and `export mcp-registry`
+accept `--env-file <path>` to load environment variables before reading the
+config. Variables already set in the environment take precedence. To embed the
+gateway in your own process, use the library:
 
 ```ts
 import { createGateway, loadConfig, receipts } from '@devlab.group/agent-commerce';
@@ -537,6 +538,16 @@ or temporary DNS failures; `skipped` when a prerequisite fails. Unresolvable
 hostnames and TLS errors leave the check unmarked.
 Text output appends `[not determined: <reason>]`. The marker does not affect
 status, score or exit code; an unreachable gateway still fails its check.
+
+`--registry` (experimental) adds an `MCP Registry` check. It fetches the
+latest listing for `protocols.mcp.registry.name` from
+`registry.modelcontextprotocol.io`, sending only that name, and compares it
+with what `export mcp-registry` would write. Differences, deprecated or deleted
+listings, missing listings and request failures produce WARN rather than FAIL.
+Recognized transport failures also get the `unreachable` marker. The check
+names differing fields and uses fixed messages for known lifecycle statuses,
+without echoing arbitrary registry values or request error messages. See
+[MCP Registry listing](docs/protocols/mcp.md#mcp-registry-listing).
 
 Exits non-zero if anything fails. `--json` for machines.
 

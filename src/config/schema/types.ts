@@ -68,7 +68,7 @@ export interface GatewayConfig {
   readonly storage: { readonly receipts: { readonly driver: 'sqlite'; readonly path: string } };
   readonly protocols: {
     readonly http: { readonly enabled: boolean };
-    readonly mcp: { readonly enabled: boolean; readonly mountPath: string };
+    readonly mcp: McpProtocolConfig;
     readonly a2a: { readonly enabled: boolean; readonly mountPath: string };
     readonly acp: AcpProtocolConfig;
   };
@@ -151,9 +151,24 @@ export interface GatewayConfig {
   readonly authorization?: { readonly ap2: Ap2AuthorizationConfig };
 }
 
+/** `protocols.mcp` after normalization */
+export interface McpProtocolConfig {
+  readonly enabled: boolean;
+  readonly mountPath: string;
+  /**
+   * Experimental listing fields for `agent-commerce export mcp-registry` and
+   * `doctor --registry`; the MCP adapter does not use them
+   */
+  readonly registry?: {
+    readonly name: string;
+    readonly version: string;
+    readonly description: string;
+  };
+}
+
 export interface NormalizedProtocols {
   readonly http: { readonly enabled: boolean };
-  readonly mcp: { readonly enabled: boolean; readonly mountPath: string };
+  readonly mcp: McpProtocolConfig;
   readonly a2a: { readonly enabled: boolean; readonly mountPath: string };
   readonly acp: AcpProtocolConfig;
 }
