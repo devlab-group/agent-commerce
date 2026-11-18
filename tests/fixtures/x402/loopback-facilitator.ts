@@ -30,7 +30,14 @@ export interface LoopbackFacilitator {
   readonly url: string;
   /** Requests received as `METHOD URL`, including any query string */
   readonly requests: readonly string[];
+  /** Parsed POST bodies received at `/verify` and `/settle` */
+  readonly bodies: readonly LoopbackBody[];
   close(): Promise<void>;
+}
+
+export interface LoopbackBody {
+  readonly operation: 'verify' | 'settle';
+  readonly body: Record<string, unknown>;
 }
 
 async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
@@ -99,6 +106,7 @@ export async function startLoopbackFacilitator(options: {
   }
 
   const requests: string[] = [];
+  const bodies: LoopbackBody[] = [];
   const handle = (req: IncomingMessage, res: ServerResponse) => {
     requests.push(`${req.method} ${req.url}`);
     const reply = (status: number, body: unknown) => {
@@ -127,6 +135,7 @@ export async function startLoopbackFacilitator(options: {
     }
     readJson(req)
       .then(async (body) => {
+        bodies.push({ operation, body });
         const requirements = body['paymentRequirements'] as { network: string };
         const payload = body['paymentPayload'] as never;
         const sdkFacilitator = sdkFacilitators.get(requirements.network);
@@ -160,6 +169,7 @@ export async function startLoopbackFacilitator(options: {
   return {
     url: `${options.tls ? 'https' : 'http'}://127.0.0.1:${(server.address() as AddressInfo).port}`,
     requests,
+    bodies,
     close: () => new Promise<void>((resolve) => server.close(() => resolve())),
   };
 }
