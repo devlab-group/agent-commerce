@@ -379,25 +379,50 @@ Whoever creates an AP2 provider must call `close()`. The application
 composition root does so after `gateway.close()`; `createGateway()` itself
 does not close authorization providers.
 
+## Pins
+
+<!-- support-record:begin pins -->
+
+| Pin                         | Value                                                                                                                                                            |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Pinned revision             | v0.2.0, tag 2026-04-28, commit `b4587ac`; Direct mode                                                                                                            |
+| Upstream source             | [`google-agentic-commerce/AP2@b4587ac1`](https://github.com/google-agentic-commerce/AP2/tree/b4587ac1d055888a73b4b21750973cffba961793)                           |
+| Declared stable upstream    | no                                                                                                                                                               |
+| Upstream wording            | "Standardization of the specification will continue within the Agentic Authentication Technical and Payments Technical Working Groups in FIDO" (read 2026-11-17) |
+| `jose`                      | `6.2.12`, optional peer                                                                                                                                          |
+| `@sd-jwt/core`              | `0.20.1`, optional peer                                                                                                                                          |
+| `canonicalize`              | `5.0.0`, optional peer                                                                                                                                           |
+| `tests/fixtures/ap2/v0.2.0` | vendored from `b4587ac1`                                                                                                                                         |
+
+<!-- support-record:end -->
+
 ## Not implemented
 
-Discovery and `doctor` read the unsupported list from `src/support/ap2.json`.
-The broader implementation limits are:
+The AP2 descriptor in `GET /.well-known/agent-commerce` lists these names in
+`unsupported`, and `agent-commerce doctor` prints them when AP2 is enabled:
 
-- autonomous mode and open Checkout Mandates (`mandate.checkout.open.1`)
-- Payment Mandates (`mandate.payment.1`)
-- spending-constraint evaluation
-- `cnf`-bound agent keys, delegation chains and key-binding JWTs
-- User Credential delegation through OpenID4VP
-- JWKS, issuer metadata, remote key discovery or remote revocation
-- key rotation without a config change
-- signatures other than ES256 or digests other than SHA-256
-- mandate issuance or signed AP2 Checkout Receipts
-- an AP2 transport adapter or `/.well-known/ap2`
-- AP2 as a payment rail
-- AP2 over ACP
+<!-- support-record:begin exclusions -->
 
-Open mandates are refused because their spending constraints are not evaluated.
+- `autonomous mode`
+- `open checkout mandates (mandate.checkout.open.1)`: Rejected because the provider does not evaluate spending constraints.
+- `payment mandates (mandate.payment.1)`
+- `spending constraint evaluation`
+- `cnf-bound agent keys`
+- `user credential delegation (OpenID4VP)`
+- `delegation chains and key-binding JWTs`
+- `JWKS and any key discovery by URL (jku, x5u)`: Operators supply all keys in config.
+- `issuer metadata fetching`
+- `remote revocation`
+- `key rotation without a config change`
+- `signature algorithms other than ES256`
+- `digest algorithms other than sha-256`
+- `mandate issuance`
+- `checkout receipts`
+- `AP2 transport adapter or /.well-known/ap2`: HTTP, MCP and A2A carry the mandate in the gateway's own carriers; AP2 v0.2.0 defines none.
+- `AP2 as a payment rail`
+- `AP2 over the ACP checkout adapter`
+
+<!-- support-record:end -->
 
 ## Code map
 

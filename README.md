@@ -8,12 +8,14 @@
   <a href="#quickstart"><img alt="Quickstart" src="https://img.shields.io/badge/quickstart-5%20minutes-2ea44f"></a>
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-blue"></a>
   <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-strict-3178c6">
+  <!-- support-record:begin badges -->
   <img alt="MCP" src="https://img.shields.io/badge/MCP-supported-6b4fbb">
   <img alt="x402" src="https://img.shields.io/badge/x402-supported-0052ff">
   <img alt="MPP" src="https://img.shields.io/badge/MPP-experimental-f0a30a">
   <img alt="A2A" src="https://img.shields.io/badge/A2A-experimental-f0a30a">
   <img alt="ACP" src="https://img.shields.io/badge/ACP-experimental-f0a30a">
   <img alt="AP2" src="https://img.shields.io/badge/AP2-experimental-f0a30a">
+  <!-- support-record:end -->
 </p>
 
 ## What it is, in ten seconds
@@ -303,17 +305,22 @@ See [docs/configuration.md](docs/configuration.md).
 
 ## Protocol support
 
-| Protocol     | Status       | Pinned revision                                                                                              |
-| ------------ | ------------ | ------------------------------------------------------------------------------------------------------------ |
-| **HTTP**     | Supported    | native routes                                                                                                |
-| **MCP**      | Supported    | `2026-07-28` and `2025-11-25`, `@modelcontextprotocol/server@2.3.0`                                          |
-| **x402**     | Supported    | x402 v2 (`@x402/core`, `@x402/evm`, `@x402/svm`, `@x402/near`), scheme `exact`, EVM and Solana; NEAR partial |
-| **MPP**      | Experimental | `mppx@0.13.1`, `charge` + `evm` + EIP-3009, USDC on Base Sepolia and Base                                    |
-| **A2A**      | Experimental | A2A v1.0.1, binding `JSONRPC`, method `SendMessage`, x402 extension                                          |
-| **ACP**      | Experimental | ACP `2026-04-17`, REST checkout + discovery                                                                  |
-| **AP2**      | Experimental | AP2 `v0.2.0`, Direct Checkout Mandate verification                                                           |
-| **ERC-8409** | Experimental | draft `SergeevDmitry/ERCs@0ee33230`: signed quotes on x402 EVM offers                                        |
-| UCP          | Planned      | no implementation                                                                                            |
+<!-- support-record:begin matrix -->
+
+| Protocol     | Status       | Pinned revision                                                                                                   | Implemented subset                                                                                                                   |
+| ------------ | ------------ | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| **HTTP**     | Supported    | native                                                                                                            | resource routes and rail-specific payment headers                                                                                    |
+| **MCP**      | Supported    | MCP `2026-07-28` and `2025-11-25`; `@modelcontextprotocol/server@2.3.0`                                           | tool discovery, invocation, payment-required and error mapping                                                                       |
+| **x402**     | Supported    | x402 v2; `@x402/core@2.30.0`, `@x402/evm@2.30.0`, `@x402/svm@2.30.0`, `@x402/near@2.30.0`                         | `exact` on EVM through EIP-3009 or Permit2, on Solana, and on NEAR (partial): challenge, verification, settlement and replay binding |
+| **MPP**      | Experimental | drafts at `tempoxyz/mpp-specs@806fdb8`; `mppx@0.13.1`                                                             | `charge`/`evm`/EIP-3009 with USDC on Base Sepolia and Base, over HTTP, MCP and A2A                                                   |
+| **A2A**      | Experimental | v1.0.1; negotiation `1.0`; `JSONRPC` binding                                                                      | Agent Card, `SendMessage`, paid flow and the x402 extension                                                                          |
+| **ACP**      | Experimental | stable snapshot `2026-04-17`; REST binding                                                                        | discovery and the five checkout operations                                                                                           |
+| **AP2**      | Experimental | v0.2.0, tag 2026-04-28, commit `b4587ac`; Direct mode; `jose@6.2.12`, `@sd-jwt/core@0.20.1`, `canonicalize@5.0.0` | closed Checkout Mandate verification before settlement                                                                               |
+| **ERC-8409** | Experimental | draft `SergeevDmitry/ERCs@0ee33230`                                                                               | signed quotes on x402 EVM offers; issuer published in `/.well-known/agent-commerce`                                                  |
+
+<!-- support-record:end -->
+
+UCP is planned and has no implementation.
 
 [AP2](docs/protocols/ap2.md) is an authorization method, not a transport. It verifies a
 mandate before a paid resource settles; the gateway does not issue the mandate
@@ -338,6 +345,9 @@ MPP, A2A, ACP, AP2, ERC-8409 quotes, `agent-commerce import openapi`,
 `PaymentProvider.reconcile`, the `ReceiptStore` methods and types added in
 2.6.0, the `idempotency` resource settings with the store and provider methods
 added in 2.7.0, and the `./testing` entry.
+
+A profile moves from experimental to supported only when it meets the
+[promotion criteria](docs/protocols.md#promotion-criteria).
 
 The journal's `Transaction` type, `ReceiptStore` journal methods and
 `/api/transactions` response shape are supported. The `transactionId` fields,

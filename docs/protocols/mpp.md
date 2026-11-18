@@ -4,11 +4,11 @@
 
 The gateway targets `draft-httpauth-payment-01`,
 `draft-payment-intent-charge-00`, and `draft-evm-charge-00` at
-`tempoxyz/mpp-specs@806fdb8`. It pins the pre-1.0 `mppx@0.13.1` as an
-optional peer. For EIP-3009, the gateway follows `mppx`: it hashes
-`JSON.stringify([id, realm])` with keccak256 to derive the nonce. The EVM
-draft instead hashes `abi.encodePacked(id, realm)`. Credentials using the
-draft nonce, including those produced by `mppx` 0.12 or earlier, fail
+`tempoxyz/mpp-specs@806fdb8`. It uses the pre-1.0 `mppx`, an optional peer
+pinned to the version under [Pins](#pins). For EIP-3009, the gateway follows
+`mppx`: it hashes `JSON.stringify([id, realm])` with keccak256 to derive the
+nonce. The EVM draft instead hashes `abi.encodePacked(id, realm)`. Credentials
+using the draft nonce, including those produced by `mppx` 0.12 or earlier, fail
 verification with `wrong_nonce`.
 
 Later drafts or `mppx` releases may change the wire format again, so MPP
@@ -61,10 +61,6 @@ issuing challenges over plain HTTP.
 Base mainnet deployments must satisfy the
 [mainnet guardrails](../configuration.md#mainnet-guardrails).
 
-Unsupported variants are listed in `src/support/mpp.json`: non-EVM
-methods, Permit2/transaction/hash credentials, splits, subscriptions, EVM
-sessions and the discovery extension.
-
 ## Idempotency-Key
 
 Experimental and disabled by default. On a resource with
@@ -102,3 +98,50 @@ another payer returns 422 `Unprocessable Content`, following section 2.7 of
   usable stored response.
 
 [http.md](http.md) lists the redelivery headers.
+
+## Pins
+
+<!-- support-record:begin pins -->
+
+| Pin                      | Value                                                                                                                                                                |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Pinned revision          | drafts at `tempoxyz/mpp-specs@806fdb8`                                                                                                                               |
+| Upstream source          | [`tempoxyz/mpp-specs@806fdb8b`](https://github.com/tempoxyz/mpp-specs/tree/806fdb8b8c92cda5c84b8660558921b6bbeef7e0)                                                 |
+| Declared stable upstream | no                                                                                                                                                                   |
+| Upstream wording         | "Internet-Drafts are draft documents valid for a maximum of six months and may be updated, replaced, or obsoleted by other documents at any time." (read 2026-11-17) |
+| `mppx`                   | `0.13.1`, optional peer                                                                                                                                              |
+
+<!-- support-record:end -->
+
+## Deviations
+
+Each entry names the section of the pinned revision the gateway departs from
+and the tests that hold the behavior.
+
+<!-- support-record:begin deviations -->
+
+- **draft-evm-charge-00**: The EIP-3009 nonce is keccak256 of `JSON.stringify([id, realm])`, as `mppx` 0.13 derives it, not of `abi.encodePacked(id, realm)`; a credential using the draft's nonce fails with `wrong_nonce`. Tests: `tests/unit/payments-mpp/provider.test.ts`.
+- **draft-payment-transport-mcp-00**: Over MCP, payment errors are tool results with `isError` and the challenges in `_meta`, not the JSON-RPC errors the draft maps them to (-32042, -32043, -32602 and -32603). Tests: `tests/integration/mcp-payment-bindings.test.ts`.
+- **draft-httpauth-payment-01 §11.4**: An unpaid request that gets a 402 also stores a `resource.requested` event beside the challenge. Tests: `tests/unit/core/execution/pipeline.test.ts`.
+- **draft-httpauth-payment-01 §4.2; draft-evm-charge-00**: A credential whose attempt is reserved or settlement-uncertain gets 409 without a fresh challenge, because a second challenge could lead to a second payment. Tests: `tests/integration/mpp-carriers.test.ts`.
+- **draft-payment-intent-charge-00**: With `paymentFlow: authorization`, the backend runs before the transfer, which the charge intent counts as partial access before payment. The default, `upfront`, settles first. Tests: `tests/e2e/payment/mpp-settlement.e2e.test.ts`.
+
+<!-- support-record:end -->
+
+## MPP exclusions
+
+The MPP descriptor in `GET /.well-known/agent-commerce` lists these names in
+`unsupported`:
+
+<!-- support-record:begin exclusions -->
+
+- `methods other than evm`
+- `credential=permit2`: The profile accepts only the EIP-3009 authorization credential.
+- `credential=transaction`
+- `credential=hash`
+- `splits`: The draft allows splits only with `permit2` credentials.
+- `intent=subscription`
+- `evm sessions`: A separate EVM draft, not an option of charge.
+- `discovery extension`
+
+<!-- support-record:end -->

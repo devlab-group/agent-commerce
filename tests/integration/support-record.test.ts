@@ -1,19 +1,24 @@
 /**
- * Check support records against the descriptors that publish their claims.
- * Descriptors derive status and unsupported features from the records; these
- * tests also compare capabilities and revisions with their values in code.
+ * Check support records against the descriptors that publish their claims and
+ * the docs generated from them. Descriptors derive status and unsupported
+ * features from the records; these tests also compare capabilities and
+ * revisions with their values in code.
  */
-import { existsSync, readdirSync } from 'node:fs';
+import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { LATEST_PROTOCOL_VERSION } from '@modelcontextprotocol/server';
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import {
-  citedPaths,
+  type PackageManifest,
   REPO_ROOT,
   readSupportRecord,
+  readSupportTree,
+  regionUpdates,
   SUPPORT_RECORD_NAMES,
   type SupportRecord,
   type SupportRecordName,
+  type SupportTree,
+  supportProblems,
 } from '../../scripts/support-record';
 import { AP2_CAPABILITIES, AP2_UNSUPPORTED } from '../../src/ap2';
 import { AP2_SPEC_VERSION } from '../../src/authorization/ap2/constants';
@@ -48,15 +53,6 @@ describe('support records', () => {
       .sort();
     expect(files).toEqual([...SUPPORT_RECORD_NAMES].sort());
     for (const name of SUPPORT_RECORD_NAMES) expect(records[name].name).toBe(name);
-  });
-
-  it('cites only evidence and documentation files that exist', () => {
-    const missing = SUPPORT_RECORD_NAMES.flatMap((name) =>
-      citedPaths(records[name])
-        .filter((path) => !existsSync(join(REPO_ROOT, path)))
-        .map((path) => `src/support/${name}.json: ${path}`),
-    );
-    expect(missing).toEqual([]);
   });
 
   it('lists tested combinations on the payment records only', () => {
@@ -208,5 +204,178 @@ describe('published exports derived from a record keep their 2.7 types', () => {
     expectTypeOf(AP2_UNSUPPORTED).toEqualTypeOf<readonly string[]>();
     expectTypeOf(AP2_CAPABILITIES).toEqualTypeOf<readonly string[]>();
     expectTypeOf(MPP_DESCRIPTOR).toEqualTypeOf<AdapterDescriptor>();
+  });
+});
+
+describe('drift between the records, package.json and the docs', () => {
+  const tree = readSupportTree();
+
+  // A writable copy of package.json's dependency sections
+  type Manifest = { -readonly [K in keyof PackageManifest]-?: Record<string, string> };
+
+  interface Change {
+    readonly records?: (records: SupportRecord[]) => void;
+    readonly manifest?: (manifest: Manifest) => void;
+    readonly edit?: Readonly<Record<string, (content: string) => string>>;
+    readonly deleted?: string;
+  }
+
+  // The real tree with one change, made on copies
+  function changed(change: Change): SupportTree {
+    const mutated = structuredClone(tree.records) as SupportRecord[];
+    const manifest = structuredClone(tree.manifest) as Manifest;
+    change.records?.(mutated);
+    change.manifest?.(manifest);
+    return {
+      records: mutated,
+      manifest,
+      read: (path) => {
+        const content = tree.read(path);
+        const edit = change.edit?.[path];
+        return content === undefined || edit === undefined ? content : edit(content);
+      },
+      exists: (path) => path !== change.deleted && tree.exists(path),
+    };
+  }
+
+  const record = (records: SupportRecord[], name: SupportRecordName) => {
+    const found = records.find((candidate) => candidate.name === name);
+    if (found === undefined) throw new Error(`no ${name} record`);
+    return found;
+  };
+
+  const stale = (path: string, region: string, source: string) =>
+    `${path}: region "${region}" differs from ${source}; run npm run support:write`;
+  const ALL = 'src/support/*.json and package.json';
+
+  it('finds none on the real tree, and --write would change no file', () => {
+    expect(supportProblems(tree)).toEqual([]);
+    expect([...regionUpdates(tree).keys()]).toEqual([]);
+  });
+
+  const HAND_EDIT: Change = {
+    edit: {
+      'README.md': (content) =>
+        content.replace('| **MPP**      | Experimental', '| **MPP**      | Supported   '),
+    },
+  };
+  const MARKERS_REMOVED: Change = {
+    edit: {
+      'docs/protocols/mcp.md': (content) =>
+        content.replace(
+          /<!-- support-record:begin pins -->[\s\S]*?<!-- support-record:end -->/,
+          '',
+        ),
+    },
+  };
+
+  const cases: [string, Change, string[]][] = [
+    [
+      'a package version bumped in package.json',
+      {
+        manifest: (manifest) => {
+          manifest.peerDependencies.mppx = '0.13.2';
+        },
+      },
+      [
+        stale('README.md', 'matrix', ALL),
+        stale('docs/protocols.md', 'matrix', ALL),
+        stale('docs/protocols/mpp.md', 'pins', 'src/support/mpp.json and package.json'),
+      ],
+    ],
+    [
+      'a recorded package missing from package.json',
+      {
+        manifest: (manifest) => {
+          delete manifest.peerDependencies['@sd-jwt/core'];
+          delete manifest.devDependencies['@sd-jwt/core'];
+        },
+      },
+      [
+        'src/support/ap2.json: package @sd-jwt/core (runtime) is not in package.json dependencies or peerDependencies',
+        stale('README.md', 'matrix', ALL),
+        stale('docs/protocols.md', 'matrix', ALL),
+        stale('docs/protocols/ap2.md', 'pins', 'src/support/ap2.json and package.json'),
+      ],
+    ],
+    [
+      'an exclusion added to a record',
+      { records: (records) => void record(records, 'acp').exclusions.push({ name: 'carts' }) },
+      [stale('docs/protocols/acp.md', 'exclusions', 'src/support/acp.json')],
+    ],
+    [
+      'an experimental profile recorded as supported',
+      {
+        records: (records) => {
+          record(records, 'a2a').status = 'supported';
+        },
+      },
+      [
+        stale('README.md', 'badges', 'src/support/*.json'),
+        stale('README.md', 'matrix', ALL),
+        stale('docs/protocols.md', 'matrix', ALL),
+        'README.md: the Versioning sentence names A2A, which src/support/a2a.json records as supported',
+        'plugins/agent-commerce-gateway/skills/agent-commerce/SKILL.md: the "exist but are experimental" sentence names A2A, which src/support/a2a.json records as supported',
+        'docs/protocols/a2a.md: says **Experimental.**, but src/support/a2a.json records supported',
+      ],
+    ],
+    ['a hand edit inside a generated region', HAND_EDIT, [stale('README.md', 'matrix', ALL)]],
+    [
+      'a deleted evidence file',
+      { deleted: 'tests/e2e/payment/x402-settlement.e2e.test.ts' },
+      [
+        'src/support/x402.json: cites tests/e2e/payment/x402-settlement.e2e.test.ts, which does not exist',
+      ],
+    ],
+    [
+      'an experimental profile missing from the Versioning sentence',
+      {
+        edit: {
+          'README.md': (content) => content.replace('MPP, A2A, ACP, AP2,', 'A2A, ACP, AP2,'),
+        },
+      },
+      [
+        'README.md: the Versioning sentence omits MPP, which src/support/mpp.json records as experimental',
+      ],
+    ],
+    [
+      'an x402 route row whose status differs from its feature',
+      {
+        edit: {
+          'docs/protocols/x402.md': (content) =>
+            content.replace(/(\| NEAR +\| )partial/, '$1supported'),
+        },
+      },
+      [
+        'docs/protocols/x402.md: the "NEAR" row says supported, but src/support/x402.json records exact-near as partial',
+      ],
+    ],
+    [
+      'a region whose markers were removed',
+      MARKERS_REMOVED,
+      ['docs/protocols/mcp.md: region "pins" appears 0 times, not once'],
+    ],
+  ];
+
+  it.each(cases)('names the place of %s', (_, change, expected) => {
+    expect(supportProblems(changed(change))).toEqual(expected);
+  });
+
+  it('escapes a pipe inside a generated table cell', () => {
+    const piped = changed({
+      records: (records) => {
+        record(records, 'acp').subset = 'checkout | discovery';
+      },
+    });
+    expect(regionUpdates(piped).get('docs/protocols.md')).toContain('checkout \\| discovery');
+  });
+
+  it('--write restores a hand-edited region and refuses a file with missing markers', () => {
+    expect(regionUpdates(changed(HAND_EDIT))).toEqual(
+      new Map([['README.md', tree.read('README.md')]]),
+    );
+    expect(() => regionUpdates(changed(MARKERS_REMOVED))).toThrow(
+      'docs/protocols/mcp.md: add the markers for region(s) pins first',
+    );
   });
 });

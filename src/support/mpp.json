@@ -4,7 +4,7 @@
   "title": "MPP",
   "status": "experimental",
   "role": "Payment rail, carried by HTTP, MCP and A2A.",
-  "subset": "`charge`/`evm`/EIP-3009 over HTTP, MCP and A2A",
+  "subset": "`charge`/`evm`/EIP-3009 with USDC on Base Sepolia and Base, over HTTP, MCP and A2A",
   "spec": {
     "revisions": [
       "draft-httpauth-payment-01",
@@ -45,24 +45,24 @@
     },
     { "name": "credential=transaction" },
     { "name": "credential=hash" },
-    { "name": "splits", "note": "The draft allows splits only with permit2 credentials." },
+    { "name": "splits", "note": "The draft allows splits only with `permit2` credentials." },
     { "name": "intent=subscription" },
     { "name": "evm sessions", "note": "A separate EVM draft, not an option of charge." },
     { "name": "discovery extension" }
   ],
   "deviations": [
     {
-      "summary": "The EIP-3009 nonce is keccak256 of JSON.stringify([id, realm]), as mppx 0.13 derives it, not of abi.encodePacked(id, realm); a credential using the draft's nonce fails with wrong_nonce.",
+      "summary": "The EIP-3009 nonce is keccak256 of `JSON.stringify([id, realm])`, as `mppx` 0.13 derives it, not of `abi.encodePacked(id, realm)`; a credential using the draft's nonce fails with `wrong_nonce`.",
       "spec": "draft-evm-charge-00",
       "tests": ["tests/unit/payments-mpp/provider.test.ts"]
     },
     {
-      "summary": "Over MCP, payment errors are tool results with isError and the challenges in _meta, not the JSON-RPC errors the draft maps them to (-32042, -32043, -32602 and -32603).",
+      "summary": "Over MCP, payment errors are tool results with `isError` and the challenges in `_meta`, not the JSON-RPC errors the draft maps them to (-32042, -32043, -32602 and -32603).",
       "spec": "draft-payment-transport-mcp-00",
       "tests": ["tests/integration/mcp-payment-bindings.test.ts"]
     },
     {
-      "summary": "An unpaid request that gets a 402 also stores a resource.requested event beside the challenge.",
+      "summary": "An unpaid request that gets a 402 also stores a `resource.requested` event beside the challenge.",
       "spec": "draft-httpauth-payment-01 §11.4",
       "tests": ["tests/unit/core/execution/pipeline.test.ts"]
     },
@@ -72,7 +72,7 @@
       "tests": ["tests/integration/mpp-carriers.test.ts"]
     },
     {
-      "summary": "With paymentFlow: authorization, the backend runs before the transfer, which the charge intent counts as partial access before payment. The default, upfront, settles first.",
+      "summary": "With `paymentFlow: authorization`, the backend runs before the transfer, which the charge intent counts as partial access before payment. The default, `upfront`, settles first.",
       "spec": "draft-payment-intent-charge-00",
       "tests": ["tests/e2e/payment/mpp-settlement.e2e.test.ts"]
     }

@@ -38,7 +38,7 @@
     { "name": "tasks" },
     {
       "name": "dns-rebinding-protection",
-      "note": "The adapter relies on the gateway's onRequest hook to validate Host and Origin for the MCP mount."
+      "note": "The adapter relies on the gateway's `onRequest` hook to validate Host and Origin for the MCP mount."
     },
     { "name": "authorization" },
     { "name": "sessions" },
@@ -47,11 +47,11 @@
     { "name": "HTTP+SSE transport" },
     {
       "name": "MPP payment-required as JSON-RPC error -32042",
-      "note": "mppx reads challenges from the tool result's _meta."
+      "note": "mppx reads challenges from the tool result's `_meta`."
     },
     {
       "name": "MPP verification failure as JSON-RPC error -32043",
-      "note": "mppx reads refusals from the tool result's _meta."
+      "note": "mppx reads refusals from the tool result's `_meta`."
     }
   ],
   "deviations": [],

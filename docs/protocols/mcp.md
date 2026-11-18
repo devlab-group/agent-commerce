@@ -115,12 +115,48 @@ For payment-required and error results, `content[0].text` is a JSON copy of
 `structuredContent`; `content[1].text` is a sentence for readers. Unexpected
 exception messages and stack traces are omitted.
 
+## Pins
+
+<!-- support-record:begin pins -->
+
+| Pin                            | Value                                                                                                                                                              |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Pinned revision                | MCP `2026-07-28` and `2025-11-25`                                                                                                                                  |
+| Upstream source                | [`modelcontextprotocol/modelcontextprotocol@05aeb07b`](https://github.com/modelcontextprotocol/modelcontextprotocol/tree/05aeb07b2db0c02adc4813a7c09f208ca8774152) |
+| Declared stable upstream       | yes                                                                                                                                                                |
+| Upstream wording               | "Current: the current protocol version, which is ready for use and may continue to receive backwards compatible changes" (read 2026-11-17)                         |
+| `@modelcontextprotocol/server` | `2.3.0`, optional peer                                                                                                                                             |
+| `@modelcontextprotocol/client` | `2.3.0`, tests only                                                                                                                                                |
+| `@modelcontextprotocol/sdk`    | `1.32.0`, tests only                                                                                                                                               |
+
+<!-- support-record:end -->
+
 ## MCP exclusions
 
-The adapter does not implement MCP resources, prompts, sampling, completions,
-elicitation, roots, logging, tasks or tool-list-change notifications. It has
-no MCP authorization, sessions, subscriptions, pagination or HTTP+SSE transport.
-The gateway, rather than the MCP adapter, enforces Host and Origin checks.
+The MCP descriptor in `GET /.well-known/agent-commerce` lists these names in
+`unsupported`:
+
+<!-- support-record:begin exclusions -->
+
+- `resources`
+- `prompts`
+- `sampling`
+- `completions`
+- `elicitation`
+- `roots`
+- `logging`
+- `notifications/tools/list_changed`
+- `tasks`
+- `dns-rebinding-protection`: The adapter relies on the gateway's `onRequest` hook to validate Host and Origin for the MCP mount.
+- `authorization`
+- `sessions`
+- `subscriptions`
+- `pagination`
+- `HTTP+SSE transport`
+- `MPP payment-required as JSON-RPC error -32042`: mppx reads challenges from the tool result's `_meta`.
+- `MPP verification failure as JSON-RPC error -32043`: mppx reads refusals from the tool result's `_meta`.
+
+<!-- support-record:end -->
 
 The MCP adapter maps payment carriers and results. It does not verify or
 settle payments or call merchant backends.

@@ -90,6 +90,7 @@
     "test:mainnet": "vitest run --config vitest.mainnet.config.ts",
     "check:contract": "node scripts/contract-surface.mjs",
     "check:metadata": "node scripts/check-package-metadata.mjs",
+    "support:write": "tsx scripts/support-record.ts --write",
     "verify": "npm run check:contract && npm run lint && npm run typecheck && npm test",
     "agent-commerce": "tsx src/cli/index.ts",
     "doctor": "tsx src/cli/index.ts doctor",

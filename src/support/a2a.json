@@ -3,7 +3,7 @@
   "kind": "protocol",
   "title": "A2A",
   "status": "experimental",
-  "role": "Transport that carries x402 and MPP payments in SendMessage, including through the x402 extension.",
+  "role": "Transport that carries x402 and MPP payments in `SendMessage`, including through the x402 extension.",
   "subset": "Agent Card, `SendMessage`, paid flow and the x402 extension",
   "spec": {
     "revisions": ["1.0.1"],

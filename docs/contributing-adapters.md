@@ -31,9 +31,13 @@ A new name crosses the public contract and runtime wiring. After approval:
 5. If it has distinct optional dependencies, add the narrow subpath, build
    entry, package export, optional peer and the real-package check in
    `tests/unit/cli/packaging.test.ts`.
-6. Add a support record under `src/support/`, a descriptor, and discovery and
-   `doctor` output. Update the frozen contract and conformance coverage. Add a
-   page under `docs/protocols/` and list it in [protocols.md](protocols.md).
+6. Add a support record under `src/support/` and its name to
+   `SUPPORT_RECORD_NAMES` in `scripts/support-record.ts`. Add a descriptor,
+   and discovery and `doctor` output. Update the frozen contract and
+   conformance coverage. Add a page under `docs/protocols/` with the region
+   markers its record needs, list it in [protocols.md](protocols.md), and run
+   `npm run support:write`. `tests/integration/support-record.test.ts` names
+   any region that is missing or out of date.
 
 ## Protocol adapters
 

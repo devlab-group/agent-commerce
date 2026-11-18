@@ -52,7 +52,10 @@
         "stable": false,
         "statement": "status: Draft",
         "checked": "2026-11-17"
-      }
+      },
+      "title": "ERC-8409",
+      "role": "x402 feature: EIP-712 signed quotes on the EVM offers of a challenge.",
+      "subset": "signed quotes on x402 EVM offers; issuer published in `/.well-known/agent-commerce`"
     }
   ],
   "exclusions": [
@@ -62,7 +65,7 @@
     { "name": "auth-capture scheme" },
     {
       "name": "x402 v1",
-      "note": "A payload declaring an x402Version other than 2 is refused as invalid_x402_version on every carrier."
+      "note": "A payload declaring an `x402Version` other than 2 is refused as `invalid_x402_version` on every carrier."
     },
     { "name": "payer-bound quotes", "feature": "erc-8409-quotes" },
     {
