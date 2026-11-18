@@ -76,7 +76,7 @@ beforeEach(async () => {
       protocols: { http: { enabled: true }, mcp: { enabled: true, mountPath: '/mcp' } },
       resources: {
         forecast: backendResource(['http', 'mcp'], ['x402'], CITY),
-        // `pattern` is not enforced, so the resource is omitted from Bazaar metadata
+        // Omit Bazaar metadata for this resource because `pattern` is not enforced
         strict: backendResource(['http'], ['x402'], {
           type: 'object',
           properties: { city: { type: 'string', pattern: '^[A-Z]' } },
@@ -221,7 +221,7 @@ describe('x402 Bazaar metadata through the gateway', () => {
   it('warns about a resource left out at load, and still sells it', async () => {
     expect(issued('strict', 'http')).toBeUndefined();
     expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining('resource "strict" gets no Bazaar metadata on http'),
+      '[agent-commerce] resource "strict" gets no Bazaar metadata on http: its input schema cannot be published as is: input.properties.city uses "pattern", which the gateway does not enforce. Payment is unaffected.',
     );
     const required = challengeOf(await invoke('strict', { city: 'Oslo' }));
     expect(required).not.toHaveProperty('extensions');

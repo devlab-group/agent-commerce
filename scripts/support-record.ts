@@ -189,7 +189,7 @@ export interface PackageManifest {
   readonly peerDependencies?: Readonly<Record<string, string>>;
 }
 
-/** Everything the drift check reads, injectable so tests can mutate a copy */
+/** Everything the drift check reads, injectable for tests that mutate a copy */
 export interface SupportTree {
   readonly records: readonly SupportRecord[];
   readonly manifest: PackageManifest;

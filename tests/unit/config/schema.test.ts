@@ -1206,6 +1206,45 @@ describe('parseConfig', () => {
       parseConfig(validRawConfig(), {});
       expect(warnSpy).not.toHaveBeenCalled();
     });
+
+    it.each(['minProperties', 'prefixItems', 'nullable', '$schema'])(
+      'warns about %s, which the validator does not read',
+      (keyword) => {
+        const raw = validRawConfig();
+        (
+          raw['resources'] as { market_report: { input: Record<string, unknown> } }
+        ).market_report.input = {
+          type: 'object',
+          properties: {},
+          additionalProperties: false,
+          [keyword]: 1,
+        };
+        parseConfig(raw, {});
+        expect(warnSpy).toHaveBeenCalledTimes(1);
+        expect(warnSpy.mock.calls[0]?.[0]).toContain(
+          `resource "market_report" input uses JSON Schema keyword "${keyword}"`,
+        );
+      },
+    );
+
+    it('does not warn about annotations, the singular example of an imported schema included', () => {
+      const raw = validRawConfig();
+      (
+        raw['resources'] as { market_report: { input: Record<string, unknown> } }
+      ).market_report.input = {
+        type: 'object',
+        title: 'Query',
+        description: 'A query',
+        properties: {
+          city: { type: 'string', example: 'Oslo', examples: ['Oslo'], default: 'Oslo' },
+          old: { type: 'string', deprecated: true, readOnly: false, writeOnly: false },
+        },
+        $comment: 'internal',
+        additionalProperties: false,
+      };
+      parseConfig(raw, {});
+      expect(warnSpy).not.toHaveBeenCalled();
+    });
   });
 
   it('rejects a schema declaring properties/required whose type excludes "object" - the validator would never enforce either', () => {
@@ -2663,7 +2702,6 @@ describe('payments.x402.bazaar', () => {
       expect(Object.keys(bazaar ?? {})).toEqual(['market_report']);
       expect(bazaar?.['market_report']?.http?.info).toEqual({
         input: { type: 'http', method: 'POST', bodyType: 'json', body: {} },
-        output: { type: 'json' },
       });
       expect(bazaar?.['market_report']?.mcp?.info['input']).toMatchObject({
         type: 'mcp',
@@ -2715,8 +2753,35 @@ describe('payments.x402.bazaar', () => {
       'x402',
     ]);
     expect(warn).toHaveBeenCalledWith(
-      '[agent-commerce] resource "market_report" gets no Bazaar metadata on http and mcp: its input schema uses a keyword the gateway does not enforce, which leaves the example unproven. Payment is unaffected.',
+      '[agent-commerce] resource "market_report" gets no Bazaar metadata on http and mcp: its input schema cannot be published as is: input.properties.ticker uses "pattern", which the gateway does not enforce. Payment is unaffected.',
     );
+  });
+
+  const OUTPUT = {
+    type: 'object',
+    properties: { ok: { type: 'boolean' } },
+    required: ['ok'],
+  };
+
+  it('declares the JSON output example of a resource that names no media type', () => {
+    const raw = withBazaar(true);
+    marketReport(raw)['output'] = OUTPUT;
+    const bazaar = parseConfig(raw, {}).payments.x402?.resourceBazaar;
+    expect(bazaar?.['market_report']?.http?.info['output']).toEqual({
+      type: 'json',
+      example: { ok: false },
+    });
+  });
+
+  it('declares no JSON output for a resource whose mimeType is text/html', () => {
+    const raw = withBazaar(true);
+    marketReport(raw)['output'] = OUTPUT;
+    marketReport(raw)['mimeType'] = 'text/html';
+    const config = parseConfig(raw, {});
+    expect(config.payments.x402?.resourceMimeTypes).toEqual({ market_report: 'text/html' });
+    expect(config.payments.x402?.resourceBazaar?.['market_report']?.http?.info).toEqual({
+      input: { type: 'http', method: 'POST', bodyType: 'json', body: {} },
+    });
   });
 });
 

@@ -244,7 +244,7 @@ and the tests that hold the behavior.
 
 <!-- support-record:begin deviations -->
 
-- **ACP RFC §6.5**: After a merchant 5xx, retrying the same `Idempotency-Key` returns 409 `idempotency_unresolved` unless `protocols.acp.idempotency.merchantIdempotent` is true. The merchant may have acted, so another execution could duplicate the order. Tests: `tests/conformance/acp/idempotency.test.ts`, `tests/conformance/acp/errors.test.ts`.
+- **ACP RFC §6.5**: After a merchant 5xx, retrying the same `Idempotency-Key` returns 409 `idempotency_unresolved` unless `protocols.acp.idempotency.merchantIdempotent` is true. The merchant may have acted, and another execution could duplicate the order. Tests: `tests/conformance/acp/idempotency.test.ts`, `tests/conformance/acp/errors.test.ts`.
 
 <!-- support-record:end -->
 

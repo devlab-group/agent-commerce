@@ -70,7 +70,6 @@ describe('Bazaar metadata forms', () => {
   it('describes the invoke route as a POST of the example JSON body', () => {
     expect(extensionOf('http').info).toEqual({
       input: { type: 'http', method: 'POST', bodyType: 'json', body: EXAMPLE },
-      output: { type: 'json' },
     });
   });
 
@@ -171,9 +170,42 @@ describe('Bazaar metadata forms', () => {
       { type: 'object', properties: { at: { type: 'string', format: 'date' } } },
     ],
     ['rejects its own generated example', { type: 'string', enum: [1] }],
-  ])('leaves out the output example when the output schema %s', (_label, outputSchema) => {
-    expect(extensionOf('http', resource({ outputSchema })).info['output']).toEqual({
+    ['gives a keyword a malformed value', { type: 'object', required: ['a', 'a'] }],
+  ])('declares no output when the output schema %s', (_label, outputSchema) => {
+    const extension = extensionOf('http', resource({ outputSchema }));
+    expect(extension.info).not.toHaveProperty('output');
+    expect(extension.schema['properties']).not.toHaveProperty('output');
+    expect(validateDiscoveryExtension(extension as never)).toEqual({ valid: true });
+  });
+
+  const OUTPUT = {
+    type: 'object',
+    properties: { forecast: { type: 'string' } },
+    required: ['forecast'],
+  };
+  const httpWith = (mimeType: string) =>
+    bazaarMetadata(resource({ outputSchema: OUTPUT }), ['http'], mimeType).extensions.http;
+
+  it.each(['text/html', 'text/plain; charset=utf-8', 'application/xml', 'application/jsonl'])(
+    'declares no JSON output for a resource whose media type is %s',
+    (mimeType) => {
+      const extension = httpWith(mimeType);
+      expect(extension?.info).toEqual({
+        input: { type: 'http', method: 'POST', bodyType: 'json', body: EXAMPLE },
+      });
+      expect(validateDiscoveryExtension(extension as never)).toEqual({ valid: true });
+    },
+  );
+
+  it.each([
+    'application/json',
+    'application/json; charset=utf-8',
+    'application/problem+json',
+    'Application/JSON',
+  ])('declares the JSON output example for a resource whose media type is %s', (mimeType) => {
+    expect(httpWith(mimeType)?.info['output']).toEqual({
       type: 'json',
+      example: { forecast: '<forecast>' },
     });
   });
 
@@ -207,34 +239,82 @@ describe('Bazaar metadata omission', () => {
       },
     });
 
+  const NOT_ENFORCED = 'which the gateway does not enforce';
+  const BAD_TYPE = 'has a "type" that is not a supported type or a list of distinct ones';
+
   it.each([
-    ['pattern', nested({ type: 'string', pattern: '^[A-Z]' })],
+    [
+      'pattern',
+      nested({ type: 'string', pattern: '^[A-Z]' }),
+      `input.properties.city uses "pattern", ${NOT_ENFORCED}`,
+    ],
     [
       'a nested format',
       nested({ type: 'object', properties: { d: { type: 'string', format: 'date' } } }),
+      `input.properties.city.properties.d uses "format", ${NOT_ENFORCED}`,
     ],
-    ['$ref', nested({ $ref: '#/$defs/city' })],
     [
-      'minProperties, which config does not warn about',
-      resource({ inputSchema: { type: 'object', minProperties: 1 } }),
+      '$ref',
+      nested({ $ref: '#/$defs/city' }),
+      `input.properties.city uses "$ref", ${NOT_ENFORCED}`,
     ],
-    ['a tuple items', nested({ type: 'array', items: [{ type: 'string' }] })],
-    ['additionalProperties without an object type', nested({ additionalProperties: false })],
-    ['items without an array type', nested({ items: { type: 'string' } })],
-    ['an empty type list', nested({ type: [] })],
-    ['an unknown type', nested({ type: 'date' })],
-  ])('leaves out a resource whose input schema uses %s', (_label, of) => {
+    [
+      'minProperties',
+      resource({ inputSchema: { type: 'object', minProperties: 1 } }),
+      `input uses "minProperties", ${NOT_ENFORCED}`,
+    ],
+    [
+      'a tuple items',
+      nested({ type: 'array', items: [{ type: 'string' }] }),
+      'input.properties.city.items is not a schema object',
+    ],
+    [
+      'additionalProperties without an object type',
+      nested({ additionalProperties: false }),
+      'input.properties.city declares "additionalProperties" but is not an object schema',
+    ],
+    [
+      'items without an array type',
+      nested({ items: { type: 'string' } }),
+      'input.properties.city declares "items" but its type does not include "array"',
+    ],
+    ['an empty type list', nested({ type: [] }), `input.properties.city ${BAD_TYPE}`],
+    ['an unknown type', nested({ type: 'date' }), `input.properties.city ${BAD_TYPE}`],
+  ])('leaves out a resource whose input schema uses %s, naming the place', (_label, of, place) => {
     expect(bazaarMetadata(of, BOTH)).toEqual({
       extensions: {},
-      omitted: [
-        {
-          surfaces: BOTH,
-          reason:
-            'its input schema uses a keyword the gateway does not enforce, which leaves the example unproven',
-        },
-      ],
+      omitted: [{ surfaces: BOTH, reason: `its input schema cannot be published as is: ${place}` }],
     });
   });
+
+  // Gateway validation tolerates these malformed keyword values, but the
+  // facilitator's schema compiler rejects them
+  it.each([
+    ['a repeated required name', { type: 'object', required: ['a', 'a'] }, 'required'],
+    ['a repeated type', { type: ['string', 'string'] }, 'type'],
+    ['examples that are not a list', { type: 'string', examples: 'x' }, 'examples'],
+    ['a numeric description', { type: 'string', description: 5 }, 'description'],
+    ['a numeric title', { type: 'string', title: 7 }, 'title'],
+    ['a deprecated that is not a boolean', { type: 'string', deprecated: 'yes' }, 'deprecated'],
+    ['an empty enum', { enum: [] }, 'enum'],
+  ])(
+    'leaves out a resource whose input schema has %s, which upstream validation refuses',
+    (_label, property, keyword) => {
+      // Replace a valid property schema in the published HTTP form with this one
+      const published = extensionOf('http');
+      const withProperty = structuredClone(published) as unknown as {
+        schema: { properties: { input: { properties: { body: JsonSchema } } } };
+      };
+      withProperty.schema.properties.input.properties.body = nested(property)
+        .inputSchema as JsonSchema;
+      expect(validateDiscoveryExtension(withProperty as never).valid).toBe(false);
+
+      const { extensions, omitted } = bazaarMetadata(nested(property), BOTH);
+      expect(extensions).toEqual({});
+      expect(omitted).toHaveLength(1);
+      expect(omitted[0]?.reason).toContain(`input.properties.city has a "${keyword}"`);
+    },
+  );
 
   it.each([
     ['fails the input schema', nested({ type: 'string', enum: [1] })],
@@ -293,9 +373,9 @@ describe('Bazaar metadata omission', () => {
 
   it('leaves out each surface whose extension exceeds 4 KiB, and keeps the others', () => {
     // The MCP form also carries the description. With it at 480 characters
-    // and 44 properties, MCP is over 4096 bytes and HTTP under.
+    // and 45 properties, MCP is over 4096 bytes and HTTP under.
     const properties = Object.fromEntries(
-      Array.from({ length: 44 }, (_, i) => [`property_${i}`, { type: 'string' }]),
+      Array.from({ length: 45 }, (_, i) => [`property_${i}`, { type: 'string' }]),
     );
     const of = resource({
       description: 'd'.repeat(480),

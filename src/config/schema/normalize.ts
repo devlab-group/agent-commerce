@@ -71,7 +71,7 @@ export function normalize(raw: RawConfig): GatewayConfig {
   const bazaarRaw = raw.payments.x402?.bazaar;
   const resourceBazaar =
     bazaarRaw !== undefined && toBoolean(bazaarRaw.enabled, 'payments.x402.bazaar.enabled')
-      ? bazaarExtensions(resourceUrls, resources)
+      ? bazaarExtensions(resourceUrls, resources, mimeTypes)
       : undefined;
   const x402WithFlows =
     x402 !== undefined
@@ -131,6 +131,7 @@ export function normalize(raw: RawConfig): GatewayConfig {
 function bazaarExtensions(
   resourceUrls: Record<string, Partial<Record<'http' | 'mcp' | 'a2a', string>>> | undefined,
   resources: readonly CommerceResource[],
+  mimeTypes: Readonly<Record<string, string>>,
 ): NonNullable<GatewayConfig['payments']['x402']>['resourceBazaar'] {
   if (resourceUrls === undefined) {
     throw new CommerceError(
@@ -144,7 +145,7 @@ function bazaarExtensions(
       const urls = resourceUrls[resource.id];
       if (urls === undefined) return [];
       const surfaces = (['http', 'mcp'] as const).filter((surface) => urls[surface] !== undefined);
-      const { extensions, omitted } = bazaarMetadata(resource, surfaces);
+      const { extensions, omitted } = bazaarMetadata(resource, surfaces, mimeTypes[resource.id]);
       for (const { surfaces: left, reason } of omitted) {
         console.warn(
           `[agent-commerce] resource "${resource.id}" gets no Bazaar metadata on ${left.join(' and ')}: ${reason}. Payment is unaffected.`,

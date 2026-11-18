@@ -11,12 +11,12 @@
  *   order)
  * - `items` (one schema applied to every array element, no tuple form)
  *
- * Not enforced: `minLength`, `maxLength`, `pattern`, `format`, `minimum`,
- * `maximum`, `exclusiveMinimum/Maximum`, `multipleOf`, `oneOf`, `anyOf`,
- * `allOf`, `not`, `$ref`, `const`, `patternProperties`, `minItems`,
- * `maxItems`, `uniqueItems`, tuple-form `items`, and a `type` naming anything
- * outside the list above. Config warns at load when a schema uses one of these
- * keywords or a tuple `items`.
+ * Not enforced: every other constraint, among them `minLength`, `maxLength`,
+ * `pattern`, `format`, `minimum`, `maximum`, `multipleOf`, `oneOf`, `anyOf`,
+ * `allOf`, `not`, `$ref`, `const`, `patternProperties`, `minItems`, `maxItems`
+ * and `uniqueItems`, tuple-form `items`, and a `type` naming anything outside
+ * the list above. Config warns at load when a schema uses a keyword outside
+ * `ENFORCED_SCHEMA_KEYWORDS` or a tuple `items`.
  */
 import { isDeepStrictEqual } from 'node:util';
 import type { JsonSchema } from '../domain/common';
@@ -43,8 +43,12 @@ const SUPPORTED_TYPES = new Set([
   'null',
 ]);
 
-// The keywords `validateNode` enforces, plus annotations that constrain nothing
-const FULLY_ENFORCED_KEYWORDS = new Set([
+/**
+ * Keywords enforced by `validateNode`, plus annotations that do not constrain
+ * input. Includes the singular OpenAPI `example` carried by `import openapi`.
+ * Config warns about input schema keywords outside this set.
+ */
+export const ENFORCED_SCHEMA_KEYWORDS: ReadonlySet<string> = new Set([
   'type',
   'properties',
   'required',
@@ -53,6 +57,7 @@ const FULLY_ENFORCED_KEYWORDS = new Set([
   'items',
   'title',
   'description',
+  'example',
   'examples',
   'default',
   '$comment',
@@ -61,35 +66,82 @@ const FULLY_ENFORCED_KEYWORDS = new Set([
   'writeOnly',
 ]);
 
+// The value forms JSON Schema 2020-12 allows for the annotations above
+const ANNOTATION_FORMS: readonly (readonly [string, string, (value: unknown) => boolean])[] = [
+  ['title', 'a string', (value) => typeof value === 'string'],
+  ['description', 'a string', (value) => typeof value === 'string'],
+  ['$comment', 'a string', (value) => typeof value === 'string'],
+  ['examples', 'a list', Array.isArray],
+  ['deprecated', 'a boolean', (value) => typeof value === 'boolean'],
+  ['readOnly', 'a boolean', (value) => typeof value === 'boolean'],
+  ['writeOnly', 'a boolean', (value) => typeof value === 'boolean'],
+];
+
+const isDistinctStrings = (value: unknown): value is string[] =>
+  Array.isArray(value) &&
+  value.every((entry) => typeof entry === 'string') &&
+  new Set(value).size === value.length;
+
 /**
- * Check whether a schema and its subschemas stay within this validator's
- * supported keyword subset. Bazaar also validates the generated example
- * before publishing it.
+ * Find the first unsupported or malformed part of a schema: a keyword outside
+ * `ENFORCED_SCHEMA_KEYWORDS`, a subschema that is not an object, `items` or
+ * `additionalProperties` that this validator would not apply under the node's
+ * type, or an invalid keyword value. Check keyword forms against JSON Schema
+ * 2020-12 and reject empty `enum` arrays, which Ajv also refuses to compile.
+ * Return `undefined` when these checks pass.
  */
-export function isFullyEnforced(schema: unknown): boolean {
-  if (!isRecord(schema)) return false;
-  if (!Object.keys(schema).every((key) => FULLY_ENFORCED_KEYWORDS.has(key))) return false;
+export function unenforcedSchemaPart(schema: unknown, path = '$'): FieldError | undefined {
+  if (!isRecord(schema)) return { path, message: 'is not a schema object' };
+  const unknown = Object.keys(schema).find((key) => !ENFORCED_SCHEMA_KEYWORDS.has(key));
+  if (unknown !== undefined) {
+    return { path, message: `uses "${unknown}", which the gateway does not enforce` };
+  }
+  const malformed = (keyword: string, form: string): FieldError => ({
+    path,
+    message: `has a "${keyword}" that is not ${form}`,
+  });
   const { type, properties, required, additionalProperties, items } = schema;
-  const types = Array.isArray(type) ? type : type === undefined ? [] : [type];
-  if (Array.isArray(type) && type.length === 0) return false;
-  if (!types.every((t) => typeof t === 'string' && SUPPORTED_TYPES.has(t))) return false;
+  const types = typeof type === 'string' ? [type] : type === undefined ? [] : type;
+  if (
+    !isDistinctStrings(types) ||
+    (Array.isArray(type) && type.length === 0) ||
+    !types.every((entry) => SUPPORTED_TYPES.has(entry))
+  ) {
+    return malformed('type', 'a supported type or a list of distinct ones');
+  }
+  if (required !== undefined && !isDistinctStrings(required)) {
+    return malformed('required', 'a list of distinct strings');
+  }
+  const allowed = schema['enum'];
+  if (allowed !== undefined && (!Array.isArray(allowed) || allowed.length === 0)) {
+    return malformed('enum', 'a list with at least one value');
+  }
+  for (const [keyword, form, accepts] of ANNOTATION_FORMS) {
+    if (schema[keyword] !== undefined && !accepts(schema[keyword])) return malformed(keyword, form);
+  }
   if (properties !== undefined) {
-    if (!isRecord(properties) || !Object.values(properties).every(isFullyEnforced)) return false;
+    if (!isRecord(properties)) return malformed('properties', 'an object');
+    for (const [key, sub] of Object.entries(properties)) {
+      const part = unenforcedSchemaPart(sub, `${path}.properties.${key}`);
+      if (part !== undefined) return part;
+    }
   }
-  if (required !== undefined) {
-    if (!Array.isArray(required) || !required.every((name) => typeof name === 'string'))
-      return false;
-  }
-  if (schema['enum'] !== undefined && !Array.isArray(schema['enum'])) return false;
   // `validateNode` applies these two only when the node's type admits them
   if (additionalProperties !== undefined) {
-    if (!isObjectSchemaNode(schema)) return false;
-    if (typeof additionalProperties !== 'boolean' && !isFullyEnforced(additionalProperties))
-      return false;
+    if (!isObjectSchemaNode(schema)) {
+      return { path, message: 'declares "additionalProperties" but is not an object schema' };
+    }
+    if (typeof additionalProperties !== 'boolean') {
+      const part = unenforcedSchemaPart(additionalProperties, `${path}.additionalProperties`);
+      if (part !== undefined) return part;
+    }
   }
-  if (items === undefined) return true;
+  if (items === undefined) return undefined;
+  if (!types.includes('array')) {
+    return { path, message: 'declares "items" but its type does not include "array"' };
+  }
   // A tuple `items` (an array of schemas) is not enforced
-  return types.includes('array') && isFullyEnforced(items);
+  return unenforcedSchemaPart(items, `${path}.items`);
 }
 
 /** Wrap a resource `inputSchema` in a reusable validator function */

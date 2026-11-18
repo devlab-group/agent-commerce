@@ -1,5 +1,5 @@
 // Example values and the published object form of a resource's input schema,
-// shared by the A2A Agent Card, MCP tools and x402 Bazaar metadata
+// shared by the adapters and payment metadata that describe a resource
 import type { JsonSchema } from '../domain/common';
 import { AUTHORIZATION_INPUT_FIELD, PAYMENT_INPUT_FIELD } from '../domain/wire';
 import { isRecord } from '../is-record';
@@ -50,8 +50,8 @@ export function exampleObject(schema: Record<string, unknown>): Record<string, u
   return example;
 }
 
-/** An object input schema before adding reserved payment and authorization fields */
-export interface ObjectInputSchema {
+/** A resource input schema in object form, before discovery surfaces add reserved fields */
+export interface PublishedInputSchema {
   readonly [keyword: string]: unknown;
   readonly type: 'object';
   readonly properties: Readonly<Record<string, Record<string, unknown>>>;
@@ -59,11 +59,11 @@ export interface ObjectInputSchema {
 }
 
 /**
- * Normalize a resource input schema for MCP, before adding reserved fields.
- * Preserve other keywords while setting `type` to `'object'`, retaining only
- * object-valued `properties` and string entries in `required`.
+ * Normalize a resource input schema for publication before a surface adds
+ * reserved fields. Set `type` to `'object'`, keep object-valued `properties`
+ * and string entries in `required`, and preserve other keywords.
  */
-export function objectInputSchema(schema: JsonSchema | undefined): ObjectInputSchema {
+export function publishedInputSchema(schema: JsonSchema | undefined): PublishedInputSchema {
   const base = isRecord(schema) ? schema : {};
   const properties = isRecord(base['properties'])
     ? Object.fromEntries(

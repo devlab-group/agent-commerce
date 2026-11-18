@@ -3,7 +3,7 @@ import { dirname, resolve } from 'node:path';
 
 /**
  * Writes `content` to a temporary sibling, then renames it over `outputPath`.
- * The destination is replaced after the write succeeds, so a failed write
+ * The destination is replaced only after the write succeeds; a failed write
  * leaves an existing file intact. Creates missing output directories.
  */
 export async function writeAtomically(outputPath: string, content: string): Promise<void> {

@@ -147,7 +147,7 @@ their ordering to choose the latest. Publishing a prerelease such as `1.2.3-1`
 after its release, `1.2.3`, does not make it the latest. If your config names
 that prerelease, `doctor --registry` reports a version difference.
 
-Several server names may list the same remote URL, so the URL alone does not
+Several server names may list the same remote URL; the URL alone does not
 prove who runs the server. `doctor --registry` looks up the configured name
 only and reports a response with another name as a difference in `name`.
 

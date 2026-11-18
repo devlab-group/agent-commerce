@@ -205,7 +205,7 @@ async function goldenConfig(x402: Record<string, unknown>): Promise<GatewayConfi
           expose: ['http', 'mcp', 'a2a'],
           payments: ['x402'],
         },
-        // Require AP2 on a resource so doctor doesn't warn that AP2 is unused
+        // Require AP2 on a resource to keep doctor from warning that AP2 is unused
         ap2_report: {
           name: 'Mandated Report',
           input: { type: 'object', properties: {}, additionalProperties: false },

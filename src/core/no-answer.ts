@@ -19,7 +19,8 @@ const NO_ANSWER_CODES = new Set([
  * Identify known transport failures for health checks and `doctor`. Search a
  * bounded cause chain for the codes above, `TimeoutError` (used by
  * `AbortSignal.timeout` and viem), or a name in `timeoutNames`. Return false
- * for unrecognized errors so configuration failures are not treated as outages.
+ * for unrecognized errors, which keeps configuration failures from counting
+ * as outages.
  */
 export function gotNoAnswer(err: unknown, timeoutNames: readonly string[] = []): boolean {
   let cause = err;

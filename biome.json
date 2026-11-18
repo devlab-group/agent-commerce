@@ -18,7 +18,9 @@
       "!contracts/lib",
       "!package-lock.json",
       "!src/protocols/acp/spec",
-      "!tests/fixtures/acp"
+      "!tests/fixtures/acp",
+      "!tests/fixtures/mcp-registry",
+      "!tests/integration/goldens"
     ]
   },
   "formatter": {

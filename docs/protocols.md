@@ -81,7 +81,7 @@ Each reads fields of the profile's record in `src/support/`:
 
 "Supported" covers the recorded subset, never the whole specification. HTTP,
 MCP and x402 were supported before 2.8.0 introduced these criteria, and keep
-that status. Upstream does not label x402 v2 stable, and its record says so.
+that status. Upstream does not label x402 v2 stable, and its record states that.
 
 ## Protocol pages
 

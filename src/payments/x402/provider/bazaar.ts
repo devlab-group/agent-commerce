@@ -5,9 +5,9 @@ import { validateBackendRequestShape } from '../../../core/execution/backend-req
 import {
   exampleObject,
   exampleValue,
-  objectInputSchema,
+  publishedInputSchema,
 } from '../../../core/execution/schema-example';
-import { compileJsonSchema, isFullyEnforced } from '../../../core/execution/validation';
+import { compileJsonSchema, unenforcedSchemaPart } from '../../../core/execution/validation';
 
 /** The extension's key in a challenge's `extensions` */
 export const BAZAAR_EXTENSION_KEY = 'bazaar';
@@ -40,13 +40,16 @@ const JSON_SCHEMA_2020_12 = 'https://json-schema.org/draft/2020-12/schema';
 
 /**
  * Build Bazaar extensions for the requested surfaces. Metadata is omitted
- * unless the generated example passes the input schema and backend request
- * shape checks, and the schema uses the validator's supported subset. This
- * avoids publishing examples that fail gateway validation before pricing.
+ * unless the generated example passes input schema and backend request shape
+ * checks, and the schema passes checks for supported keywords and valid values.
+ * These checks avoid publishing examples the gateway rejects before pricing
+ * or malformed schemas a facilitator cannot compile. `mimeType` is the
+ * resource's declared media type; an omitted value is treated as JSON.
  */
 export function bazaarMetadata(
   resource: CommerceResource,
   surfaces: readonly BazaarSurface[],
+  mimeType?: string,
 ): BazaarMetadata {
   if (surfaces.length === 0) return { extensions: {}, omitted: [] };
   const all = (reason: string): BazaarMetadata => ({
@@ -61,10 +64,9 @@ export function bazaarMetadata(
     );
   }
   const schema = resource.inputSchema ?? {};
-  if (!isFullyEnforced(schema)) {
-    return all(
-      'its input schema uses a keyword the gateway does not enforce, which leaves the example unproven',
-    );
+  const part = unenforcedSchemaPart(schema, 'input');
+  if (part !== undefined) {
+    return all(`its input schema cannot be published as is: ${part.path} ${part.message}`);
   }
   const example = exampleObject(schema);
   if (!compileJsonSchema(schema)(example).valid || !shapeAccepts(resource, example)) {
@@ -72,7 +74,7 @@ export function bazaarMetadata(
   }
 
   const built = {
-    http: () => httpForm(resource, schema, example),
+    http: () => httpForm(resource, schema, example, mimeType),
     mcp: () => mcpForm(resource, description, example),
   };
   const extensions: Partial<Record<BazaarSurface, BazaarExtension>> = {};
@@ -111,17 +113,25 @@ function shapeAccepts(resource: CommerceResource, example: unknown): boolean {
   }
 }
 
-// The invoke route takes the input as a JSON body
+// Recognize JSON media types, including those with a `+json` syntax suffix
+const JSON_MEDIA_TYPE = /^[^/;\s]+\/(?:[^;\s]+\+)?json\s*(?:;|$)/i;
+
+// The invoke route takes a JSON body. Match the x402 SDK builder by publishing
+// `output` only when a JSON response example is available.
 function httpForm(
   resource: CommerceResource,
   schema: Record<string, unknown>,
   example: Record<string, unknown>,
+  mimeType: string | undefined,
 ): BazaarExtension {
-  const output = outputExample(resource.outputSchema);
+  const output =
+    mimeType === undefined || JSON_MEDIA_TYPE.test(mimeType)
+      ? outputExample(resource.outputSchema)
+      : undefined;
   return {
     info: {
       input: { type: 'http', method: 'POST', bodyType: 'json', body: example },
-      output: { type: 'json', ...(output !== undefined ? { example: output } : {}) },
+      ...(output !== undefined ? { output: { type: 'json', example: output } } : {}),
     },
     schema: {
       $schema: JSON_SCHEMA_2020_12,
@@ -138,14 +148,15 @@ function httpForm(
           required: ['type', 'method', 'bodyType', 'body'],
           additionalProperties: false,
         },
-        output: {
-          type: 'object',
-          properties: {
-            type: { type: 'string' },
-            ...(output !== undefined ? { example: resource.outputSchema } : {}),
-          },
-          required: ['type'],
-        },
+        ...(output !== undefined
+          ? {
+              output: {
+                type: 'object',
+                properties: { type: { type: 'string' }, example: resource.outputSchema },
+                required: ['type'],
+              },
+            }
+          : {}),
       },
       required: ['input'],
     },
@@ -164,7 +175,7 @@ function mcpForm(
         type: 'mcp',
         toolName: resource.id,
         description,
-        inputSchema: objectInputSchema(resource.inputSchema),
+        inputSchema: publishedInputSchema(resource.inputSchema),
         example,
       },
     },
@@ -193,7 +204,7 @@ function mcpForm(
 // Publish an output example only when its schema uses the supported subset
 // and local validation accepts it; runtime delivery does not validate output schemas
 function outputExample(schema: Record<string, unknown> | undefined): unknown {
-  if (schema === undefined || !isFullyEnforced(schema)) return undefined;
+  if (schema === undefined || unenforcedSchemaPart(schema) !== undefined) return undefined;
   const example = exampleValue(schema, 'output');
   return compileJsonSchema(schema)(example).valid ? example : undefined;
 }

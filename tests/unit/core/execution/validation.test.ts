@@ -1,6 +1,6 @@
 import Ajv2020 from 'ajv/dist/2020.js';
 import { describe, expect, it } from 'vitest';
-import { compileJsonSchema, isFullyEnforced } from '../../../../src/core/execution/validation';
+import { compileJsonSchema, unenforcedSchemaPart } from '../../../../src/core/execution/validation';
 
 describe('compileJsonSchema', () => {
   it('accepts anything when no schema is given', () => {
@@ -298,7 +298,7 @@ describe('compileJsonSchema', () => {
   });
 });
 
-describe('isFullyEnforced', () => {
+describe('unenforcedSchemaPart', () => {
   const ENFORCED: readonly [string, Record<string, unknown>][] = [
     ['an empty schema', {}],
     [
@@ -325,38 +325,117 @@ describe('isFullyEnforced', () => {
     ],
   ];
 
-  it.each(ENFORCED)('is true for %s', (_label, schema) => {
-    expect(isFullyEnforced(schema)).toBe(true);
+  it.each(ENFORCED)('finds no such part in %s', (_label, schema) => {
+    expect(unenforcedSchemaPart(schema)).toBeUndefined();
+  });
+
+  it('accepts the singular example annotation that import openapi carries', () => {
+    expect(unenforcedSchemaPart({ type: 'string', example: 'Oslo' })).toBeUndefined();
   });
 
   it.each([
-    ['a non-object schema', true],
-    ['an unenforced keyword', { type: 'string', minLength: 1 }],
-    ['a keyword the config warning list lacks', { type: 'object', minProperties: 1 }],
+    ['a non-object schema', true, '$', 'is not a schema object'],
+    ['an unenforced keyword', { type: 'string', minLength: 1 }, '$', 'uses "minLength"'],
+    [
+      'a keyword the former config warning list lacked',
+      { type: 'object', minProperties: 1 },
+      '$',
+      'uses "minProperties"',
+    ],
     [
       'an unenforced keyword in a property',
       { properties: { a: { type: 'string', format: 'email' } } },
+      '$.properties.a',
+      'uses "format"',
     ],
     [
       'an unenforced keyword in additionalProperties',
       { type: 'object', additionalProperties: { const: 1 } },
+      '$.additionalProperties',
+      'uses "const"',
     ],
-    ['an unenforced keyword in items', { type: 'array', items: { type: 'string', pattern: 'x' } }],
-    ['a boolean property schema', { properties: { a: true } }],
-    ['a tuple items', { type: 'array', items: [{ type: 'string' }] }],
-    ['items without an array type', { items: { type: 'string' } }],
-    ['additionalProperties without an object node', { additionalProperties: false }],
-    ['an unknown type', { type: 'date' }],
-    ['an empty type list', { type: [] }],
-    ['a non-string type', { type: [1] }],
-    ['a non-array enum', { enum: 'a' }],
-    ['non-string required entries', { type: 'object', required: [1] }],
-    ['a non-object properties', { properties: [] }],
-    ['$ref', { $ref: '#/$defs/a' }],
-    ['$schema', { $schema: 'https://json-schema.org/draft/2020-12/schema' }],
-  ])('is false for %s', (_label, schema) => {
-    expect(isFullyEnforced(schema)).toBe(false);
+    [
+      'an unenforced keyword in items',
+      { type: 'array', items: { type: 'string', pattern: 'x' } },
+      '$.items',
+      'uses "pattern"',
+    ],
+    [
+      'a boolean property schema',
+      { properties: { a: true } },
+      '$.properties.a',
+      'is not a schema object',
+    ],
+    [
+      'a tuple items',
+      { type: 'array', items: [{ type: 'string' }] },
+      '$.items',
+      'is not a schema object',
+    ],
+    ['items without an array type', { items: { type: 'string' } }, '$', 'declares "items"'],
+    [
+      'additionalProperties without an object node',
+      { additionalProperties: false },
+      '$',
+      'declares "additionalProperties"',
+    ],
+    ['an unknown type', { type: 'date' }, '$', 'has a "type"'],
+    ['an empty type list', { type: [] }, '$', 'has a "type"'],
+    ['a non-string type', { type: [1] }, '$', 'has a "type"'],
+    ['a non-array enum', { enum: 'a' }, '$', 'has a "enum"'],
+    ['non-string required entries', { type: 'object', required: [1] }, '$', 'has a "required"'],
+    ['a non-object properties', { properties: [] }, '$', 'has a "properties"'],
+    ['$ref', { $ref: '#/$defs/a' }, '$', 'uses "$ref"'],
+    ['$schema', { $schema: 'https://json-schema.org/draft/2020-12/schema' }, '$', 'uses "$schema"'],
+  ])('names the place of %s', (_label, schema, path, fragment) => {
+    const part = unenforcedSchemaPart(schema);
+    expect(part?.path).toBe(path);
+    expect(part?.message).toContain(fragment);
   });
+
+  it('starts the path at the name it is given', () => {
+    expect(
+      unenforcedSchemaPart({ properties: { q: { type: 'string', pattern: 'x' } } }, 'input'),
+    ).toEqual({
+      path: 'input.properties.q',
+      message: 'uses "pattern", which the gateway does not enforce',
+    });
+  });
+
+  // Ajv rejects these malformed schemas during compilation
+  const MALFORMED: readonly [string, Record<string, unknown>, string, string][] = [
+    ['a repeated required name', { type: 'object', required: ['a', 'a'] }, '$', 'required'],
+    ['a repeated type', { type: ['object', 'object'] }, '$', 'type'],
+    ['an empty enum', { enum: [] }, '$', 'enum'],
+    ['examples that are not a list', { type: 'string', examples: 'x' }, '$', 'examples'],
+    ['a numeric description', { type: 'string', description: 5 }, '$', 'description'],
+    ['a numeric title', { type: 'string', title: 7 }, '$', 'title'],
+    ['a numeric $comment', { type: 'string', $comment: 1 }, '$', '$comment'],
+    [
+      'a deprecated that is not a boolean',
+      { type: 'string', deprecated: 'yes' },
+      '$',
+      'deprecated',
+    ],
+    ['a readOnly that is not a boolean', { type: 'string', readOnly: 1 }, '$', 'readOnly'],
+    ['a writeOnly that is not a boolean', { type: 'string', writeOnly: 'no' }, '$', 'writeOnly'],
+    [
+      'a malformed value in a nested property',
+      { type: 'object', properties: { a: { type: 'object', required: ['b', 'b'] } } },
+      '$.properties.a',
+      'required',
+    ],
+  ];
+
+  it.each(MALFORMED)(
+    'names %s, which Ajv 2020-12 refuses to compile',
+    (_label, schema, path, keyword) => {
+      expect(() => new Ajv2020({ strict: false }).compile(schema)).toThrow();
+      const part = unenforcedSchemaPart(schema);
+      expect(part?.path).toBe(path);
+      expect(part?.message).toContain(`has a "${keyword}"`);
+    },
+  );
 
   // Compare gateway and Ajv 2020-12 verdicts for these schemas and sample values
   const ajv = new Ajv2020({ strict: false });

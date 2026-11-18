@@ -12,7 +12,7 @@ import {
   PAYMENT_INPUT_FIELD,
   type PaymentMethodName,
 } from '../../core';
-import { objectInputSchema } from '../../core/execution/schema-example';
+import { publishedInputSchema } from '../../core/execution/schema-example';
 import { MPP_MCP_CREDENTIAL_META_KEY } from '../../payments/mpp/transport';
 import { X402_MCP_PAYMENT_META_KEY } from '../../payments/x402/transport';
 import { MCP_TOOL_NAME_PATTERN } from './constants';
@@ -109,7 +109,7 @@ export function buildToolDescription(resource: CommerceResource): string {
  * would otherwise refuse to send them.
  */
 export function buildInputSchema(resource: CommerceResource): Tool['inputSchema'] {
-  const schema = objectInputSchema(resource.inputSchema);
+  const schema = publishedInputSchema(resource.inputSchema);
   const properties = { ...schema.properties } as Record<string, JSONObject>;
 
   // Both overwrite a resource-declared property of the same name; config
