@@ -32,12 +32,13 @@ const MPP = {
   facilitator: { mode: 'remote', url: `https://facilitator.example/${FACILITATOR_TENANT}` },
 };
 
-function mppOnlyConfig(withX402 = false) {
+function mppOnlyConfig(withX402 = false, publicResourceUrl = false) {
   const raw = validRawConfig();
   const x402 = {
     ...((raw['payments'] as Record<string, Record<string, unknown>>)['x402'] ?? {}),
     payTo: '0x2222222222222222222222222222222222222222',
     facilitator: { mode: 'remote', url: 'https://x402-facilitator.example' },
+    ...(publicResourceUrl ? { publicResourceUrl } : {}),
   };
   const mpp = { ...MPP, rpcUrl };
   raw['payments'] = withX402 ? { x402, mpp } : { mpp };
@@ -111,5 +112,36 @@ describe('payments.mpp wiring', () => {
     for (const secret of [SECRET, RPC_KEY, FACILITATOR_TENANT]) {
       expect(wellKnown.body).not.toContain(secret);
     }
+  });
+
+  it("keeps MPP's challenge when x402 names public resource URLs", async () => {
+    const challenge = async (publicResourceUrl: boolean) => {
+      const config = mppOnlyConfig(true, publicResourceUrl);
+      const node = await createGateway({
+        config,
+        store: createFakeStore(),
+        paymentProviders: await createConfiguredPaymentProviders(config.payments, NOOP_TEST_LOGGER),
+        protocolAdapters: [],
+        backend,
+      });
+      try {
+        const res = await node.server.inject({
+          method: 'POST',
+          url: '/api/resources/market_report/invoke',
+          headers: { 'content-type': 'application/json' },
+          payload: {},
+        });
+        expect(res.statusCode).toBe(402);
+        const { realm, method, intent, request } = Challenge.deserialize(
+          String(res.headers['www-authenticate']),
+        );
+        return { realm, method, intent, request };
+      } finally {
+        await node.close();
+      }
+    };
+    expect(await challenge(true)).toEqual(await challenge(false));
+    // The MPP-paid resource gets no x402 URL
+    expect(mppOnlyConfig(true, true).payments.x402?.resourceUrls).toEqual({});
   });
 });

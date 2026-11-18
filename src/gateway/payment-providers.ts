@@ -59,6 +59,7 @@ export async function createConfiguredPaymentProviders(
         ...(x402.resourceMimeTypes !== undefined
           ? { resourceMimeTypes: x402.resourceMimeTypes }
           : {}),
+        ...(x402.resourceUrls !== undefined ? { resourceUrls: x402.resourceUrls } : {}),
         facilitator: x402.facilitator,
         ...(x402.allowMainnet !== undefined ? { allowMainnet: x402.allowMainnet } : {}),
         ...(x402.allowUnauthenticatedFacilitator !== undefined

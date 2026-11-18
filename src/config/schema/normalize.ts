@@ -1,5 +1,7 @@
 // The business-rule pass: coerces leaves and checks cross-references across sections
+import type { CommerceResource } from '../../core';
 import { CommerceError } from '../../core';
+import { joinUrl } from '../../protocols/http';
 import { normalizeAcp, validateAcpCheckoutMapping } from './acp';
 import { normalizeAp2, validateLegacyStoresIsolated } from './ap2';
 import { normalizeMpp } from './mpp';
@@ -59,12 +61,18 @@ export function normalize(raw: RawConfig): GatewayConfig {
       return mimeType !== undefined ? [[resource.id, mimeType]] : [];
     }),
   );
+  const publicUrl = raw.payments.x402?.publicResourceUrl;
+  const resourceUrls =
+    publicUrl !== undefined && toBoolean(publicUrl, 'payments.x402.publicResourceUrl')
+      ? publicResourceUrls(raw.merchant.publicBaseUrl, protocols, resources)
+      : undefined;
   const x402WithFlows =
     x402 !== undefined
       ? {
           ...x402,
           ...flowOverrides('x402'),
           ...(Object.keys(mimeTypes).length > 0 ? { resourceMimeTypes: mimeTypes } : {}),
+          ...(resourceUrls !== undefined ? { resourceUrls } : {}),
         }
       : x402;
   const mppWithFlows = mpp !== undefined ? { ...mpp, ...flowOverrides('mpp') } : mpp;
@@ -108,6 +116,38 @@ export function normalize(raw: RawConfig): GatewayConfig {
     },
     ...(ap2 !== undefined ? { authorization: { ap2 } } : {}),
   };
+}
+
+// Build URLs for the surfaces exposing each x402 resource, using the public
+// base URL so indexers can request endpoints instead of `resource://` identifiers
+function publicResourceUrls(
+  publicBaseUrl: string,
+  protocols: NormalizedProtocols,
+  resources: readonly CommerceResource[],
+): Record<string, Partial<Record<'http' | 'mcp' | 'a2a', string>>> {
+  if (!isHttpUrl(publicBaseUrl)) {
+    throw new CommerceError(
+      'CONFIG_INVALID',
+      `payments.x402.publicResourceUrl needs merchant.publicBaseUrl to be an http:// or https:// URL, not ${JSON.stringify(publicBaseUrl)}`,
+      { details: { path: 'merchant.publicBaseUrl' } },
+    );
+  }
+  const path = (surface: 'http' | 'mcp' | 'a2a', id: string) =>
+    surface === 'http'
+      ? `/api/resources/${encodeURIComponent(id)}/invoke`
+      : protocols[surface].mountPath;
+  return Object.fromEntries(
+    resources
+      .filter((resource) => resource.paymentMethods.includes('x402'))
+      .map((resource) => [
+        resource.id,
+        Object.fromEntries(
+          (['http', 'mcp', 'a2a'] as const)
+            .filter((surface) => resource.exposedVia.includes(surface))
+            .map((surface) => [surface, joinUrl(publicBaseUrl, path(surface, resource.id))]),
+        ),
+      ]),
+  );
 }
 
 // Two enabled mounts may not overlap: each registers a `${mountPath}/*`

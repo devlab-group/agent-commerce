@@ -26,6 +26,14 @@ export interface X402ProviderOptions extends X402OfferOptions {
    */
   readonly resourceMimeTypes?: Readonly<Record<string, string>>;
   /**
+   * Experimental. Maps resource ids and request surfaces to the public
+   * `resource.url` used in their challenges. Requests without a surface,
+   * ACP requests and missing entries use `resource://agent-commerce/...`.
+   */
+  readonly resourceUrls?: Readonly<
+    Record<string, Readonly<Partial<Record<'http' | 'mcp' | 'a2a', string>>>>
+  >;
+  /**
    * Which facilitator verifies and broadcasts. `local` runs one in this process
    * against a dev chain, and its `signerPrivateKey` pays gas there, usually
    * an Anvil well-known key (LOCAL DEVELOPMENT ONLY - DO NOT FUND). `remote`

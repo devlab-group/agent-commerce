@@ -468,6 +468,15 @@ persistence must not fail the commerce flow.
     offer in `options` and `resourceOptions`.
   - `doctor` reads them for `Payments (offers)` and the new
     `Payments (MPP offers)` check.
+- 2.8.0: experimental `X402ProviderOptions.resourceUrls` maps resource ids and
+  request surfaces (`http`, `mcp` or `a2a`) to each challenge's `resource.url`.
+  - `createRequirement` reads the surface from `PaymentContext.protocol`. A
+    context without one, an ACP request, or a surface without an entry keeps
+    the `resource://` form.
+  - With `payments.x402.publicResourceUrl: true`, config normalization fills
+    `GatewayConfig.payments.x402.resourceUrls`. MPP's internal x402 provider
+    does not receive this map.
+  - Without the option, challenges are unchanged.
 
 ### Authorization and AP2
 

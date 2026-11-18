@@ -112,20 +112,27 @@ export function createRequirementBuilders(
     const extensions =
       identifier === undefined ? quoteExtensions : { ...quoteExtensions, ...identifier };
 
-    // The v2 challenge document as sent on the wire. The HTTP adapter
-    // base64-encodes it into `PAYMENT-REQUIRED` and MCP passes it through, so
-    // both surfaces offer the same challenge.
+    // Build the v2 challenge document. HTTP base64-encodes it into
+    // `PAYMENT-REQUIRED`; MCP passes the document through directly.
     //
-    // `resource.url` is outside the EIP-3009 signature. A single offer puts its
-    // network and payee in it, so the buyer's echo identifies the offer. With
-    // several, the URL stays the same whichever one the buyer pays.
+    // `accepted` identifies the offer paid by a proof. With a matching
+    // `resourceUrls` entry, `resource.url` uses the configured URL for this
+    // resource and request surface. Otherwise a single offer's `resource://`
+    // URL includes its network and payee; multiple offers share one URL.
+    // The URL is outside the EIP-3009 signature; verification rejects a
+    // mismatched URL only when the proof echoes it.
     const resourceId = encodeURIComponent(context.resource.id);
+    const surface = context.protocol === 'acp' ? undefined : context.protocol;
+    const publicUrl =
+      surface !== undefined ? options.resourceUrls?.[context.resource.id]?.[surface] : undefined;
     const envelope: PaymentRequired = {
       x402Version: X402_VERSION,
       resource: {
-        url: single
-          ? `resource://agent-commerce/${encodeURIComponent(single.network)}/${single.payTo}/resources/${resourceId}`
-          : `resource://agent-commerce/resources/${resourceId}`,
+        url:
+          publicUrl ??
+          (single
+            ? `resource://agent-commerce/${encodeURIComponent(single.network)}/${single.payTo}/resources/${resourceId}`
+            : `resource://agent-commerce/resources/${resourceId}`),
         description: context.resource.description ?? context.resource.name,
         // The media type the merchant declares, else `application/json`; an HTTP
         // delivery carries the backend's own type when it is text and fits the body

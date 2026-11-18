@@ -5,6 +5,7 @@ import type { MppNetwork } from '../../payments/mpp/constants';
 import type { X402FacilitatorConfig } from '../../payments/x402/guardrails';
 import type { CustomNetworks } from '../../payments/x402/networks';
 import type { X402PaymentFlow } from '../../payments/x402/payment-flow';
+import type { X402ProviderOptions } from '../../payments/x402/provider/types';
 import type { AcpCheckoutOperation } from '../../protocols/acp/constants';
 
 /** Optional ACP discovery metadata. Absent fields are omitted from the document */
@@ -93,6 +94,12 @@ export interface GatewayConfig {
       readonly resourcePaymentFlows?: Readonly<Record<string, X402PaymentFlow>>;
       /** Resources that set `mimeType`, by resource id; others declare `application/json` */
       readonly resourceMimeTypes?: Readonly<Record<string, string>>;
+      /**
+       * Experimental. With `publicResourceUrl: true`, config normalization maps
+       * each x402 resource's exposed HTTP, MCP and A2A surfaces to its invoke
+       * route or protocol mount under `merchant.publicBaseUrl`.
+       */
+      readonly resourceUrls?: NonNullable<X402ProviderOptions['resourceUrls']>;
       readonly facilitator: X402FacilitatorConfig;
       readonly allowMainnet?: boolean;
       readonly allowUnauthenticatedFacilitator?: boolean;

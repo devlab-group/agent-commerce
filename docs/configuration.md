@@ -631,11 +631,41 @@ to fit the response headers. Its default is one 4 or 8 KB memory page;
 oversized headers cause nginx to reject the response. SDK clients echo quotes
 in `PAYMENT-SIGNATURE`, which can reach about 7.4 KB with six quoted offers.
 This approaches nginx's default 8 KB limit for a single request header field,
-set by
-[`large_client_header_buffers`](https://nginx.org/en/docs/http/ngx_http_core_module.html#large_client_header_buffers).
+set by [`large_client_header_buffers`](https://nginx.org/en/docs/http/ngx_http_core_module.html#large_client_header_buffers).
 
 Each cache miss requires a signature per EVM offer. Rate-limit unpaid requests
 at the edge; see [Denial of service](security.md#denial-of-service).
+
+### Public resource URL
+
+Experimental and disabled by default. `publicResourceUrl: true` sets an x402
+challenge's `resource.url` to the configured public endpoint for the request's
+surface. This gives indexers a URL they can request in place of the gateway's
+`resource://agent-commerce/...` identifier.
+
+```yaml
+merchant:
+  publicBaseUrl: https://shop.example
+payments:
+  x402:
+    publicResourceUrl: true
+```
+
+| Request arrives on | `resource.url`                              |
+| ------------------ | ------------------------------------------- |
+| HTTP               | `<publicBaseUrl>/api/resources/<id>/invoke` |
+| MCP                | `<publicBaseUrl><protocols.mcp.mountPath>`  |
+| A2A                | `<publicBaseUrl><protocols.a2a.mountPath>`  |
+
+Requests without a URL mapping keep the `resource://` form. MPP challenges
+are unchanged. Enabling the option requires `merchant.publicBaseUrl` to be an
+http:// or https:// URL; otherwise config loading fails with `CONFIG_INVALID`.
+
+After the option changes, proofs that echo the previous URL are rejected,
+including proofs for A2A tasks still awaiting payment after a restart. Proofs
+that echo another surface's URL are also rejected. Both cases return
+`invalid_payment_requirements` without settlement; the buyer can request and
+pay a new challenge. See [x402](protocols/x402.md#the-resource-url).
 
 ### `payments.mpp`
 

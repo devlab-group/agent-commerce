@@ -2557,6 +2557,77 @@ describe('resource mimeType', () => {
   });
 });
 
+describe('payments.x402.publicResourceUrl', () => {
+  function withPublicUrl(value: unknown, edit: (raw: Record<string, unknown>) => void = () => {}) {
+    const raw = validRawConfig();
+    (raw['payments'] as { x402: Record<string, unknown> }).x402['publicResourceUrl'] = value;
+    edit(raw);
+    return raw;
+  }
+
+  it.each([
+    ['absent', validRawConfig()],
+    ['false', withPublicUrl(false)],
+  ])('gives the x402 rail no resource URLs when %s', (_label, raw) => {
+    expect(parseConfig(raw, {}).payments.x402?.resourceUrls).toBeUndefined();
+  });
+
+  it.each([true, 'true'])(
+    'names the invoke route and MCP mount of each paid resource with %j',
+    (value) => {
+      // weather_basic is free and gets no URL
+      expect(parseConfig(withPublicUrl(value), {}).payments.x402?.resourceUrls).toEqual({
+        market_report: {
+          http: 'http://localhost:8080/api/resources/market_report/invoke',
+          mcp: 'http://localhost:8080/mcp',
+        },
+      });
+    },
+  );
+
+  it('joins a base URL with a path and a trailing slash, and adds the A2A mount', () => {
+    const raw = withPublicUrl(true, (r) => {
+      (r['merchant'] as Record<string, unknown>)['publicBaseUrl'] = 'https://shop.example/gw/';
+      (r['protocols'] as Record<string, unknown>)['a2a'] = { enabled: true, mountPath: '/agents' };
+      (r['resources'] as { market_report: Record<string, unknown> }).market_report['expose'] = [
+        'http',
+        'a2a',
+      ];
+    });
+    expect(parseConfig(raw, {}).payments.x402?.resourceUrls).toEqual({
+      market_report: {
+        http: 'https://shop.example/gw/api/resources/market_report/invoke',
+        a2a: 'https://shop.example/gw/agents',
+      },
+    });
+  });
+
+  it('refuses the opt-in when merchant.publicBaseUrl is not an http(s) URL', () => {
+    const raw = withPublicUrl(true, (r) => {
+      (r['merchant'] as Record<string, unknown>)['publicBaseUrl'] = 'localhost:8080';
+    });
+    expectConfigInvalid(
+      () => parseConfig(raw, {}),
+      'merchant.publicBaseUrl',
+      'payments.x402.publicResourceUrl needs merchant.publicBaseUrl to be an http:// or https:// URL',
+    );
+  });
+
+  it('still only warns about that base URL without the opt-in', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const raw = validRawConfig();
+    (raw['merchant'] as Record<string, unknown>)['publicBaseUrl'] = 'localhost:8080';
+    try {
+      expect(parseConfig(raw, {}).merchant.publicBaseUrl).toBe('localhost:8080');
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('is not an http:// or https:// URL'),
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});
+
 describe('resource idempotency', () => {
   function withIdempotency(id: string, idempotency: unknown): Record<string, unknown> {
     const raw = validRawConfig();
