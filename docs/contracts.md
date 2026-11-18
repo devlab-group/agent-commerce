@@ -474,8 +474,8 @@ persistence must not fail the commerce flow.
     context without one, an ACP request, or a surface without an entry keeps
     the `resource://` form.
   - With `payments.x402.publicResourceUrl: true`, config normalization fills
-    `GatewayConfig.payments.x402.resourceUrls`. MPP's internal x402 provider
-    does not receive this map.
+    `GatewayConfig.payments.x402.resourceUrls`, with each URL in the URL
+    parser's form. MPP's internal x402 provider does not receive this map.
   - Without the option, challenges are unchanged.
 - 2.8.0: experimental `X402ProviderOptions.resourceBazaar` maps resource ids
   and request surfaces (`http` or `mcp`) to each challenge's `extensions.bazaar`
@@ -495,8 +495,9 @@ persistence must not fail the commerce flow.
   `name`, `version` and `description` from `protocols.mcp.registry` and is
   absent when that block is omitted. Config loading validates these fields
   against the MCP Registry's name, length and version rules.
-  `agent-commerce export mcp-registry` and `doctor --registry` use the metadata;
-  the MCP adapter does not.
+  `agent-commerce export mcp-registry` and `doctor --registry` use the metadata.
+  `runGateway` passes `name` and `version` to the MCP adapter as `serverName`
+  and `serverVersion`; an adapter built without them keeps its defaults.
 
 ### Authorization and AP2
 

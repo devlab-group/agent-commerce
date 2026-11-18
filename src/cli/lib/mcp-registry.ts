@@ -1,5 +1,5 @@
 // The MCP Registry listing (`server.json`) for a gateway, built from config alone
-import { joinUrl } from '../../protocols/http';
+import { publicEndpointUrl } from '../../protocols/http';
 import type { GatewayConfig } from './config-client';
 
 /** The `server.json` schema revision the listing follows */
@@ -23,9 +23,11 @@ export interface RegistryProblem {
 /**
  * Builds a listing from validated `config`, or returns the problems found.
  * Requires MCP to be enabled and registry metadata to be present. The remote
- * URL joins `merchant.publicBaseUrl` and the MCP mount; it must use HTTPS and
- * must not name `localhost`, `127.0.0.1` or `*.localhost`. The version comes
- * from `protocols.mcp.registry`, independently of the package version.
+ * URL joins `merchant.publicBaseUrl` and the MCP mount through
+ * `publicEndpointUrl`, matching the form of an x402 challenge's `resource.url`.
+ * It must use HTTPS and must not name `localhost`, `127.0.0.1` or `*.localhost`.
+ * The name and version come from `protocols.mcp.registry`; `runGateway` also
+ * uses them for MCP `serverInfo`.
  */
 export function serverJson(
   config: GatewayConfig,
@@ -45,9 +47,9 @@ export function serverJson(
     });
   }
   const url = remoteUrl(config.merchant.publicBaseUrl, mcp.mountPath);
-  if (typeof url === 'string') problems.push({ key: 'merchant.publicBaseUrl', message: url });
+  if ('problem' in url) problems.push({ key: 'merchant.publicBaseUrl', message: url.problem });
 
-  if (mcp.registry === undefined || typeof url === 'string' || problems.length > 0) {
+  if (mcp.registry === undefined || 'problem' in url || problems.length > 0) {
     return { problems };
   }
   return {
@@ -56,23 +58,29 @@ export function serverJson(
       name: mcp.registry.name,
       description: mcp.registry.description,
       version: mcp.registry.version,
-      remotes: [{ type: 'streamable-http', url: url.href }],
+      remotes: [{ type: 'streamable-http', url: url.url }],
     },
   };
 }
 
 // Check the remote URL against the registry's `IsValidRemoteURL` rules
-function remoteUrl(publicBaseUrl: string, mountPath: string): URL | string {
-  let url: URL;
+function remoteUrl(
+  publicBaseUrl: string,
+  mountPath: string,
+): { readonly url: string } | { readonly problem: string } {
+  let url: string;
   try {
-    url = new URL(joinUrl(publicBaseUrl, mountPath));
+    url = publicEndpointUrl(publicBaseUrl, mountPath);
   } catch {
-    return 'is not a URL';
+    return { problem: 'is not a URL' };
   }
-  if (url.protocol !== 'https:') return 'must be an https:// URL: the MCP Registry refuses others';
-  const host = url.hostname;
+  const parsed = new URL(url);
+  if (parsed.protocol !== 'https:') {
+    return { problem: 'must be an https:// URL: the MCP Registry refuses others' };
+  }
+  const host = parsed.hostname;
   if (host === 'localhost' || host === '127.0.0.1' || host.endsWith('.localhost')) {
-    return `names ${host}, which the MCP Registry refuses`;
+    return { problem: `names ${host}, which the MCP Registry refuses` };
   }
-  return url;
+  return { url };
 }

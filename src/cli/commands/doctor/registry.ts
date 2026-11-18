@@ -37,9 +37,10 @@ export async function registryCheck(
     };
   }
   const local = built.document;
+  // The registry answers 404 for a deleted listing unless asked to include it
   const answer = await fetchJson(
     fetchImpl,
-    `${MCP_REGISTRY_URL}/v0.1/servers/${encodeURIComponent(local.name)}/versions/latest`,
+    `${MCP_REGISTRY_URL}/v0.1/servers/${encodeURIComponent(local.name)}/versions/latest?include_deleted=true`,
     REGISTRY_TIMEOUT_MS,
   );
   // An error message can carry text from the far end, such as certificate names

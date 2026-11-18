@@ -14,8 +14,9 @@ import {
 } from './fixtures';
 
 const GATEWAY = 'http://127.0.0.1:8080';
+// Request deleted listings explicitly; the registry otherwise returns 404 for them
 const LISTING_URL =
-  'https://registry.modelcontextprotocol.io/v0.1/servers/io.github.acme%2Fweather/versions/latest';
+  'https://registry.modelcontextprotocol.io/v0.1/servers/io.github.acme%2Fweather/versions/latest?include_deleted=true';
 const REGISTRY = {
   name: 'io.github.acme/weather',
   version: '1.0.0',

@@ -5,7 +5,9 @@ import addFormats from 'ajv-formats';
 import { describe, expect, it } from 'vitest';
 import type { GatewayConfig } from '../../../src/cli/lib/config-client';
 import { type ServerJson, serverJson } from '../../../src/cli/lib/mcp-registry';
+import { parseConfig } from '../../../src/config/schema';
 import { PACKAGE_VERSION } from '../../../src/version';
+import { validRawConfig } from '../config/fixtures';
 import { makeGatewayConfig } from './fixtures';
 
 const SCHEMA_URL = 'https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json';
@@ -78,6 +80,23 @@ describe('serverJson', () => {
     expect(result).toMatchObject({
       document: { remotes: [{ url: 'https://api.example.com/shop/tools/mcp' }] },
     });
+  });
+
+  it('names the endpoint with the same string as the x402 challenge of an MCP resource', () => {
+    const raw = validRawConfig();
+    (raw['merchant'] as Record<string, unknown>)['publicBaseUrl'] = 'https://Shop.Example:443/gw/';
+    (raw['protocols'] as { mcp: Record<string, unknown> }).mcp['registry'] = REGISTRY;
+    (raw['payments'] as { x402: Record<string, unknown> }).x402['publicResourceUrl'] = true;
+    const parsed = parseConfig(raw, {});
+
+    const result = serverJson(parsed);
+
+    expect(result).toMatchObject({
+      document: { remotes: [{ url: 'https://shop.example/gw/mcp' }] },
+    });
+    expect(parsed.payments.x402?.resourceUrls?.['market_report']?.mcp).toBe(
+      'https://shop.example/gw/mcp',
+    );
   });
 
   it('takes the version from config, not from the package', () => {

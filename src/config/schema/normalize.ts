@@ -2,7 +2,7 @@
 import type { CommerceResource } from '../../core';
 import { CommerceError } from '../../core';
 import { bazaarMetadata } from '../../payments/x402/provider/bazaar';
-import { joinUrl } from '../../protocols/http';
+import { publicEndpointUrl } from '../../protocols/http';
 import { normalizeAcp, validateAcpCheckoutMapping } from './acp';
 import { normalizeAp2, validateLegacyStoresIsolated } from './ap2';
 import { normalizeMpp } from './mpp';
@@ -182,7 +182,10 @@ function publicResourceUrls(
         Object.fromEntries(
           (['http', 'mcp', 'a2a'] as const)
             .filter((surface) => resource.exposedVia.includes(surface))
-            .map((surface) => [surface, joinUrl(publicBaseUrl, path(surface, resource.id))]),
+            .map((surface) => [
+              surface,
+              publicEndpointUrl(publicBaseUrl, path(surface, resource.id)),
+            ]),
         ),
       ]),
   );

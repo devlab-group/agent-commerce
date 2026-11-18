@@ -541,9 +541,10 @@ status, score or exit code; an unreachable gateway still fails its check.
 
 `--registry` (experimental) adds an `MCP Registry` check. It fetches the
 latest listing for `protocols.mcp.registry.name` from
-`registry.modelcontextprotocol.io`, sending only that name, and compares it
-with what `export mcp-registry` would write. Differences, deprecated or deleted
-listings, missing listings and request failures produce WARN rather than FAIL.
+`registry.modelcontextprotocol.io`, sending only that name and a fixed
+`include_deleted=true` flag, and compares it with what `export mcp-registry`
+would write. Differences, deprecated or deleted listings, missing listings and
+request failures produce WARN rather than FAIL.
 Recognized transport failures also get the `unreachable` marker. The check
 names differing fields and uses fixed messages for known lifecycle statuses,
 without echoing arbitrary registry values or request error messages. See

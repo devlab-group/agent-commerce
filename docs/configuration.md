@@ -219,8 +219,10 @@ about the field is OpenAPI-specific.
 Experimental and optional. This block supplies the listing fields that
 [`agent-commerce export mcp-registry`](protocols/mcp.md#mcp-registry-listing)
 writes to `server.json` and `doctor --registry` compares with the live
-listing. Config loading validates these fields; the MCP adapter does not use
-them.
+listing. Config loading validates these fields. When started with this block,
+the gateway also reports `name` and `version` as its MCP `serverInfo` at
+`initialize`. Without the block, it reports `agent-commerce` and the package
+version.
 
 ```yaml
 protocols:
@@ -695,6 +697,11 @@ payments:
 Requests without a URL mapping keep the `resource://` form. MPP challenges
 are unchanged. Enabling the option requires `merchant.publicBaseUrl` to be an
 http:// or https:// URL; otherwise config loading fails with `CONFIG_INVALID`.
+
+The URL parser writes each URL with a lowercase scheme and host and no default
+port. `agent-commerce export mcp-registry` uses the same form for the MCP
+endpoint, which gives the Registry listing and x402 challenges matching URL
+strings.
 
 After the option changes, proofs that echo the previous URL are rejected,
 including proofs for A2A tasks still awaiting payment after a restart. Proofs

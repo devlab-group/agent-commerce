@@ -2641,6 +2641,18 @@ describe('payments.x402.publicResourceUrl', () => {
     });
   });
 
+  it('writes each URL in the URL parser form, as the MCP Registry listing does', () => {
+    const raw = withPublicUrl(true, (r) => {
+      (r['merchant'] as Record<string, unknown>)['publicBaseUrl'] = 'HTTPS://Shop.Example:443';
+    });
+    expect(parseConfig(raw, {}).payments.x402?.resourceUrls).toEqual({
+      market_report: {
+        http: 'https://shop.example/api/resources/market_report/invoke',
+        mcp: 'https://shop.example/mcp',
+      },
+    });
+  });
+
   it('refuses the opt-in when merchant.publicBaseUrl is not an http(s) URL', () => {
     const raw = withPublicUrl(true, (r) => {
       (r['merchant'] as Record<string, unknown>)['publicBaseUrl'] = 'localhost:8080';

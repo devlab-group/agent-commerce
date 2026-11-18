@@ -142,8 +142,12 @@ then publish it:
    with your config.
 
 The listing's version comes from `protocols.mcp.registry.version`, independently
-of the package version. The registry recommends semantic versions and uses
-their ordering to choose the latest. Publishing a prerelease such as `1.2.3-1`
+of the package version. The registry's schema defines it as the server's
+`Implementation.version`. When started with this block, the gateway reports the
+listing's `name` and `version` as `serverInfo` at `initialize`.
+
+The registry recommends semantic versions and uses their ordering to choose
+the latest. Publishing a prerelease such as `1.2.3-1`
 after its release, `1.2.3`, does not make it the latest. If your config names
 that prerelease, `doctor --registry` reports a version difference.
 
