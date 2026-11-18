@@ -1,0 +1,88 @@
+{
+  "name": "a2a",
+  "kind": "protocol",
+  "title": "A2A",
+  "status": "experimental",
+  "role": "Transport that carries x402 and MPP payments in `SendMessage`, including through the x402 extension.",
+  "subset": "Agent Card, `SendMessage`, paid flow and the x402 extension",
+  "spec": {
+    "revisions": ["1.0.1"],
+    "display": "v1.0.1; negotiation `1.0`; `JSONRPC` binding",
+    "source": {
+      "repo": "a2aproject/A2A",
+      "commit": "3303592588e388e62e0f69f701af531d2f4e3991"
+    },
+    "stable": true,
+    "statement": "the first stable, production-ready version",
+    "checked": "2026-11-17"
+  },
+  "packages": [{ "name": "@a2a-js/sdk", "use": "test" }],
+  "artifacts": [],
+  "features": [
+    { "name": "agent-card", "status": "experimental" },
+    { "name": "jsonrpc", "status": "experimental" },
+    { "name": "SendMessage", "status": "experimental" },
+    { "name": "x402-extension", "status": "experimental" }
+  ],
+  "exclusions": [
+    { "name": "SendStreamingMessage" },
+    { "name": "GetTask" },
+    { "name": "ListTasks" },
+    { "name": "CancelTask" },
+    { "name": "SubscribeToTask" },
+    { "name": "CreateTaskPushNotificationConfig" },
+    { "name": "GetTaskPushNotificationConfig" },
+    { "name": "ListTaskPushNotificationConfigs" },
+    { "name": "DeleteTaskPushNotificationConfig" },
+    { "name": "GetExtendedAgentCard" },
+    { "name": "HTTP+JSON/REST binding" },
+    { "name": "gRPC binding" },
+    { "name": "SSE" },
+    { "name": "long-running task persistence" },
+    { "name": "task resumption other than an x402 extension payment" },
+    { "name": "push notifications" },
+    { "name": "multi-turn conversational continuation" },
+    { "name": "text parts" },
+    { "name": "file and URL parts (including inline bytes)" },
+    { "name": "multi-part messages" },
+    { "name": "message roles other than ROLE_USER" },
+    { "name": "authenticated extended agent cards" },
+    { "name": "A2A authentication schemes" },
+    { "name": "artifact types beyond Agent Commerce outcome data" },
+    {
+      "name": "x402 extension payments across gateway instances",
+      "note": "Instances with separate receipt stores cannot resume each other's tasks."
+    }
+  ],
+  "deviations": [],
+  "conformance": {
+    "suite": "Our tests against the A2A 1.0.1 specification; the A2A TCK has not been run.",
+    "tests": [
+      "tests/conformance/a2a/agent-card.test.ts",
+      "tests/conformance/a2a/errors.test.ts",
+      "tests/conformance/a2a/free-resource.test.ts",
+      "tests/conformance/a2a/paid-resource.test.ts",
+      "tests/conformance/a2a/protocol-version.test.ts"
+    ],
+    "skipped": []
+  },
+  "gaps": [
+    {
+      "requirement": "§3.1: GetTask, ListTasks and CancelTask, which every agent implements",
+      "state": "open"
+    },
+    {
+      "requirement": "§3.2.2: returnImmediately as well as the blocking default",
+      "state": "open"
+    },
+    {
+      "requirement": "§3.3.2: validate all input parameters, including tenant and configuration",
+      "state": "open"
+    },
+    {
+      "requirement": "§7.1: encrypted communication in production; merchant.publicBaseUrl accepts http",
+      "state": "open"
+    }
+  ],
+  "docs": ["docs/protocols/a2a.md"]
+}

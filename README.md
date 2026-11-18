@@ -8,12 +8,14 @@
   <a href="#quickstart"><img alt="Quickstart" src="https://img.shields.io/badge/quickstart-5%20minutes-2ea44f"></a>
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-blue"></a>
   <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-strict-3178c6">
+  <!-- support-record:begin badges -->
   <img alt="MCP" src="https://img.shields.io/badge/MCP-supported-6b4fbb">
   <img alt="x402" src="https://img.shields.io/badge/x402-supported-0052ff">
   <img alt="MPP" src="https://img.shields.io/badge/MPP-experimental-f0a30a">
   <img alt="A2A" src="https://img.shields.io/badge/A2A-experimental-f0a30a">
   <img alt="ACP" src="https://img.shields.io/badge/ACP-experimental-f0a30a">
   <img alt="AP2" src="https://img.shields.io/badge/AP2-experimental-f0a30a">
+  <!-- support-record:end -->
 </p>
 
 ## What it is, in ten seconds
@@ -71,7 +73,8 @@ agent-commerce doctor
 
 Requires **Node >= 22**. The package includes the `agent-commerce` CLI
 (`init`, `validate`, `start`, `doctor`, `reconcile`, `resolve`, `demo`,
-`import openapi`, `version`) and a library for embedding the gateway.
+`import openapi`, `export mcp-registry`, `version`) and a library for embedding
+the gateway.
 The default install excludes optional protocol, payment and authorization
 peers. The OpenAPI parser is a regular dependency because import is part of the
 CLI.
@@ -84,10 +87,10 @@ agent-commerce start --config config.yaml --env-file .env
 Install the optional peers for the features you enable, listed below. Missing
 startup imports stop the gateway with an error naming the package; missing
 Solana, NEAR or CDP peers fail provider health checks or payment requests.
-`start`, `validate`, `doctor`, `reconcile` and `resolve` accept `--env-file <path>` to
-load environment variables before reading the config. Variables already set in
-the environment take precedence. To embed the gateway in your own process, use
-the library:
+`start`, `validate`, `doctor`, `reconcile`, `resolve` and `export mcp-registry`
+accept `--env-file <path>` to load environment variables before reading the
+config. Variables already set in the environment take precedence. To embed the
+gateway in your own process, use the library:
 
 ```ts
 import { createGateway, loadConfig, receipts } from '@devlab.group/agent-commerce';
@@ -303,17 +306,22 @@ See [docs/configuration.md](docs/configuration.md).
 
 ## Protocol support
 
-| Protocol     | Status       | Pinned revision                                                                                              |
-| ------------ | ------------ | ------------------------------------------------------------------------------------------------------------ |
-| **HTTP**     | Supported    | native routes                                                                                                |
-| **MCP**      | Supported    | `2026-07-28` and `2025-11-25`, `@modelcontextprotocol/server@2.3.0`                                          |
-| **x402**     | Supported    | x402 v2 (`@x402/core`, `@x402/evm`, `@x402/svm`, `@x402/near`), scheme `exact`, EVM and Solana; NEAR partial |
-| **MPP**      | Experimental | `mppx@0.13.1`, `charge` + `evm` + EIP-3009, USDC on Base Sepolia and Base                                    |
-| **A2A**      | Experimental | A2A v1.0.1, binding `JSONRPC`, method `SendMessage`, x402 extension                                          |
-| **ACP**      | Experimental | ACP `2026-04-17`, REST checkout + discovery                                                                  |
-| **AP2**      | Experimental | AP2 `v0.2.0`, Direct Checkout Mandate verification                                                           |
-| **ERC-8409** | Experimental | draft `SergeevDmitry/ERCs@0ee33230`: signed quotes on x402 EVM offers                                        |
-| UCP          | Planned      | no implementation                                                                                            |
+<!-- support-record:begin matrix -->
+
+| Protocol     | Status       | Pinned revision                                                                                                   | Implemented subset                                                                                                                   |
+| ------------ | ------------ | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| **HTTP**     | Supported    | native                                                                                                            | resource routes and rail-specific payment headers                                                                                    |
+| **MCP**      | Supported    | MCP `2026-07-28` and `2025-11-25`; `@modelcontextprotocol/server@2.3.0`                                           | tool discovery, invocation, payment-required and error mapping                                                                       |
+| **x402**     | Supported    | x402 v2; `@x402/core@2.30.0`, `@x402/evm@2.30.0`, `@x402/svm@2.30.0`, `@x402/near@2.30.0`                         | `exact` on EVM through EIP-3009 or Permit2, on Solana, and on NEAR (partial): challenge, verification, settlement and replay binding |
+| **MPP**      | Experimental | drafts at `tempoxyz/mpp-specs@806fdb8`; `mppx@0.13.1`                                                             | `charge`/`evm`/EIP-3009 with USDC on Base Sepolia and Base, over HTTP, MCP and A2A                                                   |
+| **A2A**      | Experimental | v1.0.1; negotiation `1.0`; `JSONRPC` binding                                                                      | Agent Card, `SendMessage`, paid flow and the x402 extension                                                                          |
+| **ACP**      | Experimental | stable snapshot `2026-04-17`; REST binding                                                                        | discovery and the five checkout operations                                                                                           |
+| **AP2**      | Experimental | v0.2.0, tag 2026-04-28, commit `b4587ac`; Direct mode; `jose@6.2.12`, `@sd-jwt/core@0.20.1`, `canonicalize@5.0.0` | closed Checkout Mandate verification before settlement                                                                               |
+| **ERC-8409** | Experimental | draft `SergeevDmitry/ERCs@0ee33230`                                                                               | signed quotes on x402 EVM offers; issuer published in `/.well-known/agent-commerce`                                                  |
+
+<!-- support-record:end -->
+
+UCP is planned and has no implementation.
 
 [AP2](docs/protocols/ap2.md) is an authorization method, not a transport. It verifies a
 mandate before a paid resource settles; the gateway does not issue the mandate
@@ -333,11 +341,24 @@ prints the `unsupported` lists for A2A, ACP and AP2 when they are enabled.
 
 ### Versioning
 
-Minor releases may break experimental configurations, integrations or types:
-MPP, A2A, ACP, AP2, ERC-8409 quotes, `agent-commerce import openapi`,
-`PaymentProvider.reconcile`, the `ReceiptStore` methods and types added in
-2.6.0, the `idempotency` resource settings with the store and provider methods
-added in 2.7.0, and the `./testing` entry.
+Minor releases may break experimental configurations, integrations or types.
+This includes MPP, A2A, ACP, AP2, ERC-8409 quotes, the
+[public resource URL](docs/configuration.md#public-resource-url) and
+[Bazaar metadata](docs/configuration.md#bazaar-metadata) in payment
+challenges, and these interfaces:
+
+- `agent-commerce import openapi`.
+- `agent-commerce export mcp-registry`, `doctor --registry` and the
+  `protocols.mcp.registry` keys.
+- `PaymentProvider.reconcile` and the `ReceiptStore` methods and types added
+  in 2.6.0.
+- The `idempotency` resource settings and the store and provider methods added
+  in 2.7.0.
+- `PaymentContext.protocol` and `AdapterHealthComponent.undetermined` (added
+  in 2.8.0), and the `./testing` entry.
+
+A profile moves from experimental to supported only when it meets the
+[promotion criteria](docs/protocols.md#promotion-criteria).
 
 The journal's `Transaction` type, `ReceiptStore` journal methods and
 `/api/transactions` response shape are supported. The `transactionId` fields,
@@ -494,6 +515,7 @@ spend real USDC when their opt-ins and credentials are present.
 $ npm run agent-commerce -- doctor --config config-demo.yaml
 
 PASS  Config               valid: 2 resource(s), merchant "Demo Data Store" (using local chain manifest .deploy/local.json for X402_ASSET, X402_ASSET_NAME, X402_ASSET_VERSION, X402_ASSET_DECIMALS, MERCHANT_WALLET, X402_FACILITATOR_PRIVATE_KEY)
+PASS  Secrets              6 set (MERCHANT_WALLET, X402_ASSET, X402_ASSET_DECIMALS, X402_ASSET_NAME, X402_ASSET_VERSION, X402_FACILITATOR_PRIVATE_KEY); 8 defaulted (ADMIN_TOKEN, DASHBOARD_ORIGIN, GATEWAY_PORT, GATEWAY_PUBLIC_BASE_URL, MERCHANT_API_BASE_URL, RECEIPT_STORE_PATH, X402_NETWORK, X402_RPC_URL)
 PASS  Gateway              healthy and ready at http://127.0.0.1:8080
 PASS  Backend              2/2 backend host(s) reachable
 PASS  Protocols            http=on mcp=on (/mcp) a2a=off acp=off
@@ -501,18 +523,42 @@ INFO  A2A                  disabled
 INFO  ACP                  disabled
 INFO  AP2                  disabled
 PASS  Payments             x402 v2 (scheme=exact) enabled - LOCAL dev chain (eip155:31337), destination=0x7099…79C8, facilitator=local (in-process), paymentFlow=authorization
+PASS  Payments (offers)    1 offer(s) pass their health checks
 INFO  Payments (MPP)       MPP not configured
 PASS  Storage              sqlite schema v5 writable; receipts=2
 PASS  Transactions         none unresolved
 PASS  Protocol versions    reported by gateway /.well-known/agent-commerce
 
-Score: 8/8 checks passed
+Score: 10/10 checks passed
 ```
 
 `doctor` compares live settlement terms with local config for each rail and
 resource: offer order, network, token, payee and transfer method, plus decimals
 and payment flows when published. Mismatches fail the check. It also names
 failing offers when health is published; reasons appear in gateway debug logs.
+
+`Secrets` lists each config placeholder (`${VAR}`) as missing, set or
+defaulted. Config loading stops at the first missing variable; this check
+reports them all. It fails if any are missing and prints names only, never
+values or defaults.
+
+A check that cannot reach a verdict carries `undetermined`: `unreachable`
+for known transport failures, such as refused or reset connections, timeouts
+or temporary DNS failures; `skipped` when a prerequisite fails. Unresolvable
+hostnames and TLS errors leave the check unmarked.
+Text output appends `[not determined: <reason>]`. The marker does not affect
+status, score or exit code; an unreachable gateway still fails its check.
+
+`--registry` (experimental) adds an `MCP Registry` check. It fetches the
+latest listing for `protocols.mcp.registry.name` from
+`registry.modelcontextprotocol.io`, sending only that name and a fixed
+`include_deleted=true` flag, and compares it with what `export mcp-registry`
+would write. Differences, deprecated or deleted listings, missing listings and
+request failures produce WARN rather than FAIL.
+Recognized transport failures also get the `unreachable` marker. The check
+names differing fields and uses fixed messages for known lifecycle statuses,
+without echoing arbitrary registry values or request error messages. See
+[MCP Registry listing](docs/protocols/mcp.md#mcp-registry-listing).
 
 Exits non-zero if anything fails. `--json` for machines.
 
@@ -675,8 +721,9 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 mainnet, Solana devnet and Solana mainnet, receipts, doctor, deterministic
 demo, experimental A2A v1.0.1 and ACP `2026-04-17` checkout adapters,
 experimental AP2 v0.2.0 mandate verification, experimental MPP `charge`
-payments, experimental OpenAPI import, and experimental retries after a lost
-response.
+payments, experimental OpenAPI import, experimental retries after a lost
+response, and experimental discovery metadata for x402 Bazaar and MCP Registry
+listings.
 
 **Next** - a `doctor` GitHub Action · UCP ·
 autonomous-mode AP2 (open mandates, agent key binding, constraint evaluation) ·

@@ -18,6 +18,14 @@ export interface LoadConfigOptions {
 }
 
 export async function loadConfig(options: LoadConfigOptions = {}): Promise<GatewayConfig> {
+  return parseConfig(await readConfigFile(options), options.env ?? process.env);
+}
+
+/**
+ * Read the same file as `loadConfig`, returning parsed YAML before environment
+ * substitution and config validation. File and YAML errors match `loadConfig`.
+ */
+export async function readConfigFile(options: LoadConfigOptions = {}): Promise<unknown> {
   const env = options.env ?? process.env;
   const cwd = options.cwd ?? process.cwd();
   const configPath = resolveConfigPath(options.path, env, cwd);
@@ -32,9 +40,8 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Gatew
     });
   }
 
-  let raw: unknown;
   try {
-    raw = parseYaml(text);
+    return parseYaml(text);
   } catch (error) {
     const { reason, details } = describeYamlError(error);
     throw new CommerceError(
@@ -48,8 +55,6 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Gatew
       },
     );
   }
-
-  return parseConfig(raw, env);
 }
 
 // Plain-English phrasing for common YAML error codes. Fixed strings, so they

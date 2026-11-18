@@ -2,6 +2,7 @@
 import { z } from 'zod';
 import { X402_PAYMENT_FLOWS } from '../../payments/x402/payment-flow';
 import { ACP_WELL_KNOWN_PATH } from '../../protocols/acp/constants';
+import { McpRegistrySchema } from './mcp-registry';
 
 export const SUPPORTED_CONFIG_VERSION = 1;
 
@@ -163,6 +164,9 @@ const ProtocolsSchema = z
       .object({
         enabled: BooleanOrString,
         mountPath: MountPathSchema,
+        // Experimental metadata for `export mcp-registry` and `doctor --registry`.
+        // Validated at config load; unused by the MCP adapter.
+        registry: McpRegistrySchema.optional(),
       })
       .strict(),
     // Optional; A2A is off unless configured
@@ -353,6 +357,10 @@ const X402Schema = z
     allowMainnet: BooleanOrString.optional(),
     // Accepts credential-free facilitator access on mainnet. Never defaulted
     allowUnauthenticatedFacilitator: BooleanOrString.optional(),
+    // Experimental: use the configured public endpoint in x402 challenges
+    publicResourceUrl: BooleanOrString.optional(),
+    // Experimental Bazaar discovery metadata; enabling it requires publicResourceUrl
+    bazaar: z.object({ enabled: BooleanOrString }).strict().optional(),
     // Experimental ERC-8409 quotes; signing a quote transfers no funds
     quote: z
       .object({

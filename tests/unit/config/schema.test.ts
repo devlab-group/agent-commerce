@@ -1206,6 +1206,45 @@ describe('parseConfig', () => {
       parseConfig(validRawConfig(), {});
       expect(warnSpy).not.toHaveBeenCalled();
     });
+
+    it.each(['minProperties', 'prefixItems', 'nullable', '$schema'])(
+      'warns about %s, which the validator does not read',
+      (keyword) => {
+        const raw = validRawConfig();
+        (
+          raw['resources'] as { market_report: { input: Record<string, unknown> } }
+        ).market_report.input = {
+          type: 'object',
+          properties: {},
+          additionalProperties: false,
+          [keyword]: 1,
+        };
+        parseConfig(raw, {});
+        expect(warnSpy).toHaveBeenCalledTimes(1);
+        expect(warnSpy.mock.calls[0]?.[0]).toContain(
+          `resource "market_report" input uses JSON Schema keyword "${keyword}"`,
+        );
+      },
+    );
+
+    it('does not warn about annotations, the singular example of an imported schema included', () => {
+      const raw = validRawConfig();
+      (
+        raw['resources'] as { market_report: { input: Record<string, unknown> } }
+      ).market_report.input = {
+        type: 'object',
+        title: 'Query',
+        description: 'A query',
+        properties: {
+          city: { type: 'string', example: 'Oslo', examples: ['Oslo'], default: 'Oslo' },
+          old: { type: 'string', deprecated: true, readOnly: false, writeOnly: false },
+        },
+        $comment: 'internal',
+        additionalProperties: false,
+      };
+      parseConfig(raw, {});
+      expect(warnSpy).not.toHaveBeenCalled();
+    });
   });
 
   it('rejects a schema declaring properties/required whose type excludes "object" - the validator would never enforce either', () => {
@@ -2553,6 +2592,353 @@ describe('resource mimeType', () => {
       () => parseConfig(raw, {}),
       'resources.weather_basic.mimeType',
       'requires fixed pricing and "x402" in payments',
+    );
+  });
+});
+
+describe('payments.x402.publicResourceUrl', () => {
+  function withPublicUrl(value: unknown, edit: (raw: Record<string, unknown>) => void = () => {}) {
+    const raw = validRawConfig();
+    (raw['payments'] as { x402: Record<string, unknown> }).x402['publicResourceUrl'] = value;
+    edit(raw);
+    return raw;
+  }
+
+  it.each([
+    ['absent', validRawConfig()],
+    ['false', withPublicUrl(false)],
+  ])('gives the x402 rail no resource URLs when %s', (_label, raw) => {
+    expect(parseConfig(raw, {}).payments.x402?.resourceUrls).toBeUndefined();
+  });
+
+  it.each([true, 'true'])(
+    'names the invoke route and MCP mount of each paid resource with %j',
+    (value) => {
+      // weather_basic is free and gets no URL
+      expect(parseConfig(withPublicUrl(value), {}).payments.x402?.resourceUrls).toEqual({
+        market_report: {
+          http: 'http://localhost:8080/api/resources/market_report/invoke',
+          mcp: 'http://localhost:8080/mcp',
+        },
+      });
+    },
+  );
+
+  it('joins a base URL with a path and a trailing slash, and adds the A2A mount', () => {
+    const raw = withPublicUrl(true, (r) => {
+      (r['merchant'] as Record<string, unknown>)['publicBaseUrl'] = 'https://shop.example/gw/';
+      (r['protocols'] as Record<string, unknown>)['a2a'] = { enabled: true, mountPath: '/agents' };
+      (r['resources'] as { market_report: Record<string, unknown> }).market_report['expose'] = [
+        'http',
+        'a2a',
+      ];
+    });
+    expect(parseConfig(raw, {}).payments.x402?.resourceUrls).toEqual({
+      market_report: {
+        http: 'https://shop.example/gw/api/resources/market_report/invoke',
+        a2a: 'https://shop.example/gw/agents',
+      },
+    });
+  });
+
+  it('writes each URL in the URL parser form, as the MCP Registry listing does', () => {
+    const raw = withPublicUrl(true, (r) => {
+      (r['merchant'] as Record<string, unknown>)['publicBaseUrl'] = 'HTTPS://Shop.Example:443';
+    });
+    expect(parseConfig(raw, {}).payments.x402?.resourceUrls).toEqual({
+      market_report: {
+        http: 'https://shop.example/api/resources/market_report/invoke',
+        mcp: 'https://shop.example/mcp',
+      },
+    });
+  });
+
+  it('refuses the opt-in when merchant.publicBaseUrl is not an http(s) URL', () => {
+    const raw = withPublicUrl(true, (r) => {
+      (r['merchant'] as Record<string, unknown>)['publicBaseUrl'] = 'localhost:8080';
+    });
+    expectConfigInvalid(
+      () => parseConfig(raw, {}),
+      'merchant.publicBaseUrl',
+      'payments.x402.publicResourceUrl needs merchant.publicBaseUrl to be an http:// or https:// URL',
+    );
+  });
+
+  it('still only warns about that base URL without the opt-in', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const raw = validRawConfig();
+    (raw['merchant'] as Record<string, unknown>)['publicBaseUrl'] = 'localhost:8080';
+    try {
+      expect(parseConfig(raw, {}).merchant.publicBaseUrl).toBe('localhost:8080');
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('is not an http:// or https:// URL'),
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});
+
+describe('payments.x402.bazaar', () => {
+  // `null` leaves publicResourceUrl out
+  function withBazaar(enabled: unknown, publicResourceUrl: boolean | null = true) {
+    const raw = validRawConfig();
+    const x402 = (raw['payments'] as { x402: Record<string, unknown> }).x402;
+    x402['bazaar'] = { enabled };
+    if (publicResourceUrl !== null) x402['publicResourceUrl'] = publicResourceUrl;
+    return raw;
+  }
+  function marketReport(raw: Record<string, unknown>): Record<string, unknown> {
+    return (raw['resources'] as { market_report: Record<string, unknown> }).market_report;
+  }
+  let warn: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+  afterEach(() => {
+    warn.mockRestore();
+  });
+
+  it.each([
+    ['absent', validRawConfig()],
+    ['false', withBazaar(false)],
+  ])('gives the x402 rail no Bazaar metadata when %s', (_label, raw) => {
+    expect(parseConfig(raw, {}).payments.x402?.resourceBazaar).toBeUndefined();
+  });
+
+  it.each([true, 'true'])(
+    'builds the HTTP and MCP forms for each paid resource with %j',
+    (enabled) => {
+      const bazaar = parseConfig(withBazaar(enabled), {}).payments.x402?.resourceBazaar;
+      // weather_basic is free; market_report is paid and exposed on both
+      expect(Object.keys(bazaar ?? {})).toEqual(['market_report']);
+      expect(bazaar?.['market_report']?.http?.info).toEqual({
+        input: { type: 'http', method: 'POST', bodyType: 'json', body: {} },
+      });
+      expect(bazaar?.['market_report']?.mcp?.info['input']).toMatchObject({
+        type: 'mcp',
+        toolName: 'market_report',
+      });
+      expect(warn).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ['publicResourceUrl is absent', null],
+    ['publicResourceUrl is false', false],
+  ])('refuses the key when %s', (_label, publicResourceUrl) => {
+    expectConfigInvalid(
+      () => parseConfig(withBazaar(true, publicResourceUrl), {}),
+      'payments.x402.bazaar.enabled',
+      'payments.x402.bazaar.enabled requires payments.x402.publicResourceUrl: true',
+    );
+  });
+
+  it('builds no form for a surface the resource is not exposed on', () => {
+    const raw = withBazaar(true);
+    marketReport(raw)['expose'] = ['http'];
+    const bazaar = parseConfig(raw, {}).payments.x402?.resourceBazaar;
+    expect(Object.keys(bazaar?.['market_report'] ?? {})).toEqual(['http']);
+  });
+
+  it('refuses a key it does not know', () => {
+    const raw = validRawConfig();
+    (raw['payments'] as { x402: Record<string, unknown> }).x402['bazaar'] = {
+      enabled: true,
+      routeTemplate: '/x',
+    };
+    expect(() => parseConfig(raw, {})).toThrow(/routeTemplate/);
+  });
+
+  it('leaves out a resource it cannot prove valid, names it in a warning, and keeps its payment', () => {
+    const raw = withBazaar(true);
+    marketReport(raw)['input'] = {
+      type: 'object',
+      properties: { ticker: { type: 'string', pattern: '^[A-Z]+$' } },
+      required: ['ticker'],
+      additionalProperties: false,
+    };
+    const config = parseConfig(raw, {});
+
+    expect(config.payments.x402?.resourceBazaar).toEqual({});
+    expect(config.resources.find((r) => r.id === 'market_report')?.paymentMethods).toEqual([
+      'x402',
+    ]);
+    expect(warn).toHaveBeenCalledWith(
+      '[agent-commerce] resource "market_report" gets no Bazaar metadata on http and mcp: its input schema cannot be published as is: input.properties.ticker uses "pattern", which the gateway does not enforce. Payment is unaffected.',
+    );
+  });
+
+  const OUTPUT = {
+    type: 'object',
+    properties: { ok: { type: 'boolean' } },
+    required: ['ok'],
+  };
+
+  it('declares the JSON output example of a resource that names no media type', () => {
+    const raw = withBazaar(true);
+    marketReport(raw)['output'] = OUTPUT;
+    const bazaar = parseConfig(raw, {}).payments.x402?.resourceBazaar;
+    expect(bazaar?.['market_report']?.http?.info['output']).toEqual({
+      type: 'json',
+      example: { ok: false },
+    });
+  });
+
+  it('declares no JSON output for a resource whose mimeType is text/html', () => {
+    const raw = withBazaar(true);
+    marketReport(raw)['output'] = OUTPUT;
+    marketReport(raw)['mimeType'] = 'text/html';
+    const config = parseConfig(raw, {});
+    expect(config.payments.x402?.resourceMimeTypes).toEqual({ market_report: 'text/html' });
+    expect(config.payments.x402?.resourceBazaar?.['market_report']?.http?.info).toEqual({
+      input: { type: 'http', method: 'POST', bodyType: 'json', body: {} },
+    });
+  });
+
+  // Enable both rails and list them on the resource in the requested order
+  function withBothRails(payments: string[]) {
+    const raw = withBazaar(true);
+    (raw['payments'] as Record<string, unknown>)['mpp'] = {
+      enabled: true,
+      rpcUrl: 'https://sepolia.example/v2/key',
+      asset: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+      assetName: 'USDC',
+      assetVersion: '2',
+      recipient: '0x1111111111111111111111111111111111111111',
+      realm: 'api.example.com',
+      challengeSecret: 'mpp-challenge-secret-'.padEnd(32, 'x'),
+      facilitator: { mode: 'remote', url: 'https://facilitator.example' },
+    };
+    marketReport(raw)['payments'] = payments;
+    return raw;
+  }
+
+  it('builds no URL or metadata for a resource served on MPP, and says which rail serves it', () => {
+    const config = parseConfig(withBothRails(['mpp', 'x402']), {});
+
+    expect(config.payments.x402?.resourceUrls).toEqual({});
+    expect(config.payments.x402?.resourceBazaar).toEqual({});
+    expect(warn.mock.calls).toEqual([
+      [
+        '[agent-commerce] resource "market_report" gets no Bazaar metadata: the gateway serves it on mpp, the first enabled rail in its payments, which issues no x402 challenge. Payment is unaffected.',
+      ],
+    ]);
+  });
+
+  it('builds both for a resource that lists x402 first, without a warning', () => {
+    const config = parseConfig(withBothRails(['x402', 'mpp']), {});
+
+    expect(Object.keys(config.payments.x402?.resourceUrls ?? {})).toEqual(['market_report']);
+    expect(Object.keys(config.payments.x402?.resourceBazaar?.['market_report'] ?? {})).toEqual([
+      'http',
+      'mcp',
+    ]);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('serves on x402, and builds both, when the MPP rail listed first is disabled', () => {
+    const raw = withBothRails(['mpp', 'x402']);
+    ((raw['payments'] as Record<string, unknown>)['mpp'] as Record<string, unknown>)['enabled'] =
+      false;
+    const config = parseConfig(raw, {});
+
+    expect(Object.keys(config.payments.x402?.resourceBazaar ?? {})).toEqual(['market_report']);
+    expect(warn).not.toHaveBeenCalled();
+  });
+});
+
+describe('protocols.mcp.registry', () => {
+  const REGISTRY = {
+    name: 'io.github.acme/weather',
+    version: '1.0.0',
+    description: 'Weather forecasts, paid per call',
+  };
+  // One code point, two UTF-16 units
+  const ASTRAL = '\u{1D538}';
+
+  function withRegistry(registry: unknown): Record<string, unknown> {
+    const raw = validRawConfig();
+    (raw['protocols'] as { mcp: Record<string, unknown> }).mcp['registry'] = registry;
+    return raw;
+  }
+
+  it('leaves protocols.mcp as before when the block is absent', () => {
+    expect(parseConfig(validRawConfig(), {}).protocols.mcp).toStrictEqual({
+      enabled: true,
+      mountPath: '/mcp',
+    });
+  });
+
+  it('keeps the block as written', () => {
+    expect(parseConfig(withRegistry(REGISTRY), {}).protocols.mcp.registry).toEqual(REGISTRY);
+  });
+
+  // The first rows are upstream's own cases in validators_test.go
+  it.each([
+    ['a dotted namespace', 'name', 'com.microsoft.azure.service/webapp-server'],
+    ['".", "_" and "-" in the name', 'name', 'io.github.acme/my_server.v-2'],
+    ['200 characters', 'name', `ab/${'c'.repeat(197)}`],
+    ['a semver version', 'version', '1.2.3'],
+    ['a prerelease', 'version', '1.2.3-alpha.1'],
+    ['a date', 'version', '2021.03.15'],
+    ['a word', 'version', 'snapshot'],
+    ['a hyphen that joins no versions', 'version', 'snapshot - 2025.09'],
+    ['a hyphen between no-break spaces, not a range in RE2', 'version', '1.0 - 2.0'],
+    ['255 characters', 'version', `1.0.0-${'a'.repeat(249)}`],
+    ['100 characters', 'description', 'd'.repeat(100)],
+    ['100 code points outside the BMP', 'description', ASTRAL.repeat(100)],
+  ])('accepts %s as %s', (_label, key, value) => {
+    const registry = parseConfig(withRegistry({ ...REGISTRY, [key]: value }), {}).protocols.mcp
+      .registry;
+    expect(registry).toEqual({ ...REGISTRY, [key]: value });
+  });
+
+  it.each([
+    ['no slash', 'name', 'io.github.acme'],
+    ['two slashes', 'name', 'com.example/server/path'],
+    ['a double slash', 'name', 'com.example//server'],
+    ['an empty namespace', 'name', '/server-name'],
+    ['an empty name', 'name', 'com.example/'],
+    ['"_" in the namespace', 'name', 'io_github.acme/weather'],
+    ['a one-character namespace', 'name', 'a/weather'],
+    ['a one-character name', 'name', 'io.github.acme/w'],
+    ['a name ending in "-"', 'name', 'io.github.acme/weather-'],
+    ['201 characters', 'name', `ab/${'c'.repeat(198)}`],
+    ['a number', 'name', 42],
+    ['an empty version', 'version', ''],
+    ['"latest"', 'version', 'latest'],
+    ['a caret range', 'version', '^1.2.3'],
+    ['a comparator and a space', 'version', '>= 1.2.3'],
+    ['an x-range', 'version', '1.x'],
+    ['a wildcard', 'version', '1.*'],
+    ['a hyphen range', 'version', '1.2.3 - 2.0.0'],
+    ['an OR range', 'version', '1.2 || 1.3'],
+    ['a prerelease holding "x"', 'version', '1.0.0-next.1'],
+    ['a range ending in U+0085, which Go trims', 'version', '1.x\u0085'],
+    ['256 characters', 'version', `1.0.0-${'a'.repeat(250)}`],
+    ['an empty description', 'description', ''],
+    ['101 characters', 'description', 'd'.repeat(101)],
+    ['101 code points outside the BMP', 'description', ASTRAL.repeat(101)],
+  ])('refuses %s, naming protocols.mcp.registry.%s', (_label, key, value) => {
+    expectConfigInvalid(
+      () => parseConfig(withRegistry({ ...REGISTRY, [key]: value }), {}),
+      `protocols.mcp.registry.${key}`,
+    );
+  });
+
+  it.each(['name', 'version', 'description'])('requires %s', (key) => {
+    const partial = Object.fromEntries(Object.entries(REGISTRY).filter(([k]) => k !== key));
+    expectConfigInvalid(
+      () => parseConfig(withRegistry(partial), {}),
+      `protocols.mcp.registry.${key}`,
+    );
+  });
+
+  it('refuses a key the block does not define', () => {
+    expectConfigInvalid(
+      () => parseConfig(withRegistry({ ...REGISTRY, title: 'Weather' }), {}),
+      'protocols.mcp.registry',
     );
   });
 });

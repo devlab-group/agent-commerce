@@ -12,7 +12,10 @@
  */
 import type { AdapterDescriptor } from '../../../core';
 import { CommerceError, NOOP_LOGGER, systemClock } from '../../../core';
+import { descriptorStatus, exclusionNames } from '../../../support/claims';
+import record from '../../../support/x402.json' with { type: 'json' };
 import { PACKAGE_VERSION } from '../../../version';
+import { createBazaarForwarding } from './bazaar-forwarding';
 import { DEFAULT_IDS, DEFAULT_MAX_TIMEOUT_SECONDS, X402_VERSION } from './constants';
 import {
   createNearRelayerSource,
@@ -111,14 +114,11 @@ export function createX402PaymentProvider(
       'upfront-flow',
       ...(severalOffers ? ['multiple-offers'] : []),
       ...(quotes ? ['erc-8409-quotes'] : []),
+      ...(options.resourceUrls !== undefined ? ['public-resource-url'] : []),
+      ...(options.resourceBazaar !== undefined ? ['bazaar'] : []),
     ],
-    status: 'stable',
-    unsupported: [
-      'permit2 gas sponsoring extensions',
-      'upto scheme',
-      'batch-settlement scheme',
-      'auth-capture scheme',
-    ],
+    status: descriptorStatus(record),
+    unsupported: exclusionNames(record),
   };
 
   // Loaded only with an offer of their family, so no deployment needs the
@@ -159,8 +159,9 @@ export function createX402PaymentProvider(
     ctx,
     createSvmFeePayerSource(supported),
   );
-  const verify = createVerify(ctx, createNearRelayerSource(supported, logger));
-  const settle = createSettle(ctx);
+  const bazaar = createBazaarForwarding(ctx, supported);
+  const verify = createVerify(ctx, createNearRelayerSource(supported, logger), bazaar);
+  const settle = createSettle(ctx, bazaar);
   const health = createHealthCheck(ctx);
 
   return {

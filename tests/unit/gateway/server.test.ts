@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 process.env['NODE_ENV'] = 'test';
 
 import type {
+  AdapterHealthComponent,
   BackendExecutor,
   CanonicalRequest,
   Clock,
@@ -472,6 +473,87 @@ describe('createGateway HTTP surface', () => {
     });
     expect(res.payload).not.toContain('OPTION-RPC-KEY');
     expect(res.payload).not.toContain('SECRET-DETAIL');
+  });
+
+  // A single offer's probe appears on the rail block; with `options`, each
+  // listed offer carries its own result
+  it('publishes the probe result of a single-offer x402 block and the MPP block, with the no-answer mark', async () => {
+    const base = makeGatewayConfig();
+    const x402 = base.payments.x402 as NonNullable<typeof base.payments.x402>;
+    const mpp = {
+      enabled: true,
+      network: 'eip155:84532' as const,
+      rpcUrl: 'https://sepolia.example/v2/RPC-KEY',
+      asset: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+      assetName: 'USDC',
+      assetVersion: '2',
+      recipient: '0x1111111111111111111111111111111111111111',
+      realm: 'api.example.com',
+      challengeSecret: 'CHALLENGE-SECRET-'.padEnd(32, 'x'),
+      facilitator: {
+        mode: 'remote' as const,
+        url: 'https://facilitator.example',
+        auth: { type: 'none' as const },
+      },
+    };
+    const config = makeGatewayConfig({ payments: { x402, mpp } });
+    const offerName = (network: string, asset: string, payTo: string) =>
+      `${network} ${asset.toLowerCase()} ${payTo.toLowerCase()}`;
+    const withHealth = (name: 'x402' | 'mpp', components: AdapterHealthComponent[]) => ({
+      ...createFakePaymentProvider({ name }),
+      health: async () => ({ status: 'fail' as const, checkedAt: 'x', components }),
+    });
+    const gateway = await buildGateway({
+      config,
+      paymentProviders: [
+        withHealth('x402', [
+          {
+            name: offerName(x402.network, x402.asset, x402.payTo),
+            status: 'fail',
+            undetermined: 'unreachable',
+          },
+        ]),
+        withHealth('mpp', [
+          { name: offerName(mpp.network, mpp.asset, mpp.recipient), status: 'fail' },
+        ]),
+      ],
+    });
+    const res = await gateway.server.inject({ method: 'GET', url: '/.well-known/agent-commerce' });
+    const { payments } = res.json();
+    expect(payments.x402).toMatchObject({ status: 'fail', undetermined: 'unreachable' });
+    expect(payments.x402).not.toHaveProperty('options');
+    // A wrong answer is a verdict, and carries no mark
+    expect(payments.mpp.status).toBe('fail');
+    expect(payments.mpp).not.toHaveProperty('undetermined');
+  });
+
+  it('marks each listed x402 offer, and leaves the multi-offer block and an unprobed offer bare', async () => {
+    const base = makeGatewayConfig();
+    const x402 = base.payments.x402 as NonNullable<typeof base.payments.x402>;
+    const second = { ...x402, asset: '0x2222222222222222222222222222222222222222' };
+    const config = makeGatewayConfig({ payments: { x402: { ...x402, options: [x402, second] } } });
+    const provider = {
+      ...createFakePaymentProvider(),
+      health: async () => ({
+        status: 'fail' as const,
+        checkedAt: 'x',
+        // No component for the first offer
+        components: [
+          {
+            name: `${second.network} ${second.asset} ${second.payTo.toLowerCase()}`,
+            status: 'fail' as const,
+            undetermined: 'unreachable' as const,
+          },
+        ],
+      }),
+    };
+    const gateway = await buildGateway({ config, paymentProviders: [provider] });
+    const res = await gateway.server.inject({ method: 'GET', url: '/.well-known/agent-commerce' });
+    const block = res.json().payments.x402;
+    expect(block).not.toHaveProperty('status');
+    expect(block).not.toHaveProperty('undetermined');
+    expect(block.options[0]).not.toHaveProperty('status');
+    expect(block.options[1]).toMatchObject({ status: 'fail', undetermined: 'unreachable' });
   });
 
   it('GET /api/resources lists resources without leaking backend header secrets', async () => {

@@ -1,13 +1,13 @@
 // An MPP-only config through `createConfiguredPaymentProviders`, from parsing to a running gateway
 import { Challenge } from 'mppx';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { parseConfig } from '../../src/config/schema';
 import type { BackendExecutor } from '../../src/core';
 import { createGateway, type GatewayInstance } from '../../src/gateway';
 import { createConfiguredPaymentProviders } from '../../src/gateway/payment-providers';
 import { validRawConfig } from '../unit/config/fixtures';
 import { NOOP_TEST_LOGGER } from '../unit/core/execution/helpers';
-import { createFakeStore } from '../unit/gateway/helpers';
+import { createFakeStore, releasedPort } from '../unit/gateway/helpers';
 
 process.env['NODE_ENV'] = 'test';
 
@@ -15,9 +15,14 @@ const SECRET = 'mpp-challenge-secret-'.padEnd(32, 'x');
 const RPC_KEY = 'RPC-KEY-IN-PATH';
 const FACILITATOR_TENANT = 'tenant-in-path';
 
+// Use a released loopback port to simulate an RPC connection refusal
+let rpcUrl = '';
+beforeAll(async () => {
+  rpcUrl = `${await releasedPort()}/v2/${RPC_KEY}`;
+});
+
 const MPP = {
   enabled: true,
-  rpcUrl: `https://sepolia.example/v2/${RPC_KEY}`,
   asset: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
   assetName: 'USDC',
   assetVersion: '2',
@@ -27,14 +32,16 @@ const MPP = {
   facilitator: { mode: 'remote', url: `https://facilitator.example/${FACILITATOR_TENANT}` },
 };
 
-function mppOnlyConfig(withX402 = false) {
+function mppOnlyConfig(withX402 = false, publicResourceUrl = false) {
   const raw = validRawConfig();
   const x402 = {
     ...((raw['payments'] as Record<string, Record<string, unknown>>)['x402'] ?? {}),
     payTo: '0x2222222222222222222222222222222222222222',
     facilitator: { mode: 'remote', url: 'https://x402-facilitator.example' },
+    ...(publicResourceUrl ? { publicResourceUrl } : {}),
   };
-  raw['payments'] = withX402 ? { x402, mpp: MPP } : { mpp: MPP };
+  const mpp = { ...MPP, rpcUrl };
+  raw['payments'] = withX402 ? { x402, mpp } : { mpp };
   (raw['resources'] as { market_report: { payments: string[] } }).market_report.payments = ['mpp'];
   return parseConfig(raw, {});
 }
@@ -86,7 +93,8 @@ describe('payments.mpp wiring', () => {
       method: 'GET',
       url: '/.well-known/agent-commerce',
     });
-    // No network configured, so MPP takes its default, Base Sepolia
+    // With no configured network, MPP defaults to Base Sepolia. The probe marks
+    // the refused RPC connection as unreachable.
     expect(wellKnown.json().payments.mpp).toEqual({
       enabled: true,
       network: 'eip155:84532',
@@ -98,9 +106,42 @@ describe('payments.mpp wiring', () => {
       facilitator: { mode: 'remote' },
       mode: 'testnet',
       paymentFlow: 'upfront',
+      status: 'fail',
+      undetermined: 'unreachable',
     });
     for (const secret of [SECRET, RPC_KEY, FACILITATOR_TENANT]) {
       expect(wellKnown.body).not.toContain(secret);
     }
+  });
+
+  it("keeps MPP's challenge when x402 names public resource URLs", async () => {
+    const challenge = async (publicResourceUrl: boolean) => {
+      const config = mppOnlyConfig(true, publicResourceUrl);
+      const node = await createGateway({
+        config,
+        store: createFakeStore(),
+        paymentProviders: await createConfiguredPaymentProviders(config.payments, NOOP_TEST_LOGGER),
+        protocolAdapters: [],
+        backend,
+      });
+      try {
+        const res = await node.server.inject({
+          method: 'POST',
+          url: '/api/resources/market_report/invoke',
+          headers: { 'content-type': 'application/json' },
+          payload: {},
+        });
+        expect(res.statusCode).toBe(402);
+        const { realm, method, intent, request } = Challenge.deserialize(
+          String(res.headers['www-authenticate']),
+        );
+        return { realm, method, intent, request };
+      } finally {
+        await node.close();
+      }
+    };
+    expect(await challenge(true)).toEqual(await challenge(false));
+    // The MPP-paid resource gets no x402 URL
+    expect(mppOnlyConfig(true, true).payments.x402?.resourceUrls).toEqual({});
   });
 });

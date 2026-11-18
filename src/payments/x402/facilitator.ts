@@ -185,19 +185,18 @@ export function createRemoteFacilitatorBinding(
 
 // The SDK bounds each attempt but not its retry waits. `Promise.race` keeps
 // a handler on the abandoned call, so its later rejection is not unhandled.
+// The `TimeoutError` cause lets health() classify the deadline as unreachable.
 function withDeadline<T>(call: Promise<T>, ms: number): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
   const deadline = new Promise<never>((_, reject) => {
-    timer = setTimeout(
-      () =>
-        reject(
-          new CommerceError(
-            'PAYMENT_PROVIDER_UNAVAILABLE',
-            `x402 provider: facilitator /supported did not answer within ${ms / 1000} s`,
-          ),
-        ),
-      ms,
-    );
+    timer = setTimeout(() => {
+      const message = `x402 provider: facilitator /supported did not answer within ${ms / 1000} s`;
+      reject(
+        new CommerceError('PAYMENT_PROVIDER_UNAVAILABLE', message, {
+          cause: new DOMException(message, 'TimeoutError'),
+        }),
+      );
+    }, ms);
     timer.unref();
   });
   return Promise.race([call, deadline]).finally(() => clearTimeout(timer));

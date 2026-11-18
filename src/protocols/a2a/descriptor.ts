@@ -1,13 +1,13 @@
 /**
- * Adapter self-description.
- *
- * `supportedSpec` is the A2A specification revision (`1.0.1`), never the
- * negotiation version (`1.0`) and never this package's version. Status is
- * `experimental` while the adapter lacks the features in the unsupported list
- * below; an entry leaves that list only when its feature is implemented.
+ * `supportedSpec` pins the A2A specification revision (`1.0.1`). Negotiation
+ * uses `1.0`; the package version is independent. Status and unsupported
+ * features come from `src/support/a2a.json`. Remove an unsupported entry only
+ * after implementing its feature.
  */
 import type { AdapterDescriptor } from '../../core';
-import { A2A_SPEC_VERSION, A2A_UNSUPPORTED_METHODS } from './constants';
+import record from '../../support/a2a.json' with { type: 'json' };
+import { descriptorStatus, exclusionNames } from '../../support/claims';
+import { A2A_SPEC_VERSION } from './constants';
 
 // What this adapter implements
 const A2A_CAPABILITIES: readonly string[] = [
@@ -19,28 +19,12 @@ const A2A_CAPABILITIES: readonly string[] = [
 ];
 
 /**
- * Major A2A features this adapter does not implement, served on
- * `/.well-known/agent-commerce` and printed by `doctor`, so no client assumes
- * full protocol support
+ * Unsupported A2A features, published at `/.well-known/agent-commerce` and
+ * printed by `doctor` to show the limits of protocol support.
+ * The support record also lists the `A2A_UNSUPPORTED_METHODS` refused by the
+ * transport.
  */
-export const A2A_UNSUPPORTED: readonly string[] = [
-  // Methods, as the protocol names them; the transport refuses the same list
-  ...A2A_UNSUPPORTED_METHODS,
-  // Transports other than the one binding served
-  'HTTP+JSON/REST binding',
-  'gRPC binding',
-  // Behaviors
-  'SSE',
-  'long-running task persistence',
-  'task resumption other than an x402 extension payment',
-  'push notifications',
-  'multi-turn conversational continuation',
-  'authenticated extended agent cards',
-  'A2A authentication schemes',
-  'artifact types beyond Agent Commerce outcome data',
-  // Instances with separate receipt stores cannot resume each other's tasks
-  'x402 extension payments across gateway instances',
-];
+export const A2A_UNSUPPORTED: readonly string[] = exclusionNames(record);
 
 export function buildDescriptor(implementationVersion: string): AdapterDescriptor {
   return {
@@ -49,7 +33,7 @@ export function buildDescriptor(implementationVersion: string): AdapterDescripto
     implementationVersion,
     supportedSpec: A2A_SPEC_VERSION,
     capabilities: A2A_CAPABILITIES,
-    status: 'experimental',
+    status: descriptorStatus(record),
     unsupported: A2A_UNSUPPORTED,
   };
 }

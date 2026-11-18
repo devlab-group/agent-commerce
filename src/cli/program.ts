@@ -4,6 +4,7 @@ import { PROTOCOL_NAMES } from '../core';
 import { runBackupCommand } from './commands/backup';
 import { runDemo } from './commands/demo';
 import { printDoctorReport, runDoctor } from './commands/doctor';
+import { runExportMcpRegistry } from './commands/export-mcp-registry';
 import { runImportOpenApi } from './commands/import-openapi';
 import { runInit } from './commands/init';
 import { runReconcileCommand } from './commands/reconcile';
@@ -28,7 +29,7 @@ export function buildProgram(io: Io = processIo): Command {
   program
     .name('agent-commerce')
     .description(
-      'CLI for the Agent Commerce Gateway: init, import, validate, start, doctor, reconcile, backup, demo.',
+      'CLI for the Agent Commerce Gateway: init, import, export, validate, start, doctor, reconcile, backup, demo.',
     )
     // `--version` prints the CLI version only; the `version` subcommand also
     // lists the pinned protocol/SDK versions. Both read `readVersionReport()`,
@@ -106,14 +107,22 @@ export function buildProgram(io: Io = processIo): Command {
       'gateway base URL (default: derived from config, else http://localhost:8080)',
     )
     .option('--json', 'emit machine-readable JSON instead of a formatted report', false)
-    .action(async (opts: { config?: string; gateway?: string; json?: boolean }) => {
-      const report = await runDoctor({
-        ...(opts.config !== undefined ? { configPath: opts.config } : {}),
-        ...(opts.gateway !== undefined ? { gatewayUrl: opts.gateway } : {}),
-      });
-      printDoctorReport(report, io, opts.json === true);
-      process.exitCode = report.exitCode;
-    });
+    .option(
+      '--registry',
+      'also compare the MCP Registry listing named in protocols.mcp.registry with config (calls registry.modelcontextprotocol.io)',
+      false,
+    )
+    .action(
+      async (opts: { config?: string; gateway?: string; json?: boolean; registry: boolean }) => {
+        const report = await runDoctor({
+          ...(opts.config !== undefined ? { configPath: opts.config } : {}),
+          ...(opts.gateway !== undefined ? { gatewayUrl: opts.gateway } : {}),
+          registry: opts.registry,
+        });
+        printDoctorReport(report, io, opts.json === true);
+        process.exitCode = report.exitCode;
+      },
+    );
 
   program
     .command('reconcile')
@@ -286,6 +295,31 @@ export function buildProgram(io: Io = processIo): Command {
         );
       },
     );
+
+  // Group catalog exports under `export`, mirroring `import`
+  const exportCommand = program
+    .command('export')
+    .description('Generate catalog listings for the gateway from config.');
+
+  exportCommand
+    .command('mcp-registry')
+    .description(
+      'Write server.json for the MCP Registry from protocols.mcp.registry (experimental).',
+    )
+    .option('--config <path>', `path to ${DEFAULT_CONFIG_FILENAME}`)
+    .option('--env-file <path>', ENV_FILE_HELP)
+    .option('--output <path>', 'output path', 'server.json')
+    .option('--force', 'overwrite an existing output file', false)
+    .action(async (opts: { config?: string; output: string; force: boolean }) => {
+      process.exitCode = await runExportMcpRegistry(
+        {
+          ...(opts.config !== undefined ? { configPath: opts.config } : {}),
+          output: opts.output,
+          force: opts.force,
+        },
+        io,
+      );
+    });
 
   program
     .command('demo')

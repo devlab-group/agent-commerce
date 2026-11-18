@@ -1,0 +1,88 @@
+{
+  "name": "ap2",
+  "kind": "authorization",
+  "title": "AP2",
+  "status": "experimental",
+  "role": "Authorization method, not a payment rail: a paid resource can require a verified mandate in addition to its x402 or MPP payment, never instead of it.",
+  "subset": "closed Checkout Mandate verification before settlement",
+  "spec": {
+    "revisions": ["v0.2.0"],
+    "display": "v0.2.0, tag 2026-04-28, commit `b4587ac`; Direct mode",
+    "source": {
+      "repo": "google-agentic-commerce/AP2",
+      "commit": "b4587ac1d055888a73b4b21750973cffba961793"
+    },
+    "stable": false,
+    "statement": "Standardization of the specification will continue within the Agentic Authentication Technical and Payments Technical Working Groups in FIDO",
+    "checked": "2026-11-17"
+  },
+  "packages": [
+    { "name": "jose", "use": "runtime" },
+    { "name": "@sd-jwt/core", "use": "runtime" },
+    { "name": "canonicalize", "use": "runtime" }
+  ],
+  "artifacts": [
+    {
+      "path": "tests/fixtures/ap2/v0.2.0",
+      "revision": "b4587ac1d055888a73b4b21750973cffba961793"
+    }
+  ],
+  "features": [
+    { "name": "direct-mode", "status": "experimental" },
+    { "name": "trusted-agent-provider", "status": "experimental" },
+    { "name": "mandate.checkout.1", "status": "experimental" },
+    { "name": "sd-jwt-presentation", "status": "experimental" },
+    { "name": "ES256", "status": "experimental" },
+    { "name": "sha-256", "status": "experimental" },
+    { "name": "static-inline-trust", "status": "experimental" },
+    { "name": "merchant-checkout-jwt-binding", "status": "experimental" },
+    { "name": "agent-commerce/ap2/checkout/v1", "status": "experimental" },
+    { "name": "purchase-binding", "status": "experimental" },
+    { "name": "replay-defence", "status": "experimental" }
+  ],
+  "exclusions": [
+    { "name": "autonomous mode" },
+    {
+      "name": "open checkout mandates (mandate.checkout.open.1)",
+      "note": "Rejected because the provider does not evaluate spending constraints."
+    },
+    { "name": "payment mandates (mandate.payment.1)" },
+    { "name": "spending constraint evaluation" },
+    { "name": "cnf-bound agent keys" },
+    { "name": "user credential delegation (OpenID4VP)" },
+    { "name": "delegation chains and key-binding JWTs" },
+    {
+      "name": "JWKS and any key discovery by URL (jku, x5u)",
+      "note": "Operators supply all keys in config."
+    },
+    { "name": "issuer metadata fetching" },
+    { "name": "remote revocation" },
+    { "name": "key rotation without a config change" },
+    { "name": "signature algorithms other than ES256" },
+    { "name": "digest algorithms other than sha-256" },
+    { "name": "mandate issuance" },
+    { "name": "checkout receipts" },
+    {
+      "name": "AP2 transport adapter or /.well-known/ap2",
+      "note": "HTTP, MCP and A2A carry the mandate in the gateway's own carriers; AP2 v0.2.0 defines none."
+    },
+    { "name": "AP2 as a payment rail" },
+    { "name": "AP2 over the ACP checkout adapter" }
+  ],
+  "deviations": [],
+  "conformance": {
+    "suite": "Tests using mandates minted by the AP2 v0.2.0 reference SDK, plus end-to-end refusal cases.",
+    "tests": [
+      "tests/unit/authorization-ap2/sdk-vectors.test.ts",
+      "tests/integration/ap2-x402-conformance.test.ts"
+    ],
+    "skipped": []
+  },
+  "gaps": [
+    {
+      "requirement": "Return a Checkout Receipt once the merchant has accepted or rejected a Checkout Mandate",
+      "state": "open"
+    }
+  ],
+  "docs": ["docs/protocols/ap2.md"]
+}

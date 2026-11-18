@@ -30,7 +30,14 @@ export interface LoopbackFacilitator {
   readonly url: string;
   /** Requests received as `METHOD URL`, including any query string */
   readonly requests: readonly string[];
+  /** Parsed POST bodies received at `/verify` and `/settle` */
+  readonly bodies: readonly LoopbackBody[];
   close(): Promise<void>;
+}
+
+export interface LoopbackBody {
+  readonly operation: 'verify' | 'settle';
+  readonly body: Record<string, unknown>;
 }
 
 async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
@@ -62,6 +69,8 @@ export async function startLoopbackFacilitator(options: {
   readonly near?: LoopbackNear;
   /** Serves https with this certificate, since a mainnet gateway refuses a plain-HTTP facilitator */
   readonly tls?: { readonly key: string; readonly cert: string };
+  /** Extension identifiers advertised by `/supported`; empty by default */
+  readonly extensions?: readonly string[];
 }): Promise<LoopbackFacilitator> {
   const chains = options.evm?.chains ?? [];
   const bindings = new Map<string, FacilitatorBinding>(
@@ -99,6 +108,7 @@ export async function startLoopbackFacilitator(options: {
   }
 
   const requests: string[] = [];
+  const bodies: LoopbackBody[] = [];
   const handle = (req: IncomingMessage, res: ServerResponse) => {
     requests.push(`${req.method} ${req.url}`);
     const reply = (status: number, body: unknown) => {
@@ -114,7 +124,7 @@ export async function startLoopbackFacilitator(options: {
           ...chains.map(({ network }) => ({ x402Version: 2, scheme: 'exact', network })),
           ...sdk.flatMap((supported) => supported.kinds.filter((kind) => kind.x402Version === 2)),
         ],
-        extensions: [],
+        extensions: options.extensions ?? [],
         signers: Object.assign({}, ...sdk.map((supported) => supported.signers)),
       });
       return;
@@ -127,6 +137,7 @@ export async function startLoopbackFacilitator(options: {
     }
     readJson(req)
       .then(async (body) => {
+        bodies.push({ operation, body });
         const requirements = body['paymentRequirements'] as { network: string };
         const payload = body['paymentPayload'] as never;
         const sdkFacilitator = sdkFacilitators.get(requirements.network);
@@ -160,6 +171,7 @@ export async function startLoopbackFacilitator(options: {
   return {
     url: `${options.tls ? 'https' : 'http'}://127.0.0.1:${(server.address() as AddressInfo).port}`,
     requests,
+    bodies,
     close: () => new Promise<void>((resolve) => server.close(() => resolve())),
   };
 }

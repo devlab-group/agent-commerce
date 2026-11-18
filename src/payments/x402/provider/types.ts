@@ -7,6 +7,7 @@ import type { X402FacilitatorConfig } from '../guardrails';
 import type { CustomNetworks, DeploymentMode, X402Network } from '../networks';
 import type { X402AssetTransferMethod } from '../options';
 import type { X402PaymentFlow } from '../payment-flow';
+import type { BazaarExtension, BazaarSurface } from './bazaar';
 import type { QuoteIssuer } from './quote';
 
 /** A single offer and the settings every offer shares */
@@ -25,6 +26,24 @@ export interface X402ProviderOptions extends X402OfferOptions {
    * keyed by resource id. Defaults to `application/json`.
    */
   readonly resourceMimeTypes?: Readonly<Record<string, string>>;
+  /**
+   * Experimental. Maps resource ids and HTTP/MCP surfaces to the challenge's
+   * `extensions.bazaar` value. Omitted when the encoded HTTP challenge's
+   * `PAYMENT-REQUIRED` value plus its proof reserve exceeds 8 KiB.
+   * Verify and settle send it and the challenge's `resource` to a remote
+   * facilitator that lists `bazaar` in `/supported`.
+   */
+  readonly resourceBazaar?: Readonly<
+    Record<string, Readonly<Partial<Record<BazaarSurface, BazaarExtension>>>>
+  >;
+  /**
+   * Experimental. Maps resource ids and request surfaces to the public
+   * `resource.url` used in their challenges. Requests without a surface,
+   * ACP requests and missing entries use `resource://agent-commerce/...`.
+   */
+  readonly resourceUrls?: Readonly<
+    Record<string, Readonly<Partial<Record<'http' | 'mcp' | 'a2a', string>>>>
+  >;
   /**
    * Which facilitator verifies and broadcasts. `local` runs one in this process
    * against a dev chain, and its `signerPrivateKey` pays gas there, usually

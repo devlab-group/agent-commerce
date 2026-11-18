@@ -1,0 +1,43 @@
+{
+  "x402Version": 2,
+  "paymentPayload": {
+    "x402Version": 2,
+    "accepted": {
+      "scheme": "exact",
+      "network": "eip155:84532",
+      "amount": "10000",
+      "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+      "payTo": "0x1111111111111111111111111111111111111111",
+      "maxTimeoutSeconds": 120,
+      "extra": {
+        "name": "USDC",
+        "version": "2",
+        "assetTransferMethod": "eip3009"
+      }
+    },
+    "payload": {
+      "signature": "0x9e9124b0cb5f5b7037329a7cad609711ab9658f109b68d5854fb3486884ee5ad6eb4e4551632800337f21ef4d29752fe5016eda7d3376438a1c27b4da5a261091c",
+      "authorization": {
+        "from": "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC",
+        "to": "0x1111111111111111111111111111111111111111",
+        "value": "10000",
+        "validAfter": "0",
+        "validBefore": "4102444800",
+        "nonce": "0x4242424242424242424242424242424242424242424242424242424242424242"
+      }
+    }
+  },
+  "paymentRequirements": {
+    "scheme": "exact",
+    "network": "eip155:84532",
+    "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+    "amount": "10000",
+    "payTo": "0x1111111111111111111111111111111111111111",
+    "maxTimeoutSeconds": 120,
+    "extra": {
+      "name": "USDC",
+      "version": "2",
+      "assetTransferMethod": "eip3009"
+    }
+  }
+}

@@ -1,10 +1,8 @@
-/**
- * Adapter self-description.
- *
- * Imports nothing but core types and the pins, so `doctor` can report AP2
- * without pulling `jose` or `@sd-jwt/core` into the CLI bundle.
- */
+// AP2 pins and support metadata for diagnostics, without loading the optional
+// `jose` or `@sd-jwt/core` peers
 import type { AdapterDescriptor } from '../../core';
+import record from '../../support/ap2.json' with { type: 'json' };
+import { descriptorStatus, exclusionNames } from '../../support/claims';
 import {
   AP2_CHECKOUT_MANDATE_VCT,
   AP2_CHECKOUT_PROFILE,
@@ -29,32 +27,10 @@ export const AP2_CAPABILITIES: readonly string[] = [
 ];
 
 /**
- * Major AP2 features this provider does not support, published in its
- * descriptor and printed by `doctor`, so no client assumes full protocol
- * support
+ * Unsupported AP2 features from the support record, published in the descriptor
+ * and printed by `doctor` to show the limits of protocol support
  */
-export const AP2_UNSUPPORTED: readonly string[] = [
-  // Mandate kinds. Open mandates are refused: see AP2_CHECKOUT_MANDATE_VCT
-  'autonomous mode',
-  'open checkout mandates (mandate.checkout.open.1)',
-  'payment mandates (mandate.payment.1)',
-  'spending constraint evaluation',
-  'cnf-bound agent keys',
-  // Delegation models other than a trusted agent provider
-  'user credential delegation (OpenID4VP)',
-  'delegation chains and key-binding JWTs',
-  // Key handling. Every key is written into config by an operator
-  'JWKS and any key discovery by URL (jku, x5u)',
-  'issuer metadata fetching',
-  'key rotation without a config change',
-  // Algorithms
-  'signature algorithms other than ES256',
-  'digest algorithms other than sha-256',
-  // Roles this gateway does not play
-  'mandate issuance',
-  'checkout receipts',
-  'AP2 over the ACP checkout adapter',
-];
+export const AP2_UNSUPPORTED: readonly string[] = exclusionNames(record);
 
 export function buildAp2Descriptor(implementationVersion: string): AdapterDescriptor {
   return {
@@ -63,7 +39,7 @@ export function buildAp2Descriptor(implementationVersion: string): AdapterDescri
     implementationVersion,
     supportedSpec: `ap2/v${AP2_SPEC_VERSION} mode=direct`,
     capabilities: AP2_CAPABILITIES,
-    status: 'experimental',
+    status: descriptorStatus(record),
     unsupported: AP2_UNSUPPORTED,
   };
 }

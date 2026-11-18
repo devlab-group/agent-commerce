@@ -11,6 +11,7 @@ import type {
   DecimalAmount,
   IsoTimestamp,
   PaymentMethodName,
+  ProtocolName,
 } from './common';
 import type { PaymentAttempt } from './receipt';
 import type { CommerceResource } from './resource';
@@ -122,6 +123,11 @@ export interface PaymentContext {
    * challenge to the input but must not send it to a third party.
    */
   readonly input?: unknown;
+  /**
+   * The request's protocol, set by the pipeline on each createRequirement call.
+   * Experimental: may change in a minor release.
+   */
+  readonly protocol?: ProtocolName;
   readonly metadata?: Readonly<Record<string, unknown>>;
 }
 

@@ -1,6 +1,7 @@
 // A resource's input schema: the default closed object and the keywords the validator supports
 import { CommerceError } from '../../core';
 import { isObjectSchemaNode } from '../../core/execution';
+import { ENFORCED_SCHEMA_KEYWORDS } from '../../core/execution/validation';
 import { isRecord } from '../../core/is-record';
 
 /**
@@ -61,31 +62,6 @@ export const EMPTY_CLOSED_OBJECT_SCHEMA: Record<string, unknown> = {
   additionalProperties: false,
 };
 
-// Keywords core's validator ignores (see `execution/validation.ts` for the
-// enforced subset). Config warns at load, since an operator who writes
-// `pattern` cannot otherwise tell that it is not enforced.
-const UNSUPPORTED_SCHEMA_KEYWORDS = [
-  'pattern',
-  'minLength',
-  'maxLength',
-  'format',
-  'minimum',
-  'maximum',
-  'exclusiveMinimum',
-  'exclusiveMaximum',
-  'multipleOf',
-  'oneOf',
-  'anyOf',
-  'allOf',
-  'not',
-  '$ref',
-  'const',
-  'patternProperties',
-  'minItems',
-  'maxItems',
-  'uniqueItems',
-];
-
 // `type` set to something that rules out "object". No `type` at all does not
 // exclude it: the validator treats `properties`/`required` alone as an object
 // schema.
@@ -108,8 +84,10 @@ export function validateResourceSchemaKeywords(
   path: string,
   schema: Record<string, unknown>,
 ): void {
-  for (const keyword of UNSUPPORTED_SCHEMA_KEYWORDS) {
-    if (Object.hasOwn(schema, keyword)) {
+  // Warn about keywords outside core's supported list to tell operators that
+  // constraints such as `pattern` are not enforced
+  for (const keyword of Object.keys(schema)) {
+    if (!ENFORCED_SCHEMA_KEYWORDS.has(keyword)) {
       console.warn(
         `[agent-commerce] resource "${id}" ${path} uses JSON Schema keyword "${keyword}", which this gateway does not enforce (see src/core/execution/validation.ts for the supported subset). Remove it or treat it as documentation only.`,
       );

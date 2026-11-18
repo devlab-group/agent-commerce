@@ -1,0 +1,138 @@
+{
+  "name": "x402",
+  "kind": "payment",
+  "title": "x402",
+  "status": "supported",
+  "role": "Payment rail, carried by HTTP, MCP and A2A.",
+  "subset": "`exact` on EVM through EIP-3009 or Permit2, on Solana, and on NEAR (partial): challenge, verification, settlement and replay binding",
+  "spec": {
+    "revisions": ["v2"],
+    "display": "x402 v2",
+    "source": {
+      "repo": "x402-foundation/x402",
+      "commit": "51a0664c2b7826e3cb02595481eb6848a1b11815"
+    },
+    "stable": null,
+    "statement": "Protocol Version: 2",
+    "checked": "2026-11-17"
+  },
+  "packages": [
+    { "name": "@x402/core", "use": "runtime" },
+    { "name": "@x402/evm", "use": "runtime" },
+    { "name": "@x402/svm", "use": "runtime" },
+    { "name": "@x402/near", "use": "runtime" },
+    { "name": "@x402/mcp", "use": "test" }
+  ],
+  "artifacts": [],
+  "features": [
+    { "name": "exact-evm", "status": "supported" },
+    { "name": "exact-svm", "status": "supported" },
+    { "name": "exact-near", "status": "partial" },
+    { "name": "local-facilitator", "status": "supported" },
+    { "name": "remote-facilitator", "status": "supported" },
+    { "name": "eip-3009", "status": "supported" },
+    { "name": "permit2", "status": "supported" },
+    { "name": "caip-2", "status": "supported" },
+    { "name": "mode=local", "status": "supported" },
+    { "name": "mode=testnet", "status": "supported" },
+    { "name": "mode=mainnet", "status": "supported" },
+    { "name": "authorization-flow", "status": "supported" },
+    { "name": "upfront-flow", "status": "supported" },
+    { "name": "multiple-offers", "status": "partial" },
+    {
+      "name": "erc-8409-quotes",
+      "status": "experimental",
+      "spec": {
+        "revisions": ["0ee33230"],
+        "display": "draft `SergeevDmitry/ERCs@0ee33230`",
+        "source": {
+          "repo": "SergeevDmitry/ERCs",
+          "commit": "0ee33230ca9f9f41a714382552a47cd860465ca7"
+        },
+        "stable": false,
+        "statement": "status: Draft",
+        "checked": "2026-11-17"
+      },
+      "title": "ERC-8409",
+      "role": "x402 feature: EIP-712 signed quotes on the EVM offers of a challenge.",
+      "subset": "signed quotes on x402 EVM offers; issuer published in `/.well-known/agent-commerce`"
+    },
+    { "name": "public-resource-url", "status": "experimental" },
+    { "name": "bazaar", "status": "experimental" }
+  ],
+  "exclusions": [
+    { "name": "permit2 gas sponsoring extensions" },
+    { "name": "upto scheme" },
+    { "name": "batch-settlement scheme" },
+    { "name": "auth-capture scheme" },
+    {
+      "name": "x402 v1",
+      "note": "A payload declaring an `x402Version` other than 2 is refused as `invalid_x402_version` on every carrier."
+    },
+    { "name": "payer-bound quotes", "feature": "erc-8409-quotes" },
+    {
+      "name": "contract quote issuers (ERC-1271, ERC-6492, EIP-7702 delegates)",
+      "feature": "erc-8409-quotes"
+    },
+    {
+      "name": "quote consumption, single-use enforcement or revocation",
+      "feature": "erc-8409-quotes"
+    },
+    { "name": "quote client nonces", "feature": "erc-8409-quotes" },
+    { "name": "quotes for MPP, Solana or NEAR", "feature": "erc-8409-quotes" },
+    {
+      "name": "signed receipts and the x402 offer-receipt extension",
+      "feature": "erc-8409-quotes"
+    },
+    { "name": "remote quote signers and KMS", "feature": "erc-8409-quotes" },
+    { "name": "per-resource quote toggles", "feature": "erc-8409-quotes" }
+  ],
+  "deviations": [],
+  "combinations": [
+    {
+      "surface": "http",
+      "method": "x402",
+      "level": "e2e",
+      "evidence": "tests/e2e/payment/x402-settlement.e2e.test.ts"
+    },
+    {
+      "surface": "a2a",
+      "method": "x402",
+      "level": "e2e",
+      "evidence": "tests/e2e/payment/x402-settlement.e2e.test.ts"
+    },
+    {
+      "surface": "http",
+      "method": "x402",
+      "authorization": "ap2",
+      "level": "e2e",
+      "evidence": "tests/e2e/authorization/ap2-x402.e2e.test.ts"
+    },
+    {
+      "surface": "mcp",
+      "method": "x402",
+      "level": "e2e",
+      "evidence": "tests/e2e/payment/x402-bazaar.e2e.test.ts"
+    },
+    {
+      "surface": "mcp",
+      "method": "x402",
+      "level": "integration",
+      "evidence": "tests/integration/mcp-payment-bindings.test.ts"
+    },
+    {
+      "surface": "http",
+      "method": "x402",
+      "level": "testnet",
+      "evidence": "tests/testnet/x402.smoke.test.ts"
+    },
+    {
+      "surface": "http",
+      "method": "x402",
+      "level": "mainnet",
+      "evidence": "tests/mainnet/x402.smoke.test.ts"
+    }
+  ],
+  "gaps": [],
+  "docs": ["docs/protocols/x402.md"]
+}

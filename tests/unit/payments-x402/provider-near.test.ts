@@ -600,3 +600,28 @@ describe('payment-identifier on a NEAR offer', () => {
     expect(verifyMock).not.toHaveBeenCalled();
   });
 });
+
+describe('Bazaar metadata on an HTTP challenge with a NEAR offer', () => {
+  // Subtract the 1280-byte NEAR proof reserve from 8192, then undo base64 sizing
+  const LIMIT = 6912;
+  const LIMIT_JSON_BYTES = (LIMIT / 4) * 3;
+
+  async function challenge(pad: string): Promise<{ extensions?: unknown }> {
+    const requirement = await makeProvider({
+      resourceBazaar: { [RESOURCE.id]: { http: { info: { pad }, schema: {} } } },
+    }).createRequirement({ ...paymentContext(), protocol: 'http' });
+    return requirement.challenge.envelope as { extensions?: unknown };
+  }
+
+  it('keeps it only while 1280 bytes of an 8192-byte header stay free', async () => {
+    const unpadded = Buffer.byteLength(JSON.stringify(await challenge('')));
+    const pad = 'p'.repeat(LIMIT_JSON_BYTES - unpadded);
+
+    const atLimit = await challenge(pad);
+    const over = await challenge(`${pad}p`);
+
+    expect(Buffer.from(JSON.stringify(atLimit)).toString('base64')).toHaveLength(LIMIT);
+    expect(atLimit.extensions).toEqual({ bazaar: { info: { pad }, schema: {} } });
+    expect(over).not.toHaveProperty('extensions');
+  });
+});

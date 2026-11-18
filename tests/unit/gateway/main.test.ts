@@ -8,9 +8,13 @@ import * as nodeModule from 'node:module';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import Database from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 import { A2A_X402_EXTENSION_URI } from '../../../src/protocols/a2a/x402-extension';
+import { PACKAGE_VERSION } from '../../../src/version';
 
 const RPC_KEY = 'RPC-KEY-IN-PATH';
 // Nothing listens on port 1, so no provider reaches a chain
@@ -257,7 +261,41 @@ function hidePackage(dir: string, pkg: string): Record<string, string> {
   return { NODE_OPTIONS: `--import ${hook}`, OAC_HIDDEN_PACKAGE: pkg };
 }
 
+// Read the gateway's MCP server identity from `initialize`
+async function mcpServerInfo(gatewayUrl: string): Promise<unknown> {
+  const client = new Client({ name: 'main-test', version: '0.0.0-test' });
+  await client.connect(
+    new StreamableHTTPClientTransport(new URL(`${gatewayUrl}/mcp`)) as Transport,
+  );
+  try {
+    return client.getServerVersion();
+  } finally {
+    await client.close();
+  }
+}
+
 describe.concurrent('gateway entry points (main.ts and agent-commerce start)', () => {
+  it('reports the MCP Registry listing name and version as the MCP server info', async () => {
+    const dir = tempDir();
+    const config = baseConfig(dir);
+    (config.protocols['mcp'] as Section)['registry'] = {
+      name: 'io.github.acme/weather',
+      version: '1.4.0',
+      description: 'Weather forecasts, paid per call',
+    };
+    const gateway = startMain(dir, config);
+    try {
+      await gateway.printed('"gateway listening"');
+      expect(await mcpServerInfo(gateway.url())).toEqual({
+        name: 'io.github.acme/weather',
+        version: '1.4.0',
+      });
+    } finally {
+      gateway.stop();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30_000);
+
   it('boots x402 and MCP, prints the settlement origin without the RPC path, and exits 0 on SIGTERM', async () => {
     const dir = tempDir();
     const gateway = startMain(dir, baseConfig(dir));
@@ -268,6 +306,11 @@ describe.concurrent('gateway entry points (main.ts and agent-commerce start)', (
       const health = await fetch(`${gateway.url()}/health`);
       expect(health.status).toBe(200);
       expect(await health.json()).toEqual({ status: 'ok' });
+      // Without Registry metadata, the server uses its default name and package version
+      expect(await mcpServerInfo(gateway.url())).toEqual({
+        name: 'agent-commerce',
+        version: PACKAGE_VERSION,
+      });
 
       // A provider may put its API key in the RPC path, so only the origin is printed
       expect(gateway.output.stdout).toContain('via http://127.0.0.1:1');

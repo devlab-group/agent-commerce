@@ -104,7 +104,16 @@ export async function runGateway(options: RunGatewayOptions = {}): Promise<void>
 
   const protocolAdapters: ProtocolAdapter[] = [];
   if (mcpModule !== undefined) {
-    protocolAdapters.push(mcpModule.createMcpAdapter({ mountPath: mcp.mountPath }));
+    // The registry's `server.json` defines `version` as `Implementation.version`:
+    // a listed server reports the listing's name and version at `initialize`
+    protocolAdapters.push(
+      mcpModule.createMcpAdapter({
+        mountPath: mcp.mountPath,
+        ...(mcp.registry !== undefined
+          ? { serverName: mcp.registry.name, serverVersion: mcp.registry.version }
+          : {}),
+      }),
+    );
   }
   if (config.protocols.a2a.enabled) {
     protocolAdapters.push(

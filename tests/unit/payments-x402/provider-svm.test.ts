@@ -640,3 +640,45 @@ describe('payment-identifier on a Solana offer', () => {
     expect(verifyMock).not.toHaveBeenCalled();
   });
 });
+
+describe('Bazaar metadata on an HTTP challenge with a Solana offer', () => {
+  const EVM_OFFER = {
+    network: 'eip155:84532',
+    rpcUrl: RPC_URL,
+    asset: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+    assetName: 'USDC',
+    assetVersion: '2',
+    assetDecimals: 6,
+    payTo: '0x1111111111111111111111111111111111111111',
+  };
+  // Subtract the 2304-byte Solana proof reserve from 8192, then undo base64 sizing
+  const LIMIT = 5888;
+  const LIMIT_JSON_BYTES = (LIMIT / 4) * 3;
+
+  async function challenge(pad: string, besideEvm: boolean): Promise<PaymentRequired> {
+    const svmOffer = { network: DEVNET, rpcUrl: RPC_URL, asset: USDC, assetDecimals: 6, payTo };
+    const requirement = await makeProvider({
+      offers: besideEvm ? [EVM_OFFER, svmOffer] : [svmOffer],
+      resourceBazaar: { [RESOURCE.id]: { http: { info: { pad }, schema: {} } } },
+    }).createRequirement({ ...paymentContext(), protocol: 'http' });
+    return requirement.challenge.envelope as unknown as PaymentRequired;
+  }
+
+  it.each([
+    ['alone', false],
+    ['beside an EVM offer, whose smaller reserve does not apply', true],
+  ])(
+    'keeps it only while 2304 bytes of an 8192-byte header stay free, %s',
+    async (_label, besideEvm) => {
+      const unpadded = Buffer.byteLength(JSON.stringify(await challenge('', besideEvm)));
+      const pad = 'p'.repeat(LIMIT_JSON_BYTES - unpadded);
+
+      const atLimit = await challenge(pad, besideEvm);
+      const over = await challenge(`${pad}p`, besideEvm);
+
+      expect(Buffer.from(JSON.stringify(atLimit)).toString('base64')).toHaveLength(LIMIT);
+      expect(atLimit.extensions).toEqual({ bazaar: { info: { pad }, schema: {} } });
+      expect(over).not.toHaveProperty('extensions');
+    },
+  );
+});

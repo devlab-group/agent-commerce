@@ -5,6 +5,7 @@ import type { MppNetwork } from '../../payments/mpp/constants';
 import type { X402FacilitatorConfig } from '../../payments/x402/guardrails';
 import type { CustomNetworks } from '../../payments/x402/networks';
 import type { X402PaymentFlow } from '../../payments/x402/payment-flow';
+import type { X402ProviderOptions } from '../../payments/x402/provider/types';
 import type { AcpCheckoutOperation } from '../../protocols/acp/constants';
 
 /** Optional ACP discovery metadata. Absent fields are omitted from the document */
@@ -67,7 +68,7 @@ export interface GatewayConfig {
   readonly storage: { readonly receipts: { readonly driver: 'sqlite'; readonly path: string } };
   readonly protocols: {
     readonly http: { readonly enabled: boolean };
-    readonly mcp: { readonly enabled: boolean; readonly mountPath: string };
+    readonly mcp: McpProtocolConfig;
     readonly a2a: { readonly enabled: boolean; readonly mountPath: string };
     readonly acp: AcpProtocolConfig;
   };
@@ -93,6 +94,18 @@ export interface GatewayConfig {
       readonly resourcePaymentFlows?: Readonly<Record<string, X402PaymentFlow>>;
       /** Resources that set `mimeType`, by resource id; others declare `application/json` */
       readonly resourceMimeTypes?: Readonly<Record<string, string>>;
+      /**
+       * Experimental. With `publicResourceUrl: true`, config normalization maps
+       * each x402 resource's exposed HTTP, MCP and A2A surfaces to its invoke
+       * route or protocol mount under `merchant.publicBaseUrl`.
+       */
+      readonly resourceUrls?: NonNullable<X402ProviderOptions['resourceUrls']>;
+      /**
+       * Experimental. With `bazaar.enabled: true`, config normalization fills
+       * this map for HTTP and MCP entries in `resourceUrls` that pass the
+       * metadata checks
+       */
+      readonly resourceBazaar?: NonNullable<X402ProviderOptions['resourceBazaar']>;
       readonly facilitator: X402FacilitatorConfig;
       readonly allowMainnet?: boolean;
       readonly allowUnauthenticatedFacilitator?: boolean;
@@ -138,9 +151,24 @@ export interface GatewayConfig {
   readonly authorization?: { readonly ap2: Ap2AuthorizationConfig };
 }
 
+/** `protocols.mcp` after normalization */
+export interface McpProtocolConfig {
+  readonly enabled: boolean;
+  readonly mountPath: string;
+  /**
+   * Experimental listing fields for `agent-commerce export mcp-registry` and
+   * `doctor --registry`; the MCP adapter does not use them
+   */
+  readonly registry?: {
+    readonly name: string;
+    readonly version: string;
+    readonly description: string;
+  };
+}
+
 export interface NormalizedProtocols {
   readonly http: { readonly enabled: boolean };
-  readonly mcp: { readonly enabled: boolean; readonly mountPath: string };
+  readonly mcp: McpProtocolConfig;
   readonly a2a: { readonly enabled: boolean; readonly mountPath: string };
   readonly acp: AcpProtocolConfig;
 }

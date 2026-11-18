@@ -61,6 +61,7 @@ describe('agent-commerce --help', () => {
       'backup',
       'init',
       'import',
+      'export',
       'demo',
     ]) {
       expect(text).toMatch(new RegExp(`^  ${command}\\b`, 'm'));
@@ -169,10 +170,10 @@ payments: {}
   });
 
   // In a real process Node refuses an unreadable path first; see packaging.test.ts
-  it.each(['validate', 'doctor', 'start', 'reconcile'])(
+  it.each([['validate'], ['doctor'], ['start'], ['reconcile'], ['export', 'mcp-registry']])(
     '%s exits 1 naming an env file that cannot be read, before doing anything else',
-    async (command) => {
-      const { exitCode, io } = await run([command, '--env-file', '/does/not/exist.env']);
+    async (...command) => {
+      const { exitCode, io } = await run([...command, '--env-file', '/does/not/exist.env']);
       expect(exitCode).toBe(1);
       expect(io.err.join('\n')).toContain('cannot read --env-file "/does/not/exist.env"');
       expect(io.out).toEqual([]);
@@ -181,7 +182,7 @@ payments: {}
 });
 
 describe('agent-commerce doctor', () => {
-  it('exits 1 and emits JSON when the gateway is unreachable', async () => {
+  function configFile(): string {
     const dir = tempDir('agent-commerce-program-');
     const configPath = join(dir, 'config.yaml');
     const dbPath = join(dir, 'receipts.db').replace(/\\/g, '/');
@@ -198,15 +199,35 @@ payments: {}
 `,
       'utf8',
     );
+    return configPath;
+  }
+  const doctorArgs = (configPath: string) => [
+    'doctor',
+    '--config',
+    configPath,
+    '--gateway',
+    'http://127.0.0.1:1',
+    '--json',
+  ];
 
-    const { exitCode, io } = await run([
-      'doctor',
-      '--config',
-      configPath,
-      '--gateway',
-      'http://127.0.0.1:1',
-      '--json',
-    ]);
+  // Without a registry block, the check reports INFO without a registry request
+  it('adds the MCP Registry check with --registry', async () => {
+    const configPath = configFile();
+    const without = await run(doctorArgs(configPath));
+    const withFlag = await run([...doctorArgs(configPath), '--registry']);
+
+    const registryCheck = (io: { out: string[] }) =>
+      (JSON.parse(io.out.join('')) as DoctorReport).checks.find((c) => c.name === 'MCP Registry');
+    expect(registryCheck(without.io)).toBeUndefined();
+    expect(registryCheck(withFlag.io)).toEqual({
+      name: 'MCP Registry',
+      status: 'INFO',
+      detail: 'protocols.mcp.registry not configured',
+    });
+  });
+
+  it('exits 1 and emits JSON when the gateway is unreachable', async () => {
+    const { exitCode, io } = await run(doctorArgs(configFile()));
     expect(exitCode).toBe(1);
     const parsed = JSON.parse(io.out.join('')) as DoctorReport;
     expect(parsed.exitCode).toBe(1);
@@ -216,6 +237,76 @@ payments: {}
       status: 'FAIL',
       detail: expect.stringContaining('unreachable at http://127.0.0.1:1'),
     });
+  });
+});
+
+describe('agent-commerce export mcp-registry', () => {
+  function configFile(dir: string): string {
+    const configPath = join(dir, 'config.yaml');
+    writeFileSync(
+      configPath,
+      `
+version: 1
+merchant: { id: demo, name: Demo, publicBaseUrl: https://api.example.com }
+server: { port: 8080, host: 0.0.0.0 }
+storage: { receipts: { driver: sqlite, path: ./data/receipts.db } }
+protocols:
+  http: { enabled: true }
+  mcp:
+    enabled: true
+    mountPath: /mcp
+    registry: { name: io.github.acme/weather, version: 1.4.0, description: Weather forecasts }
+resources: {}
+payments: {}
+`,
+      'utf8',
+    );
+    return configPath;
+  }
+
+  it('writes the listing from a config file through the real program wiring', async () => {
+    const dir = tempDir('agent-commerce-program-export-');
+    const output = join(dir, 'listing', 'server.json');
+
+    const { exitCode } = await run([
+      'export',
+      'mcp-registry',
+      '--config',
+      configFile(dir),
+      '--output',
+      output,
+    ]);
+
+    expect(exitCode).toBe(0);
+    expect(JSON.parse(readFileSync(output, 'utf8'))).toMatchObject({
+      name: 'io.github.acme/weather',
+      version: '1.4.0',
+      description: 'Weather forecasts',
+      remotes: [{ type: 'streamable-http', url: 'https://api.example.com/mcp' }],
+    });
+  });
+
+  it('overwrites an existing file only with --force', async () => {
+    const dir = tempDir('agent-commerce-program-export-');
+    const output = join(dir, 'server.json');
+    writeFileSync(output, 'keep me\n', 'utf8');
+    const argv = ['export', 'mcp-registry', '--config', configFile(dir), '--output', output];
+
+    const refused = await run(argv);
+    expect(refused.exitCode).toBe(1);
+    expect(readFileSync(output, 'utf8')).toBe('keep me\n');
+
+    const forced = await run([...argv, '--force']);
+    expect(forced.exitCode).toBe(0);
+    expect(JSON.parse(readFileSync(output, 'utf8'))).toMatchObject({ version: '1.4.0' });
+  });
+
+  it('prints its usage with server.json as the default output', async () => {
+    const { exitCode, io } = await run(['export', 'mcp-registry', '--help']);
+    expect(exitCode).toBe(0);
+    const text = io.out.join('\n');
+    expect(text).toContain('Usage: agent-commerce export mcp-registry');
+    expect(text).toContain('(default: "server.json")');
   });
 });
 

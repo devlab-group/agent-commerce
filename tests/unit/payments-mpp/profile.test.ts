@@ -29,6 +29,17 @@ describe('pinned MPP profile', () => {
     expect(installed.version).toBe(MPPX_VERSION);
   });
 
+  it('pins the mppx version package.json declares, as a peer and for development', () => {
+    // The installed copy can lag package.json until the next install
+    const pkg = JSON.parse(
+      readFileSync(new URL('../../../package.json', import.meta.url), 'utf8'),
+    ) as Record<'peerDependencies' | 'devDependencies', Record<string, string>>;
+    expect([pkg.peerDependencies['mppx'], pkg.devDependencies['mppx']]).toEqual([
+      MPPX_VERSION,
+      MPPX_VERSION,
+    ]);
+  });
+
   it('records a full upstream commit, not a branch or a short sha', () => {
     expect(MPP_SPEC_COMMIT).toMatch(/^[0-9a-f]{40}$/);
   });

@@ -222,12 +222,57 @@ Discovery is public while ACP is enabled and uses
 locale and intervention metadata appears only when configured. Tokens, backend
 URLs, resource ids and database paths are excluded.
 
+## Pins
+
+<!-- support-record:begin pins -->
+
+| Pin                                                              | Value                                                                                                                                                                                  |
+| ---------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Pinned revision                                                  | stable snapshot `2026-04-17`; REST binding                                                                                                                                             |
+| Upstream source                                                  | [`agentic-commerce-protocol/agentic-commerce-protocol@6b828681`](https://github.com/agentic-commerce-protocol/agentic-commerce-protocol/tree/6b828681206f1f98a3faba978610ced66770d2ae) |
+| Declared stable upstream                                         | no                                                                                                                                                                                     |
+| Upstream wording                                                 | "currently in `beta`" (read 2026-11-17)                                                                                                                                                |
+| `src/protocols/acp/spec/2026-04-17/schema.agentic_checkout.json` | vendored from `6b828681`                                                                                                                                                               |
+| `tests/fixtures/acp/2026-04-17`                                  | vendored from `6b828681`                                                                                                                                                               |
+
+<!-- support-record:end -->
+
+## Deviations
+
+Each entry names the section of the pinned revision the gateway departs from
+and the tests that hold the behavior.
+
+<!-- support-record:begin deviations -->
+
+- **ACP RFC §6.5**: After a merchant 5xx, retrying the same `Idempotency-Key` returns 409 `idempotency_unresolved` unless `protocols.acp.idempotency.merchantIdempotent` is true. The merchant may have acted, and another execution could duplicate the order. Tests: `tests/conformance/acp/idempotency.test.ts`, `tests/conformance/acp/errors.test.ts`.
+
+<!-- support-record:end -->
+
 ## ACP exclusions
 
-The adapter excludes carts, feed and standalone orders; delegated payment and
-authentication; the ACP MCP binding; webhooks and outbound delivery; the client
-role; `Signature` and `Timestamp` verification; discounts and the general
-extension framework; seller-backed payment handlers; and other ACP versions.
+The ACP descriptor in `GET /.well-known/agent-commerce` lists these names in
+`unsupported`, and `agent-commerce doctor` prints them when ACP is enabled:
+
+<!-- support-record:begin exclusions -->
+
+- `carts service`: The discovery document advertises only the checkout service.
+- `feed service`
+- `standalone orders service`
+- `delegate_payment`
+- `delegate_authentication`
+- `ACP MCP transport binding`
+- `webhooks`: The merchant backend sends ACP order webhooks itself.
+- `outbound merchant-to-agent delivery`
+- `ACP client role`
+- `Signature header verification`: The adapter forwards the header to the merchant unverified.
+- `Timestamp replay-window verification`: The adapter forwards the header to the merchant unverified.
+- `discount extension`
+- `general ACP extension framework`
+- `multiple ACP API versions`
+- `seller-backed payment handler integration`
+
+<!-- support-record:end -->
+
 A `Signature` header does not replace bearer authentication.
 
 No ACP SDK ships. Conformance tests use the vendored official schema and examples.

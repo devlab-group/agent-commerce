@@ -237,12 +237,10 @@ export function normalizeResource(
     );
   }
 
-  // The gateway serves a resource on the first rail it lists that is enabled
-  const servingRail = paymentMethods.find(
-    (method) =>
-      (method === 'x402' && x402?.config.enabled === true) ||
-      (method === 'mpp' && mpp?.enabled === true),
-  );
+  const servingRail = servingRailOf(paymentMethods, {
+    x402: x402?.config.enabled === true,
+    mpp: mpp?.enabled === true,
+  });
   const idempotency = normalizeResourceIdempotency(id, entry, paymentMethods, servingRail);
 
   const pricing: Pricing =
@@ -283,6 +281,16 @@ export function normalizeResource(
     ...(authorization !== undefined ? { authorization } : {}),
     ...(idempotency !== undefined ? { idempotency } : {}),
   };
+}
+
+/** The resource's first enabled payment rail, which the gateway uses to serve it */
+export function servingRailOf(
+  paymentMethods: readonly string[],
+  enabled: { readonly x402: boolean; readonly mpp: boolean },
+): string | undefined {
+  return paymentMethods.find(
+    (method) => (method === 'x402' && enabled.x402) || (method === 'mpp' && enabled.mpp),
+  );
 }
 
 function normalizeResourceIdempotency(

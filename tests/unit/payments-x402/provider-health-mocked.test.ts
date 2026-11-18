@@ -4,8 +4,10 @@
  * throw, and every RPC or chain-state outcome is cheap to force this way.
  */
 
+import { FacilitatorTimeoutError } from '@x402/core/http';
+import { HttpRequestError, RpcRequestError, TimeoutError } from 'viem';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Clock } from '../../../src/core';
+import { type Clock, CommerceError } from '../../../src/core';
 
 const getChainIdMock = vi.fn();
 const getCodeMock = vi.fn();
@@ -232,6 +234,114 @@ describe('health() - mocked RPC client', () => {
     const health = await provider.health();
     expect(health.status).toBe('fail');
     expect(health.detail).toContain('boom');
+  });
+});
+
+// Exercise error classification with the libraries' own error classes.
+// tests/integration/doctor-certainty.test.ts covers refused connections,
+// JSON-RPC errors and HTTP 401 responses through real clients.
+describe('health() - a throw that got no answer marks the offer', () => {
+  const url = 'http://127.0.0.1:19322';
+  // undici's fetch error, with the Node error code on its cause
+  const fetchFailed = (code: string) =>
+    new TypeError('fetch failed', { cause: Object.assign(new Error(code), { code }) });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    readContractMock.mockResolvedValue(6);
+    getCodeMock.mockResolvedValue('0x6080604052');
+  });
+
+  // `where` says which call throws: the RPC, or the facilitator's `/supported`
+  async function componentAfter(where: 'rpc' | 'facilitator', err: unknown) {
+    if (where === 'rpc') {
+      getChainIdMock.mockRejectedValueOnce(err);
+    } else {
+      getChainIdMock.mockResolvedValueOnce(84532);
+      supportedMock.mockRejectedValueOnce(err);
+    }
+    const health = await (await makeProvider('remote')).health();
+    expect(health.status).toBe('fail');
+    return health.components?.[0];
+  }
+
+  it.each([
+    [
+      'rpc',
+      'a refused connection, as viem wraps it',
+      () => new HttpRequestError({ url, cause: fetchFailed('ECONNREFUSED') }),
+    ],
+    ['rpc', "viem's request timeout", () => new TimeoutError({ body: {}, url })],
+    [
+      'rpc',
+      'an aborted fetch on a Solana or NEAR call',
+      () => new DOMException('The operation was aborted due to timeout', 'TimeoutError'),
+    ],
+    ['facilitator', 'a refused connection', () => fetchFailed('ECONNREFUSED')],
+    [
+      'facilitator',
+      "the SDK's request timeout",
+      () => new FacilitatorTimeoutError('supported', 10_000),
+    ],
+    [
+      'facilitator',
+      'the /supported deadline',
+      () =>
+        new CommerceError('PAYMENT_PROVIDER_UNAVAILABLE', 'did not answer within 10 s', {
+          cause: new DOMException('did not answer within 10 s', 'TimeoutError'),
+        }),
+    ],
+  ] as const)('marks the %s unreachable after %s', async (where, _label, error) => {
+    expect(await componentAfter(where, error())).toMatchObject({
+      status: 'fail',
+      undetermined: 'unreachable',
+    });
+  });
+
+  it.each([
+    [
+      'rpc',
+      'a JSON-RPC error',
+      () => new RpcRequestError({ body: {}, url, error: { code: -32601, message: 'no method' } }),
+    ],
+    [
+      'rpc',
+      'a non-2xx from the RPC',
+      () => new HttpRequestError({ url, status: 502, details: 'Bad Gateway' }),
+    ],
+    [
+      'rpc',
+      'a 2xx whose body is not JSON',
+      () => new HttpRequestError({ url, cause: new SyntaxError('Unexpected token <') }),
+    ],
+    [
+      'rpc',
+      'a Solana or NEAR JSON-RPC error',
+      () =>
+        new CommerceError('PAYMENT_PROVIDER_UNAVAILABLE', 'RPC status failed', {
+          details: { rpcError: { code: -32000 } },
+        }),
+    ],
+    [
+      'rpc',
+      'a hostname that does not resolve',
+      () => new HttpRequestError({ url, cause: fetchFailed('ENOTFOUND') }),
+    ],
+    [
+      'facilitator',
+      'a certificate for another host',
+      () => fetchFailed('ERR_TLS_CERT_ALTNAME_INVALID'),
+    ],
+    ['rpc', 'an unrecognized error', () => new Error('boom')],
+    [
+      'facilitator',
+      'a 401 from /supported',
+      () => new Error('Facilitator getSupported failed (401): unauthorized'),
+    ],
+  ] as const)('leaves the %s unmarked after %s', async (where, _label, error) => {
+    const component = await componentAfter(where, error());
+    expect(component?.status).toBe('fail');
+    expect(component).not.toHaveProperty('undetermined');
   });
 });
 

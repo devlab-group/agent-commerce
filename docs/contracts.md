@@ -299,6 +299,14 @@ persistence must not fail the commerce flow.
     Omitting the override keeps the code's default.
   - These fields and methods are experimental and may change in a minor
     release. The 3.0.0 migration plan makes `getIdempotencyKey` required.
+- 2.8.0 adds two optional, experimental fields that may change in a minor
+  release. Existing 2.7 providers and adapters need no changes.
+  - `PaymentContext.protocol` identifies the request's protocol. On each
+    `createRequirement` call, the pipeline copies it from
+    `CanonicalRequest.protocol`. Providers can ignore it.
+  - `AdapterHealthComponent.undetermined` uses `'unreachable'` for a probe
+    that received no response. When set, `status` does not describe the
+    target's health. Without the field, `status` retains its 2.7 meaning.
 
 ### Protocols and gateway
 
@@ -449,6 +457,51 @@ persistence must not fail the commerce flow.
   as they become idle and resolves after requests and adapters have finished.
   In 2.5, adapters stopped first and could close a store still in use by a
   request.
+- 2.8.0: x402 health marks an offer's component with `undetermined: 'unreachable'`
+  for recognized transport failures, including refused, reset or timed-out
+  connections, temporary DNS failures and request timeouts. Unresolvable
+  hostnames, TLS or certificate errors, JSON-RPC errors, non-2xx responses and
+  reverts leave the component unmarked. MPP uses the same provider to report its
+  offer's health.
+  - `/.well-known` adds `status` and `undetermined` to a single-offer
+    `payments.x402` block and to `payments.mpp`, and `undetermined` to each
+    offer in `options` and `resourceOptions`.
+  - `doctor` reads them for `Payments (offers)` and the new
+    `Payments (MPP offers)` check.
+- 2.8.0: experimental `X402ProviderOptions.resourceUrls` maps resource ids and
+  request surfaces (`http`, `mcp` or `a2a`) to each challenge's `resource.url`.
+  - `createRequirement` reads the surface from `PaymentContext.protocol`. A
+    context without one, an ACP request, or a surface without an entry keeps
+    the `resource://` form.
+  - With `payments.x402.publicResourceUrl: true`, config normalization fills
+    `GatewayConfig.payments.x402.resourceUrls` for resources whose first
+    enabled rail is x402, with each URL in the URL parser's form. MPP's
+    internal x402 provider does not receive this map.
+  - A provider given the map lists `public-resource-url` in its descriptor's
+    `capabilities`.
+  - Without the option, challenges are unchanged.
+- 2.8.0: experimental `X402ProviderOptions.resourceBazaar` maps resource ids
+  and request surfaces (`http` or `mcp`) to each challenge's `extensions.bazaar`
+  value.
+  - With `payments.x402.bazaar.enabled: true`, config normalization fills
+    `GatewayConfig.payments.x402.resourceBazaar` with metadata that passes
+    the omission rules. MPP's internal x402 provider does not receive it.
+  - When a challenge carries Bazaar metadata, verify and settle send its
+    `resource` and `extensions.bazaar` to a remote facilitator that lists
+    `bazaar` in `/supported`, replacing those fields from the proof. Any other
+    facilitator receives neither.
+  - An HTTP challenge omits the metadata unless its encoded
+    `PAYMENT-REQUIRED` value plus the largest proof reserve among its offer
+    families fits within 8192 bytes.
+  - A provider given the map lists `bazaar` in its descriptor's `capabilities`.
+  - Without the option, challenges and facilitator bodies are unchanged.
+- 2.8.0: experimental `GatewayConfig.protocols.mcp.registry` holds the
+  `name`, `version` and `description` from `protocols.mcp.registry` and is
+  absent when that block is omitted. Config loading validates these fields
+  against the MCP Registry's name, length and version rules.
+  `agent-commerce export mcp-registry` and `doctor --registry` use the metadata.
+  `runGateway` passes `name` and `version` to the MCP adapter as `serverName`
+  and `serverVersion`; an adapter built without them keeps its defaults.
 
 ### Authorization and AP2
 
@@ -1001,7 +1054,16 @@ export interface GatewayConfig {
   };
   readonly protocols: {
     readonly http: { readonly enabled: boolean };
-    readonly mcp: { readonly enabled: boolean; readonly mountPath: string };
+    readonly mcp: {
+      readonly enabled: boolean;
+      readonly mountPath: string;
+      // Experimental; present only when `protocols.mcp.registry` is set
+      readonly registry?: {
+        readonly name: string;
+        readonly version: string;
+        readonly description: string;
+      };
+    };
     readonly a2a: { readonly enabled: boolean; readonly mountPath: string };
     readonly acp: AcpProtocolConfig;
   };
@@ -1021,6 +1083,9 @@ export interface GatewayConfig {
       readonly paymentFlow?: X402PaymentFlow; // default 'authorization'
       readonly resourcePaymentFlows?: Readonly<Record<string, X402PaymentFlow>>;
       readonly resourceMimeTypes?: Readonly<Record<string, string>>; // resources that set `mimeType`
+      // Experimental; filled by `publicResourceUrl` and `bazaar.enabled`
+      readonly resourceUrls?: X402ProviderOptions['resourceUrls'];
+      readonly resourceBazaar?: X402ProviderOptions['resourceBazaar'];
       readonly facilitator: X402FacilitatorConfig;
       readonly allowMainnet?: boolean;
       readonly allowUnauthenticatedFacilitator?: boolean;

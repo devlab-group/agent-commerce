@@ -44,6 +44,13 @@ protocols:
   mcp:
     enabled: true
     mountPath: /mcp
+    # Experimental MCP Registry fields. Export them to server.json with
+    # `agent-commerce export mcp-registry`. The gateway also reports name and
+    # version in MCP serverInfo. See docs/configuration.md#protocolsmcpregistry.
+    # registry:
+    #   name: io.github.acme/weather
+    #   version: 1.0.0
+    #   description: Weather forecasts, paid per call
   # A2A (Agent2Agent) v1.0.1 - experimental, off by default.
   # Serves JSON-RPC `SendMessage` at mountPath and the Agent Card at
   # /.well-known/agent-card.json. Enable at least one resource with
@@ -140,6 +147,13 @@ payments:
     # quote:
     #   enabled: true
     #   signerPrivateKey: ${X402_QUOTE_SIGNER_KEY}
+    # Experimental discovery. publicResourceUrl replaces resource:// identifiers
+    # with public endpoint URLs in x402 challenges on HTTP, MCP and A2A.
+    # bazaar adds catalog metadata on HTTP and MCP and requires publicResourceUrl.
+    # See docs/configuration.md#public-resource-url.
+    # publicResourceUrl: true
+    # bazaar:
+    #   enabled: true
     # Settlement order: authorization (the default) calls the backend first
     # and settles only if it succeeds; upfront settles first. A paid resource
     # can set its own paymentFlow, which applies to the rail that serves it.

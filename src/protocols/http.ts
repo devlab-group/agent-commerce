@@ -57,3 +57,13 @@ export async function readCappedBody(req: IncomingMessage, maxBytes: number): Pr
 export function joinUrl(baseUrl: string, mountPath: string): string {
   return `${baseUrl.replace(/\/+$/, '')}/${mountPath.replace(/^\/+|\/+$/g, '')}`;
 }
+
+/**
+ * Join the base and mount path with `joinUrl`, then normalize with the URL
+ * parser: lowercase scheme and host, no default port. x402 challenges and MCP
+ * Registry listings both use this form, which makes their endpoint URL strings
+ * match. Throws when the joined URL cannot be parsed.
+ */
+export function publicEndpointUrl(baseUrl: string, mountPath: string): string {
+  return new URL(joinUrl(baseUrl, mountPath)).href;
+}

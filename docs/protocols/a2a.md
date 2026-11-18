@@ -184,13 +184,55 @@ without an `id` returns `-32600` without running. Each A2A error carries a
 `google.rpc.ErrorInfo` in `error.data`, with a reason such as
 `VERSION_NOT_SUPPORTED` and the domain `a2a-protocol.org`.
 
+## Pins
+
+<!-- support-record:begin pins -->
+
+| Pin                      | Value                                                                                                        |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------ |
+| Pinned revision          | v1.0.1; negotiation `1.0`; `JSONRPC` binding                                                                 |
+| Upstream source          | [`a2aproject/A2A@33035925`](https://github.com/a2aproject/A2A/tree/3303592588e388e62e0f69f701af531d2f4e3991) |
+| Declared stable upstream | yes                                                                                                          |
+| Upstream wording         | "the first stable, production-ready version" (read 2026-11-17)                                               |
+| `@a2a-js/sdk`            | `1.3.0`, tests only                                                                                          |
+
+<!-- support-record:end -->
+
 ## A2A exclusions
 
-Unsupported methods are `SendStreamingMessage`, `GetTask`, `ListTasks`,
-`CancelTask`, `SubscribeToTask`, the four task-push-notification-config
-methods and `GetExtendedAgentCard`. The adapter also excludes REST and gRPC
-bindings, SSE, long-running tasks, push delivery, multi-turn continuation,
-authenticated extended cards, A2A authentication and other artifact types.
+The A2A descriptor in `GET /.well-known/agent-commerce` lists these names in
+`unsupported`, and `agent-commerce doctor` prints them when A2A is enabled:
+
+<!-- support-record:begin exclusions -->
+
+- `SendStreamingMessage`
+- `GetTask`
+- `ListTasks`
+- `CancelTask`
+- `SubscribeToTask`
+- `CreateTaskPushNotificationConfig`
+- `GetTaskPushNotificationConfig`
+- `ListTaskPushNotificationConfigs`
+- `DeleteTaskPushNotificationConfig`
+- `GetExtendedAgentCard`
+- `HTTP+JSON/REST binding`
+- `gRPC binding`
+- `SSE`
+- `long-running task persistence`
+- `task resumption other than an x402 extension payment`
+- `push notifications`
+- `multi-turn conversational continuation`
+- `text parts`
+- `file and URL parts (including inline bytes)`
+- `multi-part messages`
+- `message roles other than ROLE_USER`
+- `authenticated extended agent cards`
+- `A2A authentication schemes`
+- `artifact types beyond Agent Commerce outcome data`
+- `x402 extension payments across gateway instances`: Instances with separate receipt stores cannot resume each other's tasks.
+
+<!-- support-record:end -->
+
 Only pending x402 payment tasks can be stored and resumed.
 
 The A2A adapter accepts `_payment` but does not verify or settle payments

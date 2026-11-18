@@ -18,10 +18,20 @@ import {
   resolveDeploymentMode,
 } from '../../../payments/x402/networks';
 import { X402_DEFAULT_PAYMENT_FLOW } from '../../../payments/x402/payment-flow';
+import { featureStatus } from '../../../support/claims';
+import x402Record from '../../../support/x402.json' with { type: 'json' };
 import type { GatewayConfig } from '../../lib/config-client';
 import { PLACEHOLDER_ASSET_ADDRESS } from '../../lib/init-config';
 import { maskMiddle } from '../../lib/mask';
-import type { DoctorCheck, WellKnownResult } from './types';
+import {
+  type DoctorCheck,
+  SKIPPED_CONFIG_INVALID,
+  type Undetermined,
+  undeterminedField,
+  type WellKnownResult,
+} from './types';
+
+const QUOTE_STATUS = featureStatus(x402Record, 'erc-8409-quotes');
 
 // The rail's settlement order and how many resources override it
 function describePaymentFlow(
@@ -47,6 +57,8 @@ interface RailOffer {
   readonly assetTransferMethod?: string;
   /** The live offer's health status, when the gateway publishes it */
   readonly status?: string;
+  // Set when the gateway reports the offer's probe as unreachable
+  readonly undetermined?: 'unreachable';
 }
 
 // A rail's terms, as configured or as the running gateway publishes them
@@ -63,7 +75,7 @@ interface RailTerms {
 type LiveRailResult = RailTerms | 'disabled' | undefined;
 
 function readOffer(rec: Record<string, unknown>, rail: 'x402' | 'mpp'): RailOffer | undefined {
-  const { asset, network, assetDecimals, assetTransferMethod, status } = rec;
+  const { asset, network, assetDecimals, assetTransferMethod, status, undetermined } = rec;
   const payTo = rec[rail === 'mpp' ? 'recipient' : 'payTo'];
   if (typeof asset !== 'string' || typeof network !== 'string' || typeof payTo !== 'string') {
     return undefined;
@@ -75,6 +87,7 @@ function readOffer(rec: Record<string, unknown>, rail: 'x402' | 'mpp'): RailOffe
     ...(typeof assetDecimals === 'number' ? { assetDecimals } : {}),
     ...(typeof assetTransferMethod === 'string' ? { assetTransferMethod } : {}),
     ...(typeof status === 'string' ? { status } : {}),
+    ...(undetermined === 'unreachable' ? { undetermined } : {}),
   };
 }
 
@@ -288,6 +301,7 @@ function railOffer(option: {
 function offerHealthCheck(
   live: RailTerms,
   named: (network: string) => string,
+  name: string,
 ): DoctorCheck | undefined {
   const all = [...live.offers, ...Object.values(live.resourceOffers ?? {}).flat()];
   const offers = [
@@ -308,7 +322,7 @@ function offerHealthCheck(
       .join('; ');
   if (failing.length === 0 && degraded.length === 0) {
     return {
-      name: 'Payments (offers)',
+      name,
       status: 'PASS',
       detail: `${reported.length} offer(s) pass their health checks`,
     };
@@ -317,10 +331,13 @@ function offerHealthCheck(
     ...(failing.length > 0 ? [`failing: ${describe(failing)}`] : []),
     ...(degraded.length > 0 ? [`degraded: ${describe(degraded)}`] : []),
   ];
+  // Keep the aggregate unmarked if any failing or degraded offer is unmarked
+  const unanswered = [...failing, ...degraded].every((offer) => offer.undetermined !== undefined);
   return {
-    name: 'Payments (offers)',
+    name,
     status: failing.length > 0 ? 'FAIL' : 'WARN',
     detail: `${problems.join('; ')}. The gateway logs each reason at debug level`,
+    ...undeterminedField(unanswered ? 'unreachable' : undefined),
   };
 }
 
@@ -380,6 +397,7 @@ function quoteCheck(
   body: Record<string, unknown> | undefined,
   gatewayUrl: string,
   stale: string,
+  liveCause: Undetermined | undefined,
 ): DoctorCheck | undefined {
   const name = 'Payments (quotes)';
   if (enabled && local === 'invalid') {
@@ -399,7 +417,8 @@ function quoteCheck(
       ? {
           name,
           status: 'INFO',
-          detail: `ERC-8409 quotes enabled (experimental)${localIssuer !== undefined ? `, issuer=${localIssuer} from the local key` : ''}; the gateway's issuer could not be read`,
+          detail: `ERC-8409 quotes enabled (${QUOTE_STATUS})${localIssuer !== undefined ? `, issuer=${localIssuer} from the local key` : ''}; the gateway's issuer could not be read`,
+          ...undeterminedField(liveCause),
         }
       : undefined;
   }
@@ -431,7 +450,7 @@ function quoteCheck(
   return {
     name,
     status: 'PASS',
-    detail: `ERC-8409 quotes (experimental) - issuer=${issuer}${local === undefined ? ' as the gateway publishes it (viem could not be loaded to check it against the local key)' : ''}, requestScheme=${quote.requestScheme}, extension=${quote.extension}`,
+    detail: `ERC-8409 quotes (${QUOTE_STATUS}) - issuer=${issuer}${local === undefined ? ' as the gateway publishes it (viem could not be loaded to check it against the local key)' : ''}, requestScheme=${quote.requestScheme}, extension=${quote.extension}`,
   };
 }
 
@@ -443,13 +462,17 @@ export async function paymentChecks(
   chainDeploy = false,
   // Load this optional peer only when local x402 quote signing is enabled
   loadAccounts: LoadViemAccounts = () => import('viem/accounts'),
+  // Why the well-known document was not obtained; absent after a response
+  liveCause?: Undetermined,
 ): Promise<DoctorCheck[]> {
   const checks: DoctorCheck[] = [];
   // Suggest the repository deployment script only when the caller found it
   const stale = `; the gateway may be running against an older deployment - restart it${chainDeploy ? ' or re-run chain:deploy' : ''}`;
   // 6. Payments
   const x402 = config?.payments.x402;
-  if (x402 === undefined || !x402.enabled) {
+  if (config === undefined) {
+    checks.push({ name: 'Payments', status: 'INFO', ...SKIPPED_CONFIG_INVALID });
+  } else if (x402 === undefined || !x402.enabled) {
     checks.push({ name: 'Payments', status: 'INFO', detail: 'x402 not configured' });
   } else {
     const options = x402.options ?? [x402];
@@ -497,6 +520,7 @@ export async function paymentChecks(
         name: 'Payments',
         status: 'INFO',
         detail: `${summary} (gateway's live settlement config could not be verified)`,
+        ...undeterminedField(liveCause),
       });
     } else {
       const configured: RailTerms = {
@@ -519,7 +543,7 @@ export async function paymentChecks(
           ? { name: 'Payments', status: 'PASS', detail: summary }
           : { name: 'Payments', status: 'FAIL', detail: `${mismatch}${stale}` },
       );
-      const offerHealth = offerHealthCheck(live, named);
+      const offerHealth = offerHealthCheck(live, named, 'Payments (offers)');
       if (offerHealth !== undefined) checks.push(offerHealth);
     }
     const quotes = quoteCheck(
@@ -531,6 +555,7 @@ export async function paymentChecks(
       wellKnown?.ok ? wellKnown.body : undefined,
       gatewayUrl,
       stale,
+      liveCause,
     );
     if (quotes !== undefined) checks.push(quotes);
     if (mode === 'mainnet') {
@@ -546,7 +571,9 @@ export async function paymentChecks(
     }
   }
   const mpp = config?.payments.mpp;
-  if (mpp === undefined || !mpp.enabled) {
+  if (config === undefined) {
+    checks.push({ name: 'Payments (MPP)', status: 'INFO', ...SKIPPED_CONFIG_INVALID });
+  } else if (mpp === undefined || !mpp.enabled) {
     checks.push({ name: 'Payments (MPP)', status: 'INFO', detail: 'MPP not configured' });
   } else {
     const { mode, where, via } = describeSettlement(mpp.network, mpp.facilitator);
@@ -582,6 +609,7 @@ export async function paymentChecks(
         name: 'Payments (MPP)',
         status: 'INFO',
         detail: `${summary} (live MPP settlement config unavailable for comparison)`,
+        ...undeterminedField(liveCause),
       });
     } else {
       const mismatch = findRailMismatch(configured, live, 'recipient');
@@ -590,6 +618,12 @@ export async function paymentChecks(
           ? { name: 'Payments (MPP)', status: 'PASS', detail: summary }
           : { name: 'Payments (MPP)', status: 'FAIL', detail: `${mismatch}${stale}` },
       );
+      const offerHealth = offerHealthCheck(
+        live,
+        (network) => `${findX402Network(network)?.displayName ?? 'unknown network'} (${network})`,
+        'Payments (MPP offers)',
+      );
+      if (offerHealth !== undefined) checks.push(offerHealth);
     }
     if (mode === 'mainnet') {
       checks.push(

@@ -115,12 +115,88 @@ For payment-required and error results, `content[0].text` is a JSON copy of
 `structuredContent`; `content[1].text` is a sentence for readers. Unexpected
 exception messages and stack traces are omitted.
 
+## MCP Registry listing
+
+Experimental. The [MCP Registry](https://registry.modelcontextprotocol.io)
+is a public catalog of MCP servers in preview. Use the CLI to export a listing,
+then publish it:
+
+1. Set [`protocols.mcp.registry`](../configuration.md#protocolsmcpregistry)
+   and an HTTPS `merchant.publicBaseUrl`.
+2. Run `agent-commerce export mcp-registry`. It loads and validates the full
+   config as `start` does, so required `${VAR}` placeholders must resolve. It
+   writes `server.json` with the 2025-12-11 `$schema`, your `name`, `description`
+   and `version`, and one `streamable-http` remote at
+   `<publicBaseUrl><protocols.mcp.mountPath>`.
+   Use `--output` to choose another path and `--force` to replace an existing
+   file. The command writes nothing and names the key to change when MCP is
+   disabled, the registry block is missing, or the URL uses a scheme other than
+   HTTPS or names `localhost`, `127.0.0.1` or a `.localhost` host.
+3. Log in and publish with the registry's `mcp-publisher` CLI. The namespace
+   determines the required ownership proof: `io.github.<user>/` needs GitHub
+   authentication; a reverse-DNS namespace such as `com.example/` needs a DNS
+   TXT record or a `/.well-known/mcp-registry-auth` file on `example.com`.
+   The gateway does not serve that file. See the registry's
+   [authentication guide](https://github.com/modelcontextprotocol/registry/blob/115f85225c9fac5281d8a2dc8551cf49b004d2f9/docs/modelcontextprotocol-io/authentication.mdx).
+4. Run `agent-commerce doctor --registry` to compare the published listing
+   with your config.
+
+The listing's version comes from `protocols.mcp.registry.version`, independently
+of the package version. The registry's schema defines it as the server's
+`Implementation.version`. When started with this block, the gateway reports the
+listing's `name` and `version` as `serverInfo` at `initialize`.
+
+The registry recommends semantic versions and uses their ordering to choose
+the latest. Publishing a prerelease such as `1.2.3-1`
+after its release, `1.2.3`, does not make it the latest. If your config names
+that prerelease, `doctor --registry` reports a version difference.
+
+Several server names may list the same remote URL; the URL alone does not
+prove who runs the server. `doctor --registry` looks up the configured name
+only and reports a response with another name as a difference in `name`.
+
+## Pins
+
+<!-- support-record:begin pins -->
+
+| Pin                            | Value                                                                                                                                                              |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Pinned revision                | MCP `2026-07-28` and `2025-11-25`                                                                                                                                  |
+| Upstream source                | [`modelcontextprotocol/modelcontextprotocol@05aeb07b`](https://github.com/modelcontextprotocol/modelcontextprotocol/tree/05aeb07b2db0c02adc4813a7c09f208ca8774152) |
+| Declared stable upstream       | yes                                                                                                                                                                |
+| Upstream wording               | "Current: the current protocol version, which is ready for use and may continue to receive backwards compatible changes" (read 2026-11-17)                         |
+| `@modelcontextprotocol/server` | `2.3.0`, optional peer                                                                                                                                             |
+| `@modelcontextprotocol/client` | `2.3.0`, tests only                                                                                                                                                |
+| `@modelcontextprotocol/sdk`    | `1.32.0`, tests only                                                                                                                                               |
+
+<!-- support-record:end -->
+
 ## MCP exclusions
 
-The adapter does not implement MCP resources, prompts, sampling, completions,
-elicitation, roots, logging, tasks or tool-list-change notifications. It has
-no MCP authorization, sessions, subscriptions, pagination or HTTP+SSE transport.
-The gateway, rather than the MCP adapter, enforces Host and Origin checks.
+The MCP descriptor in `GET /.well-known/agent-commerce` lists these names in
+`unsupported`:
+
+<!-- support-record:begin exclusions -->
+
+- `resources`
+- `prompts`
+- `sampling`
+- `completions`
+- `elicitation`
+- `roots`
+- `logging`
+- `notifications/tools/list_changed`
+- `tasks`
+- `dns-rebinding-protection`: The adapter relies on the gateway's `onRequest` hook to validate Host and Origin for the MCP mount.
+- `authorization`
+- `sessions`
+- `subscriptions`
+- `pagination`
+- `HTTP+SSE transport`
+- `MPP payment-required as JSON-RPC error -32042`: mppx reads challenges from the tool result's `_meta`.
+- `MPP verification failure as JSON-RPC error -32043`: mppx reads refusals from the tool result's `_meta`.
+
+<!-- support-record:end -->
 
 The MCP adapter maps payment carriers and results. It does not verify or
 settle payments or call merchant backends.

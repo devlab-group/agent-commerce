@@ -2,7 +2,7 @@ import { promises as fs } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { loadConfig } from '../../../src/config/load';
+import { loadConfig, readConfigFile } from '../../../src/config/load';
 import { isCommerceError } from '../../../src/core';
 
 const VALID_YAML = `
@@ -230,5 +230,26 @@ describe('loadConfig', () => {
       expect(error.details?.['yamlErrorCode']).toEqual(expect.any(String));
       expect(error.details?.['line']).toEqual(expect.any(Number));
     }
+  });
+});
+
+describe('readConfigFile', () => {
+  it('returns the parsed file before substitution and validation', async () => {
+    const dir = await makeTmpDir();
+    const file = path.join(dir, 'raw.yaml');
+    await fs.writeFile(file, 'server:\n  adminToken: ${ADMIN_TOKEN}\nunknownKey: 1\n', 'utf8');
+    expect(await readConfigFile({ path: file, env: {} })).toEqual({
+      server: { adminToken: '${ADMIN_TOKEN}' },
+      unknownKey: 1,
+    });
+  });
+
+  it('refuses a missing file as loadConfig does', async () => {
+    const dir = await makeTmpDir();
+    const file = path.join(dir, 'absent.yaml');
+    await expect(readConfigFile({ path: file })).rejects.toMatchObject({
+      code: 'CONFIG_INVALID',
+      message: `Could not read configuration file "${file}"`,
+    });
   });
 });

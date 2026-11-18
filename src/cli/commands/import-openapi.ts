@@ -6,8 +6,7 @@
  * `--output config.yaml --force` replaces that file rather than merging.
  */
 import { existsSync } from 'node:fs';
-import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
-import { basename, dirname, extname, resolve } from 'node:path';
+import { basename, extname } from 'node:path';
 import { PROTOCOL_NAMES } from '../../core';
 import {
   buildResourceDrafts,
@@ -17,6 +16,7 @@ import {
   renderResourcesYaml,
 } from '../../openapi';
 import type { Io } from '../lib/io';
+import { writeAtomically } from '../lib/write-file';
 
 export interface ImportOpenApiOptions {
   readonly source: string;
@@ -103,7 +103,7 @@ export async function runImportOpenApi(
   const wrote = failures.length === 0;
   if (wrote) {
     try {
-      await writeAtomically(outputPath, renderResourcesYaml(result), deps);
+      await (deps.writeFile ?? writeAtomically)(outputPath, renderResourcesYaml(result));
     } catch (error) {
       io.stderr(`FAIL  ${outputPath} could not be written: ${describe(error)}`);
       return 1;
@@ -162,30 +162,6 @@ function buildPolicy(options: ImportOpenApiOptions): ImportPolicy | string {
     policy.expose = requested;
   }
   return policy;
-}
-
-async function writeAtomically(
-  outputPath: string,
-  content: string,
-  deps: ImportOpenApiDeps,
-): Promise<void> {
-  if (deps.writeFile !== undefined) {
-    await deps.writeFile(outputPath, content);
-    return;
-  }
-  // Temp sibling then rename: a crash or a full disk must not leave a
-  // half-written file where a complete one used to be
-  const target = resolve(outputPath);
-  const temporary = `${target}.${process.pid}.tmp`;
-  try {
-    // Like `init --output`: a missing output directory is created, not an error
-    await mkdir(dirname(target), { recursive: true });
-    await writeFile(temporary, content, 'utf8');
-    await rename(temporary, target);
-  } catch (error) {
-    await rm(temporary, { force: true });
-    throw error;
-  }
 }
 
 function printSummary(

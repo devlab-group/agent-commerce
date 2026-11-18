@@ -6,6 +6,7 @@ import { CommerceError, RECONCILIATION_METADATA_KEY } from '../../../core';
 import { redactedErrorText } from '../../../core/errors';
 import { normalizeAddress, sameAddress } from '../addresses';
 import { declaredX402Version, decodePaymentSubmission, forFacilitator } from '../payload';
+import type { BazaarForwarding } from './bazaar-forwarding';
 import { X402_VERSION } from './constants';
 import { offerCurrency } from './offers';
 import { paymentIdentifierEchoed } from './payment-id';
@@ -22,6 +23,7 @@ const RELAYER_GRACE_MS = 1_000;
 export function createVerify(
   ctx: ProviderContext,
   nearRelayers: (offer: NearOffer) => Promise<readonly string[]>,
+  bazaar: BazaarForwarding,
 ): (context: PaymentVerificationContext) => Promise<PaymentResult> {
   const { offersFor, clock, logger, svm, near } = ctx;
 
@@ -167,10 +169,13 @@ export function createVerify(
 
     // Fetch NEAR relayers alongside verification; failed `/supported` reads yield none
     const relayers = offer.family === 'near' ? nearRelayers(offer) : undefined;
+    const issued = await bazaar.issuedFor(
+      requirement.challenge.envelope as PaymentRequired | undefined,
+    );
     const scope = offer.binding.open();
     let sdkResult: VerifyResponse;
     try {
-      sdkResult = await scope.verify(forFacilitator(payload), requirements);
+      sdkResult = await scope.verify(forFacilitator(payload, issued), requirements);
     } catch (err) {
       // A throw means no verdict was obtained, so it is never held against the
       // buyer. Only an unclassified one is logged, as it may be an SDK fault.
@@ -183,6 +188,8 @@ export function createVerify(
         { cause: err },
       );
     }
+
+    bazaar.report(requirement.resourceId, sdkResult.extensionResponses);
 
     if (!sdkResult.isValid) {
       // An RPC that never answered is not a payment that failed a check

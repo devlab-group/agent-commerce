@@ -3,19 +3,29 @@
  * providers, the real A2A adapter, and an `@x402/core` client building the
  * `PaymentPayload`. Only the facilitator HTTP client is mocked.
  */
+
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { x402Client } from '@x402/core/client';
 import type { PaymentRequired } from '@x402/core/types';
 import { registerExactEvmScheme } from '@x402/evm/exact/client';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { GatewayConfig } from '../../src/config';
-import type { CanonicalRequest, CommerceResource, PaymentMethodName } from '../../src/core';
+import type {
+  CanonicalRequest,
+  CommerceResource,
+  PaymentMethodName,
+  ReceiptStore,
+} from '../../src/core';
 import { createGateway, type GatewayInstance } from '../../src/gateway';
 import { createMppPaymentProvider } from '../../src/payments/mpp/provider';
 import { createX402PaymentProvider } from '../../src/payments/x402/provider';
 import { createA2aAdapter } from '../../src/protocols/a2a';
 import type { A2aAgentCard, A2aTask } from '../../src/protocols/a2a/types';
 import { A2A_X402_EXTENSION_URI } from '../../src/protocols/a2a/x402-extension';
+import { createSqliteReceiptStore } from '../../src/storage/receipts';
 import { createFakeStore } from '../unit/gateway/helpers';
 
 process.env['NODE_ENV'] = 'test';
@@ -44,6 +54,16 @@ const REMOTE = {
   auth: { type: 'none' },
 } as const;
 const buyer = privateKeyToAccount(generatePrivateKey());
+const X402_OPTIONS = {
+  network: 'eip155:31337',
+  rpcUrl: RPC_URL,
+  asset: ASSET,
+  assetName: AUTHORIZATION.name,
+  assetVersion: AUTHORIZATION.version,
+  assetDecimals: 6,
+  payTo: PAY_TO,
+  facilitator: REMOTE,
+} as const;
 
 let gateway: GatewayInstance;
 let backendCalls = 0;
@@ -90,16 +110,7 @@ beforeEach(async () => {
     config: config(),
     store: createFakeStore(),
     paymentProviders: [
-      createX402PaymentProvider({
-        network: 'eip155:31337',
-        rpcUrl: RPC_URL,
-        asset: ASSET,
-        assetName: AUTHORIZATION.name,
-        assetVersion: AUTHORIZATION.version,
-        assetDecimals: 6,
-        payTo: PAY_TO,
-        facilitator: REMOTE,
-      }),
+      createX402PaymentProvider(X402_OPTIONS),
       createMppPaymentProvider({
         network: 'eip155:31337',
         recipient: PAY_TO,
@@ -565,5 +576,85 @@ describe('an AP2 mandate sent with the x402 extension payment', () => {
 
     const { body } = await rpc(pay(task, await submitted(task)));
     expect(body.result?.task.status.state).toBe('TASK_STATE_COMPLETED');
+  });
+});
+
+describe('x402 A2A extension with the public resource URL, across a restart', () => {
+  const A2A_URL = 'http://localhost:8080/a2a';
+  let dir = '';
+  let store: ReceiptStore | undefined;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'a2a-public-url-'));
+  });
+
+  afterEach(async () => {
+    await gateway.close().catch(() => {});
+    await store?.close();
+    store = undefined;
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  // Use the shared receipt file to preserve tasks awaiting payment across boots
+  async function boot(publicUrl: boolean): Promise<void> {
+    await gateway.close().catch(() => {});
+    await store?.close();
+    store = createSqliteReceiptStore({ path: join(dir, 'receipts.db') });
+    await store.init();
+    gateway = await createGateway({
+      config: config(),
+      store,
+      paymentProviders: [
+        createX402PaymentProvider({
+          ...X402_OPTIONS,
+          ...(publicUrl ? { resourceUrls: { x402_report: { a2a: A2A_URL } } } : {}),
+        }),
+      ],
+      protocolAdapters: [createA2aAdapter({ store })],
+      backend: {
+        async call() {
+          backendCalls++;
+          return { status: 200, body: { report: 'paid' }, headers: {}, durationMs: 1 };
+        },
+      },
+    });
+  }
+
+  const submitted = async (task: A2aTask) => ({
+    'x402.payment.status': 'payment-submitted',
+    'x402.payment.payload': await paymentPayload(task),
+  });
+
+  it('pays a task after a restart, its proof echoing the A2A URL, and settles once', async () => {
+    await boot(true);
+    const task = await challenged();
+    const required = task.status.message?.metadata?.['x402.payment.required'] as PaymentRequired;
+    expect(required.resource.url).toBe(A2A_URL);
+    const metadata = await submitted(task);
+
+    await boot(true);
+    const { body } = await rpc(pay(task, metadata));
+
+    expect(body.result?.task.status.state).toBe('TASK_STATE_COMPLETED');
+    expect(backendCalls).toBe(1);
+    expect(facilitator.settle).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a task challenged before the URL was turned on, and settles nothing', async () => {
+    await boot(false);
+    const task = await challenged();
+    const metadata = await submitted(task);
+
+    await boot(true);
+    const { body } = await rpc(pay(task, metadata));
+
+    expect(body.result?.task.status.state).toBe('TASK_STATE_FAILED');
+    expect(body.result?.task.status.message?.metadata).toMatchObject({
+      'x402.payment.status': 'payment-failed',
+      'x402.payment.error': 'invalid_payment_requirements',
+    });
+    expect(backendCalls).toBe(0);
+    expect(facilitator.verify).not.toHaveBeenCalled();
+    expect(facilitator.settle).not.toHaveBeenCalled();
   });
 });

@@ -1,0 +1,130 @@
+{
+  "name": "mpp",
+  "kind": "payment",
+  "title": "MPP",
+  "status": "experimental",
+  "role": "Payment rail, carried by HTTP, MCP and A2A.",
+  "subset": "`charge`/`evm`/EIP-3009 with USDC on Base Sepolia and Base, over HTTP, MCP and A2A",
+  "spec": {
+    "revisions": [
+      "draft-httpauth-payment-01",
+      "draft-payment-intent-charge-00",
+      "draft-evm-charge-00"
+    ],
+    "display": "drafts at `tempoxyz/mpp-specs@806fdb8`",
+    "source": {
+      "repo": "tempoxyz/mpp-specs",
+      "commit": "806fdb8b8c92cda5c84b8660558921b6bbeef7e0"
+    },
+    "stable": false,
+    "statement": "Internet-Drafts are draft documents valid for a maximum of six months and may be updated, replaced, or obsoleted by other documents at any time.",
+    "checked": "2026-11-17"
+  },
+  "packages": [{ "name": "mppx", "use": "runtime" }],
+  "artifacts": [],
+  "features": [
+    { "name": "intent=charge", "status": "experimental" },
+    { "name": "method=evm", "status": "experimental" },
+    { "name": "credential=authorization", "status": "experimental" },
+    { "name": "eip-3009", "status": "experimental" },
+    { "name": "network=eip155:31337", "status": "experimental" },
+    { "name": "network=eip155:84532", "status": "experimental" },
+    { "name": "network=eip155:8453", "status": "experimental" },
+    { "name": "asset=USDC", "status": "experimental" },
+    { "name": "verify-before-settle", "status": "experimental" },
+    { "name": "authorization-flow", "status": "experimental" },
+    { "name": "upfront-flow", "status": "experimental" },
+    { "name": "payment-receipt", "status": "experimental" },
+    { "name": "challenge-digest-binding", "status": "experimental" }
+  ],
+  "exclusions": [
+    { "name": "methods other than evm" },
+    {
+      "name": "credential=permit2",
+      "note": "The profile accepts only the EIP-3009 authorization credential."
+    },
+    { "name": "credential=transaction" },
+    { "name": "credential=hash" },
+    { "name": "splits", "note": "The draft allows splits only with `permit2` credentials." },
+    { "name": "intent=subscription" },
+    { "name": "evm sessions", "note": "A separate EVM draft, not an option of charge." },
+    { "name": "discovery extension" }
+  ],
+  "deviations": [
+    {
+      "summary": "The EIP-3009 nonce is keccak256 of `JSON.stringify([id, realm])`, as `mppx` 0.13 derives it, not of `abi.encodePacked(id, realm)`; a credential using the draft's nonce fails with `wrong_nonce`.",
+      "spec": "draft-evm-charge-00",
+      "tests": ["tests/unit/payments-mpp/provider.test.ts"]
+    },
+    {
+      "summary": "Over MCP, payment errors are tool results with `isError` and the challenges in `_meta`, not the JSON-RPC errors the draft maps them to (-32042, -32043, -32602 and -32603).",
+      "spec": "draft-payment-transport-mcp-00",
+      "tests": ["tests/integration/mcp-payment-bindings.test.ts"]
+    },
+    {
+      "summary": "An unpaid request that gets a 402 also stores a `resource.requested` event beside the challenge.",
+      "spec": "draft-httpauth-payment-01 §11.4",
+      "tests": ["tests/unit/core/execution/pipeline.test.ts"]
+    },
+    {
+      "summary": "A credential whose attempt is reserved or settlement-uncertain gets 409 without a fresh challenge, because a second challenge could lead to a second payment.",
+      "spec": "draft-httpauth-payment-01 §4.2; draft-evm-charge-00",
+      "tests": ["tests/integration/mpp-carriers.test.ts"]
+    },
+    {
+      "summary": "With `paymentFlow: authorization`, the backend runs before the transfer, which the charge intent counts as partial access before payment. The default, `upfront`, settles first.",
+      "spec": "draft-payment-intent-charge-00",
+      "tests": ["tests/e2e/payment/mpp-settlement.e2e.test.ts"]
+    }
+  ],
+  "combinations": [
+    {
+      "surface": "http",
+      "method": "mpp",
+      "level": "e2e",
+      "evidence": "tests/e2e/payment/mpp-settlement.e2e.test.ts"
+    },
+    {
+      "surface": "http",
+      "method": "mpp",
+      "authorization": "ap2",
+      "level": "e2e",
+      "evidence": "tests/e2e/authorization/ap2-mpp.e2e.test.ts"
+    },
+    {
+      "surface": "mcp",
+      "method": "mpp",
+      "level": "integration",
+      "evidence": "tests/integration/mcp-payment-bindings.test.ts"
+    },
+    {
+      "surface": "a2a",
+      "method": "mpp",
+      "level": "integration",
+      "evidence": "tests/integration/mpp-carriers.test.ts"
+    },
+    {
+      "surface": "http",
+      "method": "mpp",
+      "level": "testnet",
+      "evidence": "tests/testnet/mpp-base-sepolia.smoke.test.ts"
+    },
+    {
+      "surface": "http",
+      "method": "mpp",
+      "level": "mainnet",
+      "evidence": "tests/mainnet/mpp-base.smoke.test.ts"
+    }
+  ],
+  "gaps": [
+    {
+      "requirement": "Each challenge id is single-use (charge intent); two payers can each settle against one challenge",
+      "state": "open"
+    },
+    {
+      "requirement": "Payment-Receipt only after an on-chain receipt with a matching Transfer log; the gateway trusts the facilitator's settle result",
+      "state": "open"
+    }
+  ],
+  "docs": ["docs/protocols/mpp.md"]
+}

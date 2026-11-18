@@ -1,6 +1,7 @@
 // Shared fakes for gateway tests, implementing the core interfaces directly
 // rather than importing another area's implementation
-import type { IncomingMessage, ServerResponse } from 'node:http';
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import type { GatewayConfig } from '../../../src/config';
 import type {
   AdapterDescriptor,
@@ -271,4 +272,15 @@ export function makeGatewayConfig(overrides: Partial<GatewayConfig> = {}): Gatew
     },
     ...overrides,
   };
+}
+
+/** A loopback URL with a released port, used to simulate a refused connection */
+export function releasedPort(): Promise<string> {
+  const server = createServer();
+  return new Promise((resolve) =>
+    server.listen(0, '127.0.0.1', () => {
+      const { port } = server.address() as AddressInfo;
+      server.close(() => resolve(`http://127.0.0.1:${port}`));
+    }),
+  );
 }

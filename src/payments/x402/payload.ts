@@ -7,10 +7,11 @@
  * which throws.
  */
 import { PaymentPayloadV2Schema } from '@x402/core/schemas';
-import type { PaymentPayload } from '@x402/core/types';
+import type { PaymentPayload, PaymentRequired } from '@x402/core/types';
 import type { ExactEIP3009Payload, ExactPermit2Payload } from '@x402/evm';
 import { isRecord } from '../../core/is-record';
 import { isEvmAddress } from './addresses';
+import { BAZAAR_EXTENSION_KEY } from './provider/bazaar';
 
 export function decodePaymentSubmission(payloadBase64: string): PaymentPayload | undefined {
   const json = decodeJson(payloadBase64);
@@ -28,18 +29,26 @@ export function declaredX402Version(payloadBase64: string): unknown {
 }
 
 /**
- * The payload as sent to a facilitator. `resource` is optional in v2 and
- * verify() has already matched it against the offer; hosted facilitators have
- * settled payloads without it, and none has been shown to accept this
- * gateway's `resource://` URL. `extensions` is dropped because quote echoes
- * are not used to verify payment, and a gas-sponsoring extension in a Permit2
- * payload would activate unsupported SDK facilitator behavior.
+ * Build the facilitator payload, dropping the buyer's `resource` and
+ * `extensions`. `resource` is optional in v2; verify() checks its URL against
+ * the challenge when present. Quote echoes are not used to verify payment,
+ * and a gas-sponsoring extension in a Permit2 payload would activate
+ * unsupported SDK facilitator behavior.
+ *
+ * When the `issued` challenge carries Bazaar metadata, attach its `resource`
+ * and `extensions.bazaar` for cataloging. The provider passes `issued` only
+ * for a facilitator that lists the extension. Use the issued values to keep
+ * an altered buyer echo from replacing the listing metadata.
  */
 export function forFacilitator<T extends PaymentPayload>(
   payload: T,
-): Omit<T, 'resource' | 'extensions'> {
+  issued: PaymentRequired | undefined,
+): Omit<T, 'resource' | 'extensions'> & Pick<Partial<PaymentPayload>, 'resource' | 'extensions'> {
   const { resource: _resource, extensions: _extensions, ...rest } = payload;
-  return rest;
+  const bazaar = issued?.extensions?.[BAZAAR_EXTENSION_KEY];
+  return issued !== undefined && bazaar !== undefined
+    ? { ...rest, resource: issued.resource, extensions: { [BAZAAR_EXTENSION_KEY]: bazaar } }
+    : rest;
 }
 
 function decodeJson(payloadBase64: string): unknown {

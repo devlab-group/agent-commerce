@@ -43,7 +43,12 @@ export function makeGatewayConfig(overrides: Partial<GatewayConfig> = {}): Gatew
   };
 }
 
-/** A fake `fetch` from an exact-URL -> Response map. Unmatched URLs reject, as if unreachable */
+/** An undici fetch error with the Node error code on its cause */
+export function fetchFailed(code: string | undefined, message: string): TypeError {
+  return new TypeError('fetch failed', { cause: Object.assign(new Error(message), { code }) });
+}
+
+/** A fake `fetch` with exact URL handlers; unmatched URLs reject as unreachable */
 export function createFakeFetch(
   handlers: Record<string, () => Response | Promise<Response>>,
 ): FetchLike {
@@ -51,9 +56,7 @@ export function createFakeFetch(
     const url =
       typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
     const handler = handlers[url];
-    if (handler === undefined) {
-      throw new TypeError(`fake fetch: connection refused for ${url}`);
-    }
+    if (handler === undefined) throw fetchFailed('ECONNREFUSED', `connect ECONNREFUSED ${url}`);
     return handler();
   };
   return fake as unknown as FetchLike;

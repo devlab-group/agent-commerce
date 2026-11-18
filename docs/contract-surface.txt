@@ -23,6 +23,7 @@ interface AdapterHealth {
 interface AdapterHealthComponent {
     readonly name: string;
     readonly status: "pass" | "warn" | "fail";
+    readonly undetermined?: "unreachable";
   }
 
 interface AdapterHttpRoute {
@@ -373,6 +374,7 @@ interface PaymentContext {
     readonly currency: string;
     readonly input?: unknown;
     readonly metadata?: Readonly<Record<string, unknown>>;
+    readonly protocol?: ProtocolName;
     readonly requestId: string;
     readonly requestedAt: string;
     readonly resource: CommerceResource;

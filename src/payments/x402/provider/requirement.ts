@@ -10,9 +10,29 @@ import { parseCanonicalAmount } from '../amount';
 import type { X402Network } from '../networks';
 import { decodePaymentSubmission } from '../payload';
 import { X402_DEFAULT_PAYMENT_FLOW } from '../payment-flow';
+import { BAZAAR_EXTENSION_KEY } from './bazaar';
 import { DEFAULT_MIME_TYPE, X402_PROTOCOL_VERSION, X402_VERSION } from './constants';
 import { paymentIdentifierExtensions } from './payment-id';
-import type { ProviderContext, SvmOffer } from './types';
+import type { Offer, ProviderContext, SvmOffer } from './types';
+
+// Budget for a header value with Bazaar metadata, based on nginx's default
+// 8 KiB request header field limit. Proxies may reject larger headers.
+const MAX_HTTP_HEADER_BYTES = 8192;
+
+/**
+ * Reserve space below the header budget for the proof. The buyer's
+ * `PAYMENT-SIGNATURE` repeats `resource`, `extensions` and one offer
+ * beside its signed payload, which after base64 takes about 0.6 KB for
+ * EIP-3009 and 0.8 KB for Permit2 with an EOA signature, under 1 KB for a
+ * NEAR delegate action and 2.2 KB for a full-size Solana transaction. A
+ * contract wallet's signature can exceed the EVM figure. The reserve also
+ * covers `error`, which the HTTP adapter adds to a refused proof's challenge.
+ */
+const PROOF_RESERVE_BYTES: Readonly<Record<Offer['family'], number>> = {
+  evm: 1024,
+  svm: 2304,
+  near: 1280,
+};
 
 // Requirement metadata naming the offer `selectRequirement` chose, by index
 export const SELECTED_OFFER_KEY = 'x402.offer';
@@ -61,7 +81,9 @@ export function createRequirementBuilders(
   readonly createRequirement: (context: PaymentContext) => Promise<PaymentRequirement>;
   readonly selectRequirement: (context: PaymentVerificationContext) => Promise<PaymentRequirement>;
 } {
-  const { options, offersFor, clock, ids, maxTimeoutSeconds } = ctx;
+  const { options, offersFor, clock, ids, maxTimeoutSeconds, logger } = ctx;
+  // Resources whose HTTP challenge has already been logged as too large
+  const oversizedLogged = new Set<string>();
 
   async function createRequirement(context: PaymentContext): Promise<PaymentRequirement> {
     const offers = offersFor(context.resource.id);
@@ -111,21 +133,32 @@ export function createRequirementBuilders(
     const identifier = paymentIdentifierExtensions(context.resource);
     const extensions =
       identifier === undefined ? quoteExtensions : { ...quoteExtensions, ...identifier };
+    const bazaar =
+      context.protocol === 'http' || context.protocol === 'mcp'
+        ? options.resourceBazaar?.[context.resource.id]?.[context.protocol]
+        : undefined;
 
-    // The v2 challenge document as sent on the wire. The HTTP adapter
-    // base64-encodes it into `PAYMENT-REQUIRED` and MCP passes it through, so
-    // both surfaces offer the same challenge.
+    // Build the v2 challenge document. HTTP base64-encodes it into
+    // `PAYMENT-REQUIRED`; MCP passes the document through directly.
     //
-    // `resource.url` is outside the EIP-3009 signature. A single offer puts its
-    // network and payee in it, so the buyer's echo identifies the offer. With
-    // several, the URL stays the same whichever one the buyer pays.
+    // `accepted` identifies the offer paid by a proof. With a matching
+    // `resourceUrls` entry, `resource.url` uses the configured URL for this
+    // resource and request surface. Otherwise a single offer's `resource://`
+    // URL includes its network and payee; multiple offers share one URL.
+    // The URL is outside the EIP-3009 signature; verification rejects a
+    // mismatched URL only when the proof echoes it.
     const resourceId = encodeURIComponent(context.resource.id);
+    const surface = context.protocol === 'acp' ? undefined : context.protocol;
+    const publicUrl =
+      surface !== undefined ? options.resourceUrls?.[context.resource.id]?.[surface] : undefined;
     const envelope: PaymentRequired = {
       x402Version: X402_VERSION,
       resource: {
-        url: single
-          ? `resource://agent-commerce/${encodeURIComponent(single.network)}/${single.payTo}/resources/${resourceId}`
-          : `resource://agent-commerce/resources/${resourceId}`,
+        url:
+          publicUrl ??
+          (single
+            ? `resource://agent-commerce/${encodeURIComponent(single.network)}/${single.payTo}/resources/${resourceId}`
+            : `resource://agent-commerce/resources/${resourceId}`),
         description: context.resource.description ?? context.resource.name,
         // The media type the merchant declares, else `application/json`; an HTTP
         // delivery carries the backend's own type when it is text and fits the body
@@ -134,6 +167,18 @@ export function createRequirementBuilders(
       accepts,
       ...(extensions !== undefined ? { extensions } : {}),
     };
+    const challenge =
+      bazaar === undefined
+        ? envelope
+        : withBazaar(
+            envelope,
+            bazaar,
+            // MCP carries the challenge in the result body, not a header
+            context.protocol === 'http'
+              ? Math.max(...offers.map((offer) => PROOF_RESERVE_BYTES[offer.family]))
+              : undefined,
+            context.resource.id,
+          );
 
     const expiresAt = new Date(clock.now().getTime() + maxTimeoutSeconds * 1000).toISOString();
 
@@ -153,7 +198,7 @@ export function createRequirementBuilders(
         provider: 'x402',
         version: X402_PROTOCOL_VERSION,
         accepts: accepts as unknown as Record<string, unknown>[],
-        envelope: envelope as unknown as Record<string, unknown>,
+        envelope: challenge as unknown as Record<string, unknown>,
       },
       metadata: {
         [SETTLE_AFTER_BACKEND_METADATA_KEY]: paymentFlow === 'authorization',
@@ -162,6 +207,31 @@ export function createRequirementBuilders(
         [REUSE_REJECTED_AUTHORIZATION_METADATA_KEY]: true,
       },
     };
+  }
+
+  // Omit Bazaar if the HTTP challenge plus its proof reserve exceeds 8 KiB.
+  // `headerReserve` is undefined for other surfaces.
+  function withBazaar(
+    envelope: PaymentRequired,
+    bazaar: unknown,
+    headerReserve: number | undefined,
+    resourceId: string,
+  ): PaymentRequired {
+    const extended = {
+      ...envelope,
+      extensions: { ...envelope.extensions, [BAZAAR_EXTENSION_KEY]: bazaar },
+    };
+    if (headerReserve === undefined) return extended;
+    const encoded = 4 * Math.ceil(Buffer.byteLength(JSON.stringify(extended)) / 3);
+    if (encoded + headerReserve <= MAX_HTTP_HEADER_BYTES) return extended;
+    if (!oversizedLogged.has(resourceId)) {
+      oversizedLogged.add(resourceId);
+      logger.warn(
+        { resourceId, bytes: encoded, reservedBytes: headerReserve },
+        'x402: Bazaar metadata left out of an HTTP challenge too large to leave room for the signed proof in an 8 KiB header',
+      );
+    }
+    return envelope;
   }
 
   /**
