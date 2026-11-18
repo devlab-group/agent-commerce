@@ -15,6 +15,7 @@ import { CommerceError, NOOP_LOGGER, systemClock } from '../../../core';
 import { descriptorStatus, exclusionNames } from '../../../support/claims';
 import record from '../../../support/x402.json' with { type: 'json' };
 import { PACKAGE_VERSION } from '../../../version';
+import { createBazaarForwarding } from './bazaar-forwarding';
 import { DEFAULT_IDS, DEFAULT_MAX_TIMEOUT_SECONDS, X402_VERSION } from './constants';
 import {
   createNearRelayerSource,
@@ -156,8 +157,9 @@ export function createX402PaymentProvider(
     ctx,
     createSvmFeePayerSource(supported),
   );
-  const verify = createVerify(ctx, createNearRelayerSource(supported, logger));
-  const settle = createSettle(ctx);
+  const bazaar = createBazaarForwarding(ctx, supported);
+  const verify = createVerify(ctx, createNearRelayerSource(supported, logger), bazaar);
+  const settle = createSettle(ctx, bazaar);
   const health = createHealthCheck(ctx);
 
   return {

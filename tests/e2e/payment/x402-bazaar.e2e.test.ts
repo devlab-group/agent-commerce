@@ -58,6 +58,8 @@ let anvil: AnvilHandle;
 let deployment: Awaited<ReturnType<typeof deployLocalChain>>;
 let withBazaar: Stack;
 let withoutBazaar: Stack;
+// Bazaar is enabled, but the facilitator does not advertise the extension
+let unlisted: Stack;
 let mcp: Client | undefined;
 
 function rawConfig(facilitatorUrl: string, bazaar: boolean): Record<string, unknown> {
@@ -116,12 +118,13 @@ function rawConfig(facilitatorUrl: string, bazaar: boolean): Record<string, unkn
   };
 }
 
-async function startStack(bazaar: boolean): Promise<Stack> {
+async function startStack(bazaar: boolean, extensions: string[] = ['bazaar']): Promise<Stack> {
   const facilitator = await startLoopbackFacilitator({
     evm: {
       chains: [{ network: NETWORK, rpcUrl: anvil.rpcUrl }],
       signerPrivateKey: deployment.facilitator.privateKey,
     },
+    extensions,
   });
   const config = parseConfig(rawConfig(facilitator.url, bazaar), {});
   const store = createSqliteReceiptStore({ path: ':memory:', logger: NOOP_LOGGER });
@@ -222,6 +225,7 @@ beforeAll(async () => {
   deployment = await deployLocalChain({ rpcUrl: anvil.rpcUrl, buyerInitialBalance: '10.00' });
   withBazaar = await startStack(true);
   withoutBazaar = await startStack(false);
+  unlisted = await startStack(true, []);
 }, 180_000);
 
 afterEach(async () => {
@@ -230,7 +234,7 @@ afterEach(async () => {
 });
 
 afterAll(async () => {
-  for (const stack of [withBazaar, withoutBazaar]) {
+  for (const stack of [withBazaar, withoutBazaar, unlisted]) {
     await stack?.gateway.close().catch(() => {});
     await stack?.store.close().catch(() => {});
     await stack?.facilitator.close();
@@ -334,6 +338,22 @@ describe('x402 Bazaar metadata - real local chain', () => {
       await payHttp(withoutBazaar, proof);
     });
 
+    expect(bodies.map(({ operation }) => operation)).toEqual(['verify', 'settle']);
+    for (const payload of payloads(bodies) as Record<string, unknown>[]) {
+      expect(Object.keys(payload)).toEqual(THREE_KEYS);
+    }
+  });
+
+  it('facilitator without the extension: settles with the metadata in the 402 and none sent', async () => {
+    const required = await httpChallenge(unlisted);
+    expect(Object.keys(required.extensions ?? {})).toEqual(['bazaar']);
+    const proof = await buyer().createPaymentPayload(required);
+
+    const bodies = await purchase(unlisted, async () => {
+      await payHttp(unlisted, proof);
+    });
+
+    expect(unlisted.facilitator.requests).toContain('GET /supported');
     expect(bodies.map(({ operation }) => operation)).toEqual(['verify', 'settle']);
     for (const payload of payloads(bodies) as Record<string, unknown>[]) {
       expect(Object.keys(payload)).toEqual(THREE_KEYS);

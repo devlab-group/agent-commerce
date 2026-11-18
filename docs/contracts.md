@@ -483,9 +483,13 @@ persistence must not fail the commerce flow.
   - With `payments.x402.bazaar.enabled: true`, config normalization fills
     `GatewayConfig.payments.x402.resourceBazaar` with metadata that passes
     the omission rules. MPP's internal x402 provider does not receive it.
-  - For a challenge carrying Bazaar metadata, verify and settle send its
-    `resource` and `extensions.bazaar` to the facilitator, replacing those
-    fields from the proof.
+  - When a challenge carries Bazaar metadata, verify and settle send its
+    `resource` and `extensions.bazaar` to a remote facilitator that lists
+    `bazaar` in `/supported`, replacing those fields from the proof. Any other
+    facilitator receives neither.
+  - An HTTP challenge omits the metadata unless its encoded
+    `PAYMENT-REQUIRED` value plus the largest proof reserve among its offer
+    families fits within 8192 bytes.
   - Without the option, challenges and facilitator bodies are unchanged.
 - 2.8.0: experimental `GatewayConfig.protocols.mcp.registry` holds the
   `name`, `version` and `description` from `protocols.mcp.registry` and is

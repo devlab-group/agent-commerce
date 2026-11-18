@@ -20,7 +20,7 @@ import { createConfiguredPaymentProviders } from '../../src/gateway/payment-prov
 import { createMcpAdapter } from '../../src/protocols/mcp';
 import { createFakeStore } from '../unit/gateway/helpers';
 
-const facilitator = vi.hoisted(() => ({ verify: vi.fn(), settle: vi.fn() }));
+const facilitator = vi.hoisted(() => ({ verify: vi.fn(), settle: vi.fn(), supported: vi.fn() }));
 vi.mock('@x402/core/http', () => ({
   FacilitatorResponseError: class extends Error {},
   HTTPFacilitatorClient: class {
@@ -29,6 +29,9 @@ vi.mock('@x402/core/http', () => ({
     }
     settle(...args: unknown[]) {
       return facilitator.settle(...args);
+    }
+    getSupported() {
+      return facilitator.supported();
     }
   },
 }));
@@ -58,7 +61,14 @@ let url = '';
 let mcp: Client | undefined;
 let warn: ReturnType<typeof vi.spyOn>;
 
+const supported = (extensions: string[]) => ({
+  kinds: [{ x402Version: 2, scheme: 'exact', network: NETWORK }],
+  extensions,
+  signers: {},
+});
+
 beforeEach(async () => {
+  facilitator.supported.mockReset().mockResolvedValue(supported(['bazaar']));
   facilitator.verify.mockReset().mockResolvedValue({ isValid: true, payer: buyer.address });
   facilitator.settle.mockReset().mockResolvedValue({
     success: true,
@@ -216,6 +226,50 @@ describe('x402 Bazaar metadata through the gateway', () => {
         extensions: { bazaar: issued('forecast', 'http') },
       });
     }
+  });
+
+  it('sells through a facilitator that does not list the extension, sending it no metadata', async () => {
+    facilitator.supported.mockResolvedValue(supported([]));
+    const required = challengeOf(await invoke('forecast', { city: 'Oslo', days: 1 }));
+    expect(required.extensions).toEqual({ bazaar: issued('forecast', 'http') });
+
+    const paid = await invoke(
+      'forecast',
+      { city: 'Oslo', days: 1 },
+      await payments().createPaymentPayload(required),
+    );
+
+    expect(paid.statusCode).toBe(200);
+    expect(paid.json()).toEqual({ forecast: 'sun' });
+    for (const mock of [facilitator.verify, facilitator.settle]) {
+      expect(mock).toHaveBeenCalledTimes(1);
+      expect(Object.keys(mock.mock.calls[0]?.[0] as object)).toEqual([
+        'x402Version',
+        'accepted',
+        'payload',
+      ]);
+    }
+  });
+
+  it('answers a refused proof with a challenge that keeps the metadata and names the reason', async () => {
+    facilitator.verify.mockResolvedValue({
+      isValid: false,
+      invalidReason: 'invalid_exact_evm_signature',
+    });
+    const required = challengeOf(await invoke('forecast', { city: 'Oslo', days: 1 }));
+
+    const refused = await invoke(
+      'forecast',
+      { city: 'Oslo', days: 1 },
+      await payments().createPaymentPayload(required),
+    );
+
+    expect(challengeOf(refused)).toMatchObject({
+      error: 'invalid_exact_evm_signature',
+      extensions: { bazaar: issued('forecast', 'http') },
+    });
+    expect(String(refused.headers['payment-required']).length).toBeLessThanOrEqual(8192);
+    expect(facilitator.settle).not.toHaveBeenCalled();
   });
 
   it('warns about a resource left out at load, and still sells it', async () => {

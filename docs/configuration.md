@@ -722,9 +722,11 @@ the resource id, affected surfaces and reason. Omitting metadata leaves payment
 behavior unchanged.
 [x402](protocols/x402.md#bazaar-discovery-metadata) lists the rules.
 
-Choose a facilitator that accepts Bazaar metadata. When a challenge carries
-it, verify and settle forward that metadata. On HTTP, a Bazaar validation
-rejection can cause repeated 402 challenges.
+Choose a facilitator whose `/supported` response lists `bazaar` among its
+extensions. Verify and settle forward metadata only to these remote
+facilitators. Other facilitators receive the proof without metadata. If a
+facilitator lists the extension but rejects payment because of the metadata,
+HTTP buyers can receive repeated 402 challenges.
 
 ### `payments.mpp`
 

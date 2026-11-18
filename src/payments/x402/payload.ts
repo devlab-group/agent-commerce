@@ -36,8 +36,9 @@ export function declaredX402Version(payloadBase64: string): unknown {
  * unsupported SDK facilitator behavior.
  *
  * When the `issued` challenge carries Bazaar metadata, attach its `resource`
- * and `extensions.bazaar` for cataloging. Use the issued values so a buyer's
- * altered echo cannot replace the listing metadata.
+ * and `extensions.bazaar` for cataloging. The provider passes `issued` only
+ * for a facilitator that lists the extension. Use the issued values to keep
+ * an altered buyer echo from replacing the listing metadata.
  */
 export function forFacilitator<T extends PaymentPayload>(
   payload: T,

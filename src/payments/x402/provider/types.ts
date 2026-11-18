@@ -28,9 +28,10 @@ export interface X402ProviderOptions extends X402OfferOptions {
   readonly resourceMimeTypes?: Readonly<Record<string, string>>;
   /**
    * Experimental. Maps resource ids and HTTP/MCP surfaces to the challenge's
-   * `extensions.bazaar` value. Omitted from HTTP challenges when it would make
-   * the encoded `PAYMENT-REQUIRED` value exceed 8 KiB. When present, verify and
-   * settle send it and the challenge's `resource` to the facilitator.
+   * `extensions.bazaar` value. Omitted when the encoded HTTP challenge's
+   * `PAYMENT-REQUIRED` value plus its proof reserve exceeds 8 KiB.
+   * Verify and settle send it and the challenge's `resource` to a remote
+   * facilitator that lists `bazaar` in `/supported`.
    */
   readonly resourceBazaar?: Readonly<
     Record<string, Readonly<Partial<Record<BazaarSurface, BazaarExtension>>>>

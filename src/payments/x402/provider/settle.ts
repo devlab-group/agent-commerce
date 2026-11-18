@@ -5,6 +5,7 @@ import { CommerceError } from '../../../core';
 import { redactedErrorText } from '../../../core/errors';
 import { isTransactionReference } from '../addresses';
 import { decodePaymentSubmission, forFacilitator } from '../payload';
+import type { BazaarForwarding } from './bazaar-forwarding';
 import {
   isNearVerdict,
   isOnChainRevertError,
@@ -23,6 +24,7 @@ import type { ProviderContext } from './types';
 /** Builds the provider's `settle`, which throws unless handed a successful verification */
 export function createSettle(
   ctx: ProviderContext,
+  bazaar: BazaarForwarding,
 ): (context: PaymentSettlementContext) => Promise<PaymentResult> {
   const { offersFor, clock, logger } = ctx;
 
@@ -70,13 +72,13 @@ export function createSettle(
       rejectionReason,
     });
 
+    const issued = await bazaar.issuedFor(
+      requirement.challenge.envelope as PaymentRequired | undefined,
+    );
     const scope = offer.binding.open();
     let sdkResult: SettleResponse;
     try {
-      sdkResult = await scope.settle(
-        forFacilitator(payload, requirement.challenge.envelope as PaymentRequired | undefined),
-        requirements,
-      );
+      sdkResult = await scope.settle(forFacilitator(payload, issued), requirements);
     } catch (err) {
       if (isProviderUnavailableError(err) || scope.transportFailed()) {
         throw new CommerceError(
@@ -108,6 +110,8 @@ export function createSettle(
       );
       return rejectedSettlement('transaction_reverted');
     }
+
+    bazaar.report(requirement.resourceId, sdkResult.extensionResponses);
 
     // verify() established the payer. The Solana scheme's settlement example
     // names the fee payer there, while x402 v2 defines the payer's wallet.

@@ -69,6 +69,8 @@ export async function startLoopbackFacilitator(options: {
   readonly near?: LoopbackNear;
   /** Serves https with this certificate, since a mainnet gateway refuses a plain-HTTP facilitator */
   readonly tls?: { readonly key: string; readonly cert: string };
+  /** Extension identifiers advertised by `/supported`; empty by default */
+  readonly extensions?: readonly string[];
 }): Promise<LoopbackFacilitator> {
   const chains = options.evm?.chains ?? [];
   const bindings = new Map<string, FacilitatorBinding>(
@@ -122,7 +124,7 @@ export async function startLoopbackFacilitator(options: {
           ...chains.map(({ network }) => ({ x402Version: 2, scheme: 'exact', network })),
           ...sdk.flatMap((supported) => supported.kinds.filter((kind) => kind.x402Version === 2)),
         ],
-        extensions: [],
+        extensions: options.extensions ?? [],
         signers: Object.assign({}, ...sdk.map((supported) => supported.signers)),
       });
       return;

@@ -3,7 +3,7 @@ import { x402Client } from '@x402/core/client';
 import type { PaymentPayload, PaymentRequired } from '@x402/core/types';
 import { registerExactEvmScheme } from '@x402/evm/exact/client';
 import { privateKeyToAccount } from 'viem/accounts';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   type CommerceResource,
   NOOP_LOGGER,
@@ -15,8 +15,10 @@ import {
   createX402PaymentProvider,
   type X402ProviderOptions,
 } from '../../../src/payments/x402/provider';
+import { createBazaarForwarding } from '../../../src/payments/x402/provider/bazaar-forwarding';
+import type { ProviderContext } from '../../../src/payments/x402/provider/types';
 
-const facilitator = vi.hoisted(() => ({ verify: vi.fn(), settle: vi.fn() }));
+const facilitator = vi.hoisted(() => ({ verify: vi.fn(), settle: vi.fn(), supported: vi.fn() }));
 
 // Mock the facilitator HTTP client to inspect the payment payloads passed to it
 vi.mock('@x402/core/http', () => ({
@@ -27,6 +29,9 @@ vi.mock('@x402/core/http', () => ({
     }
     settle(...args: unknown[]) {
       return facilitator.settle(...args);
+    }
+    getSupported() {
+      return facilitator.supported();
     }
   },
 }));
@@ -115,7 +120,18 @@ async function pay(
   };
 }
 
+const supported = (extensions: string[]) => ({
+  kinds: [{ x402Version: 2, scheme: 'exact', network: 'eip155:31337' }],
+  extensions,
+  signers: {},
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 beforeEach(() => {
+  facilitator.supported.mockReset().mockResolvedValue(supported(['bazaar']));
   facilitator.verify.mockReset().mockResolvedValue({ isValid: true, payer: BUYER.address });
   facilitator.settle.mockReset().mockResolvedValue({
     success: true,
@@ -156,19 +172,49 @@ describe('Bazaar metadata in the challenge', () => {
     return { pad, extension: bazaarFor('http', pad) };
   }
 
-  it('keeps it when the encoded HTTP challenge is exactly 8192 bytes', async () => {
-    const { pad, extension } = await sizedHttpChallenge(8192);
+  // 8192 less the 1024 bytes kept for an EVM proof
+  const EVM_LIMIT = 7168;
+  const encodedLength = (document: unknown) =>
+    Buffer.from(JSON.stringify(document)).toString('base64').length;
+
+  it('keeps it when the encoded HTTP challenge leaves exactly 1024 bytes of an 8192-byte header', async () => {
+    const { pad, extension } = await sizedHttpChallenge(EVM_LIMIT);
     const envelope = envelopeOf(
       await provider({ resourceBazaar: { report: { http: extension } } }).createRequirement(
         context('http'),
       ),
     );
-    expect(Buffer.from(JSON.stringify(envelope)).toString('base64')).toHaveLength(8192);
+    expect(encodedLength(envelope)).toBe(EVM_LIMIT);
     expect(envelope.extensions).toEqual({ bazaar: bazaarFor('http', pad) });
   });
 
+  it('fits the SDK client echo of the largest kept challenge in an 8192-byte header', async () => {
+    const { extension } = await sizedHttpChallenge(EVM_LIMIT);
+    const requirement = await provider({
+      resourceBazaar: { report: { http: extension } },
+    }).createRequirement(context('http'));
+
+    const proof = await sdkProof(requirement);
+
+    // The echo repeats the metadata and adds the signed payload
+    expect(proof.extensions).toEqual({ bazaar: extension });
+    expect(encodedLength(proof)).toBeGreaterThan(EVM_LIMIT);
+    expect(encodedLength(proof)).toBeLessThanOrEqual(8192);
+  });
+
+  it("fits a refused proof's challenge with the longest error code in an 8192-byte header", async () => {
+    const { extension } = await sizedHttpChallenge(EVM_LIMIT);
+    const envelope = envelopeOf(
+      await provider({ resourceBazaar: { report: { http: extension } } }).createRequirement(
+        context('http'),
+      ),
+    );
+    // A provider reason is at most 128 characters
+    expect(encodedLength({ ...envelope, error: 'r'.repeat(128) })).toBeLessThanOrEqual(8192);
+  });
+
   it('leaves it out of an HTTP challenge one byte over, and logs that once per resource', async () => {
-    const { extension } = await sizedHttpChallenge(8192);
+    const { extension } = await sizedHttpChallenge(EVM_LIMIT);
     const big = {
       ...extension,
       info: { input: { ...extension.info.input, pad: `${extension.info.input.pad}p` } },
@@ -191,8 +237,8 @@ describe('Bazaar metadata in the challenge', () => {
     expect(mcp.extensions).toEqual({ bazaar: bigger });
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalledWith(
-      { resourceId: 'report', bytes: 8196 },
-      'x402: Bazaar metadata left out of an HTTP challenge whose PAYMENT-REQUIRED header would exceed 8 KiB',
+      { resourceId: 'report', bytes: EVM_LIMIT + 4, reservedBytes: 1024 },
+      'x402: Bazaar metadata left out of an HTTP challenge too large to leave room for the signed proof in an 8 KiB header',
     );
   });
 });
@@ -381,4 +427,151 @@ describe('Bazaar metadata on the way to the facilitator', () => {
       expect(settled).toEqual(expected);
     },
   );
+});
+
+describe('Bazaar metadata and the facilitator /supported list', () => {
+  const THREE_KEYS = ['x402Version', 'accepted', 'payload'];
+
+  it('sends none to a facilitator that does not list the extension, and warns once', async () => {
+    facilitator.supported.mockResolvedValue(supported(['eip2612GasSponsoring']));
+    const warn = vi.fn();
+    const by = provider({ resourceBazaar: BAZAAR, logger: { ...NOOP_LOGGER, warn } });
+    const requirement = await by.createRequirement(context('http'));
+    expect(envelopeOf(requirement).extensions).toEqual({ bazaar: BAZAAR.report.http });
+
+    const { verified, settled } = await pay(by, requirement, await sdkProof(requirement));
+    await pay(by, requirement, await sdkProof(requirement));
+
+    expect(Object.keys(verified)).toEqual(THREE_KEYS);
+    expect(Object.keys(settled)).toEqual(THREE_KEYS);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(
+      { facilitator: 'remote https://facilitator.example (auth=none)' },
+      'x402: the facilitator does not list the bazaar extension in /supported; Bazaar metadata stays in challenges but is not sent to it',
+    );
+  });
+
+  it('sends none, and still verifies and settles, when /supported fails', async () => {
+    facilitator.supported.mockRejectedValue(new Error('facilitator down'));
+    const by = provider({ resourceBazaar: BAZAAR });
+    const requirement = await by.createRequirement(context('http'));
+
+    const { verified, settled } = await pay(by, requirement, await sdkProof(requirement));
+
+    expect(Object.keys(verified)).toEqual(THREE_KEYS);
+    expect(Object.keys(settled)).toEqual(THREE_KEYS);
+  });
+
+  it('sends none, and waits one second per call, when /supported does not answer', async () => {
+    const by = provider({ resourceBazaar: BAZAAR });
+    const requirement = await by.createRequirement(context('http'));
+    const proof = await sdkProof(requirement);
+    facilitator.supported.mockReturnValue(new Promise(() => {}));
+    vi.useFakeTimers();
+
+    const paying = pay(by, requirement, proof);
+    await vi.advanceTimersByTimeAsync(999);
+    expect(facilitator.verify).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(facilitator.verify).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1_000);
+    const { verified, settled } = await paying;
+
+    expect(Object.keys(verified)).toEqual(THREE_KEYS);
+    expect(Object.keys(settled)).toEqual(THREE_KEYS);
+  });
+
+  it('does not read /supported for a challenge without the metadata', async () => {
+    const by = provider();
+    const requirement = await by.createRequirement(context('http'));
+
+    await pay(by, requirement, await sdkProof(requirement));
+
+    expect(facilitator.supported).not.toHaveBeenCalled();
+  });
+});
+
+describe('Bazaar metadata and the in-process facilitator', () => {
+  it('gets none, and /supported is not read, since it keeps no catalog', async () => {
+    const currentSupported = vi.fn();
+    const forwarding = createBazaarForwarding(
+      { remoteBinding: undefined, logger: NOOP_LOGGER } as unknown as ProviderContext,
+      currentSupported,
+    );
+    const issued = envelopeOf(
+      await provider({ resourceBazaar: BAZAAR }).createRequirement(context('http')),
+    );
+    expect(issued.extensions).toEqual({ bazaar: BAZAAR.report.http });
+
+    expect(await forwarding.issuedFor(issued)).toBeUndefined();
+    expect(currentSupported).not.toHaveBeenCalled();
+  });
+});
+
+describe('Bazaar outcome from the facilitator', () => {
+  const REJECTED = {
+    bazaar: {
+      status: 'rejected',
+      rejectedReason: `info failed schema validation at https://user:secret@catalog.example/v1?key=abc ${'x'.repeat(400)}`,
+    },
+  };
+  const REJECTION_MESSAGE =
+    'x402: the facilitator rejected the Bazaar metadata of a resource and will not catalog it. Payment is unaffected';
+
+  async function payWith(by: ReturnType<typeof provider>) {
+    const requirement = await by.createRequirement(context('http'));
+    return pay(by, requirement, await sdkProof(requirement));
+  }
+
+  it('logs a rejection on verify once per resource, with the reason redacted and cut to 200 characters', async () => {
+    facilitator.verify.mockResolvedValue({
+      isValid: true,
+      payer: BUYER.address,
+      extensionResponses: REJECTED,
+    });
+    const warn = vi.fn();
+    const by = provider({ resourceBazaar: BAZAAR, logger: { ...NOOP_LOGGER, warn } });
+
+    await payWith(by);
+    await payWith(by);
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    const [fields, message] = warn.mock.calls[0] as [Record<string, string>, string];
+    expect(message).toBe(REJECTION_MESSAGE);
+    expect(fields).toEqual({
+      resourceId: 'report',
+      reportedReason:
+        `info failed schema validation at https://catalog.example ${'x'.repeat(400)}`.slice(0, 200),
+    });
+  });
+
+  it('logs a rejection that arrives on settle', async () => {
+    facilitator.settle.mockResolvedValue({
+      success: true,
+      transaction: `0x${'ab'.repeat(32)}`,
+      network: 'eip155:31337',
+      payer: BUYER.address,
+      extensionResponses: { bazaar: { status: 'rejected' } },
+    });
+    const warn = vi.fn();
+    const by = provider({ resourceBazaar: BAZAAR, logger: { ...NOOP_LOGGER, warn } });
+
+    await payWith(by);
+
+    expect(warn.mock.calls).toEqual([[{ resourceId: 'report' }, REJECTION_MESSAGE]]);
+  });
+
+  it.each(['success', 'processing'])('logs nothing for a %s outcome', async (status) => {
+    facilitator.verify.mockResolvedValue({
+      isValid: true,
+      payer: BUYER.address,
+      extensionResponses: { bazaar: { status } },
+    });
+    const warn = vi.fn();
+    const by = provider({ resourceBazaar: BAZAAR, logger: { ...NOOP_LOGGER, warn } });
+
+    await payWith(by);
+
+    expect(warn).not.toHaveBeenCalled();
+  });
 });
