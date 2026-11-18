@@ -341,11 +341,21 @@ prints the `unsupported` lists for A2A, ACP and AP2 when they are enabled.
 
 ### Versioning
 
-Minor releases may break experimental configurations, integrations or types:
-MPP, A2A, ACP, AP2, ERC-8409 quotes, `agent-commerce import openapi`,
-`PaymentProvider.reconcile`, the `ReceiptStore` methods and types added in
-2.6.0, the `idempotency` resource settings with the store and provider methods
-added in 2.7.0, and the `./testing` entry.
+Minor releases may break experimental configurations, integrations or types.
+This includes MPP, A2A, ACP, AP2, ERC-8409 quotes, the
+[public resource URL](docs/configuration.md#public-resource-url) and
+[Bazaar metadata](docs/configuration.md#bazaar-metadata) in payment
+challenges, and these interfaces:
+
+- `agent-commerce import openapi`.
+- `agent-commerce export mcp-registry`, `doctor --registry` and the
+  `protocols.mcp.registry` keys.
+- `PaymentProvider.reconcile` and the `ReceiptStore` methods and types added
+  in 2.6.0.
+- The `idempotency` resource settings and the store and provider methods added
+  in 2.7.0.
+- `PaymentContext.protocol` and `AdapterHealthComponent.undetermined` (added
+  in 2.8.0), and the `./testing` entry.
 
 A profile moves from experimental to supported only when it meets the
 [promotion criteria](docs/protocols.md#promotion-criteria).
@@ -711,8 +721,9 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 mainnet, Solana devnet and Solana mainnet, receipts, doctor, deterministic
 demo, experimental A2A v1.0.1 and ACP `2026-04-17` checkout adapters,
 experimental AP2 v0.2.0 mandate verification, experimental MPP `charge`
-payments, experimental OpenAPI import, and experimental retries after a lost
-response.
+payments, experimental OpenAPI import, experimental retries after a lost
+response, and experimental discovery metadata for x402 Bazaar and MCP Registry
+listings.
 
 **Next** - a `doctor` GitHub Action · UCP ·
 autonomous-mode AP2 (open mandates, agent key binding, constraint evaluation) ·

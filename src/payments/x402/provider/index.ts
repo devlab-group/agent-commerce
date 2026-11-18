@@ -114,6 +114,8 @@ export function createX402PaymentProvider(
       'upfront-flow',
       ...(severalOffers ? ['multiple-offers'] : []),
       ...(quotes ? ['erc-8409-quotes'] : []),
+      ...(options.resourceUrls !== undefined ? ['public-resource-url'] : []),
+      ...(options.resourceBazaar !== undefined ? ['bazaar'] : []),
     ],
     status: descriptorStatus(record),
     unsupported: exclusionNames(record),

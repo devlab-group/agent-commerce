@@ -122,6 +122,8 @@ const X402_MATRIX: Record<string, Record<string, unknown>> = {
     ],
     facilitator: REMOTE,
     quote: { enabled: true, signerPrivateKey: QUOTE_SIGNER },
+    publicResourceUrl: true,
+    bazaar: { enabled: true },
   },
   'Base mainnet': {
     network: 'eip155:8453',

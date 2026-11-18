@@ -477,6 +477,8 @@ persistence must not fail the commerce flow.
     `GatewayConfig.payments.x402.resourceUrls` for resources whose first
     enabled rail is x402, with each URL in the URL parser's form. MPP's
     internal x402 provider does not receive this map.
+  - A provider given the map lists `public-resource-url` in its descriptor's
+    `capabilities`.
   - Without the option, challenges are unchanged.
 - 2.8.0: experimental `X402ProviderOptions.resourceBazaar` maps resource ids
   and request surfaces (`http` or `mcp`) to each challenge's `extensions.bazaar`
@@ -491,6 +493,7 @@ persistence must not fail the commerce flow.
   - An HTTP challenge omits the metadata unless its encoded
     `PAYMENT-REQUIRED` value plus the largest proof reserve among its offer
     families fits within 8192 bytes.
+  - A provider given the map lists `bazaar` in its descriptor's `capabilities`.
   - Without the option, challenges and facilitator bodies are unchanged.
 - 2.8.0: experimental `GatewayConfig.protocols.mcp.registry` holds the
   `name`, `version` and `description` from `protocols.mcp.registry` and is

@@ -56,7 +56,9 @@
       "title": "ERC-8409",
       "role": "x402 feature: EIP-712 signed quotes on the EVM offers of a challenge.",
       "subset": "signed quotes on x402 EVM offers; issuer published in `/.well-known/agent-commerce`"
-    }
+    },
+    { "name": "public-resource-url", "status": "experimental" },
+    { "name": "bazaar", "status": "experimental" }
   ],
   "exclusions": [
     { "name": "permit2 gas sponsoring extensions" },
@@ -105,6 +107,12 @@
       "authorization": "ap2",
       "level": "e2e",
       "evidence": "tests/e2e/authorization/ap2-x402.e2e.test.ts"
+    },
+    {
+      "surface": "mcp",
+      "method": "x402",
+      "level": "e2e",
+      "evidence": "tests/e2e/payment/x402-bazaar.e2e.test.ts"
     },
     {
       "surface": "mcp",

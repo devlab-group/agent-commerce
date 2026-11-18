@@ -49,6 +49,7 @@ on the wallet holder's machine, never in CI.
 | x402 | HTTP    | -             | E2E, local chain      | `tests/e2e/payment/x402-settlement.e2e.test.ts`  |
 | x402 | A2A     | -             | E2E, local chain      | `tests/e2e/payment/x402-settlement.e2e.test.ts`  |
 | x402 | HTTP    | AP2           | E2E, local chain      | `tests/e2e/authorization/ap2-x402.e2e.test.ts`   |
+| x402 | MCP     | -             | E2E, local chain      | `tests/e2e/payment/x402-bazaar.e2e.test.ts`      |
 | x402 | MCP     | -             | integration, no chain | `tests/integration/mcp-payment-bindings.test.ts` |
 | x402 | HTTP    | -             | public testnet        | `tests/testnet/x402.smoke.test.ts`               |
 | x402 | HTTP    | -             | mainnet               | `tests/mainnet/x402.smoke.test.ts`               |
@@ -87,13 +88,15 @@ that status. Upstream does not label x402 v2 stable, and its record states that.
 
 - [HTTP surface](protocols/http.md): routes, and the payment headers each rail
   uses on the invoke route
-- [MCP](protocols/mcp.md): tools, payment over MCP, and exclusions
+- [MCP](protocols/mcp.md): tools, payment over MCP, MCP Registry listings,
+  and exclusions
 - [A2A](protocols/a2a.md): invocation and payment, the x402 extension, results,
   and exclusions
 - [ACP](protocols/acp.md): headers, checkout operations, the payment boundary,
   idempotency, errors, discovery, and exclusions
 - [x402](protocols/x402.md): the `exact` scheme on EVM, Solana and NEAR,
-  several options, payment flows, and mainnet guardrails
+  several options, payment flows, the public resource URL, Bazaar metadata,
+  and mainnet guardrails
 - [MPP](protocols/mpp.md): the pinned drafts, the `charge` profile, payment
   flow, problem documents, and exclusions
 - [AP2](protocols/ap2.md): mandate verification before a paid resource settles
