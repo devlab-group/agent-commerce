@@ -16,6 +16,9 @@ export interface LoadConfigOptions {
 
 export type ConfigLoader = (options?: LoadConfigOptions) => Promise<GatewayConfig>;
 
+/** Reads the loader's raw config before environment substitution and validation */
+export type ConfigFileReader = (options?: LoadConfigOptions) => Promise<unknown>;
+
 /** Validates an already-built raw config object, without touching the disk */
 export type ConfigParser = (raw: unknown, env?: NodeJS.ProcessEnv) => Promise<GatewayConfig>;
 
@@ -32,6 +35,10 @@ async function importConfig(): Promise<typeof import('../../config')> {
 
 export async function loadConfigDynamic(options: LoadConfigOptions = {}): Promise<GatewayConfig> {
   return (await importConfig()).loadConfig(options);
+}
+
+export async function readConfigFileDynamic(options: LoadConfigOptions = {}): Promise<unknown> {
+  return (await importConfig()).readConfigFile(options);
 }
 
 /** Validates a raw config object in memory; `init` uses it to validate before writing */

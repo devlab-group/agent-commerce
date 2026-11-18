@@ -10,7 +10,12 @@ import {
   type SqliteReceiptStoreSummary,
 } from '../../../storage/receipts';
 import type { GatewayConfig } from '../../lib/config-client';
-import type { CheckStatus, DoctorCheck, DoctorStore } from './types';
+import {
+  type CheckStatus,
+  type DoctorCheck,
+  type DoctorStore,
+  SKIPPED_CONFIG_INVALID,
+} from './types';
 
 // Whether an existing file is writable, without creating one
 function isWritableFile(path: string): boolean {
@@ -141,7 +146,7 @@ export async function storageChecks(
   // 7. Storage
   if (config === undefined) {
     return {
-      checks: [{ name: 'Storage', status: 'WARN', detail: 'skipped: config invalid' }],
+      checks: [{ name: 'Storage', status: 'WARN', ...SKIPPED_CONFIG_INVALID }],
       legacy: undefined,
     };
   }

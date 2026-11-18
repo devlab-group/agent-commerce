@@ -457,6 +457,17 @@ persistence must not fail the commerce flow.
   as they become idle and resolves after requests and adapters have finished.
   In 2.5, adapters stopped first and could close a store still in use by a
   request.
+- 2.8.0: x402 health marks an offer's component with `undetermined: 'unreachable'`
+  for recognized transport failures, including refused, reset or timed-out
+  connections, temporary DNS failures and request timeouts. Unresolvable
+  hostnames, TLS or certificate errors, JSON-RPC errors, non-2xx responses and
+  reverts leave the component unmarked. MPP uses the same provider to report its
+  offer's health.
+  - `/.well-known` adds `status` and `undetermined` to a single-offer
+    `payments.x402` block and to `payments.mpp`, and `undetermined` to each
+    offer in `options` and `resourceOptions`.
+  - `doctor` reads them for `Payments (offers)` and the new
+    `Payments (MPP offers)` check.
 
 ### Authorization and AP2
 

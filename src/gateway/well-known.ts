@@ -95,7 +95,7 @@ export interface WellKnownDocument {
       readonly resourceOptions?: Readonly<Record<string, readonly WellKnownX402Offer[]>>;
       /** Absent unless the x402 provider signs ERC-8409 quotes */
       readonly quote?: WellKnownX402Quote;
-    };
+    } & OfferHealth;
     /** Public settlement fields; excludes the challenge secret and facilitator credentials */
     readonly mpp?: {
       readonly enabled: boolean;
@@ -111,12 +111,23 @@ export interface WellKnownDocument {
       readonly paymentFlow: X402PaymentFlow;
       /** Resources that set their own flow, by id; absent when none does */
       readonly resourcePaymentFlows?: Readonly<Record<string, X402PaymentFlow>>;
-    };
+    } & OfferHealth;
   };
 }
 
+/**
+ * Public probe results for one offer, without diagnostic detail. On a rail
+ * block, these fields describe its own offer and appear only when `options`
+ * is absent.
+ */
+export interface OfferHealth {
+  readonly status?: AdapterHealth['status'];
+  /** Marks an unreachable probe; `status` does not describe the offer's health */
+  readonly undetermined?: 'unreachable';
+}
+
 /** One x402 offer's public terms */
-export interface WellKnownX402Offer {
+export interface WellKnownX402Offer extends OfferHealth {
   readonly network: string;
   readonly asset: string;
   readonly assetName?: string;
@@ -124,8 +135,6 @@ export interface WellKnownX402Offer {
   readonly assetDecimals: number;
   readonly payTo: string;
   readonly assetTransferMethod?: 'permit2';
-  /** Last reported health status, excluding diagnostic detail */
-  readonly status?: AdapterHealth['status'];
 }
 
 /**
@@ -172,14 +181,25 @@ function publicProtocols(protocols: GatewayConfig['protocols']): WellKnownProtoc
   };
 }
 
+// Find the offer's probe by its x402 component name; return no fields if absent
+function offerHealth(
+  health: AdapterHealth | undefined,
+  offer: { readonly network: string; readonly asset: string; readonly payTo: string },
+): OfferHealth {
+  const name = x402OfferName(offer);
+  const component = health?.components?.find((candidate) => candidate.name === name);
+  if (component === undefined) return {};
+  const { status, undetermined } = component;
+  return { status, ...(undetermined !== undefined ? { undetermined } : {}) };
+}
+
 // Allowlist public offer fields: RPC URLs can contain API keys
 function publicOffer(
   option: X402OptionConfig,
-  statuses: ReadonlyMap<string, AdapterHealth['status']>,
+  health: AdapterHealth | undefined,
 ): WellKnownX402Offer {
   const { network, asset, assetName, assetVersion, assetDecimals, payTo, assetTransferMethod } =
     option;
-  const status = statuses.get(x402OfferName(option));
   return {
     network,
     asset,
@@ -188,7 +208,7 @@ function publicOffer(
     assetDecimals,
     payTo,
     ...(assetTransferMethod !== undefined ? { assetTransferMethod } : {}),
-    ...(status !== undefined ? { status } : {}),
+    ...offerHealth(health, option),
   };
 }
 
@@ -218,10 +238,10 @@ export function buildWellKnownDocument(options: BuildWellKnownOptions): WellKnow
   }));
 
   const { x402, mpp } = options.config.payments;
-  const x402Health = options.paymentHealth?.find((probed) => probed.name === 'x402')?.health;
-  const offerStatuses = new Map(
-    (x402Health?.components ?? []).map((component) => [component.name, component.status]),
-  );
+  const probed = (name: string) =>
+    options.paymentHealth?.find((provider) => provider.name === name)?.health;
+  const x402Health = probed('x402');
+  const x402Options = x402?.options !== undefined && x402.options.length > 1 ? x402.options : [];
   const quote = publicQuote(options.paymentProviders);
 
   return {
@@ -258,15 +278,15 @@ export function buildWellKnownDocument(options: BuildWellKnownOptions): WellKnow
               ),
               paymentFlow: x402.paymentFlow ?? X402_DEFAULT_PAYMENT_FLOW,
               ...flowOverrides(x402.resourcePaymentFlows),
-              ...(x402.options !== undefined && x402.options.length > 1
-                ? { options: x402.options.map((option) => publicOffer(option, offerStatuses)) }
-                : {}),
+              ...(x402Options.length > 0
+                ? { options: x402Options.map((option) => publicOffer(option, x402Health)) }
+                : offerHealth(x402Health, x402)),
               ...(x402.resourceOptions !== undefined
                 ? {
                     resourceOptions: Object.fromEntries(
                       Object.entries(x402.resourceOptions).map(([id, list]) => [
                         id,
-                        list.map((option) => publicOffer(option, offerStatuses)),
+                        list.map((option) => publicOffer(option, x402Health)),
                       ]),
                     ),
                   }
@@ -289,6 +309,12 @@ export function buildWellKnownDocument(options: BuildWellKnownOptions): WellKnow
               mode: resolveDeploymentMode(requireX402Network(mpp.network, 'payments.mpp.network')),
               paymentFlow: mpp.paymentFlow ?? MPP_DEFAULT_PAYMENT_FLOW,
               ...flowOverrides(mpp.resourcePaymentFlows),
+              // MPP settles through an x402 provider, which names the offer
+              ...offerHealth(probed('mpp'), {
+                network: mpp.network,
+                asset: mpp.asset,
+                payTo: mpp.recipient,
+              }),
             },
           }
         : {}),

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { substituteEnv } from '../../../src/config/env';
+import { listEnvPlaceholders, substituteEnv } from '../../../src/config/env';
 import { isCommerceError } from '../../../src/core';
 
 describe('substituteEnv', () => {
@@ -124,5 +124,55 @@ describe('nested placeholders and the unresolved-placeholder promise', () => {
 
   it('control: a "${" with no closing brace is ordinary text, not a placeholder', () => {
     expect(substituteEnv({ x: 'cost is ${5' }, {})).toEqual({ x: 'cost is ${5' });
+  });
+});
+
+describe('listEnvPlaceholders', () => {
+  it('names each placeholder by state, sorted, from nested objects and arrays', () => {
+    const raw = {
+      server: { adminToken: '${ADMIN_TOKEN}', port: '${PORT:-8080}' },
+      payments: [{ url: 'https://rpc.example/${RPC_KEY}?x=${ZONE:-eu}', other: 7 }],
+      merchant: { name: '${MISSING_NAME}' },
+    };
+    expect(
+      listEnvPlaceholders(raw, { ADMIN_TOKEN: 'secret-value', RPC_KEY: 'k', ZONE: 'us' }),
+    ).toEqual({
+      missing: ['MISSING_NAME'],
+      defaulted: ['PORT'],
+      set: ['ADMIN_TOKEN', 'RPC_KEY', 'ZONE'],
+    });
+  });
+
+  // An empty value is set for ${VAR} and defaulted for ${VAR:-d}
+  it('counts an empty value as set for ${VAR} and as defaulted for ${VAR:-default}', () => {
+    expect(listEnvPlaceholders({ a: '${A}', b: '${B:-x}' }, { A: '', B: '' })).toEqual({
+      missing: [],
+      defaulted: ['B'],
+      set: ['A'],
+    });
+  });
+
+  // Put the worse state first to catch code that keeps the last use instead
+  it('lists a name used several ways once, under its worst state', () => {
+    const raw = { a: '${TOKEN}', b: '${TOKEN:-dev}', c: '${PORT:-1}', d: '${PORT}' };
+    expect(listEnvPlaceholders(raw, { PORT: '' })).toEqual({
+      missing: ['TOKEN'],
+      defaulted: ['PORT'],
+      set: [],
+    });
+  });
+
+  it('returns names only: no value and no default', () => {
+    const listed = listEnvPlaceholders(
+      { a: '${SET_VAR}', b: '${DEFAULTED:-default-secret}' },
+      { SET_VAR: 'value-secret' },
+    );
+    expect(JSON.stringify(listed)).not.toMatch(/secret/);
+  });
+
+  it('does not throw on templates config load refuses, and ignores keys', () => {
+    const raw = { '${KEY_NAME}': 'x', a: '${A:-${B}}', b: '${C-x}', c: '$PLAIN' };
+    expect(() => substituteEnv(raw, {})).toThrow();
+    expect(listEnvPlaceholders(raw, {})).toEqual({ missing: [], defaulted: ['A'], set: [] });
   });
 });

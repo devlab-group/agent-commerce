@@ -11,7 +11,7 @@ import ap2Record from '../../../support/ap2.json' with { type: 'json' };
 import { exclusionNames } from '../../../support/claims';
 import type { GatewayConfig } from '../../lib/config-client';
 import { type LegacyState, legacyStoreCheck } from './storage';
-import type { DoctorCheck } from './types';
+import { type DoctorCheck, SKIPPED_CONFIG_INVALID } from './types';
 
 // Issuer ids and how many keys each carries. Never a key
 function describeIssuers(
@@ -33,7 +33,7 @@ export function ap2Checks(config: GatewayConfig | undefined, legacy: LegacyState
   // issuer ids and key counts appear.
   const ap2 = config?.authorization?.ap2;
   if (config === undefined) {
-    checks.push({ name: 'AP2', status: 'WARN', detail: 'skipped: config invalid' });
+    checks.push({ name: 'AP2', status: 'WARN', ...SKIPPED_CONFIG_INVALID });
   } else if (ap2 === undefined || !ap2.enabled) {
     checks.push({ name: 'AP2', status: 'INFO', detail: 'disabled' });
   } else {

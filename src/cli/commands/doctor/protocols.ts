@@ -18,7 +18,13 @@ import acpRecord from '../../../support/acp.json' with { type: 'json' };
 import { exclusionNames } from '../../../support/claims';
 import type { GatewayConfig } from '../../lib/config-client';
 import { type LegacyState, legacyStoreCheck } from './storage';
-import type { DoctorCheck, WellKnownResult } from './types';
+import {
+  type DoctorCheck,
+  SKIPPED_CONFIG_INVALID,
+  type Undetermined,
+  undeterminedField,
+  type WellKnownResult,
+} from './types';
 
 /**
  * The resource mapped to each checkout operation, re-checked against the rules
@@ -64,13 +70,23 @@ export function protocolChecks(
   config: GatewayConfig | undefined,
   wellKnown: WellKnownResult | undefined,
   legacy: LegacyState,
+  // Why the well-known document was not obtained; absent after a response
+  liveCause?: Undetermined,
 ): DoctorCheck[] {
   const checks: DoctorCheck[] = [];
   // 5. Protocols
   if (config === undefined) {
-    checks.push({ name: 'Protocols', status: 'WARN', detail: 'skipped: config invalid' });
+    checks.push({ name: 'Protocols', status: 'WARN', ...SKIPPED_CONFIG_INVALID });
   } else if (wellKnown === undefined || !wellKnown.ok) {
-    checks.push({ name: 'Protocols', status: 'FAIL', detail: 'well-known document unreachable' });
+    checks.push({
+      name: 'Protocols',
+      status: 'FAIL',
+      detail:
+        wellKnown === undefined || wellKnown.status === 0
+          ? 'well-known document unreachable'
+          : `well-known document unavailable (HTTP ${wellKnown.status})`,
+      ...undeterminedField(liveCause),
+    });
   } else {
     const mcpMountPath = config.protocols.mcp.enabled ? config.protocols.mcp.mountPath : undefined;
     const a2aMountPath = config.protocols.a2a.enabled ? config.protocols.a2a.mountPath : undefined;
@@ -84,7 +100,7 @@ export function protocolChecks(
   // 5b. A2A specifics, from the pins rather than the live gateway. The spec
   // revision and the negotiation version look alike, so each is named.
   if (config === undefined) {
-    checks.push({ name: 'A2A', status: 'WARN', detail: 'skipped: config invalid' });
+    checks.push({ name: 'A2A', status: 'WARN', ...SKIPPED_CONFIG_INVALID });
   } else if (!config.protocols.a2a.enabled) {
     checks.push({ name: 'A2A', status: 'INFO', detail: 'disabled' });
   } else {
@@ -106,7 +122,7 @@ export function protocolChecks(
   // the bearer token, the idempotency path and the operation mapping. This
   // report prints the path and the mapping, never the token.
   if (config === undefined) {
-    checks.push({ name: 'ACP', status: 'WARN', detail: 'skipped: config invalid' });
+    checks.push({ name: 'ACP', status: 'WARN', ...SKIPPED_CONFIG_INVALID });
   } else if (!config.protocols.acp.enabled) {
     checks.push({ name: 'ACP', status: 'INFO', detail: 'disabled' });
   } else {

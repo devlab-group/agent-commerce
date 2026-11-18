@@ -23,7 +23,8 @@ export function printDoctorReport(report: DoctorReport, io: Io, json: boolean): 
   }
   for (const check of report.checks) {
     const label = statusColor(check.status, check.status.padEnd(5));
-    io.stdout(`${label} ${check.name.padEnd(20)} ${check.detail}`);
+    const mark = check.undetermined !== undefined ? ` [not determined: ${check.undetermined}]` : '';
+    io.stdout(`${label} ${check.name.padEnd(20)} ${check.detail}${mark}`);
   }
   io.stdout('');
   io.stdout(`Score: ${report.score.passed}/${report.score.total} checks passed`);

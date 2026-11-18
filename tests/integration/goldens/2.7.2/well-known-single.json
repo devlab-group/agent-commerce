@@ -283,7 +283,8 @@
         "mode": "remote"
       },
       "mode": "testnet",
-      "paymentFlow": "authorization"
+      "paymentFlow": "authorization",
+      "status": "pass"
     },
     "mpp": {
       "enabled": true,
@@ -297,7 +298,8 @@
         "mode": "remote"
       },
       "mode": "testnet",
-      "paymentFlow": "upfront"
+      "paymentFlow": "upfront",
+      "status": "pass"
     }
   }
 }

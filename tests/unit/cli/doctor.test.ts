@@ -1095,17 +1095,20 @@ describe('runDoctor: ERC-8409 quotes', () => {
     expect(await quoteCheck(undefined)).toBeUndefined();
   });
 
+  // Only a gateway that gave no answer marks the result; a document that
+  // answered without a readable issuer is a finding
   it.each([
-    ['the gateway is unreachable', undefined],
-    ['the gateway reports x402 disabled', wellKnownBody({ enabled: false })],
-    ['the quote block is not an object', withQuote('erc-8409')],
-    ['the issuer is missing', withQuote({ ...QUOTE, issuer: undefined })],
-  ])("reports INFO with the local key's issuer when %s", async (_label, body) => {
+    ['the gateway is unreachable', undefined, { undetermined: 'unreachable' }],
+    ['the gateway reports x402 disabled', wellKnownBody({ enabled: false }), {}],
+    ['the quote block is not an object', withQuote('erc-8409'), {}],
+    ['the issuer is missing', withQuote({ ...QUOTE, issuer: undefined }), {}],
+  ])("reports INFO with the local key's issuer when %s", async (_label, body, mark) => {
     expect(await quoteCheck(QUOTE_KEY, body)).toEqual({
       name: 'Payments (quotes)',
       status: 'INFO',
       detail:
         "ERC-8409 quotes enabled (experimental), issuer=0x5CbD…07FB from the local key; the gateway's issuer could not be read",
+      ...mark,
     });
   });
 });

@@ -3,7 +3,7 @@ import { type FetchLike, fetchJson } from '../../../src/cli/lib/http';
 import { processIo } from '../../../src/cli/lib/io';
 import { maskMiddle } from '../../../src/cli/lib/mask';
 import { readVersionReport } from '../../../src/cli/lib/versions';
-import { createFakeFetch, jsonResponse } from './fixtures';
+import { createFakeFetch, fetchFailed, jsonResponse } from './fixtures';
 
 describe('maskMiddle', () => {
   it('masks the middle of a long value, keeping a prefix and suffix', () => {
@@ -38,12 +38,25 @@ describe('fetchJson', () => {
     expect(result.status).toBe(404);
   });
 
-  it('returns status 0 and an error message when the fetch itself throws (unreachable)', async () => {
-    const fetchImpl = createFakeFetch({});
-    const result = await fetchJson(fetchImpl, 'http://x/unreachable');
-    expect(result.ok).toBe(false);
-    expect(result.status).toBe(0);
-    expect(result.error).toBeTruthy();
+  it('returns status 0, the root cause and noAnswer when the connection is refused', async () => {
+    const result = await fetchJson(createFakeFetch({}), 'http://x/unreachable');
+    expect(result).toEqual({
+      ok: false,
+      status: 0,
+      error: 'fetch failed: connect ECONNREFUSED http://x/unreachable',
+      noAnswer: true,
+    });
+  });
+
+  it('returns status 0 without noAnswer when the hostname does not resolve', async () => {
+    const fetchImpl = (async () => {
+      throw fetchFailed('ENOTFOUND', 'getaddrinfo ENOTFOUND x');
+    }) as unknown as FetchLike;
+    expect(await fetchJson(fetchImpl, 'http://x/')).toEqual({
+      ok: false,
+      status: 0,
+      error: 'fetch failed: getaddrinfo ENOTFOUND x',
+    });
   });
 
   it('falls back to a generic error message when a non-Error value is thrown', async () => {
@@ -61,7 +74,7 @@ describe('fetchJson', () => {
         init?.signal?.addEventListener('abort', () => reject(init.signal?.reason));
       })) as FetchLike;
     const result = await fetchJson(fetchImpl, 'http://x/slow', 10);
-    expect(result).toMatchObject({ ok: false, status: 0 });
+    expect(result).toMatchObject({ ok: false, status: 0, noAnswer: true });
     expect(result.error).toMatch(/timeout/i);
   });
 

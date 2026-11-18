@@ -47,6 +47,50 @@ export function substituteEnv(value: unknown, env: NodeJS.ProcessEnv, path = '$'
   return value;
 }
 
+/** Sorted placeholder names from raw config, grouped by how they resolve in the environment */
+export interface EnvPlaceholders {
+  /** `${VAR}` with `VAR` unset; config loading stops at the first missing variable */
+  readonly missing: readonly string[];
+  /** `${VAR:-default}` with `VAR` unset or empty */
+  readonly defaulted: readonly string[];
+  readonly set: readonly string[];
+}
+
+/**
+ * Collect recognized placeholder names without validating template syntax;
+ * config loading reports unsupported templates. Each name appears once, using
+ * the most severe state: missing, then defaulted, then set. Return names only,
+ * never values or defaults.
+ */
+export function listEnvPlaceholders(raw: unknown, env: NodeJS.ProcessEnv): EnvPlaceholders {
+  // 0 set, 1 defaulted, 2 missing: a higher number is worse
+  const worst = new Map<string, number>();
+  const visit = (value: unknown): void => {
+    if (typeof value === 'string') {
+      for (const [, name = '', hasDefault] of value.matchAll(PLACEHOLDER_PATTERN)) {
+        const envValue = env[name];
+        const state =
+          hasDefault !== undefined
+            ? envValue === undefined || envValue === ''
+              ? 1
+              : 0
+            : envValue === undefined
+              ? 2
+              : 0;
+        worst.set(name, Math.max(state, worst.get(name) ?? 0));
+      }
+    } else if (Array.isArray(value)) {
+      value.forEach(visit);
+    } else if (isRecord(value)) {
+      Object.values(value).forEach(visit);
+    }
+  };
+  visit(raw);
+  const names = [...worst.keys()].sort();
+  const named = (state: number) => names.filter((name) => worst.get(name) === state);
+  return { missing: named(2), defaulted: named(1), set: named(0) };
+}
+
 function substituteString(value: string, env: NodeJS.ProcessEnv, path: string): string {
   assertTemplateIsSupported(value, path);
   return substituteOnce(value, env, path);

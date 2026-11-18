@@ -88,9 +88,11 @@ describe('remote facilitator binding', () => {
     if (binding.kind !== 'remote') throw new Error('expected a remote binding');
 
     const read = binding.supported();
+    // health() reads the TimeoutError cause as "no answer"
     const outcome = expect(read).rejects.toMatchObject({
       code: 'PAYMENT_PROVIDER_UNAVAILABLE',
       message: expect.stringContaining('did not answer within 10 s'),
+      cause: expect.objectContaining({ name: 'TimeoutError' }),
     });
     await vi.advanceTimersByTimeAsync(SUPPORTED_TIMEOUT_MS);
     await outcome;

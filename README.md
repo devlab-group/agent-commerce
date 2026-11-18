@@ -504,6 +504,7 @@ spend real USDC when their opt-ins and credentials are present.
 $ npm run agent-commerce -- doctor --config config-demo.yaml
 
 PASS  Config               valid: 2 resource(s), merchant "Demo Data Store" (using local chain manifest .deploy/local.json for X402_ASSET, X402_ASSET_NAME, X402_ASSET_VERSION, X402_ASSET_DECIMALS, MERCHANT_WALLET, X402_FACILITATOR_PRIVATE_KEY)
+PASS  Secrets              6 set (MERCHANT_WALLET, X402_ASSET, X402_ASSET_DECIMALS, X402_ASSET_NAME, X402_ASSET_VERSION, X402_FACILITATOR_PRIVATE_KEY); 8 defaulted (ADMIN_TOKEN, DASHBOARD_ORIGIN, GATEWAY_PORT, GATEWAY_PUBLIC_BASE_URL, MERCHANT_API_BASE_URL, RECEIPT_STORE_PATH, X402_NETWORK, X402_RPC_URL)
 PASS  Gateway              healthy and ready at http://127.0.0.1:8080
 PASS  Backend              2/2 backend host(s) reachable
 PASS  Protocols            http=on mcp=on (/mcp) a2a=off acp=off
@@ -511,18 +512,31 @@ INFO  A2A                  disabled
 INFO  ACP                  disabled
 INFO  AP2                  disabled
 PASS  Payments             x402 v2 (scheme=exact) enabled - LOCAL dev chain (eip155:31337), destination=0x7099…79C8, facilitator=local (in-process), paymentFlow=authorization
+PASS  Payments (offers)    1 offer(s) pass their health checks
 INFO  Payments (MPP)       MPP not configured
 PASS  Storage              sqlite schema v5 writable; receipts=2
 PASS  Transactions         none unresolved
 PASS  Protocol versions    reported by gateway /.well-known/agent-commerce
 
-Score: 8/8 checks passed
+Score: 10/10 checks passed
 ```
 
 `doctor` compares live settlement terms with local config for each rail and
 resource: offer order, network, token, payee and transfer method, plus decimals
 and payment flows when published. Mismatches fail the check. It also names
 failing offers when health is published; reasons appear in gateway debug logs.
+
+`Secrets` lists each config placeholder (`${VAR}`) as missing, set or
+defaulted. Config loading stops at the first missing variable; this check
+reports them all. It fails if any are missing and prints names only, never
+values or defaults.
+
+A check that cannot reach a verdict carries `undetermined`: `unreachable`
+for known transport failures, such as refused or reset connections, timeouts
+or temporary DNS failures; `skipped` when a prerequisite fails. Unresolvable
+hostnames and TLS errors leave the check unmarked.
+Text output appends `[not determined: <reason>]`. The marker does not affect
+status, score or exit code; an unreachable gateway still fails its check.
 
 Exits non-zero if anything fails. `--json` for machines.
 

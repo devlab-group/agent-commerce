@@ -96,6 +96,11 @@
       "detail": "MPP charge/evm/authorization enabled - TESTNET on Base Sepolia (eip155:84532), asset=USDC 0x036C…CF7e, recipient=0x1111…1111, facilitator=remote (auth=none), paymentFlow=upfront, spec draft-httpauth-payment-01@806fdb8, mppx 0.13.1"
     },
     {
+      "name": "Payments (MPP offers)",
+      "status": "PASS",
+      "detail": "1 offer(s) pass their health checks"
+    },
+    {
       "name": "Storage",
       "status": "PASS",
       "detail": "sqlite schema v5 writable; receipts=0"
@@ -112,8 +117,8 @@
     }
   ],
   "score": {
-    "passed": 19,
-    "total": 19
+    "passed": 20,
+    "total": 20
   },
   "exitCode": 0
 }

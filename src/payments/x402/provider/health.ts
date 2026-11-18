@@ -6,6 +6,7 @@ import { erc20Abi } from 'viem';
 import { type AdapterHealth, CommerceError } from '../../../core';
 import { redactedErrorText } from '../../../core/errors';
 import { isRecord } from '../../../core/is-record';
+import { gotNoAnswer } from '../../../core/no-answer';
 import { normalizeAddress } from '../addresses';
 import type { createLocalPublicClient } from '../chain';
 import type { FacilitatorBinding } from '../facilitator';
@@ -281,27 +282,37 @@ export function createHealthCheck(ctx: ProviderContext): () => Promise<AdapterHe
       return supported;
     };
 
-    const results = await Promise.all(
+    const results: readonly OfferResult[] = await Promise.all(
       offers.map((offer) =>
-        offerHealth(offer, kinds).catch((err: unknown) => ({
-          status: 'fail' as const,
-          detail: `x402 health check failed: ${redactedErrorText(err)}`,
-        })),
+        offerHealth(offer, kinds).catch(
+          (err: unknown): OfferResult => ({
+            status: 'fail',
+            detail: `x402 health check failed: ${redactedErrorText(err)}`,
+            // The SDK throws its own timeout error from `/supported`
+            ...(gotNoAnswer(err, ['FacilitatorTimeoutError'])
+              ? { undetermined: 'unreachable' }
+              : {}),
+          }),
+        ),
       ),
     );
     const failed = results.some((result) => result.status === 'fail');
     const details = offers.flatMap((offer, index) => {
-      const result = results[index] as (typeof results)[number];
+      const result = results[index] as OfferResult;
       if (failed && result.status !== 'fail') return [];
       return [offers.length === 1 ? result.detail : `${x402OfferName(offer)}: ${result.detail}`];
     });
     return {
       status: failed ? 'fail' : 'pass',
       detail: details.join('; '),
-      components: offers.map((offer, index) => ({
-        name: x402OfferName(offer),
-        status: (results[index] as (typeof results)[number]).status,
-      })),
+      components: offers.map((offer, index) => {
+        const { status, undetermined } = results[index] as OfferResult;
+        return {
+          name: x402OfferName(offer),
+          status,
+          ...(undetermined !== undefined ? { undetermined } : {}),
+        };
+      }),
       checkedAt,
       durationMs: clock.monotonicMs() - startedAt,
     };
@@ -336,6 +347,13 @@ export function createHealthCheck(ctx: ProviderContext): () => Promise<AdapterHe
   }
 
   return health;
+}
+
+// One offer's probe result; `undetermined` marks a recognized transport failure
+interface OfferResult {
+  readonly status: 'pass' | 'fail';
+  readonly detail: string;
+  readonly undetermined?: 'unreachable';
 }
 
 const PERMIT2_CONTRACTS = [

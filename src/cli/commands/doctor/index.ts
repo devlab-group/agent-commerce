@@ -5,7 +5,11 @@ import {
   createSqliteReceiptStore,
   openSqliteReceiptStoreReadOnly,
 } from '../../../storage/receipts';
-import { type GatewayConfig, loadConfigDynamic } from '../../lib/config-client';
+import {
+  type GatewayConfig,
+  loadConfigDynamic,
+  readConfigFileDynamic,
+} from '../../lib/config-client';
 import { fetchJson } from '../../lib/http';
 import {
   fillEnvFromLocalChainManifest,
@@ -17,8 +21,18 @@ import { readVersionReport } from '../../lib/versions';
 import { ap2Checks } from './ap2';
 import { paymentChecks } from './payments';
 import { protocolChecks } from './protocols';
+import { secretsCheck } from './secrets';
 import { storageChecks } from './storage';
-import type { CheckStatus, DoctorCheck, DoctorDeps, DoctorOptions, DoctorReport } from './types';
+import {
+  type CheckStatus,
+  type DoctorCheck,
+  type DoctorDeps,
+  type DoctorOptions,
+  type DoctorReport,
+  SKIPPED_CONFIG_INVALID,
+  type Undetermined,
+  undeterminedField,
+} from './types';
 
 const CHECK_TIMEOUT_MS = 1500;
 
@@ -101,22 +115,39 @@ export async function runDoctor(
     });
   }
 
+  // Skip Secrets when an injected loader has no reader; the default could read
+  // a different config
+  const readConfigFile =
+    deps.readConfigFile ?? (deps.loadConfig === undefined ? readConfigFileDynamic : undefined);
+  if (readConfigFile !== undefined) {
+    checks.push(await secretsCheck(readConfigFile, options.configPath, env));
+  }
+
   const gatewayUrl = deriveGatewayUrl(options.gatewayUrl, config);
 
-  // 2. Gateway
+  // 2. Gateway. Status 0 means the request threw; `noAnswer` identifies a known
+  // transport failure. Hostname and TLS errors remain unmarked.
   const health = await fetchJson(fetchImpl, `${gatewayUrl}/health`, CHECK_TIMEOUT_MS);
   let gatewayUp = false;
+  // Why the checks that read the well-known document have no live data
+  let liveCause: Undetermined | undefined;
   if (!health.ok) {
+    liveCause = health.noAnswer ? 'unreachable' : 'skipped';
     checks.push({
       name: 'Gateway',
       status: 'FAIL',
-      detail: `unreachable at ${gatewayUrl} (${health.error ?? `HTTP ${health.status}`})`,
+      detail:
+        health.status === 0
+          ? `unreachable at ${gatewayUrl} (${health.error ?? 'no answer'})`
+          : `unhealthy at ${gatewayUrl} (HTTP ${health.status})`,
+      ...undeterminedField(health.noAnswer ? 'unreachable' : undefined),
     });
   } else {
     const ready = await fetchJson(fetchImpl, `${gatewayUrl}/ready`, CHECK_TIMEOUT_MS);
     // Doctor sends no Origin header, so a 403 from /ready means the Host was
     // rejected. GET /health skips the Host check used by other routes.
     if (ready.status === 403) {
+      liveCause = 'skipped';
       checks.push({
         name: 'Gateway',
         status: 'FAIL',
@@ -131,6 +162,7 @@ export async function runDoctor(
               name: 'Gateway',
               status: 'WARN',
               detail: `healthy but not ready at ${gatewayUrl} (${ready.error ?? `HTTP ${ready.status}`})`,
+              ...undeterminedField(ready.noAnswer ? 'unreachable' : undefined),
             },
       );
     }
@@ -138,7 +170,7 @@ export async function runDoctor(
 
   // 3. Backend(s)
   if (config === undefined) {
-    checks.push({ name: 'Backend', status: 'WARN', detail: 'skipped: config invalid' });
+    checks.push({ name: 'Backend', status: 'WARN', ...SKIPPED_CONFIG_INVALID });
   } else if (config.resources.length === 0) {
     checks.push({ name: 'Backend', status: 'INFO', detail: 'no resources configured' });
   } else {
@@ -147,13 +179,19 @@ export async function runDoctor(
     const results = await Promise.all(
       urls.map((url) => fetchJson(fetchImpl, url, CHECK_TIMEOUT_MS)),
     );
-    const reachable = results.filter((r) => r.status !== 0).length;
+    // Any HTTP response establishes reachability. Mark unreachable only when all
+    // requests that threw have recognized transport failures.
+    const unreached = results.filter((r) => r.status === 0);
+    const reachable = urls.length - unreached.length;
     const status: CheckStatus =
       reachable === urls.length ? 'PASS' : reachable === 0 ? 'FAIL' : 'WARN';
     checks.push({
       name: 'Backend',
       status,
       detail: `${reachable}/${urls.length} backend host(s) reachable`,
+      ...undeterminedField(
+        unreached.length > 0 && unreached.every((r) => r.noAnswer) ? 'unreachable' : undefined,
+      ),
     });
   }
 
@@ -165,14 +203,23 @@ export async function runDoctor(
         CHECK_TIMEOUT_MS,
       )
     : undefined;
+  // Clear the marker after any document response, even if its content is unusable
+  if (wellKnown !== undefined) liveCause = wellKnown.noAnswer ? 'unreachable' : undefined;
 
   // 5-7. Protocols, AP2, payments and storage. Read import records first so
   // protocol and AP2 checks can report the status of deprecated store keys.
   const storage = await storageChecks(config, createStore);
-  checks.push(...protocolChecks(config, wellKnown, storage.legacy));
+  checks.push(...protocolChecks(config, wellKnown, storage.legacy, liveCause));
   checks.push(...ap2Checks(config, storage.legacy));
   checks.push(
-    ...(await paymentChecks(config, wellKnown, gatewayUrl, chainDeploy, deps.loadViemAccounts)),
+    ...(await paymentChecks(
+      config,
+      wellKnown,
+      gatewayUrl,
+      chainDeploy,
+      deps.loadViemAccounts,
+      liveCause,
+    )),
   );
   checks.push(...storage.checks);
 
@@ -188,7 +235,8 @@ export async function runDoctor(
     checks.push({
       name: 'Protocol versions',
       status: 'INFO',
-      detail: `gateway unreachable; local pins: ${local.pinned.map((p) => `${p.name}@${p.version}`).join(', ')}`,
+      detail: `${liveCause === 'unreachable' ? 'gateway unreachable' : 'gateway versions unavailable'}; local pins: ${local.pinned.map((p) => `${p.name}@${p.version}`).join(', ')}`,
+      ...undeterminedField(liveCause),
     });
   }
 
@@ -200,4 +248,11 @@ export async function runDoctor(
 }
 
 export { printDoctorReport } from './report';
-export type { CheckStatus, DoctorCheck, DoctorDeps, DoctorOptions, DoctorReport } from './types';
+export type {
+  CheckStatus,
+  DoctorCheck,
+  DoctorDeps,
+  DoctorOptions,
+  DoctorReport,
+  Undetermined,
+} from './types';

@@ -86,9 +86,19 @@
       "detail": "x402 v2 (scheme=exact) enabled - TESTNET on Base Sepolia (eip155:84532), destination=0x1111…1111, facilitator=remote (auth=none), paymentFlow=authorization"
     },
     {
+      "name": "Payments (offers)",
+      "status": "PASS",
+      "detail": "1 offer(s) pass their health checks"
+    },
+    {
       "name": "Payments (MPP)",
       "status": "PASS",
       "detail": "MPP charge/evm/authorization enabled - TESTNET on Base Sepolia (eip155:84532), asset=USDC 0x036C…CF7e, recipient=0x1111…1111, facilitator=remote (auth=none), paymentFlow=upfront, spec draft-httpauth-payment-01@806fdb8, mppx 0.13.1"
+    },
+    {
+      "name": "Payments (MPP offers)",
+      "status": "PASS",
+      "detail": "1 offer(s) pass their health checks"
     },
     {
       "name": "Storage",
@@ -107,8 +117,8 @@
     }
   ],
   "score": {
-    "passed": 18,
-    "total": 18
+    "passed": 20,
+    "total": 20
   },
   "exitCode": 0
 }
