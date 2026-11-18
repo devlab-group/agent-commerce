@@ -2795,6 +2795,57 @@ describe('payments.x402.bazaar', () => {
       input: { type: 'http', method: 'POST', bodyType: 'json', body: {} },
     });
   });
+
+  // Enable both rails and list them on the resource in the requested order
+  function withBothRails(payments: string[]) {
+    const raw = withBazaar(true);
+    (raw['payments'] as Record<string, unknown>)['mpp'] = {
+      enabled: true,
+      rpcUrl: 'https://sepolia.example/v2/key',
+      asset: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+      assetName: 'USDC',
+      assetVersion: '2',
+      recipient: '0x1111111111111111111111111111111111111111',
+      realm: 'api.example.com',
+      challengeSecret: 'mpp-challenge-secret-'.padEnd(32, 'x'),
+      facilitator: { mode: 'remote', url: 'https://facilitator.example' },
+    };
+    marketReport(raw)['payments'] = payments;
+    return raw;
+  }
+
+  it('builds no URL or metadata for a resource served on MPP, and says which rail serves it', () => {
+    const config = parseConfig(withBothRails(['mpp', 'x402']), {});
+
+    expect(config.payments.x402?.resourceUrls).toEqual({});
+    expect(config.payments.x402?.resourceBazaar).toEqual({});
+    expect(warn.mock.calls).toEqual([
+      [
+        '[agent-commerce] resource "market_report" gets no Bazaar metadata: the gateway serves it on mpp, the first enabled rail in its payments, which issues no x402 challenge. Payment is unaffected.',
+      ],
+    ]);
+  });
+
+  it('builds both for a resource that lists x402 first, without a warning', () => {
+    const config = parseConfig(withBothRails(['x402', 'mpp']), {});
+
+    expect(Object.keys(config.payments.x402?.resourceUrls ?? {})).toEqual(['market_report']);
+    expect(Object.keys(config.payments.x402?.resourceBazaar?.['market_report'] ?? {})).toEqual([
+      'http',
+      'mcp',
+    ]);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('serves on x402, and builds both, when the MPP rail listed first is disabled', () => {
+    const raw = withBothRails(['mpp', 'x402']);
+    ((raw['payments'] as Record<string, unknown>)['mpp'] as Record<string, unknown>)['enabled'] =
+      false;
+    const config = parseConfig(raw, {});
+
+    expect(Object.keys(config.payments.x402?.resourceBazaar ?? {})).toEqual(['market_report']);
+    expect(warn).not.toHaveBeenCalled();
+  });
 });
 
 describe('protocols.mcp.registry', () => {

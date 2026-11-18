@@ -7,7 +7,7 @@ import { normalizeAcp, validateAcpCheckoutMapping } from './acp';
 import { normalizeAp2, validateLegacyStoresIsolated } from './ap2';
 import { normalizeMpp } from './mpp';
 import { isHttpUrl, type RawConfig, SUPPORTED_CONFIG_VERSION } from './raw';
-import { normalizeResource } from './resources';
+import { normalizeResource, servingRailOf } from './resources';
 import type { GatewayConfig, NormalizedProtocols } from './types';
 import { toBoolean, toNumber } from './values';
 import { normalizeX402 } from './x402';
@@ -63,15 +63,19 @@ export function normalize(raw: RawConfig): GatewayConfig {
       return mimeType !== undefined ? [[resource.id, mimeType]] : [];
     }),
   );
+  // Build URL mappings and metadata for resources whose serving rail is x402
+  const rails = { x402: x402?.enabled === true, mpp: mpp?.enabled === true };
+  const railOf = (resource: CommerceResource) => servingRailOf(resource.paymentMethods, rails);
+  const onX402 = resources.filter((resource) => railOf(resource) === 'x402');
   const publicUrl = raw.payments.x402?.publicResourceUrl;
   const resourceUrls =
     publicUrl !== undefined && toBoolean(publicUrl, 'payments.x402.publicResourceUrl')
-      ? publicResourceUrls(raw.merchant.publicBaseUrl, protocols, resources)
+      ? publicResourceUrls(raw.merchant.publicBaseUrl, protocols, onX402)
       : undefined;
   const bazaarRaw = raw.payments.x402?.bazaar;
   const resourceBazaar =
     bazaarRaw !== undefined && toBoolean(bazaarRaw.enabled, 'payments.x402.bazaar.enabled')
-      ? bazaarExtensions(resourceUrls, resources, mimeTypes)
+      ? bazaarExtensions(resourceUrls, resources, mimeTypes, railOf)
       : undefined;
   const x402WithFlows =
     x402 !== undefined
@@ -132,6 +136,7 @@ function bazaarExtensions(
   resourceUrls: Record<string, Partial<Record<'http' | 'mcp' | 'a2a', string>>> | undefined,
   resources: readonly CommerceResource[],
   mimeTypes: Readonly<Record<string, string>>,
+  railOf: (resource: CommerceResource) => string | undefined,
 ): NonNullable<GatewayConfig['payments']['x402']>['resourceBazaar'] {
   if (resourceUrls === undefined) {
     throw new CommerceError(
@@ -143,7 +148,15 @@ function bazaarExtensions(
   return Object.fromEntries(
     resources.flatMap((resource) => {
       const urls = resourceUrls[resource.id];
-      if (urls === undefined) return [];
+      if (urls === undefined) {
+        const rail = railOf(resource);
+        if (resource.paymentMethods.includes('x402') && rail !== undefined) {
+          console.warn(
+            `[agent-commerce] resource "${resource.id}" gets no Bazaar metadata: the gateway serves it on ${rail}, the first enabled rail in its payments, which issues no x402 challenge. Payment is unaffected.`,
+          );
+        }
+        return [];
+      }
       const surfaces = (['http', 'mcp'] as const).filter((surface) => urls[surface] !== undefined);
       const { extensions, omitted } = bazaarMetadata(resource, surfaces, mimeTypes[resource.id]);
       for (const { surfaces: left, reason } of omitted) {
@@ -156,8 +169,8 @@ function bazaarExtensions(
   );
 }
 
-// Build URLs for the surfaces exposing each x402 resource, using the public
-// base URL so indexers can request endpoints instead of `resource://` identifiers
+// Build public endpoint URLs for the surfaces exposing resources served on
+// x402, which indexers can request, unlike `resource://` identifiers
 function publicResourceUrls(
   publicBaseUrl: string,
   protocols: NormalizedProtocols,
@@ -175,19 +188,17 @@ function publicResourceUrls(
       ? `/api/resources/${encodeURIComponent(id)}/invoke`
       : protocols[surface].mountPath;
   return Object.fromEntries(
-    resources
-      .filter((resource) => resource.paymentMethods.includes('x402'))
-      .map((resource) => [
-        resource.id,
-        Object.fromEntries(
-          (['http', 'mcp', 'a2a'] as const)
-            .filter((surface) => resource.exposedVia.includes(surface))
-            .map((surface) => [
-              surface,
-              publicEndpointUrl(publicBaseUrl, path(surface, resource.id)),
-            ]),
-        ),
-      ]),
+    resources.map((resource) => [
+      resource.id,
+      Object.fromEntries(
+        (['http', 'mcp', 'a2a'] as const)
+          .filter((surface) => resource.exposedVia.includes(surface))
+          .map((surface) => [
+            surface,
+            publicEndpointUrl(publicBaseUrl, path(surface, resource.id)),
+          ]),
+      ),
+    ]),
   );
 }
 

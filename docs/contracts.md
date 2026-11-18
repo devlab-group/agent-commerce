@@ -474,8 +474,9 @@ persistence must not fail the commerce flow.
     context without one, an ACP request, or a surface without an entry keeps
     the `resource://` form.
   - With `payments.x402.publicResourceUrl: true`, config normalization fills
-    `GatewayConfig.payments.x402.resourceUrls`, with each URL in the URL
-    parser's form. MPP's internal x402 provider does not receive this map.
+    `GatewayConfig.payments.x402.resourceUrls` for resources whose first
+    enabled rail is x402, with each URL in the URL parser's form. MPP's
+    internal x402 provider does not receive this map.
   - Without the option, challenges are unchanged.
 - 2.8.0: experimental `X402ProviderOptions.resourceBazaar` maps resource ids
   and request surfaces (`http` or `mcp`) to each challenge's `extensions.bazaar`

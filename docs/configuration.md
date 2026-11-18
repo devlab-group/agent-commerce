@@ -695,8 +695,9 @@ payments:
 | A2A                | `<publicBaseUrl><protocols.a2a.mountPath>`  |
 
 Requests without a URL mapping keep the `resource://` form. MPP challenges
-are unchanged. Enabling the option requires `merchant.publicBaseUrl` to be an
-http:// or https:// URL; otherwise config loading fails with `CONFIG_INVALID`.
+are unchanged, and a resource served on MPP gets no mapping. Enabling the
+option requires `merchant.publicBaseUrl` to be an http:// or https:// URL;
+otherwise config loading fails with `CONFIG_INVALID`.
 
 The URL parser writes each URL with a lowercase scheme and host and no default
 port. `agent-commerce export mcp-registry` uses the same form for the MCP
@@ -712,9 +713,10 @@ pay a new challenge. See [x402](protocols/x402.md#the-resource-url).
 ### Bazaar metadata
 
 Experimental and disabled by default. `bazaar.enabled: true` adds Bazaar
-discovery metadata to x402 challenges on HTTP and MCP for resources whose
-`payments` include `x402`. Enabling it requires `publicResourceUrl: true`;
-otherwise config loading fails with `CONFIG_INVALID`.
+discovery metadata to x402 challenges on HTTP and MCP for resources the
+gateway serves on x402: those whose first enabled rail in `payments` is `x402`.
+Enabling it requires `publicResourceUrl: true`; otherwise config loading fails
+with `CONFIG_INVALID`.
 
 ```yaml
 payments:
@@ -725,8 +727,9 @@ payments:
 ```
 
 During config loading, omissions from HTTP/MCP metadata produce warnings with
-the resource id, affected surfaces and reason. Omitting metadata leaves payment
-behavior unchanged.
+the resource id, affected surfaces and reason. A resource that lists `x402`
+behind an enabled `mpp` gets a warning that names the rail serving it.
+Omitting metadata leaves payment behavior unchanged.
 [x402](protocols/x402.md#bazaar-discovery-metadata) lists the rules.
 
 Choose a facilitator whose `/supported` response lists `bazaar` among its

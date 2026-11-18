@@ -295,6 +295,13 @@ describe('x402 Bazaar metadata through the gateway', () => {
   });
 
   it('answers a resource whose first rail is MPP with an MPP challenge and no metadata', async () => {
+    expect(config.payments.x402?.resourceUrls).not.toHaveProperty('mpp_first');
+    expect(config.payments.x402?.resourceBazaar).not.toHaveProperty('mpp_first');
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'resource "mpp_first" gets no Bazaar metadata: the gateway serves it on mpp',
+      ),
+    );
     const res = await invoke('mpp_first', { city: 'Oslo', days: 1 });
 
     expect(res.statusCode).toBe(402);

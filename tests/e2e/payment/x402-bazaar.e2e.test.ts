@@ -87,7 +87,7 @@ function rawConfig(facilitatorUrl: string, bazaar: boolean): Record<string, unkn
     protocols: { http: { enabled: true }, mcp: { enabled: true, mountPath: '/mcp' } },
     resources: {
       forecast: resource(['http', 'mcp'], ['x402']),
-      // Put MPP first to serve this resource; including x402 also generates Bazaar metadata
+      // MPP serves this resource because it is listed first; Bazaar metadata is omitted
       forecast_mpp: resource(['http'], ['mpp', 'x402']),
     },
     payments: {
@@ -361,10 +361,9 @@ describe('x402 Bazaar metadata - real local chain', () => {
   });
 
   it('MPP beside Bazaar: settles with only x402Version, accepted and payload sent', async () => {
-    // Config has Bazaar metadata for this resource; MPP must omit it from settlement
-    expect(withBazaar.config.payments.x402?.resourceBazaar?.['forecast_mpp']).toHaveProperty(
-      'http',
-    );
+    // Config omits the x402 URL and metadata because MPP serves this resource
+    expect(withBazaar.config.payments.x402?.resourceBazaar).not.toHaveProperty('forecast_mpp');
+    expect(withBazaar.config.payments.x402?.resourceUrls).not.toHaveProperty('forecast_mpp');
     const bodies = await purchase(
       withBazaar,
       async () => {
