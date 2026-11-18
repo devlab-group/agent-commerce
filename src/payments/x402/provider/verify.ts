@@ -170,7 +170,10 @@ export function createVerify(
     const scope = offer.binding.open();
     let sdkResult: VerifyResponse;
     try {
-      sdkResult = await scope.verify(forFacilitator(payload), requirements);
+      sdkResult = await scope.verify(
+        forFacilitator(payload, requirement.challenge.envelope as PaymentRequired | undefined),
+        requirements,
+      );
     } catch (err) {
       // A throw means no verdict was obtained, so it is never held against the
       // buyer. Only an unclassified one is logged, as it may be an SDK fault.

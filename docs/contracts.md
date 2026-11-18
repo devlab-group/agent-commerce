@@ -477,6 +477,16 @@ persistence must not fail the commerce flow.
     `GatewayConfig.payments.x402.resourceUrls`. MPP's internal x402 provider
     does not receive this map.
   - Without the option, challenges are unchanged.
+- 2.8.0: experimental `X402ProviderOptions.resourceBazaar` maps resource ids
+  and request surfaces (`http` or `mcp`) to each challenge's `extensions.bazaar`
+  value.
+  - With `payments.x402.bazaar.enabled: true`, config normalization fills
+    `GatewayConfig.payments.x402.resourceBazaar` with metadata that passes
+    the omission rules. MPP's internal x402 provider does not receive it.
+  - For a challenge carrying Bazaar metadata, verify and settle send its
+    `resource` and `extensions.bazaar` to the facilitator, replacing those
+    fields from the proof.
+  - Without the option, challenges and facilitator bodies are unchanged.
 
 ### Authorization and AP2
 

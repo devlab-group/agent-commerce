@@ -100,6 +100,12 @@ export interface GatewayConfig {
        * route or protocol mount under `merchant.publicBaseUrl`.
        */
       readonly resourceUrls?: NonNullable<X402ProviderOptions['resourceUrls']>;
+      /**
+       * Experimental. With `bazaar.enabled: true`, config normalization fills
+       * this map for HTTP and MCP entries in `resourceUrls` that pass the
+       * metadata checks
+       */
+      readonly resourceBazaar?: NonNullable<X402ProviderOptions['resourceBazaar']>;
       readonly facilitator: X402FacilitatorConfig;
       readonly allowMainnet?: boolean;
       readonly allowUnauthenticatedFacilitator?: boolean;

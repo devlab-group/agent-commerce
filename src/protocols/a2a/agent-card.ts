@@ -6,8 +6,8 @@
  * shape through fields it does define: a sentence in the agent description,
  * which also says where the schemas are published, and one example per skill.
  */
-import { AUTHORIZATION_INPUT_FIELD, type CommerceResource, PAYMENT_INPUT_FIELD } from '../../core';
-import { isRecord } from '../../core/is-record';
+import { type CommerceResource, PAYMENT_INPUT_FIELD } from '../../core';
+import { exampleObject } from '../../core/execution/schema-example';
 import { joinUrl } from '../http';
 import { A2A_JSON_MEDIA_TYPE, A2A_PROTOCOL_BINDING, A2A_PROTOCOL_VERSION } from './constants';
 import { A2A_CALL_SHAPE } from './message-mapping';
@@ -47,50 +47,6 @@ function skillDescription(resource: CommerceResource): string {
     return `${base} Requires payment (amount determined at request time).`;
   }
   return base;
-}
-
-/**
- * Build a sample from schema examples, defaults, enum values or the declared
- * type. Objects include required properties only. Other constraints may need
- * different input.
- */
-function exampleValue(schema: unknown, name: string): unknown {
-  if (!isRecord(schema)) return `<${name}>`;
-  const examples = schema['examples'];
-  if (Array.isArray(examples) && examples.length > 0) return examples[0];
-  if (schema['default'] !== undefined) return schema['default'];
-  const allowed = schema['enum'];
-  if (Array.isArray(allowed) && allowed.length > 0) return allowed[0];
-  const declared = schema['type'];
-  const type: unknown = Array.isArray(declared) ? declared[0] : declared;
-  switch (type) {
-    case 'object':
-      return exampleObject(schema);
-    case 'array':
-      return schema['items'] !== undefined ? [exampleValue(schema['items'], name)] : [];
-    case 'number':
-    case 'integer':
-      return 0;
-    case 'boolean':
-      return false;
-    case 'null':
-      return null;
-    default:
-      return `<${name}>`;
-  }
-}
-
-function exampleObject(schema: Record<string, unknown>): Record<string, unknown> {
-  const properties = isRecord(schema['properties']) ? schema['properties'] : {};
-  const required = Array.isArray(schema['required']) ? schema['required'] : [];
-  const example: Record<string, unknown> = {};
-  for (const key of required) {
-    // The reserved fields carry proofs, which no example can hold
-    if (typeof key !== 'string' || key === PAYMENT_INPUT_FIELD || key === AUTHORIZATION_INPUT_FIELD)
-      continue;
-    example[key] = exampleValue(properties[key], key);
-  }
-  return example;
 }
 
 /** The `data` value of a data part that calls the skill, as JSON */

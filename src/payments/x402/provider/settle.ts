@@ -1,5 +1,5 @@
 // Settles a verified proof and classifies the facilitator's answer
-import type { PaymentRequirements, SettleResponse } from '@x402/core/types';
+import type { PaymentRequired, PaymentRequirements, SettleResponse } from '@x402/core/types';
 import type { PaymentResult, PaymentSettlementContext } from '../../../core';
 import { CommerceError } from '../../../core';
 import { redactedErrorText } from '../../../core/errors';
@@ -73,7 +73,10 @@ export function createSettle(
     const scope = offer.binding.open();
     let sdkResult: SettleResponse;
     try {
-      sdkResult = await scope.settle(forFacilitator(payload), requirements);
+      sdkResult = await scope.settle(
+        forFacilitator(payload, requirement.challenge.envelope as PaymentRequired | undefined),
+        requirements,
+      );
     } catch (err) {
       if (isProviderUnavailableError(err) || scope.transportFailed()) {
         throw new CommerceError(

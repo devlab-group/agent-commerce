@@ -12,7 +12,7 @@ import {
   PAYMENT_INPUT_FIELD,
   type PaymentMethodName,
 } from '../../core';
-import { isRecord } from '../../core/is-record';
+import { objectInputSchema } from '../../core/execution/schema-example';
 import { MPP_MCP_CREDENTIAL_META_KEY } from '../../payments/mpp/transport';
 import { X402_MCP_PAYMENT_META_KEY } from '../../payments/x402/transport';
 import { MCP_TOOL_NAME_PATTERN } from './constants';
@@ -109,17 +109,8 @@ export function buildToolDescription(resource: CommerceResource): string {
  * would otherwise refuse to send them.
  */
 export function buildInputSchema(resource: CommerceResource): Tool['inputSchema'] {
-  const base = resource.inputSchema;
-  const baseIsObject = isRecord(base);
-
-  // Keep object-valued property schemas from the resource's config JSON
-  const basePropertyEntries: readonly [string, JSONObject][] =
-    baseIsObject && isRecord(base.properties)
-      ? Object.entries(base.properties).filter((entry): entry is [string, JSONObject] =>
-          isRecord(entry[1]),
-        )
-      : [];
-  const properties: Record<string, JSONObject> = Object.fromEntries(basePropertyEntries);
+  const schema = objectInputSchema(resource.inputSchema);
+  const properties = { ...schema.properties } as Record<string, JSONObject>;
 
   // Both overwrite a resource-declared property of the same name; config
   // rejects that collision at load time
@@ -143,23 +134,5 @@ export function buildInputSchema(resource: CommerceResource): Tool['inputSchema'
     };
   }
 
-  const required =
-    baseIsObject && Array.isArray(base.required)
-      ? base.required.filter((v): v is string => typeof v === 'string')
-      : [];
-
-  const extra = baseIsObject
-    ? Object.fromEntries(
-        Object.entries(base).filter(
-          ([key]) => key !== 'type' && key !== 'properties' && key !== 'required',
-        ),
-      )
-    : {};
-
-  return {
-    ...extra,
-    type: 'object',
-    properties,
-    ...(required.length > 0 ? { required } : {}),
-  };
+  return { ...schema, properties } as Tool['inputSchema'];
 }

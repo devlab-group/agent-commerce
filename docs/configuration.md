@@ -667,6 +667,30 @@ that echo another surface's URL are also rejected. Both cases return
 `invalid_payment_requirements` without settlement; the buyer can request and
 pay a new challenge. See [x402](protocols/x402.md#the-resource-url).
 
+### Bazaar metadata
+
+Experimental and disabled by default. `bazaar.enabled: true` adds Bazaar
+discovery metadata to x402 challenges on HTTP and MCP for resources whose
+`payments` include `x402`. Enabling it requires `publicResourceUrl: true`;
+otherwise config loading fails with `CONFIG_INVALID`.
+
+```yaml
+payments:
+  x402:
+    publicResourceUrl: true
+    bazaar:
+      enabled: true
+```
+
+During config loading, omissions from HTTP/MCP metadata produce warnings with
+the resource id, affected surfaces and reason. Omitting metadata leaves payment
+behavior unchanged.
+[x402](protocols/x402.md#bazaar-discovery-metadata) lists the rules.
+
+Choose a facilitator that accepts Bazaar metadata. When a challenge carries
+it, verify and settle forward that metadata. On HTTP, a Bazaar validation
+rejection can cause repeated 402 challenges.
+
 ### `payments.mpp`
 
 MPP accepts the `USDC` currency label on the local chain `eip155:31337`, Base

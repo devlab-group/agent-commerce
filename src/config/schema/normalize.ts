@@ -1,6 +1,7 @@
 // The business-rule pass: coerces leaves and checks cross-references across sections
 import type { CommerceResource } from '../../core';
 import { CommerceError } from '../../core';
+import { bazaarMetadata } from '../../payments/x402/provider/bazaar';
 import { joinUrl } from '../../protocols/http';
 import { normalizeAcp, validateAcpCheckoutMapping } from './acp';
 import { normalizeAp2, validateLegacyStoresIsolated } from './ap2';
@@ -66,6 +67,11 @@ export function normalize(raw: RawConfig): GatewayConfig {
     publicUrl !== undefined && toBoolean(publicUrl, 'payments.x402.publicResourceUrl')
       ? publicResourceUrls(raw.merchant.publicBaseUrl, protocols, resources)
       : undefined;
+  const bazaarRaw = raw.payments.x402?.bazaar;
+  const resourceBazaar =
+    bazaarRaw !== undefined && toBoolean(bazaarRaw.enabled, 'payments.x402.bazaar.enabled')
+      ? bazaarExtensions(resourceUrls, resources)
+      : undefined;
   const x402WithFlows =
     x402 !== undefined
       ? {
@@ -73,6 +79,7 @@ export function normalize(raw: RawConfig): GatewayConfig {
           ...flowOverrides('x402'),
           ...(Object.keys(mimeTypes).length > 0 ? { resourceMimeTypes: mimeTypes } : {}),
           ...(resourceUrls !== undefined ? { resourceUrls } : {}),
+          ...(resourceBazaar !== undefined ? { resourceBazaar } : {}),
         }
       : x402;
   const mppWithFlows = mpp !== undefined ? { ...mpp, ...flowOverrides('mpp') } : mpp;
@@ -116,6 +123,35 @@ export function normalize(raw: RawConfig): GatewayConfig {
     },
     ...(ap2 !== undefined ? { authorization: { ap2 } } : {}),
   };
+}
+
+// Build Bazaar metadata for public URLs and report omitted resources or surfaces
+// during config loading. Omitting metadata leaves payment behavior unchanged.
+function bazaarExtensions(
+  resourceUrls: Record<string, Partial<Record<'http' | 'mcp' | 'a2a', string>>> | undefined,
+  resources: readonly CommerceResource[],
+): NonNullable<GatewayConfig['payments']['x402']>['resourceBazaar'] {
+  if (resourceUrls === undefined) {
+    throw new CommerceError(
+      'CONFIG_INVALID',
+      'payments.x402.bazaar.enabled requires payments.x402.publicResourceUrl: true',
+      { details: { path: 'payments.x402.bazaar.enabled' } },
+    );
+  }
+  return Object.fromEntries(
+    resources.flatMap((resource) => {
+      const urls = resourceUrls[resource.id];
+      if (urls === undefined) return [];
+      const surfaces = (['http', 'mcp'] as const).filter((surface) => urls[surface] !== undefined);
+      const { extensions, omitted } = bazaarMetadata(resource, surfaces);
+      for (const { surfaces: left, reason } of omitted) {
+        console.warn(
+          `[agent-commerce] resource "${resource.id}" gets no Bazaar metadata on ${left.join(' and ')}: ${reason}. Payment is unaffected.`,
+        );
+      }
+      return Object.keys(extensions).length > 0 ? [[resource.id, extensions]] : [];
+    }),
+  );
 }
 
 // Build URLs for the surfaces exposing each x402 resource, using the public

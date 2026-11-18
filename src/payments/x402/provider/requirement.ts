@@ -10,9 +10,14 @@ import { parseCanonicalAmount } from '../amount';
 import type { X402Network } from '../networks';
 import { decodePaymentSubmission } from '../payload';
 import { X402_DEFAULT_PAYMENT_FLOW } from '../payment-flow';
+import { BAZAAR_EXTENSION_KEY } from './bazaar';
 import { DEFAULT_MIME_TYPE, X402_PROTOCOL_VERSION, X402_VERSION } from './constants';
 import { paymentIdentifierExtensions } from './payment-id';
 import type { ProviderContext, SvmOffer } from './types';
+
+// Budget for the encoded PAYMENT-REQUIRED value when adding Bazaar metadata;
+// large headers may be rejected by proxies
+const MAX_HTTP_CHALLENGE_HEADER_BYTES = 8192;
 
 // Requirement metadata naming the offer `selectRequirement` chose, by index
 export const SELECTED_OFFER_KEY = 'x402.offer';
@@ -61,7 +66,9 @@ export function createRequirementBuilders(
   readonly createRequirement: (context: PaymentContext) => Promise<PaymentRequirement>;
   readonly selectRequirement: (context: PaymentVerificationContext) => Promise<PaymentRequirement>;
 } {
-  const { options, offersFor, clock, ids, maxTimeoutSeconds } = ctx;
+  const { options, offersFor, clock, ids, maxTimeoutSeconds, logger } = ctx;
+  // Resources whose HTTP challenge has already been logged as too large
+  const oversizedLogged = new Set<string>();
 
   async function createRequirement(context: PaymentContext): Promise<PaymentRequirement> {
     const offers = offersFor(context.resource.id);
@@ -111,6 +118,10 @@ export function createRequirementBuilders(
     const identifier = paymentIdentifierExtensions(context.resource);
     const extensions =
       identifier === undefined ? quoteExtensions : { ...quoteExtensions, ...identifier };
+    const bazaar =
+      context.protocol === 'http' || context.protocol === 'mcp'
+        ? options.resourceBazaar?.[context.resource.id]?.[context.protocol]
+        : undefined;
 
     // Build the v2 challenge document. HTTP base64-encodes it into
     // `PAYMENT-REQUIRED`; MCP passes the document through directly.
@@ -141,6 +152,10 @@ export function createRequirementBuilders(
       accepts,
       ...(extensions !== undefined ? { extensions } : {}),
     };
+    const challenge =
+      bazaar === undefined
+        ? envelope
+        : withBazaar(envelope, bazaar, context.protocol === 'http', context.resource.id);
 
     const expiresAt = new Date(clock.now().getTime() + maxTimeoutSeconds * 1000).toISOString();
 
@@ -160,7 +175,7 @@ export function createRequirementBuilders(
         provider: 'x402',
         version: X402_PROTOCOL_VERSION,
         accepts: accepts as unknown as Record<string, unknown>[],
-        envelope: envelope as unknown as Record<string, unknown>,
+        envelope: challenge as unknown as Record<string, unknown>,
       },
       metadata: {
         [SETTLE_AFTER_BACKEND_METADATA_KEY]: paymentFlow === 'authorization',
@@ -169,6 +184,29 @@ export function createRequirementBuilders(
         [REUSE_REJECTED_AUTHORIZATION_METADATA_KEY]: true,
       },
     };
+  }
+
+  // Omit Bazaar from oversized HTTP challenges to reduce proxy header failures
+  function withBazaar(
+    envelope: PaymentRequired,
+    bazaar: unknown,
+    http: boolean,
+    resourceId: string,
+  ): PaymentRequired {
+    const extended = {
+      ...envelope,
+      extensions: { ...envelope.extensions, [BAZAAR_EXTENSION_KEY]: bazaar },
+    };
+    const encoded = 4 * Math.ceil(Buffer.byteLength(JSON.stringify(extended)) / 3);
+    if (!http || encoded <= MAX_HTTP_CHALLENGE_HEADER_BYTES) return extended;
+    if (!oversizedLogged.has(resourceId)) {
+      oversizedLogged.add(resourceId);
+      logger.warn(
+        { resourceId, bytes: encoded },
+        'x402: Bazaar metadata left out of an HTTP challenge whose PAYMENT-REQUIRED header would exceed 8 KiB',
+      );
+    }
+    return envelope;
   }
 
   /**

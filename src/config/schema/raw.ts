@@ -355,6 +355,8 @@ const X402Schema = z
     allowUnauthenticatedFacilitator: BooleanOrString.optional(),
     // Experimental: use the configured public endpoint in x402 challenges
     publicResourceUrl: BooleanOrString.optional(),
+    // Experimental Bazaar discovery metadata; enabling it requires publicResourceUrl
+    bazaar: z.object({ enabled: BooleanOrString }).strict().optional(),
     // Experimental ERC-8409 quotes; signing a quote transfers no funds
     quote: z
       .object({

@@ -43,6 +43,55 @@ const SUPPORTED_TYPES = new Set([
   'null',
 ]);
 
+// The keywords `validateNode` enforces, plus annotations that constrain nothing
+const FULLY_ENFORCED_KEYWORDS = new Set([
+  'type',
+  'properties',
+  'required',
+  'additionalProperties',
+  'enum',
+  'items',
+  'title',
+  'description',
+  'examples',
+  'default',
+  '$comment',
+  'deprecated',
+  'readOnly',
+  'writeOnly',
+]);
+
+/**
+ * Check whether a schema and its subschemas stay within this validator's
+ * supported keyword subset. Bazaar also validates the generated example
+ * before publishing it.
+ */
+export function isFullyEnforced(schema: unknown): boolean {
+  if (!isRecord(schema)) return false;
+  if (!Object.keys(schema).every((key) => FULLY_ENFORCED_KEYWORDS.has(key))) return false;
+  const { type, properties, required, additionalProperties, items } = schema;
+  const types = Array.isArray(type) ? type : type === undefined ? [] : [type];
+  if (Array.isArray(type) && type.length === 0) return false;
+  if (!types.every((t) => typeof t === 'string' && SUPPORTED_TYPES.has(t))) return false;
+  if (properties !== undefined) {
+    if (!isRecord(properties) || !Object.values(properties).every(isFullyEnforced)) return false;
+  }
+  if (required !== undefined) {
+    if (!Array.isArray(required) || !required.every((name) => typeof name === 'string'))
+      return false;
+  }
+  if (schema['enum'] !== undefined && !Array.isArray(schema['enum'])) return false;
+  // `validateNode` applies these two only when the node's type admits them
+  if (additionalProperties !== undefined) {
+    if (!isObjectSchemaNode(schema)) return false;
+    if (typeof additionalProperties !== 'boolean' && !isFullyEnforced(additionalProperties))
+      return false;
+  }
+  if (items === undefined) return true;
+  // A tuple `items` (an array of schemas) is not enforced
+  return types.includes('array') && isFullyEnforced(items);
+}
+
 /** Wrap a resource `inputSchema` in a reusable validator function */
 export function compileJsonSchema(schema: JsonSchema | undefined): Validator {
   return (input: unknown): ValidationResult => {

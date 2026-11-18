@@ -1,5 +1,6 @@
+import Ajv2020 from 'ajv/dist/2020.js';
 import { describe, expect, it } from 'vitest';
-import { compileJsonSchema } from '../../../../src/core/execution/validation';
+import { compileJsonSchema, isFullyEnforced } from '../../../../src/core/execution/validation';
 
 describe('compileJsonSchema', () => {
   it('accepts anything when no schema is given', () => {
@@ -294,5 +295,92 @@ describe('compileJsonSchema', () => {
     expect(validate({ city: 'Berlin' }).valid).toBe(true);
     expect(validate({}).valid).toBe(false); // required still enforced
     expect(validate({ city: 'Berlin', evil: true }).valid).toBe(false); // still closed
+  });
+});
+
+describe('isFullyEnforced', () => {
+  const ENFORCED: readonly [string, Record<string, unknown>][] = [
+    ['an empty schema', {}],
+    [
+      'a closed object with every supported keyword and the annotations',
+      {
+        type: 'object',
+        title: 'Query',
+        description: 'A query',
+        $comment: 'internal',
+        properties: {
+          city: { type: 'string', examples: ['Oslo'], deprecated: false },
+          days: { type: ['integer', 'null'], default: 3, readOnly: true },
+          units: { enum: ['metric', 'imperial'], writeOnly: false },
+          tags: { type: 'array', items: { type: 'string' } },
+          extra: { type: 'object', additionalProperties: { type: 'number' } },
+        },
+        required: ['city'],
+        additionalProperties: false,
+      },
+    ],
+    [
+      'properties without a type',
+      { properties: { a: { type: 'boolean' } }, additionalProperties: false },
+    ],
+  ];
+
+  it.each(ENFORCED)('is true for %s', (_label, schema) => {
+    expect(isFullyEnforced(schema)).toBe(true);
+  });
+
+  it.each([
+    ['a non-object schema', true],
+    ['an unenforced keyword', { type: 'string', minLength: 1 }],
+    ['a keyword the config warning list lacks', { type: 'object', minProperties: 1 }],
+    [
+      'an unenforced keyword in a property',
+      { properties: { a: { type: 'string', format: 'email' } } },
+    ],
+    [
+      'an unenforced keyword in additionalProperties',
+      { type: 'object', additionalProperties: { const: 1 } },
+    ],
+    ['an unenforced keyword in items', { type: 'array', items: { type: 'string', pattern: 'x' } }],
+    ['a boolean property schema', { properties: { a: true } }],
+    ['a tuple items', { type: 'array', items: [{ type: 'string' }] }],
+    ['items without an array type', { items: { type: 'string' } }],
+    ['additionalProperties without an object node', { additionalProperties: false }],
+    ['an unknown type', { type: 'date' }],
+    ['an empty type list', { type: [] }],
+    ['a non-string type', { type: [1] }],
+    ['a non-array enum', { enum: 'a' }],
+    ['non-string required entries', { type: 'object', required: [1] }],
+    ['a non-object properties', { properties: [] }],
+    ['$ref', { $ref: '#/$defs/a' }],
+    ['$schema', { $schema: 'https://json-schema.org/draft/2020-12/schema' }],
+  ])('is false for %s', (_label, schema) => {
+    expect(isFullyEnforced(schema)).toBe(false);
+  });
+
+  // Compare gateway and Ajv 2020-12 verdicts for these schemas and sample values
+  const ajv = new Ajv2020({ strict: false });
+  const VALUES: readonly unknown[] = [
+    {},
+    { city: 'Oslo' },
+    { city: 'Oslo', days: null, units: 'metric', tags: ['a'], extra: { n: 1 } },
+    { city: 'Oslo', units: 'kelvin' },
+    { city: 1 },
+    { city: 'Oslo', tags: [1] },
+    { city: 'Oslo', extra: { n: 'x' } },
+    { city: 'Oslo', unknown: true },
+    { a: true },
+    { a: 'yes' },
+    [],
+    'text',
+    null,
+  ];
+
+  it.each(ENFORCED)('agrees with Ajv 2020-12 on every sample value for %s', (_label, schema) => {
+    const gateway = compileJsonSchema(schema);
+    const reference = ajv.compile(schema);
+    expect(VALUES.map((value) => gateway(value).valid)).toEqual(
+      VALUES.map((value) => reference(value)),
+    );
   });
 });

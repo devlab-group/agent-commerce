@@ -2628,6 +2628,98 @@ describe('payments.x402.publicResourceUrl', () => {
   });
 });
 
+describe('payments.x402.bazaar', () => {
+  // `null` leaves publicResourceUrl out
+  function withBazaar(enabled: unknown, publicResourceUrl: boolean | null = true) {
+    const raw = validRawConfig();
+    const x402 = (raw['payments'] as { x402: Record<string, unknown> }).x402;
+    x402['bazaar'] = { enabled };
+    if (publicResourceUrl !== null) x402['publicResourceUrl'] = publicResourceUrl;
+    return raw;
+  }
+  function marketReport(raw: Record<string, unknown>): Record<string, unknown> {
+    return (raw['resources'] as { market_report: Record<string, unknown> }).market_report;
+  }
+  let warn: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+  afterEach(() => {
+    warn.mockRestore();
+  });
+
+  it.each([
+    ['absent', validRawConfig()],
+    ['false', withBazaar(false)],
+  ])('gives the x402 rail no Bazaar metadata when %s', (_label, raw) => {
+    expect(parseConfig(raw, {}).payments.x402?.resourceBazaar).toBeUndefined();
+  });
+
+  it.each([true, 'true'])(
+    'builds the HTTP and MCP forms for each paid resource with %j',
+    (enabled) => {
+      const bazaar = parseConfig(withBazaar(enabled), {}).payments.x402?.resourceBazaar;
+      // weather_basic is free; market_report is paid and exposed on both
+      expect(Object.keys(bazaar ?? {})).toEqual(['market_report']);
+      expect(bazaar?.['market_report']?.http?.info).toEqual({
+        input: { type: 'http', method: 'POST', bodyType: 'json', body: {} },
+        output: { type: 'json' },
+      });
+      expect(bazaar?.['market_report']?.mcp?.info['input']).toMatchObject({
+        type: 'mcp',
+        toolName: 'market_report',
+      });
+      expect(warn).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ['publicResourceUrl is absent', null],
+    ['publicResourceUrl is false', false],
+  ])('refuses the key when %s', (_label, publicResourceUrl) => {
+    expectConfigInvalid(
+      () => parseConfig(withBazaar(true, publicResourceUrl), {}),
+      'payments.x402.bazaar.enabled',
+      'payments.x402.bazaar.enabled requires payments.x402.publicResourceUrl: true',
+    );
+  });
+
+  it('builds no form for a surface the resource is not exposed on', () => {
+    const raw = withBazaar(true);
+    marketReport(raw)['expose'] = ['http'];
+    const bazaar = parseConfig(raw, {}).payments.x402?.resourceBazaar;
+    expect(Object.keys(bazaar?.['market_report'] ?? {})).toEqual(['http']);
+  });
+
+  it('refuses a key it does not know', () => {
+    const raw = validRawConfig();
+    (raw['payments'] as { x402: Record<string, unknown> }).x402['bazaar'] = {
+      enabled: true,
+      routeTemplate: '/x',
+    };
+    expect(() => parseConfig(raw, {})).toThrow(/routeTemplate/);
+  });
+
+  it('leaves out a resource it cannot prove valid, names it in a warning, and keeps its payment', () => {
+    const raw = withBazaar(true);
+    marketReport(raw)['input'] = {
+      type: 'object',
+      properties: { ticker: { type: 'string', pattern: '^[A-Z]+$' } },
+      required: ['ticker'],
+      additionalProperties: false,
+    };
+    const config = parseConfig(raw, {});
+
+    expect(config.payments.x402?.resourceBazaar).toEqual({});
+    expect(config.resources.find((r) => r.id === 'market_report')?.paymentMethods).toEqual([
+      'x402',
+    ]);
+    expect(warn).toHaveBeenCalledWith(
+      '[agent-commerce] resource "market_report" gets no Bazaar metadata on http and mcp: its input schema uses a keyword the gateway does not enforce, which leaves the example unproven. Payment is unaffected.',
+    );
+  });
+});
+
 describe('resource idempotency', () => {
   function withIdempotency(id: string, idempotency: unknown): Record<string, unknown> {
     const raw = validRawConfig();
