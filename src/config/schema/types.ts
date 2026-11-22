@@ -69,7 +69,7 @@ export interface GatewayConfig {
   readonly protocols: {
     readonly http: { readonly enabled: boolean };
     readonly mcp: McpProtocolConfig;
-    readonly a2a: { readonly enabled: boolean; readonly mountPath: string };
+    readonly a2a: A2aProtocolConfig;
     readonly acp: AcpProtocolConfig;
   };
   /** Canonical resources, already normalized */
@@ -151,6 +151,14 @@ export interface GatewayConfig {
   readonly authorization?: { readonly ap2: Ap2AuthorizationConfig };
 }
 
+/** `protocols.a2a` after normalization */
+export interface A2aProtocolConfig {
+  readonly enabled: boolean;
+  readonly mountPath: string;
+  /** Set only when `protocols.a2a.tasks` is configured; unset limits stay absent */
+  readonly tasks?: { readonly retentionHours?: number; readonly maxRetained?: number };
+}
+
 /** `protocols.mcp` after normalization */
 export interface McpProtocolConfig {
   readonly enabled: boolean;
@@ -169,6 +177,6 @@ export interface McpProtocolConfig {
 export interface NormalizedProtocols {
   readonly http: { readonly enabled: boolean };
   readonly mcp: McpProtocolConfig;
-  readonly a2a: { readonly enabled: boolean; readonly mountPath: string };
+  readonly a2a: A2aProtocolConfig;
   readonly acp: AcpProtocolConfig;
 }

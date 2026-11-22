@@ -932,7 +932,9 @@ serves, including the A2A Agent Card and ACP discovery paths · a
 `protocols.mcp.registry` value that breaks the field rules above · an ACP checkout
 mapping that is incomplete, names a missing or non-`acp` resource, reuses one
 resource for two operations, or maps a paid one · an ACP idempotency retention
-below 24 hours · an invalid or zero `payTo`/`asset`/`recipient` · an
+below 24 hours · a `protocols.a2a.tasks.retentionHours` that is not an integer
+from 1 to 8760, or a `protocols.a2a.tasks.maxRetained` that is not an integer
+from 1 to 1,000,000 · an invalid or zero `payTo`/`asset`/`recipient` · an
 `x402.accepts` list that is empty or on a resource that cannot use it · a
 `mimeType` that is not a media type, or on a resource that is not fixed-price
 with `x402` in `payments` · an `idempotency` block on a resource that is not

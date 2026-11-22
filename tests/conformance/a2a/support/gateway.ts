@@ -1,100 +1,27 @@
 /**
  * A real, listening gateway for the SDK to talk to.
  *
- * The official client uses global `fetch` against a URL, so unlike the
- * `inject()`-based integration tests this suite needs a socket. The gateway,
- * pipeline and A2A adapter are real; the merchant backend, payment provider
- * and receipt store are faked, since the endpoint's conformance does not
- * depend on them.
+ * The official client sends requests through global `fetch`, so the suite
+ * needs a listening socket instead of `inject()`. It runs the gateway,
+ * pipeline and A2A adapter with an in-memory SQLite receipt store. The merchant
+ * backend and payment provider are faked to isolate protocol behavior.
  */
 import { createServer } from 'node:net';
 import type { GatewayConfig } from '../../../../src/config';
 import type {
   AdapterDescriptor,
   BackendExecutor,
-  CommerceEvent,
-  CommerceReceipt,
-  PaymentAttempt,
   PaymentContext,
   PaymentProvider,
   PaymentRequirement,
   PaymentResult,
   PaymentSettlementContext,
   PaymentVerificationContext,
-  ReceiptStore,
 } from '../../../../src/core';
 import { CommerceError } from '../../../../src/core';
 import { createGateway, type GatewayInstance } from '../../../../src/gateway';
 import { createA2aAdapter } from '../../../../src/protocols/a2a';
-
-const descriptor: AdapterDescriptor = {
-  name: 'fake-store',
-  kind: 'storage',
-  implementationVersion: '0.0.0-test',
-  supportedSpec: 'n/a',
-  capabilities: [],
-  status: 'experimental',
-};
-
-function createFakeStore(): ReceiptStore {
-  const events: CommerceEvent[] = [];
-  const receipts: CommerceReceipt[] = [];
-  const attempts = new Map<string, PaymentAttempt>();
-  return {
-    async init() {},
-    async appendEvent(event) {
-      events.push(event);
-    },
-    async reservePaymentAttempt(reservation) {
-      const attempt: PaymentAttempt = {
-        id: `attempt-${attempts.size + 1}`,
-        requestId: reservation.requestId,
-        resourceId: reservation.resourceId,
-        provider: reservation.provider,
-        replayKey: reservation.replayKey,
-        status: 'reserved',
-        amount: reservation.amount,
-        currency: reservation.currency,
-        createdAt: '2026-01-01T00:00:00.000Z',
-        updatedAt: '2026-01-01T00:00:00.000Z',
-      };
-      attempts.set(reservation.replayKey, attempt);
-      return attempt;
-    },
-    async updatePaymentAttempt() {},
-    async saveReceipt(receipt) {
-      receipts.push(receipt);
-    },
-    async getReceipt(id) {
-      return receipts.find((r) => r.id === id);
-    },
-    async listReceipts() {
-      return receipts;
-    },
-    async countReceipts() {
-      return receipts.length;
-    },
-    async countUndeliveredReceipts() {
-      return 0;
-    },
-    async countUncertainPaymentAttempts() {
-      return [...attempts.values()].filter(
-        (a) => a.status === 'settlement-uncertain' || a.status === 'failed',
-      ).length;
-    },
-    async listEvents() {
-      return events;
-    },
-    async listPaymentAttempts() {
-      return [...attempts.values()];
-    },
-    async health() {
-      return { status: 'pass', checkedAt: '2026-01-01T00:00:00.000Z' };
-    },
-    async close() {},
-    descriptor,
-  };
-}
+import { createSqliteReceiptStore } from '../../../../src/storage/receipts';
 
 /** Fixed merchant response, so an assertion about the artifact is about the artifact */
 export const MERCHANT_BODY = { city: 'Berlin', forecast: 'sunny', celsius: 21 };
@@ -279,16 +206,18 @@ export async function startConformanceGateway(): Promise<RunningGateway> {
   };
   const backend = countingBackend();
   const provider = fakeProvider();
+  const store = createSqliteReceiptStore({ path: ':memory:' });
+  await store.init();
   const gateway = await createGateway({
     config: gatewayConfig,
-    store: createFakeStore(),
+    store,
     paymentProviders: [provider],
-    // Built as src/gateway/run.ts builds it, so the suite certifies the
-    // adapter production runs
+    // Match the adapter setup in src/gateway/run.ts, including its store
     protocolAdapters: [
       createA2aAdapter({
         mountPath: gatewayConfig.protocols.a2a.mountPath,
         agentName: gatewayConfig.merchant.name,
+        store,
       }),
     ],
     backend,
@@ -302,6 +231,7 @@ export async function startConformanceGateway(): Promise<RunningGateway> {
     settleCalls: provider.settleCalls,
     async close() {
       await gateway.close();
+      await store.close();
     },
   };
 }

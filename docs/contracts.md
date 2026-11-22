@@ -521,6 +521,10 @@ persistence must not fail the commerce flow.
   `agent-commerce export mcp-registry` and `doctor --registry` use the metadata.
   `runGateway` passes `name` and `version` to the MCP adapter as `serverName`
   and `serverVersion`; an adapter built without them keeps its defaults.
+- 2.9.0: `GatewayConfig.protocols.a2a.tasks` contains only limits set in
+  `protocols.a2a.tasks`. The block and individual keys stay absent when
+  omitted. Config loading requires integers from 1 to 8760 for `retentionHours`
+  and from 1 to 1,000,000 for `maxRetained`.
 
 ### Authorization and AP2
 
@@ -1083,7 +1087,11 @@ export interface GatewayConfig {
         readonly description: string;
       };
     };
-    readonly a2a: { readonly enabled: boolean; readonly mountPath: string };
+    readonly a2a: {
+      readonly enabled: boolean;
+      readonly mountPath: string;
+      readonly tasks?: { readonly retentionHours?: number; readonly maxRetained?: number };
+    };
     readonly acp: AcpProtocolConfig;
   };
   readonly resources: readonly CommerceResource[];

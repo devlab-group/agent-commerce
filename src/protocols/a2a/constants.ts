@@ -87,3 +87,9 @@ export const A2A_TASK_STATE_INPUT_REQUIRED = 'TASK_STATE_INPUT_REQUIRED';
 
 /** Extension activation header, a comma-separated list of extension URIs */
 export const A2A_EXTENSIONS_HEADER = 'a2a-extensions';
+
+/** Bounds for `protocols.a2a.tasks.retentionHours`, the retention period for answered tasks */
+export const A2A_TASK_RETENTION_HOURS = { min: 1, max: 8760 } as const;
+
+/** Bounds for `protocols.a2a.tasks.maxRetained`, the cap on unexpired task records */
+export const A2A_MAX_RETAINED_TASKS = { min: 1, max: 1_000_000 } as const;

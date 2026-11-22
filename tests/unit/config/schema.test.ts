@@ -1620,6 +1620,63 @@ describe('protocols.a2a', () => {
     const config = parseConfig(withA2a({ enabled: false, mountPath: '/mcp' }), {});
     expect(config.protocols.a2a.enabled).toBe(false);
   });
+
+  describe('tasks', () => {
+    it('keeps the task limits it sets, including env-substituted strings', () => {
+      const config = parseConfig(
+        withA2a({
+          enabled: true,
+          tasks: { retentionHours: '${A2A_RETENTION}', maxRetained: 5000 },
+        }),
+        { A2A_RETENTION: '48' },
+      );
+      expect(config.protocols.a2a).toEqual({
+        enabled: true,
+        mountPath: '/a2a',
+        tasks: { retentionHours: 48, maxRetained: 5000 },
+      });
+    });
+
+    it('leaves an unset limit absent for the adapter default', () => {
+      const config = parseConfig(withA2a({ enabled: true, tasks: { maxRetained: 1 } }), {});
+      expect(config.protocols.a2a.tasks).toEqual({ maxRetained: 1 });
+    });
+
+    it.each([
+      ['retentionHours', 1],
+      ['retentionHours', 8760],
+      ['maxRetained', 1],
+      ['maxRetained', 1_000_000],
+    ])('accepts %s at its bound %s', (key, value) => {
+      const config = parseConfig(withA2a({ enabled: true, tasks: { [key]: value } }), {});
+      expect(config.protocols.a2a.tasks).toEqual({ [key]: value });
+    });
+
+    it.each([
+      ['retentionHours', 0, '>= 1'],
+      ['retentionHours', 8761, '<= 8760'],
+      ['retentionHours', '8761', '<= 8760'],
+      ['retentionHours', 1.5, 'must be an integer'],
+      ['retentionHours', 'soon', 'decimal digits'],
+      ['maxRetained', 0, '>= 1'],
+      ['maxRetained', 1_000_001, '<= 1000000'],
+      ['maxRetained', -1, '>= 1'],
+    ])('refuses %s %s', (key, value, message) => {
+      expectConfigInvalid(
+        () => parseConfig(withA2a({ enabled: true, tasks: { [key]: value } }), {}),
+        `protocols.a2a.tasks.${key}`,
+        message,
+      );
+    });
+
+    it('rejects an unknown key inside the tasks block', () => {
+      expectConfigInvalid(
+        () => parseConfig(withA2a({ enabled: true, tasks: { history: true } }), {}),
+        'protocols.a2a.tasks',
+        /history/,
+      );
+    });
+  });
 });
 
 describe('protocols.acp', () => {
