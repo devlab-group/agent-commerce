@@ -42,6 +42,7 @@ import {
   type LegacySource,
   type LegacyStoreOptions,
   missingLegacyImports,
+  recordedLegacyImports,
 } from './legacy-import';
 import { clampListLimit } from './params';
 import { createPendingTaskMethods, sweepExpiredPendingTasks } from './pending-tasks';
@@ -59,6 +60,7 @@ import {
   type TransactionRow,
 } from './rows';
 import { migrate, SCHEMA_VERSION } from './schema';
+import { createTaskRecordMethods, sweepExpiredTaskRecords } from './task-records';
 
 // Non-2xx statuses, including 0 (unknown), are undelivered, matching
 // deliveryResult() in ReceiptList.tsx. NOT NULL prevents NULL comparisons from
@@ -138,9 +140,8 @@ export interface SqliteReceiptStoreSummary {
   readonly missingLegacyImports: readonly LegacySource[];
 }
 
-/** Implements every optional `ReceiptStore` method except the `task_records` group */
-export interface SqliteReceiptStore
-  extends Required<Omit<ReceiptStore, 'putTaskRecord' | 'getTaskRecord' | 'listTaskRecords'>> {
+/** Implements every optional `ReceiptStore` method */
+export interface SqliteReceiptStore extends Required<ReceiptStore> {
   /** Experimental: may change in a minor release */
   summary(options: { readonly orphanHoldMinAgeMs: number }): Promise<SqliteReceiptStoreSummary>;
 }
@@ -522,12 +523,6 @@ function storeOn(db: Database.Database, options: SqliteReceiptStoreOptions): Sql
   const countLiveTasksStmt = db.prepare<[string], { count: number }>(
     'SELECT COUNT(*) AS count FROM pending_tasks WHERE expires_at > ?',
   );
-  const legacyImportsStmt = db.prepare<
-    [],
-    { source: string; path: string; rows: number; imported_at: string }
-  >(
-    'SELECT source, path, rows, imported_at FROM legacy_imports WHERE path IS NOT NULL ORDER BY source',
-  );
 
   let closed = false;
   let releaseLegacyLocks: (() => void) | undefined;
@@ -545,6 +540,7 @@ function storeOn(db: Database.Database, options: SqliteReceiptStoreOptions): Sql
       'idempotency-keys',
       'authorization-holds',
       'pending-tasks',
+      'task-records',
     ],
     status: 'stable',
   };
@@ -560,8 +556,13 @@ function storeOn(db: Database.Database, options: SqliteReceiptStoreOptions): Sql
           `Receipt store schema version mismatch (found ${version}, expected ${SCHEMA_VERSION})`,
         );
       }
-      // Remove expired pending tasks at startup without waiting for A2A traffic
-      if (!db.readonly) sweepExpiredPendingTasks(db, clock.nowIso());
+      // Sweep expired pending tasks and task records during writable-store
+      // init(), without waiting for protocol traffic
+      if (!db.readonly) {
+        const now = clock.nowIso();
+        sweepExpiredPendingTasks(db, now);
+        sweepExpiredTaskRecords(db, now);
+      }
       if (options.legacyStores !== undefined && releaseLegacyLocks === undefined) {
         releaseLegacyLocks = importLegacyStores(
           db,
@@ -812,6 +813,7 @@ function storeOn(db: Database.Database, options: SqliteReceiptStoreOptions): Sql
     ...createIdempotencyMethods(db, clock),
     ...createHoldMethods(db, clock),
     ...createPendingTaskMethods(db, clock),
+    ...createTaskRecordMethods(db, clock),
 
     // Reads all unresolved transactions at once. Page this query if large
     // journals make operator diagnostics too costly.
@@ -833,12 +835,7 @@ function storeOn(db: Database.Database, options: SqliteReceiptStoreOptions): Sql
         unresolvedIdempotencyKeys: unresolvedKeys?.other ?? 0,
         unresolvedPaymentKeys: unresolvedKeys?.payment ?? 0,
         unexpiredPendingTasks: countLiveTasksStmt.get(now)?.count ?? 0,
-        legacyImports: legacyImportsStmt.all().map((row) => ({
-          source: row.source,
-          path: row.path,
-          rows: row.rows,
-          importedAt: row.imported_at,
-        })),
+        legacyImports: recordedLegacyImports(db),
         missingLegacyImports: missingLegacyImports(db),
       };
     },

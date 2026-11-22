@@ -259,7 +259,7 @@
     "name": "sqlite-receipt-store",
     "kind": "storage",
     "implementationVersion": "<package-version>",
-    "supportedSpec": "sqlite-schema-v5",
+    "supportedSpec": "sqlite-schema-v6",
     "capabilities": [
       "receipts",
       "events",
@@ -267,7 +267,8 @@
       "transactions",
       "idempotency-keys",
       "authorization-holds",
-      "pending-tasks"
+      "pending-tasks",
+      "task-records"
     ],
     "status": "stable"
   },

@@ -1,7 +1,7 @@
 export {
   type LegacySource,
   type LegacyStoreOptions,
-  readMissingLegacyImports,
+  readLegacyImportState,
 } from './legacy-import';
 export {
   createSqliteReceiptStore,

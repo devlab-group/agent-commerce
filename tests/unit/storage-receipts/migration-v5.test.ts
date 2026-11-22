@@ -1,15 +1,22 @@
-// Test schema v5 upgrades using a fixed 2.5.0 (schema v4) SQL fixture
+// Test upgrades from the fixed 2.5.0 (schema v4) SQL fixture to SCHEMA_VERSION
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createSqliteReceiptStore } from '../../../src/storage/receipts';
+import { SCHEMA_VERSION } from '../../../src/storage/receipts/schema';
 import { dumpTables } from '../../fixtures/sqlite-dump';
 import { createFakeClock, createFakeIds } from './helpers';
 
 const FIXTURE = readFileSync(new URL('./fixtures/receipts-v4.sql', import.meta.url), 'utf8');
-const NEW_TABLES = ['authorization_holds', 'idempotency_keys', 'legacy_imports', 'pending_tasks'];
+const NEW_TABLES = [
+  'authorization_holds',
+  'idempotency_keys',
+  'legacy_imports',
+  'pending_tasks',
+  'task_records',
+];
 
 const schemaOf = (path: string) => {
   const db = new Database(path, { readonly: true });
@@ -55,7 +62,7 @@ describe('schema v5 migration', () => {
     }
 
     const after = dumpTables(path);
-    expect(schemaOf(path).version).toBe(5);
+    expect(schemaOf(path).version).toBe(SCHEMA_VERSION);
     for (const table of NEW_TABLES) expect(after[table]).toEqual([]);
     const existing = Object.fromEntries(
       Object.entries(after).filter(([table]) => !NEW_TABLES.includes(table)),
@@ -101,24 +108,29 @@ describe('schema v5 migration', () => {
     }
   });
 
-  it('reports schema v5 and its record capabilities', async () => {
+  it('reports the current schema and its record capabilities', async () => {
     const store = open();
     try {
       await store.init();
-      expect(store.descriptor.supportedSpec).toBe('sqlite-schema-v5');
+      expect(store.descriptor.supportedSpec).toBe(`sqlite-schema-v${SCHEMA_VERSION}`);
       expect(store.descriptor.capabilities).toEqual(
-        expect.arrayContaining(['idempotency-keys', 'authorization-holds', 'pending-tasks']),
+        expect.arrayContaining([
+          'idempotency-keys',
+          'authorization-holds',
+          'pending-tasks',
+          'task-records',
+        ]),
       );
       expect(await store.health()).toMatchObject({
         status: 'pass',
-        detail: 'sqlite schema v5 writable',
+        detail: `sqlite schema v${SCHEMA_VERSION} writable`,
       });
     } finally {
       await store.close();
     }
   });
 
-  it('leaves a v5 file unchanged when reopened', async () => {
+  it('leaves a migrated file unchanged when reopened', async () => {
     const first = open();
     await first.init();
     await first.reserveAuthorizationHold?.({
@@ -150,7 +162,7 @@ describe('schema v5 migration', () => {
     await upgraded.init();
     await upgraded.close();
     const db = new Database(path);
-    db.pragma('user_version = 6');
+    db.pragma(`user_version = ${SCHEMA_VERSION + 1}`);
     db.close();
     const rows = dumpTables(path);
 
@@ -158,7 +170,7 @@ describe('schema v5 migration', () => {
     try {
       await expect(store.init()).rejects.toMatchObject({
         code: 'STORAGE_ERROR',
-        message: expect.stringContaining('found 6, expected 5'),
+        message: expect.stringContaining(`found ${SCHEMA_VERSION + 1}, expected ${SCHEMA_VERSION}`),
       });
       expect(await store.health()).toMatchObject({
         status: 'fail',
@@ -168,6 +180,6 @@ describe('schema v5 migration', () => {
       await store.close();
     }
     expect(dumpTables(path)).toStrictEqual(rows);
-    expect(schemaOf(path).version).toBe(6);
+    expect(schemaOf(path).version).toBe(SCHEMA_VERSION + 1);
   });
 });

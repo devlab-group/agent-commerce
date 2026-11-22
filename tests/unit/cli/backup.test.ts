@@ -20,6 +20,7 @@ import { type BackupManifest, runBackupCommand } from '../../../src/cli/commands
 import type { GatewayConfig } from '../../../src/config';
 import { createAcpIdempotencyStore } from '../../../src/protocols/acp/idempotency/store';
 import { createSqliteReceiptStore } from '../../../src/storage/receipts';
+import { SCHEMA_VERSION } from '../../../src/storage/receipts/schema';
 import { dumpTables } from '../../fixtures/sqlite-dump';
 import { createCapturingIo, makeGatewayConfig } from './fixtures';
 
@@ -28,6 +29,16 @@ const FIXTURE_V4 = readFileSync(
   'utf8',
 );
 const NOW = '2026-11-01T12:00:00.000Z';
+// Keep this record valid when the backup is read with the system clock
+const TASK_RECORD = {
+  id: 'task_backup',
+  protocol: 'a2a' as const,
+  groupId: 'ctx_backup',
+  state: 'TASK_STATE_COMPLETED',
+  updatedAt: NOW,
+  document: { id: 'task_backup' },
+  expiresAt: '2100-01-01T00:00:00.000Z',
+};
 const clock = { now: () => new Date(NOW), nowIso: () => NOW, monotonicMs: () => 0 };
 
 let dir: string;
@@ -119,6 +130,10 @@ function mode(path: string): number {
 describe('agent-commerce backup', () => {
   it('copies a database a writer is changing into a consistent, owner-only snapshot', async () => {
     await startedOnce();
+    const seeded = createSqliteReceiptStore({ path: receipts });
+    await seeded.init();
+    await seeded.putTaskRecord(TASK_RECORD, { maxRecords: 1 });
+    await seeded.close();
     const live = new Database(receipts);
     live.exec('CREATE TABLE writer_probe (n INTEGER PRIMARY KEY)');
     live.close();
@@ -162,7 +177,7 @@ describe('agent-commerce backup', () => {
         {
           file: 'receipts.sqlite',
           source: 'storage.receipts.path',
-          schemaVersion: 5,
+          schemaVersion: SCHEMA_VERSION,
           sha256: sha256(join(out, 'receipts.sqlite')),
         },
       ],
@@ -174,7 +189,8 @@ describe('agent-commerce backup', () => {
     // Reopen last: the store switches the copy to WAL but needs no migration
     const reopened = createSqliteReceiptStore({ path: join(out, 'receipts.sqlite') });
     await reopened.init();
-    expect((await reopened.health()).detail).toBe('sqlite schema v5 writable');
+    expect((await reopened.health()).detail).toBe(`sqlite schema v${SCHEMA_VERSION} writable`);
+    expect(await reopened.getTaskRecord(TASK_RECORD.id)).toEqual(TASK_RECORD);
     await reopened.close();
   });
 
@@ -202,7 +218,7 @@ describe('agent-commerce backup', () => {
     expect(dumpTables(join(out, 'ap2-replay.sqlite'))).toEqual(dumpTables(ap2));
     expect(dumpTables(join(out, 'acp-idempotency.sqlite'))).toEqual(dumpTables(acp));
     for (const file of manifest().files) expect(mode(join(out, file.file))).toBe(0o600);
-    // Read-only: no migration to v5, no import marker, no rewritten file
+    // Read-only: no migration, no import marker, no rewritten file
     expect([receipts, ap2, acp].map(sha256)).toEqual(before);
   });
 
@@ -268,17 +284,22 @@ describe('agent-commerce backup', () => {
     expect(readFileSync(out, 'utf8')).toBe('not a directory');
   });
 
-  it.each([3, 6])('refuses a receipt database at schema v%i, copying nothing', async (version) => {
-    const db = new Database(receipts);
-    db.pragma(`user_version = ${version}`);
-    db.close();
+  it.each([3, SCHEMA_VERSION + 1])(
+    'refuses a receipt database at schema v%i, copying nothing',
+    async (version) => {
+      const db = new Database(receipts);
+      db.pragma(`user_version = ${version}`);
+      db.close();
 
-    const { code, io } = await backup();
+      const { code, io } = await backup();
 
-    expect(code).toBe(1);
-    expect(io.err.join('\n')).toContain(`schema v${version}; this version backs up v4 to v5`);
-    expect(readdirSync(out)).toEqual([]);
-  });
+      expect(code).toBe(1);
+      expect(io.err.join('\n')).toContain(
+        `schema v${version}; this version backs up v4 to v${SCHEMA_VERSION}`,
+      );
+      expect(readdirSync(out)).toEqual([]);
+    },
+  );
 
   it('refuses a receipt database that does not exist, without creating it', async () => {
     const { code, io } = await backup();

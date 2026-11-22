@@ -103,7 +103,7 @@
     {
       "name": "Storage",
       "status": "PASS",
-      "detail": "sqlite schema v5 writable; receipts=0"
+      "detail": "sqlite schema v6 writable; receipts=0"
     },
     {
       "name": "Transactions",

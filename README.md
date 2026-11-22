@@ -525,7 +525,7 @@ INFO  AP2                  disabled
 PASS  Payments             x402 v2 (scheme=exact) enabled - LOCAL dev chain (eip155:31337), destination=0x7099…79C8, facilitator=local (in-process), paymentFlow=authorization
 PASS  Payments (offers)    1 offer(s) pass their health checks
 INFO  Payments (MPP)       MPP not configured
-PASS  Storage              sqlite schema v5 writable; receipts=2
+PASS  Storage              sqlite schema v6 writable; receipts=2
 PASS  Transactions         none unresolved
 PASS  Protocol versions    reported by gateway /.well-known/agent-commerce
 
@@ -595,8 +595,8 @@ follows.
 It exits 0 after a completed run, even if attempts remain unresolved, and 1 if
 the run fails to complete. If a store error stops a hold scan, the command
 prints the report, preserving any saved resolutions, and exits 1.
-`reconcile` and `resolve` refuse receipt databases below schema v5 without
-migrating them. Back up the database, then start the gateway once before
+`reconcile` and `resolve` reject receipt databases with an older schema
+without migrating them. Back up the database, then start the gateway once before
 retrying either command.
 
 Each family needs its own evidence:

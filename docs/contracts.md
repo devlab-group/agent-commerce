@@ -309,7 +309,8 @@ persistence must not fail the commerce flow.
     target's health. Without the field, `status` retains its 2.7 meaning.
 - 2.9.0 adds the optional `ReceiptStore` method group `task_records` to
   `STORE_METHOD_GROUPS`. Existing 2.8 stores need no changes. A store must
-  implement the whole group or omit it. SQLite omits this group.
+  implement the whole group or omit it. The SQLite store implements it in
+  schema v6.
   - `putTaskRecord`, `getTaskRecord` and `listTaskRecords` store and read
     `TaskRecord` values. A record holds the task response last returned by its
     adapter for later reads. It does not make the task payable; payment
@@ -637,9 +638,9 @@ export function createSqliteReceiptStore(
 ): SqliteReceiptStore;
 ```
 
-Creating the store upgrades older files to schema v5. `init()` rejects any
-version other than v5, just as a 2.5.x store rejects a v5 file because it
-requires v4. To downgrade below 2.6.0, restore a copy made before the upgrade.
+Creating the store migrates older files to schema v6. `init()` requires v6.
+A 2.8.x store requires v5 and rejects v6 files. To downgrade below 2.9.0,
+restore a copy made before migration.
 
 The store removes the top-level `_payment` and `_authorization` fields from
 pending task input before writing it. Hold `metadata` values under

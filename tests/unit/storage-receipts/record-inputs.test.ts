@@ -15,6 +15,15 @@ import { dumpTables } from '../../fixtures/sqlite-dump';
 const MINUTE = 60_000;
 const SCOPE = { deployment: 'https://gateway.test', endpoint: '/checkout_sessions', key: 'k1' };
 const task = { id: 'task_1', protocol: 'a2a' as const, resourceId: 'r', input: {} };
+const record = (id: string, updatedAt: string, expiresAt = isoAt(10 * MINUTE)) => ({
+  id,
+  protocol: 'a2a' as const,
+  groupId: 'ctx_1',
+  state: 'TASK_STATE_COMPLETED',
+  updatedAt,
+  document: { id },
+  expiresAt,
+});
 
 describe('SQLite record method inputs', () => {
   let dir: string;
@@ -41,6 +50,13 @@ describe('SQLite record method inputs', () => {
       store.putPendingTask({ ...task, expiresAt: isoAt(MINUTE) }, { maxTasks }),
     ).rejects.toMatchObject({ code: 'STORAGE_ERROR' });
     expect(dumpTables(path).pending_tasks).toEqual([]);
+  });
+
+  it.each([Number.NaN, -1, 1.5])('refuses maxRecords %s and stores nothing', async (maxRecords) => {
+    await expect(
+      store.putTaskRecord(record('rec_1', isoAt(0)), { maxRecords }),
+    ).rejects.toMatchObject({ code: 'STORAGE_ERROR' });
+    expect(dumpTables(path).task_records).toEqual([]);
   });
 
   it('writes nothing when reading a claim, even one past its expiry', async () => {
@@ -77,9 +93,16 @@ describe('SQLite record method inputs', () => {
     await expect(
       store.listOrphanAuthorizationHolds({ updatedBefore: 'not-a-date' }),
     ).rejects.toMatchObject({ code: 'STORAGE_ERROR' });
+    await expect(
+      store.putTaskRecord(record('rec_1', 'not-a-date'), { maxRecords: 10 }),
+    ).rejects.toMatchObject({ code: 'STORAGE_ERROR' });
+    await expect(
+      store.putTaskRecord(record('rec_1', isoAt(0), 'not-a-date'), { maxRecords: 10 }),
+    ).rejects.toMatchObject({ code: 'STORAGE_ERROR' });
     const tables = dumpTables(path);
     expect(tables.idempotency_keys).toEqual([]);
     expect(tables.pending_tasks).toEqual([]);
+    expect(tables.task_records).toEqual([]);
   });
 
   // Timestamps are compared as text, so an offset form must be stored as UTC
@@ -103,5 +126,34 @@ describe('SQLite record method inputs', () => {
     ).toBe(true);
     clock.advance(20 * MINUTE);
     expect(await store.getPendingTask('task_1')).toBeUndefined();
+  });
+
+  it('stops serving a task record at the instant an offset timestamp names', async () => {
+    await store.putTaskRecord(record('rec_1', isoAt(0), '2026-01-01T01:10:00+01:00'), {
+      maxRecords: 1,
+    });
+    clock.advance(20 * MINUTE);
+    expect(await store.getTaskRecord('rec_1')).toBeUndefined();
+    expect(await store.listTaskRecords({ protocol: 'a2a', groupId: 'ctx_1' })).toEqual([]);
+  });
+
+  it('lists task records by the instant an offset updatedAt names', async () => {
+    // 00:30+01:00 is 23:30Z the day before; raw timestamp strings sort in the wrong order
+    await store.putTaskRecord(record('earlier', '2026-01-01T00:30:00+01:00'), { maxRecords: 2 });
+    await store.putTaskRecord(record('later', '2026-01-01T00:10:00.000Z'), { maxRecords: 2 });
+    const listed = await store.listTaskRecords({ protocol: 'a2a', groupId: 'ctx_1' });
+    expect(listed.map((r) => [r.id, r.updatedAt])).toEqual([
+      ['later', '2026-01-01T00:10:00.000Z'],
+      ['earlier', '2025-12-31T23:30:00.000Z'],
+    ]);
+  });
+
+  it('deletes expired task records when a writable store starts', async () => {
+    await store.putTaskRecord(record('rec_1', isoAt(0), isoAt(MINUTE)), { maxRecords: 1 });
+    await store.close();
+    clock.advance(MINUTE + 1);
+    store = createSqliteReceiptStore({ path, clock });
+    await store.init();
+    expect(dumpTables(path).task_records).toEqual([]);
   });
 });
