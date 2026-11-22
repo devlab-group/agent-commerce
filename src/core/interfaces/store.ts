@@ -20,6 +20,7 @@ import type {
   IdempotencyScope,
   IdempotencyUpdate,
   PendingTask,
+  TaskRecord,
 } from '../domain/store-records';
 import type {
   AuthorizationHoldState,
@@ -316,6 +317,27 @@ export interface ReceiptStore {
    * in a minor release.
    */
   takePendingTask?(id: string): Promise<PendingTask | undefined>;
+
+  /**
+   * Store task responses for later reads by protocol adapters. Implement all
+   * three methods or none. Experimental: may change in a minor release.
+   *
+   * Delete expired records, then store `record`. Replace a record with the same
+   * ID even at capacity. For a new ID, return false without storing when
+   * `maxRecords` unexpired records exist.
+   */
+  putTaskRecord?(record: TaskRecord, options: { readonly maxRecords: number }): Promise<boolean>;
+  /** Return undefined for a missing or expired record. Experimental: may change in a minor release */
+  getTaskRecord?(id: string): Promise<TaskRecord | undefined>;
+  /**
+   * Return all unexpired records matching `protocol` and `groupId`, ordered by
+   * `updatedAt` and then `id`, both descending. Experimental: may change in a
+   * minor release.
+   */
+  listTaskRecords?(filter: {
+    readonly protocol: ProtocolName;
+    readonly groupId: string;
+  }): Promise<readonly TaskRecord[]>;
 
   readonly descriptor: AdapterDescriptor;
   health(): Promise<AdapterHealth>;

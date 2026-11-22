@@ -94,3 +94,27 @@ export interface PendingTask {
   /** Set and bounded by the caller */
   readonly expiresAt: IsoTimestamp;
 }
+
+/**
+ * A task response last returned by its protocol adapter, saved for later reads.
+ * This record does not make the task payable. Experimental: may change in a
+ * minor release.
+ */
+export interface TaskRecord {
+  /** Unique across the store */
+  readonly id: string;
+  readonly protocol: ProtocolName;
+  /** Groups related tasks for listing */
+  readonly groupId: string;
+  /** State name defined by the adapter */
+  readonly state: string;
+  /** Time of the last state change; used to sort listed records */
+  readonly updatedAt: IsoTimestamp;
+  /**
+   * JSON-serializable task response. Must not contain payment proofs or
+   * authorization presentations.
+   */
+  readonly document: Readonly<Record<string, unknown>>;
+  /** Set and bounded by the caller */
+  readonly expiresAt: IsoTimestamp;
+}

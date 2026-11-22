@@ -307,6 +307,24 @@ persistence must not fail the commerce flow.
   - `AdapterHealthComponent.undetermined` uses `'unreachable'` for a probe
     that received no response. When set, `status` does not describe the
     target's health. Without the field, `status` retains its 2.7 meaning.
+- 2.9.0 adds the optional `ReceiptStore` method group `task_records` to
+  `STORE_METHOD_GROUPS`. Existing 2.8 stores need no changes. A store must
+  implement the whole group or omit it. SQLite omits this group.
+  - `putTaskRecord`, `getTaskRecord` and `listTaskRecords` store and read
+    `TaskRecord` values. A record holds the task response last returned by its
+    adapter for later reads. It does not make the task payable; payment
+    continuation uses separate pending-task state.
+  - `putTaskRecord` deletes expired records before storing a record. It
+    replaces a record with the same ID even at capacity. For a new ID, it
+    returns `false` without storing when `maxRecords` unexpired records exist.
+  - `listTaskRecords` returns all unexpired records matching `protocol` and
+    `groupId`, without pagination. Records are ordered by `updatedAt` and then
+    `id`, both descending.
+  - `groupId` is a protocol-neutral grouping key. `document` holds the task as
+    the adapter returns it and must not contain payment proofs or
+    authorization presentations.
+  - These methods and the type are experimental and may change in a minor
+    release.
 
 ### Protocols and gateway
 

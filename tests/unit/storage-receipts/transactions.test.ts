@@ -8,12 +8,12 @@ import type {
   Clock,
   PaymentAttemptReservation,
   PaymentAttemptResolution,
-  ReceiptStore,
   Transaction,
   TransactionPage,
 } from '../../../src/core';
 import {
   createSqliteReceiptStore,
+  type SqliteReceiptStore,
   type SqliteReceiptStoreOptions,
 } from '../../../src/storage/receipts';
 import { createFakeIds, makeEvent, makeReceipt } from './helpers';
@@ -67,7 +67,7 @@ const RESOLUTION: PaymentAttemptResolution = {
 };
 
 // SQLite implements the optional journal methods, so tests can call them directly
-type JournalStore = Required<ReceiptStore>;
+type JournalStore = SqliteReceiptStore;
 const openStore = (options: SqliteReceiptStoreOptions) =>
   createSqliteReceiptStore(options) as JournalStore;
 

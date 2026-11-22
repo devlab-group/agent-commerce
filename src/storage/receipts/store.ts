@@ -138,8 +138,9 @@ export interface SqliteReceiptStoreSummary {
   readonly missingLegacyImports: readonly LegacySource[];
 }
 
-/** Implements every optional `ReceiptStore` method */
-export interface SqliteReceiptStore extends Required<ReceiptStore> {
+/** Implements every optional `ReceiptStore` method except the `task_records` group */
+export interface SqliteReceiptStore
+  extends Required<Omit<ReceiptStore, 'putTaskRecord' | 'getTaskRecord' | 'listTaskRecords'>> {
   /** Experimental: may change in a minor release */
   summary(options: { readonly orphanHoldMinAgeMs: number }): Promise<SqliteReceiptStoreSummary>;
 }
