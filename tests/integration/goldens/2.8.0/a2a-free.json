@@ -1,0 +1,40 @@
+{
+  "status": 200,
+  "extensions": null,
+  "body": {
+    "jsonrpc": "2.0",
+    "id": "golden",
+    "result": {
+      "task": {
+        "id": "a2a_<uuid>",
+        "contextId": "a2a-ctx_<uuid>",
+        "status": {
+          "state": "TASK_STATE_COMPLETED",
+          "timestamp": "<timestamp>"
+        },
+        "artifacts": [
+          {
+            "artifactId": "a2a-artifact_<uuid>",
+            "name": "weather_free",
+            "parts": [
+              {
+                "data": {
+                  "ok": true
+                },
+                "mediaType": "application/json"
+              }
+            ],
+            "metadata": {
+              "agent-commerce/delivery": {
+                "requestId": "a2a_<uuid>",
+                "resourceId": "weather_free",
+                "receiptId": "receipt_<uuid>",
+                "deliveredAt": "<timestamp>"
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+}
