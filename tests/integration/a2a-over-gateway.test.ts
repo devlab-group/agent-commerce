@@ -222,7 +222,8 @@ describe('A2A JSON-RPC transport over the real gateway', () => {
     ['a completely unknown method', 'DoSomething', -32601],
   ])('distinguishes %s', async (_label, method, code) => {
     const gw = await startGateway();
-    const { body } = await rpc(gw, { jsonrpc: '2.0', id: 1, method, params: {} });
+    // GetTask and CancelTask require an id
+    const { body } = await rpc(gw, { jsonrpc: '2.0', id: 1, method, params: { id: 'task-1' } });
     expect(body.error?.code).toBe(code);
   });
 

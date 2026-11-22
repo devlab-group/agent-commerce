@@ -60,6 +60,13 @@ import {
   parseJsonRpcRequest,
 } from './jsonrpc';
 import { type A2aInvocation, parseInvocation } from './message-mapping';
+import {
+  readCancelTaskParams,
+  readGetTaskParams,
+  readListTasksParams,
+  readSendMessageParams,
+  type SendMessageParams,
+} from './params';
 import { resumePayment, taskResult } from './payment-resume';
 import {
   completedTask,
@@ -104,6 +111,27 @@ export interface A2aAdapterOptions {
    * otherwise tasks stay in memory. The adapter never closes this store.
    */
   readonly store?: ReceiptStore;
+}
+
+// Parameter validators for task operations
+const TASK_PARAM_READERS = new Map<string, (params: Record<string, unknown>) => unknown>([
+  ['GetTask', readGetTaskParams],
+  ['CancelTask', readCancelTaskParams],
+  ['ListTasks', readListTasksParams],
+]);
+
+// Map parameter and message failures to JSON-RPC errors. Keep CommerceError
+// messages; use a generic message for other thrown values.
+function refusal(id: JsonRpcId, err: unknown): Record<string, unknown> {
+  const error = toCommerceError(err);
+  const a2aErrorCode = error.details?.['a2aErrorCode'];
+  const code =
+    typeof a2aErrorCode === 'number'
+      ? a2aErrorCode
+      : error.code === 'PROTOCOL_UNSUPPORTED'
+        ? A2A_ERROR_UNSUPPORTED_OPERATION
+        : JSONRPC_INVALID_PARAMS;
+  return jsonRpcError(id, code, error.message);
 }
 
 const DEFAULT_AGENT_DESCRIPTION =
@@ -321,6 +349,15 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
         `A2A method "${method}" is not supported: this agent does not support push notifications.`,
       );
     }
+    // Validate task parameters before returning task-not-found or unsupported-operation errors
+    const readTaskParams = TASK_PARAM_READERS.get(method);
+    if (readTaskParams !== undefined) {
+      try {
+        readTaskParams(isRecord(params) ? params : {});
+      } catch (err) {
+        return refusal(id, err);
+      }
+    }
     if (A2A_TASK_LOOKUP_METHODS.includes(method)) {
       return jsonRpcError(
         id,
@@ -339,24 +376,21 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
       return jsonRpcError(id, JSONRPC_METHOD_NOT_FOUND, `Unknown method "${method}".`);
     }
 
-    const resumed = await resumePayment(this.context, this.pendingPayments, id, params);
+    let request: SendMessageParams;
+    try {
+      request = readSendMessageParams(isRecord(params) ? params : {});
+    } catch (err) {
+      return refusal(id, err);
+    }
+
+    const resumed = await resumePayment(this.context, this.pendingPayments, id, request.params);
     if (resumed !== undefined) return resumed;
 
     let invocation: ReturnType<typeof parseInvocation>;
     try {
-      invocation = parseInvocation(params);
+      invocation = parseInvocation(request.params);
     } catch (err) {
-      const error = toCommerceError(err);
-      const a2aErrorCode = error.details?.['a2aErrorCode'];
-      const code =
-        typeof a2aErrorCode === 'number'
-          ? a2aErrorCode
-          : error.code === 'PROTOCOL_UNSUPPORTED'
-            ? A2A_ERROR_UNSUPPORTED_OPERATION
-            : JSONRPC_INVALID_PARAMS;
-      // CommerceError messages are written for a client; nothing else is
-      // relayed
-      return jsonRpcError(id, code, error.message);
+      return refusal(id, err);
     }
 
     return this.execute(id, invocation, x402Extension);

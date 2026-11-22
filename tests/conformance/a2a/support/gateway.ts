@@ -17,6 +17,7 @@ import type {
   PaymentResult,
   PaymentSettlementContext,
   PaymentVerificationContext,
+  ReceiptStore,
 } from '../../../../src/core';
 import { CommerceError } from '../../../../src/core';
 import { createGateway, type GatewayInstance } from '../../../../src/gateway';
@@ -179,7 +180,32 @@ export interface RunningGateway {
   backendCalls(): number;
   /** Successful settlements so far */
   settleCalls(): number;
+  /** Pending-task and task-record reads from the store so far */
+  taskReads(): number;
   close(): Promise<void>;
+}
+
+const TASK_READS = new Set([
+  'getPendingTask',
+  'takePendingTask',
+  'getTaskRecord',
+  'listTaskRecords',
+]);
+
+// Count task-store reads to check that parameter refusals happen before lookup
+function countingTaskReads(store: ReceiptStore): { store: ReceiptStore; reads: () => number } {
+  let reads = 0;
+  const counted = new Proxy(store, {
+    get(target, key, receiver) {
+      const value: unknown = Reflect.get(target, key, receiver);
+      if (typeof value !== 'function') return value;
+      return (...args: unknown[]) => {
+        if (typeof key === 'string' && TASK_READS.has(key)) reads += 1;
+        return value.apply(target, args);
+      };
+    },
+  });
+  return { store: counted, reads: () => reads };
 }
 
 /**
@@ -206,8 +232,9 @@ export async function startConformanceGateway(): Promise<RunningGateway> {
   };
   const backend = countingBackend();
   const provider = fakeProvider();
-  const store = createSqliteReceiptStore({ path: ':memory:' });
-  await store.init();
+  const sqlite = createSqliteReceiptStore({ path: ':memory:' });
+  await sqlite.init();
+  const { store, reads } = countingTaskReads(sqlite);
   const gateway = await createGateway({
     config: gatewayConfig,
     store,
@@ -229,6 +256,7 @@ export async function startConformanceGateway(): Promise<RunningGateway> {
     url,
     backendCalls: backend.calls,
     settleCalls: provider.settleCalls,
+    taskReads: reads,
     async close() {
       await gateway.close();
       await store.close();

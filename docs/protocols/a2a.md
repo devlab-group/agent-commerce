@@ -60,6 +60,33 @@ parts, multipart messages, non-user roles, and task or context continuation.
 The text and file refusals name the expected part shape. A payment message can
 resume a pending x402 extension task.
 
+## Request parameters
+
+The adapter validates the parameters below before reading the task store or
+calling a backend. For these parameters, `null` counts as absent. Type errors
+return `-32602`, except that any non-null
+`configuration.taskPushNotificationConfig` returns `-32003`. Unknown parameters
+are ignored after field-name checks.
+
+Requests may use proto field names, such as `context_id` for `contextId`.
+The adapter converts request, `configuration`, message and part keys to JSON
+names. Keys within `data` and `metadata` values stay unchanged, preserving
+merchant input and extension metadata. Sending both names for a field returns
+`-32602`. Integer parameters accept JSON numbers or decimal integer strings.
+
+| Parameter                                      | Accepted                                                                              | Otherwise |
+| ---------------------------------------------- | ------------------------------------------------------------------------------------- | --------- |
+| `tenant`                                       | absent or `""`                                                                        | `-32004`  |
+| `configuration.acceptedOutputModes`            | absent, empty, or a list that includes `application/json`, `application/*` or `*/*`   | `-32005`  |
+| `configuration.taskPushNotificationConfig`     | absent                                                                                | `-32003`  |
+| `configuration.historyLength`, `historyLength` | absent or an integer from 0 to 2,147,483,647; ignored because no task history is kept | `-32602`  |
+| `configuration.returnImmediately`              | absent or a boolean; ignored, so responses remain synchronous                         | `-32602`  |
+| `metadata` on `SendMessage` and `CancelTask`   | absent or an object; ignored                                                          | `-32602`  |
+| `id` on `GetTask` and `CancelTask`             | a non-empty string                                                                    | `-32602`  |
+
+The adapter also validates `ListTasks` filters and pagination parameters.
+A valid request returns `-32004`; listing tasks is unsupported.
+
 ## x402 extension
 
 A client activates the extension with
@@ -170,13 +197,13 @@ The adapter returns JSON-RPC errors for invalid requests and A2A features it
 cannot serve. Alongside `-32700`, `-32600`, `-32601`, `-32602` and `-32603`, it
 uses these A2A codes:
 
-| Code     | A2A error                           | Returned for                                                                                    |
-| -------- | ----------------------------------- | ----------------------------------------------------------------------------------------------- |
-| `-32001` | `TaskNotFoundError`                 | an unknown, expired or completed `taskId`; `GetTask` and `CancelTask` for any id                |
-| `-32003` | `PushNotificationNotSupportedError` | the four push notification configuration methods                                                |
-| `-32004` | `UnsupportedOperationError`         | other unsupported methods and message features listed below                                     |
-| `-32005` | `ContentTypeNotSupportedError`      | a text, file, inline-byte or URL part, or a non-JSON `mediaType`                                |
-| `-32009` | `VersionNotSupportedError`          | an unsupported version; a missing header and parameter, or an empty header, is treated as `0.3` |
+| Code     | A2A error                           | Returned for                                                                                                    |
+| -------- | ----------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `-32001` | `TaskNotFoundError`                 | an unknown, expired or completed `taskId`; `GetTask` and `CancelTask` for any valid `id`                        |
+| `-32003` | `PushNotificationNotSupportedError` | the four push notification configuration methods; any non-null `configuration.taskPushNotificationConfig`       |
+| `-32004` | `UnsupportedOperationError`         | other unsupported methods; a non-empty `tenant`; the message features listed below                              |
+| `-32005` | `ContentTypeNotSupportedError`      | a text, file, inline-byte or URL part; a non-JSON `mediaType`; an `acceptedOutputModes` list that excludes JSON |
+| `-32009` | `VersionNotSupportedError`          | an unsupported version; a missing header and parameter, or an empty header, is treated as `0.3`                 |
 
 Multipart messages, a `contextId` and non-empty `referenceTaskIds` return
 `-32004`. Missing `messageId` or a non-user role returns `-32602`. A request

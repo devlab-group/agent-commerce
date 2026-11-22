@@ -25,10 +25,10 @@
  * to make.
  */
 import { z } from 'zod';
-import { CommerceError } from '../../core';
 import { isRecord } from '../../core/is-record';
 import { A2A_JSON_MEDIA_TYPE } from './constants';
 import { A2A_ERROR_CONTENT_TYPE_NOT_SUPPORTED, A2A_ERROR_TASK_NOT_FOUND } from './jsonrpc';
+import { invalid, unsupported } from './params';
 
 // The only role a request message may carry. A2A v1 spells roles this way
 const A2A_USER_ROLE = 'ROLE_USER';
@@ -74,18 +74,6 @@ const ParamsSchema = z.object({
   taskId: z.string().optional(),
   contextId: z.string().optional(),
 });
-
-function invalid(message: string): CommerceError {
-  return new CommerceError('INPUT_INVALID', message);
-}
-
-function unsupported(message: string, a2aErrorCode?: number): CommerceError {
-  return new CommerceError(
-    'PROTOCOL_UNSUPPORTED',
-    message,
-    a2aErrorCode !== undefined ? { details: { a2aErrorCode } } : {},
-  );
-}
 
 /**
  * Continuation is refused rather than ignored: a caller resuming a task would

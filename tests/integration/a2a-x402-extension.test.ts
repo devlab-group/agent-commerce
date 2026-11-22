@@ -390,6 +390,54 @@ describe('x402 A2A extension', () => {
     expect(body.result?.task.status.state).toBe('TASK_STATE_COMPLETED');
   });
 
+  it('pays a task named with proto field names', async () => {
+    const task = await challenged();
+    const { taskId, contextId, messageId, ...rest } = pay(task, {
+      'x402.payment.status': 'payment-submitted',
+      'x402.payment.payload': await paymentPayload(task),
+    });
+
+    const { body } = await rpc({
+      ...rest,
+      task_id: taskId,
+      context_id: contextId,
+      message_id: messageId,
+    });
+
+    expect(body.result?.task).toMatchObject({
+      id: task.id,
+      status: { state: 'TASK_STATE_COMPLETED' },
+    });
+    expect(facilitator.settle).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves snake_case keys in the merchant input and the payment metadata as sent', async () => {
+    const requests = spyOnPipeline();
+    const purchase = buy('x402_report');
+    const [part] = purchase['parts'] as Record<string, unknown>[];
+    const { body: challenge } = await rpc({
+      ...purchase,
+      parts: [{ ...part, data: { resource: 'x402_report', input: { symbol: 'ETH', max_age: 5 } } }],
+    });
+    const task = challenge.result?.task as A2aTask;
+    const payload = await paymentPayload(task);
+    const signed = { ...(payload['payload'] as Record<string, unknown>), buyer_note: 'n' };
+
+    const { body } = await rpc(
+      pay(task, {
+        'x402.payment.status': 'payment-submitted',
+        'x402.payment.payload': { ...payload, payload: signed },
+      }),
+    );
+
+    expect(body.result?.task.status.state).toBe('TASK_STATE_COMPLETED');
+    expect(requests.map((request) => request.input)).toEqual([
+      { symbol: 'ETH', max_age: 5 },
+      { symbol: 'ETH', max_age: 5 },
+    ]);
+    expect(facilitator.verify.mock.calls[0]?.[0]).toMatchObject({ payload: { buyer_note: 'n' } });
+  });
+
   it('answers a task id it never issued with TaskNotFoundError', async () => {
     const { body } = await rpc(
       pay(
