@@ -7,7 +7,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { GatewayConfig } from '../../../src/config';
 import type {
   AdapterDescriptor,
@@ -24,7 +24,7 @@ import type {
   ReceiptStore,
 } from '../../../src/core';
 import { createGateway, type GatewayInstance } from '../../../src/gateway';
-import { createA2aAdapter } from '../../../src/protocols/a2a';
+import { type A2aAdapterOptions, createA2aAdapter } from '../../../src/protocols/a2a';
 import type { A2aTask } from '../../../src/protocols/a2a/types';
 import {
   A2A_X402_EXTENSION_URI,
@@ -188,6 +188,8 @@ let calls: Calls;
 let backendCalls: number;
 let time: ReturnType<typeof createClock>;
 let ids: IdGenerator;
+// Set to hold every backend call until it resolves
+let backendGate: Promise<void> | undefined;
 let open: Node[];
 
 beforeEach(() => {
@@ -195,6 +197,7 @@ beforeEach(() => {
   path = join(dir, 'receipts.db');
   calls = { verify: 0, settle: 0, mandates: [] };
   backendCalls = 0;
+  backendGate = undefined;
   time = createClock();
   // Keep test IDs distinct across gateway restarts
   let n = 0;
@@ -208,7 +211,10 @@ afterEach(async () => {
 });
 
 // The adapter's store defaults to the gateway's own
-async function boot(adapterStore?: (store: ReceiptStore) => ReceiptStore): Promise<Node> {
+async function boot(
+  adapterStore?: (store: ReceiptStore) => ReceiptStore,
+  tasks?: A2aAdapterOptions['tasks'],
+): Promise<Node> {
   const store = createSqliteReceiptStore({ path, clock: time.clock, ids, logger: NOOP_LOGGER });
   await store.init();
   const gateway = await createGateway({
@@ -216,13 +222,16 @@ async function boot(adapterStore?: (store: ReceiptStore) => ReceiptStore): Promi
     store,
     paymentProviders: [fakePayments(time.clock, calls)],
     authorizationProviders: [fakeMandates(time.clock, calls)],
-    protocolAdapters: [createA2aAdapter({ store: adapterStore?.(store) ?? store })],
+    protocolAdapters: [
+      createA2aAdapter({ store: adapterStore?.(store) ?? store, ...(tasks ? { tasks } : {}) }),
+    ],
     logger: NOOP_LOGGER,
     clock: time.clock,
     ids,
     backend: {
       async call() {
         backendCalls += 1;
+        await backendGate;
         return { status: 200, body: { report: 'paid' }, headers: {}, durationMs: 1 };
       },
     },
@@ -237,6 +246,22 @@ async function shutdown(node: Node): Promise<void> {
   open = open.filter((candidate) => candidate !== node);
   await node.gateway.close();
   await node.store.close();
+}
+
+interface Answer {
+  // `{ task }` from SendMessage, a task from GetTask and CancelTask, a page from ListTasks
+  readonly result?: Partial<A2aTask> & { readonly task?: A2aTask; readonly tasks?: A2aTask[] };
+  readonly error?: { code: number; message: string };
+}
+
+async function call(node: Node, method: string, params: Record<string, unknown>): Promise<Answer> {
+  const res = await node.gateway.server.inject({
+    method: 'POST',
+    url: '/a2a',
+    headers: { 'content-type': 'application/json', 'a2a-version': '1.0' },
+    payload: JSON.stringify({ jsonrpc: '2.0', id: 'req-1', method, params }),
+  });
+  return res.json();
 }
 
 async function rpc(node: Node, message: Record<string, unknown>): Promise<JsonRpc> {
@@ -304,6 +329,8 @@ function decline(task: A2aTask): Record<string, unknown> {
 }
 
 const TASK_NOT_FOUND = -32001;
+// A message on a recorded task that is no longer waiting for payment
+const NO_FURTHER_MESSAGES = -32004;
 
 describe('a task waiting for payment, held in the receipt store', () => {
   it('is paid after a restart, and the purchase settles once', async () => {
@@ -325,7 +352,7 @@ describe('a task waiting for payment, held in the receipt store', () => {
 
     // The payment consumed the task
     const again = await rpc(second, pay(task, 'nonce-2'));
-    expect(again.error?.code).toBe(TASK_NOT_FOUND);
+    expect(again.error?.code).toBe(NO_FURTHER_MESSAGES);
     expect(calls.settle).toBe(1);
   });
 
@@ -359,7 +386,7 @@ describe('a task waiting for payment, held in the receipt store', () => {
     ]);
 
     const paid = answers.filter((answer) => answer.result !== undefined);
-    const missing = answers.filter((answer) => answer.error?.code === TASK_NOT_FOUND);
+    const missing = answers.filter((answer) => answer.error?.code === NO_FURTHER_MESSAGES);
     expect(paid).toHaveLength(1);
     expect(paid[0]?.result?.task.status.state).toBe('TASK_STATE_COMPLETED');
     expect(missing).toHaveLength(1);
@@ -390,7 +417,7 @@ describe('a task waiting for payment, held in the receipt store', () => {
     });
     expect(await node.store.getPendingTask?.(task.id)).toBeUndefined();
     const later = await rpc(node, pay(task));
-    expect(later.error?.code).toBe(TASK_NOT_FOUND);
+    expect(later.error?.code).toBe(NO_FURTHER_MESSAGES);
     expect(calls).toMatchObject({ verify: 0, settle: 0 });
   });
 
@@ -403,6 +430,8 @@ describe('a task waiting for payment, held in the receipt store', () => {
     const { error } = await rpc(node, pay(task));
     expect(error?.code).toBe(TASK_NOT_FOUND);
     expect(calls.verify).toBe(0);
+    // Its record expires with it, which leaves nothing that looks payable
+    expect((await call(node, 'GetTask', { id: task.id })).error?.code).toBe(TASK_NOT_FOUND);
   });
 
   it('stays payable after a malformed payment message', async () => {
@@ -489,6 +518,189 @@ describe('a task waiting for payment, held in the receipt store', () => {
   });
 });
 
+// Neither group: pending tasks and answered tasks both live in memory
+const memoryOnly = (store: ReceiptStore): ReceiptStore =>
+  Object.assign(Object.create(store) as ReceiptStore, {
+    putPendingTask: undefined,
+    getPendingTask: undefined,
+    takePendingTask: undefined,
+    putTaskRecord: undefined,
+    getTaskRecord: undefined,
+    listTaskRecords: undefined,
+  });
+
+describe('answered tasks, kept in the receipt store', () => {
+  it('reads a paid task after a restart, until its retention ends', async () => {
+    const first = await boot();
+    const task = await challenged(first, 'report');
+    const paid = (await rpc(first, pay(task))).result?.task;
+    await shutdown(first);
+    const second = await boot();
+
+    expect((await call(second, 'GetTask', { id: task.id })).result).toEqual(paid);
+    time.advance(24 * HOUR - 1);
+    expect((await call(second, 'GetTask', { id: task.id })).result).toEqual(paid);
+    time.advance(1);
+    expect((await call(second, 'GetTask', { id: task.id })).error?.code).toBe(TASK_NOT_FOUND);
+    expect((await call(second, 'ListTasks', { contextId: task.contextId })).result).toEqual({
+      tasks: [],
+      nextPageToken: '',
+      pageSize: 50,
+      totalSize: 0,
+    });
+  });
+
+  it('keeps a task for the configured retention', async () => {
+    const node = await boot(undefined, { retentionHours: 1 });
+    const task = await challenged(node, 'report');
+    await rpc(node, pay(task));
+
+    time.advance(HOUR - 1);
+    expect((await call(node, 'GetTask', { id: task.id })).result?.status?.state).toBe(
+      'TASK_STATE_COMPLETED',
+    );
+    time.advance(1);
+    expect((await call(node, 'GetTask', { id: task.id })).error?.code).toBe(TASK_NOT_FOUND);
+  });
+
+  it('reads as working while its payment runs, then as its result', async () => {
+    const node = await boot();
+    const task = await challenged(node, 'report');
+    let release = () => {};
+    backendGate = new Promise((resolve) => {
+      release = resolve;
+    });
+
+    const paying = rpc(node, pay(task));
+    await vi.waitFor(async () => {
+      const read = await call(node, 'GetTask', { id: task.id });
+      expect(read.result?.status?.state).toBe('TASK_STATE_WORKING');
+    });
+    const working = await call(node, 'ListTasks', {
+      contextId: task.contextId,
+      status: 'TASK_STATE_WORKING',
+    });
+    const cancel = await call(node, 'CancelTask', { id: task.id });
+    release();
+    const paid = (await paying).result?.task;
+
+    expect(working.result?.tasks?.map((listed) => listed.id)).toEqual([task.id]);
+    expect(cancel.error?.code).toBe(-32002);
+    expect(paid?.status.state).toBe('TASK_STATE_COMPLETED');
+    expect((await call(node, 'GetTask', { id: task.id })).result).toEqual(paid);
+    expect(calls.settle).toBe(1);
+  });
+
+  it('answers an internal error when the canceled task cannot be recorded, and stays canceled', async () => {
+    let failPuts = false;
+    const node = await boot((store) =>
+      Object.assign(Object.create(store) as ReceiptStore, {
+        async putTaskRecord(...args: Parameters<NonNullable<ReceiptStore['putTaskRecord']>>) {
+          if (failPuts) throw new Error('disk full');
+          return store.putTaskRecord?.(...args) ?? false;
+        },
+      }),
+    );
+    const task = await challenged(node, 'report');
+    failPuts = true;
+
+    const cancel = await call(node, 'CancelTask', { id: task.id });
+    const payment = await rpc(node, pay(task));
+
+    expect(cancel).toMatchObject({ id: 'req-1', error: { code: -32603 } });
+    expect(await node.store.getPendingTask?.(task.id)).toBeUndefined();
+    expect(payment.error?.code).toBe(NO_FURTHER_MESSAGES);
+    expect(calls.verify).toBe(0);
+  });
+
+  it('refuses a purchase when the task store is full, and holds nothing for it', async () => {
+    const node = await boot(undefined, { maxRetained: 1 });
+    const waiting = await challenged(node, 'report');
+
+    const { result } = await rpc(node, buy('report'));
+
+    const busy = result?.task as A2aTask;
+    expect(busy.status.state).toBe('TASK_STATE_FAILED');
+    expect(busy.artifacts[0]?.parts[0]?.data).toMatchObject({ code: 'GATEWAY_BUSY' });
+    expect(await node.store.getPendingTask?.(busy.id)).toBeUndefined();
+    expect((await call(node, 'GetTask', { id: busy.id })).error?.code).toBe(TASK_NOT_FOUND);
+    // The waiting task replaces its own record, which always fits
+    const paid = await rpc(node, pay(waiting));
+    expect(paid.result?.task.status.state).toBe('TASK_STATE_COMPLETED');
+  });
+
+  it('keeps no payment proof, mandate or request input in any task record', async () => {
+    const node = await boot();
+    const input = { _authorization: MANDATE, note: 'private-input' };
+    const paid = await challenged(node, 'mandated', input);
+    const declined = await challenged(node, 'mandated', input);
+    const canceled = await challenged(node, 'mandated', input);
+    await rpc(node, pay(paid, 'secret-nonce'));
+    await rpc(node, decline(declined));
+    await call(node, 'CancelTask', { id: canceled.id });
+
+    const db = new Database(path, { readonly: true });
+    try {
+      const rows = db.prepare('SELECT id, state, document_json FROM task_records').all() as {
+        id: string;
+        state: string;
+      }[];
+      expect(rows.map((row) => [row.id, row.state]).sort()).toEqual(
+        [
+          [paid.id, 'TASK_STATE_COMPLETED'],
+          [declined.id, 'TASK_STATE_FAILED'],
+          [canceled.id, 'TASK_STATE_CANCELED'],
+        ].sort(),
+      );
+      const text = JSON.stringify(rows);
+      for (const secret of [
+        MANDATE.payload,
+        '_authorization',
+        '_payment',
+        'secret-nonce',
+        'x402.payment.payload',
+        'private-input',
+      ]) {
+        expect(text).not.toContain(secret);
+      }
+    } finally {
+      db.close();
+    }
+  });
+
+  it.each([
+    ['SQLite', undefined],
+    ['memory', memoryOnly],
+  ])(
+    'lets one of eight racing cancel and payment messages take a task, in %s',
+    async (_label, wrap) => {
+      const node = await boot(wrap);
+      const task = await challenged(node, 'report');
+
+      const answers = await Promise.all(
+        Array.from({ length: 8 }, (_, i) =>
+          i % 2 === 0
+            ? call(node, 'CancelTask', { id: task.id })
+            : (rpc(node, pay(task, `nonce-${i}`)) as Promise<Answer>),
+        ),
+      );
+
+      const paid = answers.filter((a) => a.result?.task?.status.state === 'TASK_STATE_COMPLETED');
+      const canceled = answers.filter((a) => a.result?.status?.state === 'TASK_STATE_CANCELED');
+      const refused = answers.filter((a) => a.error?.code === -32002 || a.error?.code === -32004);
+      expect(paid.length).toBeLessThanOrEqual(1);
+      // A cancel and a payment never both succeed
+      expect(paid.length * canceled.length).toBe(0);
+      expect(paid.length + canceled.length + refused.length).toBe(8);
+      expect(calls).toMatchObject({ verify: paid.length, settle: paid.length });
+      expect(backendCalls).toBe(paid.length);
+      expect((await call(node, 'GetTask', { id: task.id })).result?.status?.state).toBe(
+        paid.length === 1 ? 'TASK_STATE_COMPLETED' : 'TASK_STATE_CANCELED',
+      );
+    },
+  );
+});
+
 describe('a store without the pending-task methods', () => {
   const noTasks = (store: ReceiptStore): ReceiptStore =>
     Object.assign(Object.create(store) as ReceiptStore, {
@@ -516,8 +728,9 @@ describe('a store without the pending-task methods', () => {
     const lost = await challenged(first, 'report');
     await shutdown(first);
     const second = await boot(wrap);
+    // The receipt store still holds the task's record, without its pending purchase
     const { error } = await rpc(second, pay(lost, 'nonce-2'));
-    expect(error?.code).toBe(TASK_NOT_FOUND);
+    expect(error?.code).toBe(NO_FURTHER_MESSAGES);
     expect(calls.verify).toBe(1);
   });
 });

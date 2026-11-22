@@ -1653,8 +1653,13 @@ describe('runDoctor: A2A', () => {
     const unsupported = report.checks.find((c) => c.name === 'A2A unsupported');
     expect(unsupported?.status).toBe('INFO');
     expect(unsupported?.detail).toBe(A2A_UNSUPPORTED.join(', '));
-    for (const operation of ['SendStreamingMessage', 'GetTask', 'CancelTask', 'gRPC binding']) {
+    for (const operation of ['SendStreamingMessage', 'SubscribeToTask', 'gRPC binding']) {
       expect(unsupported?.detail).toContain(operation);
+    }
+    // Served from stored tasks, which leaves them off the list
+    const names = unsupported?.detail?.split(', ') ?? [];
+    for (const served of ['GetTask', 'ListTasks', 'CancelTask']) {
+      expect(names).not.toContain(served);
     }
   });
 });

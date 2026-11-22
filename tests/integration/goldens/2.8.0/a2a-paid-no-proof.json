@@ -6,16 +6,16 @@
     "id": "golden",
     "result": {
       "task": {
-        "id": "a2a_<uuid>",
-        "contextId": "a2a-ctx_<uuid>",
+        "id": "<uuid>",
+        "contextId": "<uuid>",
         "status": {
           "state": "TASK_STATE_FAILED",
           "timestamp": "<timestamp>",
           "message": {
             "role": "ROLE_AGENT",
             "messageId": "a2a-msg_<uuid>",
-            "contextId": "a2a-ctx_<uuid>",
-            "taskId": "a2a_<uuid>",
+            "contextId": "<uuid>",
+            "taskId": "<uuid>",
             "parts": [
               {
                 "text": "Payment of 0.01 USDC is required for resource \"market_report\". Retry with a x402 payment proof."

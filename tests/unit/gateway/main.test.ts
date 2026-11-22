@@ -127,7 +127,8 @@ function acpResource(keys: readonly string[], optional: readonly string[] = []) 
 // Configure every protocol, both payment rails and AP2 with one receipt database
 function fullConfig(dir: string) {
   const config = baseConfig(dir);
-  config.protocols['a2a'] = { enabled: true, mountPath: '/a2a' };
+  // One retained task, which the A2A check below fills to show the option arrives
+  config.protocols['a2a'] = { enabled: true, mountPath: '/a2a', tasks: { maxRetained: 1 } };
   config.protocols['acp'] = {
     enabled: true,
     auth: { type: 'bearer', token: 'acp-token' },
@@ -346,29 +347,33 @@ describe.concurrent('gateway entry points (main.ts and agent-commerce start)', (
       ]);
 
       // An x402 extension task waits for payment in the receipt database
-      const sent = await fetch(`${gateway.url()}/a2a`, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          'a2a-version': '1.0',
-          'a2a-extensions': A2A_X402_EXTENSION_URI,
-        },
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          id: 'req-1',
-          method: 'SendMessage',
-          params: {
-            message: {
-              role: 'ROLE_USER',
-              messageId: 'msg-buy',
-              parts: [{ data: { resource: 'market_report', input: {} } }],
-            },
+      const buy = async () => {
+        const sent = await fetch(`${gateway.url()}/a2a`, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'a2a-version': '1.0',
+            'a2a-extensions': A2A_X402_EXTENSION_URI,
           },
-        }),
-      });
-      const task = ((await sent.json()) as { result?: { task?: { status: { state: string } } } })
-        .result?.task;
-      expect(task?.status.state).toBe('TASK_STATE_INPUT_REQUIRED');
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: 'req-1',
+            method: 'SendMessage',
+            params: {
+              message: {
+                role: 'ROLE_USER',
+                messageId: 'msg-buy',
+                parts: [{ data: { resource: 'market_report', input: {} } }],
+              },
+            },
+          }),
+        });
+        type Task = { status: { state: string }; artifacts: { parts: { data?: unknown }[] }[] };
+        return ((await sent.json()) as { result?: { task?: Task } }).result?.task;
+      };
+      expect((await buy())?.status.state).toBe('TASK_STATE_INPUT_REQUIRED');
+      // `protocols.a2a.tasks.maxRetained: 1` reached the adapter
+      expect((await buy())?.artifacts[0]?.parts[0]?.data).toMatchObject({ code: 'GATEWAY_BUSY' });
       expect(names('paymentProviders')).toEqual(['mpp', 'x402']);
       expect(names('authorizationProviders')).toEqual(['ap2']);
 
@@ -391,6 +396,9 @@ describe.concurrent('gateway entry points (main.ts and agent-commerce start)', (
       const db = new Database(join(dir, 'receipts.sqlite'), { readonly: true });
       try {
         expect(db.prepare('SELECT COUNT(*) AS n FROM pending_tasks').get()).toEqual({ n: 1 });
+        expect(db.prepare('SELECT state FROM task_records').all()).toEqual([
+          { state: 'TASK_STATE_INPUT_REQUIRED' },
+        ]);
       } finally {
         db.close();
       }

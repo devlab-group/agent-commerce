@@ -11,6 +11,12 @@ across restarts:
   [`idempotency.redelivery`](configuration.md#resources), responses delivered
   with a client retry key, unencrypted. `retentionHours` limits reuse; a later
   claim sweep deletes expired rows (see [security.md](security.md#buyer-protection));
+- from 2.9.0, retained A2A task responses, subject to
+  [`protocols.a2a.tasks.retentionHours`](configuration.md#protocolsa2a) and
+  pending-payment expiry. Records include merchant content and x402 receipts,
+  which can name the payer address and transaction hash. The adapter does not
+  separately attach request input, payment proofs or AP2 mandates; merchant
+  content is stored without redaction (see [A2A tasks](protocols/a2a.md#tasks));
 - a record of each deprecated store file it imported.
 
 The gateway creates the file at 0600, and any missing directory at 0700, and
@@ -86,7 +92,7 @@ does not migrate or import records, or take a write lock on the sources.
 - It writes `receipts.sqlite`, a consistent snapshot taken with
   `VACUUM INTO`. Supported receipt schemas are v4 (2.5), v5 (2.6 to 2.8)
   and v6 (2.9); other versions are refused. The snapshot includes
-  unencrypted stored responses.
+  unencrypted stored responses and A2A tasks.
 - For enabled AP2 or ACP, it also copies any configured legacy file that
   exists, is not `:memory:` and has no recorded import. The copies are named
   `ap2-replay.sqlite` or `acp-idempotency.sqlite`. Before the first 2.6.0
@@ -114,8 +120,10 @@ Exit 0 means the backup is complete; 1 means it is not.
 
 Restoring a backup discards local records written after its snapshot:
 
-- Later receipts, events, payment attempts, holds, idempotency claims and
-  pending tasks are lost. Transfers remain on chain.
+- Later receipts, events, payment attempts, holds, idempotency claims,
+  pending tasks and A2A tasks are lost. Transfers remain on chain. Unexpired
+  restored A2A records retain their snapshot contents and expiry; a restored
+  `TASK_STATE_WORKING` record is reported as failed.
 - A proof spent after the backup reaches the facilitator again. On EVM,
   verification rejects the spent authorization. Solana and NEAR rely on the
   chain rejecting a transaction or nonce it has already processed. If a replay

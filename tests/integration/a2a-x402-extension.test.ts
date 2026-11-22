@@ -26,6 +26,7 @@ import { createA2aAdapter } from '../../src/protocols/a2a';
 import type { A2aAgentCard, A2aTask } from '../../src/protocols/a2a/types';
 import { A2A_X402_EXTENSION_URI } from '../../src/protocols/a2a/x402-extension';
 import { createSqliteReceiptStore } from '../../src/storage/receipts';
+import { tckErrors } from '../conformance/a2a/support/task-schema';
 import { createFakeStore } from '../unit/gateway/helpers';
 
 process.env['NODE_ENV'] = 'test';
@@ -140,6 +141,7 @@ afterEach(async () => {
 interface RpcResult {
   readonly headers: Record<string, unknown>;
   readonly body: {
+    // `{ task }` for SendMessage; the task itself for GetTask and CancelTask
     result?: { task: A2aTask };
     error?: { code: number; message: string };
   };
@@ -160,7 +162,13 @@ async function call(
     },
     payload: JSON.stringify({ jsonrpc: '2.0', id: 'req-1', method, params }),
   });
-  return { headers: res.headers, body: res.json() };
+  const body: RpcResult['body'] = res.json();
+  // Every task answered here passes the TCK's response schema
+  if (body.result !== undefined) {
+    const schema = method === 'SendMessage' ? 'Send Message Response' : 'Task';
+    expect(tckErrors(schema, body.result), `${method} result against the TCK schema`).toEqual([]);
+  }
+  return { headers: res.headers, body };
 }
 
 function rpc(message: Record<string, unknown>, extension = true): Promise<RpcResult> {
@@ -293,7 +301,8 @@ describe('x402 A2A extension', () => {
 
     const { body } = await rpc(message);
 
-    expect(body.error?.code).toBe(-32001);
+    // The task's record remains: it accepts no further messages
+    expect(body.error?.code).toBe(-32004);
     expect(facilitator.settle).toHaveBeenCalledTimes(1);
   });
 
@@ -335,7 +344,7 @@ describe('x402 A2A extension', () => {
       message: { metadata: { 'x402.payment.status': 'payment-rejected' } },
     });
     const again = await rpc(pay(task, { 'x402.payment.status': 'payment-rejected' }));
-    expect(again.body.error?.code).toBe(-32001);
+    expect(again.body.error?.code).toBe(-32004);
   });
 
   // A full store must preserve purchases whose buyers may have signed.
@@ -351,6 +360,8 @@ describe('x402 A2A extension', () => {
       code: 'GATEWAY_BUSY',
       retryable: true,
     });
+    // The refused task's record shows the refusal, not a payment it cannot take
+    expect((await call('GetTask', { id: busy?.id })).body.result).toEqual(busy);
 
     const paid = await rpc(
       pay(first, {
@@ -531,24 +542,65 @@ describe('x402 A2A extension', () => {
     expect(body.result?.task.status.state).toBe('TASK_STATE_COMPLETED');
   });
 
-  it.each(['GetTask', 'CancelTask'])(
-    'answers %s on a pending task with TaskNotFoundError and keeps it payable',
-    async (method) => {
-      const task = await challenged();
+  it('answers GetTask on a pending task with the task as sent, and keeps it payable', async () => {
+    const task = await challenged();
 
-      const lookup = await call(method, { id: task.id });
-      expect(lookup.body.error?.code).toBe(-32001);
-      expect(lookup.headers['a2a-extensions']).toBeUndefined();
+    const lookup = await call('GetTask', { id: task.id }, false);
+    expect(lookup.body.result).toEqual(task);
+    // The task's metadata keys belong to the extension, which the response names
+    expect(lookup.headers['a2a-extensions']).toBe(A2A_X402_EXTENSION_URI);
 
-      const { body } = await rpc(
-        pay(task, {
-          'x402.payment.status': 'payment-submitted',
-          'x402.payment.payload': await paymentPayload(task),
-        }),
-      );
-      expect(body.result?.task.status.state).toBe('TASK_STATE_COMPLETED');
-    },
-  );
+    const { body } = await rpc(
+      pay(task, {
+        'x402.payment.status': 'payment-submitted',
+        'x402.payment.payload': await paymentPayload(task),
+      }),
+    );
+    expect(body.result?.task.status.state).toBe('TASK_STATE_COMPLETED');
+    expect((await call('GetTask', { id: task.id })).body.result).toEqual(body.result?.task);
+  });
+
+  it('cancels a pending task, which then takes no payment, and cancels it again unchanged', async () => {
+    const task = await challenged();
+
+    const canceled = (await call('CancelTask', { id: task.id })).body.result as unknown as A2aTask;
+    expect(canceled).toMatchObject({
+      id: task.id,
+      contextId: task.contextId,
+      status: { state: 'TASK_STATE_CANCELED', message: { parts: [{ text: 'Task canceled.' }] } },
+      artifacts: [],
+    });
+    expect(canceled.status.message).not.toHaveProperty('metadata');
+
+    const payment = await rpc(
+      pay(task, {
+        'x402.payment.status': 'payment-submitted',
+        'x402.payment.payload': await paymentPayload(task),
+      }),
+    );
+    expect(payment.body.error?.code).toBe(-32004);
+    expect(facilitator.verify).not.toHaveBeenCalled();
+    expect(backendCalls).toBe(0);
+    expect((await call('CancelTask', { id: task.id })).body.result).toEqual(canceled);
+    expect((await call('GetTask', { id: task.id })).body.result).toEqual(canceled);
+  });
+
+  it('refuses to cancel a paid task', async () => {
+    const task = await challenged();
+    await rpc(
+      pay(task, {
+        'x402.payment.status': 'payment-submitted',
+        'x402.payment.payload': await paymentPayload(task),
+      }),
+    );
+
+    const { body } = await call('CancelTask', { id: task.id });
+
+    expect(body.error?.code).toBe(-32002);
+    expect((await call('GetTask', { id: task.id })).body.result).toMatchObject({
+      status: { state: 'TASK_STATE_COMPLETED' },
+    });
+  });
 });
 
 describe('an AP2 mandate sent with the x402 extension payment', () => {

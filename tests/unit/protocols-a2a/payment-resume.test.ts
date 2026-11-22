@@ -44,7 +44,11 @@ async function resumeWith(refusal: CommerceError) {
     },
   };
 
-  const response = await resumePayment(context, pendingPayments, 1, { message });
+  const response = await resumePayment(
+    { context, pendingPayments, keep: async () => true, running: new Set() },
+    1,
+    { message },
+  );
   const task = (response as { result: { task: A2aTask } }).result.task;
   const envelope = task.artifacts?.[0]?.parts[0]?.data as Record<string, unknown>;
   return { task, envelope, pendingPayments };

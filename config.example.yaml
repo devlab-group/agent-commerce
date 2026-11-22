@@ -52,13 +52,18 @@ protocols:
     #   version: 1.0.0
     #   description: Weather forecasts, paid per call
   # A2A (Agent2Agent) v1.0.1 - experimental, off by default.
-  # Serves JSON-RPC `SendMessage` at mountPath and the Agent Card at
-  # /.well-known/agent-card.json. Enable at least one resource with
-  # `expose: [a2a]`. Clients send `A2A-Version: 1.0`.
+  # Serves JSON-RPC `SendMessage`, `GetTask`, `ListTasks` and `CancelTask` at
+  # mountPath and the Agent Card at /.well-known/agent-card.json. Enable at
+  # least one resource with `expose: [a2a]`. Clients send `A2A-Version: 1.0`.
   # See docs/protocols/a2a.md for supported features.
   a2a:
     enabled: false
     mountPath: /a2a
+    # Retain task responses in the receipt database for later reads.
+    # At capacity, refuse new records and keep existing ones.
+    # tasks:
+    #   retentionHours: 24   # 1 to 8760
+    #   maxRetained: 1000    # 1 to 1,000,000
   # ACP (Agentic Commerce Protocol), stable snapshot 2026-04-17 - experimental,
   # off by default. Enabling it serves the five checkout routes under mountPath
   # and the specification-fixed discovery document at /.well-known/acp.json.

@@ -287,14 +287,19 @@ describe('A2A adapter lifecycle', () => {
       'agent-card',
       'jsonrpc',
       'SendMessage',
+      'GetTask',
+      'ListTasks',
+      'CancelTask',
       'x402-extension',
     ]);
+    for (const served of ['GetTask', 'ListTasks', 'CancelTask']) {
+      expect(descriptor.unsupported).not.toContain(served);
+    }
     // Every A2A feature the project scope leaves out is named, so no client
     // reads the descriptor as full protocol support
     expect(descriptor.unsupported).toEqual(
       expect.arrayContaining([
         'SendStreamingMessage',
-        'GetTask',
         'long-running task persistence',
         'push notifications',
         'multi-turn conversational continuation',

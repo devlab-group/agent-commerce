@@ -525,6 +525,13 @@ persistence must not fail the commerce flow.
   `protocols.a2a.tasks`. The block and individual keys stay absent when
   omitted. Config loading requires integers from 1 to 8760 for `retentionHours`
   and from 1 to 1,000,000 for `maxRetained`.
+  - `A2aAdapterOptions.tasks` accepts the same limits; `runGateway` passes the
+    config block. Omitted `retentionHours` defaults to 24; omitted `maxRetained`
+    defaults to 1000. The adapter constructor throws `CONFIG_INVALID` for
+    non-integer or out-of-range values, naming `tasks.retentionHours` or
+    `tasks.maxRetained`.
+  - The adapter retains task responses in a supplied store with the complete
+    `task_records` group, or in process memory otherwise.
 
 ### Authorization and AP2
 

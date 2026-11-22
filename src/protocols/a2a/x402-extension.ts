@@ -71,14 +71,20 @@ function expiryMs(nowMs: number, expiresAt: string | undefined): number {
   return nowMs + Math.min(Math.max(ttl, 0), MAX_PENDING_TTL_MS);
 }
 
+/** When a purchase waiting for payment expires, as an ISO timestamp */
+export function pendingExpiresAt(nowMs: number, expiresAt: string | undefined): string {
+  return new Date(expiryMs(nowMs, expiresAt)).toISOString();
+}
+
 type Awaitable<T> = T | Promise<T>;
 
 /**
  * Pending purchases use the supplied receipt store when it has the pending-task
  * methods, or process memory otherwise. Memory tasks are lost on restart and
  * are unavailable to other instances. Durable stored tasks can survive
- * restarts until expiry. A missing task returns `TaskNotFoundError` before verification or
- * settlement, so the client must start a new purchase.
+ * restarts until expiry. A message on a task that is no longer pending gets an
+ * error before verification or settlement, and the client must start a new
+ * purchase.
  */
 export interface PendingPayments {
   /** Holds a purchase until `expiresAt`; returns false, holding nothing, when full */

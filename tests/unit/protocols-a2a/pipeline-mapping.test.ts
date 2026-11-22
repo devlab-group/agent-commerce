@@ -16,6 +16,7 @@ import type {
   IdGenerator,
   Logger,
   ProtocolAdapterContext,
+  ReceiptStore,
   ResourceRegistry,
 } from '../../../src/core';
 import { CommerceError, DELIVERY_SUMMARY_META_KEY, PAYMENT_INPUT_FIELD } from '../../../src/core';
@@ -97,6 +98,8 @@ const delivered: ExecutionOutcome = {
   receipt,
   durationMs: 3,
 };
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 // An Error is thrown by the pipeline; anything else is returned as its outcome
 function setup(outcome: ExecutionOutcome | Error = delivered) {
@@ -214,8 +217,6 @@ describe('A2A SendMessage onto the execution pipeline', () => {
     expect(request.resourceId).toBe('market_report');
     expect(request.input).toEqual({ symbol: 'ETH' });
     expect(request.requestId).toMatch(/^a2a-/);
-    // The task id is the request id, so a task correlates with its receipt
-    expect(task(response).id).toBe(request.requestId);
     expect(task(response).status.state).toBe('TASK_STATE_COMPLETED');
   });
 
@@ -326,6 +327,17 @@ describe('A2A SendMessage onto the execution pipeline', () => {
       expect(response.error).toBeUndefined();
       expect(task(response).status.state).toBe('TASK_STATE_FAILED');
       expect(artifactData(response)['code']).toBe(error.code);
+      // The failed task is kept like any other answer
+      const read = await post(
+        adapter,
+        JSON.stringify({
+          jsonrpc: '2.0',
+          id: 'req-2',
+          method: 'GetTask',
+          params: { id: task(response).id },
+        }),
+      );
+      expect(read.body.result).toEqual(task(response));
     },
   );
 
@@ -371,6 +383,61 @@ describe('A2A adapter is not a client of anything', () => {
   });
 });
 
+describe('an answered task the store does not keep', () => {
+  function getTask(id: string): string {
+    return JSON.stringify({ jsonrpc: '2.0', id: 'req-2', method: 'GetTask', params: { id } });
+  }
+
+  function loggingSetup() {
+    const { context } = setup();
+    const warn = vi.fn();
+    const error = vi.fn();
+    const logger: Logger = { ...NOOP_LOGGER, warn, error };
+    return { context: { ...context, logger }, warn, error };
+  }
+
+  it('is returned but not kept when the store is full, and the gateway logs a warning', async () => {
+    const { context, warn } = loggingSetup();
+    const adapter = createA2aAdapter({ tasks: { maxRetained: 1 } });
+    await adapter.start(context);
+    const kept = task(await send(adapter, { resource: 'market_report', input: {} }));
+
+    const refused = task(await send(adapter, { resource: 'market_report', input: {} }));
+
+    expect(refused.status.state).toBe('TASK_STATE_COMPLETED');
+    expect((await post(adapter, getTask(refused.id))).body.error?.code).toBe(-32001);
+    expect((await post(adapter, getTask(kept.id))).body.result).toEqual(kept);
+    expect(warn).toHaveBeenCalledWith(
+      { state: 'TASK_STATE_COMPLETED' },
+      'a2a adapter: task not retained: the task store is full',
+    );
+  });
+
+  it('is returned but not kept when the store write fails, and the gateway logs an error', async () => {
+    const { context, error } = loggingSetup();
+    const store = {
+      putTaskRecord: async () => {
+        throw new CommerceError('STORAGE_ERROR', 'disk full');
+      },
+      getTaskRecord: async () => undefined,
+      listTaskRecords: async () => [],
+    } as unknown as ReceiptStore;
+    const adapter = createA2aAdapter({ store });
+    await adapter.start(context);
+
+    const answered = task(await send(adapter, { resource: 'market_report', input: {} }));
+
+    expect(answered.status.state).toBe('TASK_STATE_COMPLETED');
+    expect(error).toHaveBeenCalledWith(
+      expect.objectContaining({ state: 'TASK_STATE_COMPLETED' }),
+      'a2a adapter: task not retained',
+    );
+    // No task or context id reaches the log
+    expect(JSON.stringify(error.mock.calls)).not.toContain(answered.id);
+    expect(JSON.stringify(error.mock.calls)).not.toContain(answered.contextId);
+  });
+});
+
 describe('A2A terminal task representation', () => {
   it('returns a completed task whose artifact carries the canonical body', async () => {
     const { context } = setup();
@@ -380,8 +447,11 @@ describe('A2A terminal task representation', () => {
     const response = await send(adapter, { resource: 'market_report', input: { symbol: 'ETH' } });
     const result = task(response);
 
-    expect(result.id).toMatch(/^a2a-/);
-    expect(result.contextId).toMatch(/^a2a-ctx-/);
+    // The task and context ids are access keys: random UUIDs, never the
+    // predictable `IdGenerator` sequence this context uses
+    expect(result.id).toMatch(UUID);
+    expect(result.contextId).toMatch(UUID);
+    expect(result.contextId).not.toBe(result.id);
     expect(result.status).toEqual({
       state: 'TASK_STATE_COMPLETED',
       timestamp: '2026-01-01T00:00:00.000Z',

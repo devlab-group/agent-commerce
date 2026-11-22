@@ -5,11 +5,12 @@
  * lives, and the specification-fixed `/.well-known/agent-card.json`, declared
  * through `additionalHttpRoutes` so the gateway needs no A2A-specific routing.
  *
- * Only the synchronous `SendMessage` path is served; every other A2A method
- * is listed in `descriptor.unsupported`. This adapter maps reserved payment
- * fields but leaves verification, settlement and merchant calls to the pipeline.
+ * `SendMessage` runs synchronously. `GetTask` and `ListTasks` read retained
+ * tasks; `CancelTask` ends pending payments. Other A2A methods are listed in
+ * `descriptor.unsupported`. This adapter maps reserved payment fields but
+ * leaves verification, settlement and merchant calls to the pipeline.
  */
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import {
   type AdapterDescriptor,
@@ -37,17 +38,20 @@ import {
   A2A_DEFAULT_MOUNT_PATH,
   A2A_EXTENSIONS_HEADER,
   A2A_JSON_MEDIA_TYPE,
+  A2A_MAX_RETAINED_TASKS,
+  A2A_METHOD_CANCEL_TASK,
+  A2A_METHOD_GET_TASK,
+  A2A_METHOD_LIST_TASKS,
   A2A_METHOD_SEND_MESSAGE,
   A2A_PROTOCOL_VERSION,
   A2A_PUSH_CONFIG_METHODS,
-  A2A_TASK_LOOKUP_METHODS,
+  A2A_TASK_RETENTION_HOURS,
   A2A_UNSUPPORTED_METHODS,
   A2A_VERSION_HEADER,
 } from './constants';
 import { buildDescriptor } from './descriptor';
 import {
   A2A_ERROR_PUSH_NOTIFICATION_NOT_SUPPORTED,
-  A2A_ERROR_TASK_NOT_FOUND,
   A2A_ERROR_UNSUPPORTED_OPERATION,
   A2A_ERROR_VERSION_NOT_SUPPORTED,
   JSONRPC_INTERNAL_ERROR,
@@ -59,7 +63,7 @@ import {
   jsonRpcError,
   parseJsonRpcRequest,
 } from './jsonrpc';
-import { type A2aInvocation, parseInvocation } from './message-mapping';
+import { type A2aInvocation, parseInvocation, readMessage } from './message-mapping';
 import {
   readCancelTaskParams,
   readGetTaskParams,
@@ -67,7 +71,7 @@ import {
   readSendMessageParams,
   type SendMessageParams,
 } from './params';
-import { resumePayment, taskResult } from './payment-resume';
+import { type PaymentResume, resumePayment, taskResult } from './payment-resume';
 import {
   completedTask,
   failedTask,
@@ -75,6 +79,8 @@ import {
   paymentRequiredTask,
   type TaskIdentity,
 } from './task-mapping';
+import { cancelTask, getTask, listTasks, type TaskOperations } from './task-operations';
+import { type A2aTaskStore, createMemoryTasks, createStoredTasks } from './task-store';
 import type { A2aAgentCard, A2aTask } from './types';
 import {
   A2A_X402_EXTENSION_URI,
@@ -82,6 +88,7 @@ import {
   createStoredPendingPayments,
   type PendingPayments,
   paymentRequiredMetadata,
+  pendingExpiresAt,
   requestsX402Extension,
 } from './x402-extension';
 
@@ -106,19 +113,52 @@ export interface A2aAdapterOptions {
   /** Version published on the card. Defaults to this package's version */
   readonly agentVersion?: string;
   /**
-   * Stores x402 tasks awaiting payment when all pending-task methods are
-   * present. Durable stores can preserve unexpired tasks across restarts;
-   * otherwise tasks stay in memory. The adapter never closes this store.
+   * Store task responses through the complete `task_records` group and unpaid
+   * x402 purchases through the complete `pending_tasks` group. Each missing
+   * group falls back to process memory. A durable store can preserve unexpired
+   * records across restarts. The caller owns and closes the store.
    */
   readonly store?: ReceiptStore;
+  /**
+   * Task retention in hours (default 24, range 1 to 8760) and the limit on
+   * unexpired records when admitting new tasks (default 1000, range 1 to
+   * 1,000,000). At capacity, new records are refused and replacements allowed;
+   * existing records are not evicted.
+   */
+  readonly tasks?: { readonly retentionHours?: number; readonly maxRetained?: number };
 }
 
-// Parameter validators for task operations
-const TASK_PARAM_READERS = new Map<string, (params: Record<string, unknown>) => unknown>([
-  ['GetTask', readGetTaskParams],
-  ['CancelTask', readCancelTaskParams],
-  ['ListTasks', readListTasksParams],
-]);
+// Validate an integer option against its bounds, using the default when omitted
+function taskLimit(
+  value: number | undefined,
+  name: string,
+  bounds: { readonly min: number; readonly max: number; readonly default: number },
+): number {
+  if (value === undefined) return bounds.default;
+  if (!Number.isInteger(value) || value < bounds.min || value > bounds.max) {
+    throw new CommerceError(
+      'CONFIG_INVALID',
+      `A2A adapter option "tasks.${name}" must be an integer from ${bounds.min} to ${bounds.max}`,
+      { details: { path: `tasks.${name}` } },
+    );
+  }
+  return value;
+}
+
+// Reject invalid parameters before running an operation that reads tasks
+async function withParams<P>(
+  id: JsonRpcId,
+  read: () => P,
+  run: (params: P) => Promise<Record<string, unknown>>,
+): Promise<Record<string, unknown>> {
+  let params: P;
+  try {
+    params = read();
+  } catch (err) {
+    return refusal(id, err);
+  }
+  return run(params);
+}
 
 // Map parameter and message failures to JSON-RPC errors. Keep CommerceError
 // messages; use a generic message for other thrown values.
@@ -147,6 +187,8 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
   private readonly agentDescription: string;
   private readonly agentVersion: string;
   private readonly store: ReceiptStore | undefined;
+  private readonly retentionMs: number;
+  private readonly maxRetained: number;
 
   private context: ProtocolAdapterContext | undefined;
   private started = false;
@@ -160,6 +202,10 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
   private cardEtag = '';
   // Purchases waiting for an x402 extension payment
   private pendingPayments: PendingPayments | undefined;
+  // Retained responses for task lookup, listing and cancellation
+  private tasks: A2aTaskStore | undefined;
+  // Tasks this process is paying; see `TaskOperations.running`
+  private readonly running = new Set<string>();
 
   constructor(options: A2aAdapterOptions = {}) {
     this.mountPath = options.mountPath ?? A2A_DEFAULT_MOUNT_PATH;
@@ -167,6 +213,10 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
     this.agentDescription = options.agentDescription ?? DEFAULT_AGENT_DESCRIPTION;
     this.agentVersion = options.agentVersion ?? PACKAGE_VERSION;
     this.store = options.store;
+    this.retentionMs =
+      taskLimit(options.tasks?.retentionHours, 'retentionHours', A2A_TASK_RETENTION_HOURS) *
+      3_600_000;
+    this.maxRetained = taskLimit(options.tasks?.maxRetained, 'maxRetained', A2A_MAX_RETAINED_TASKS);
     this.descriptor = buildDescriptor(PACKAGE_VERSION);
     this.additionalHttpRoutes = [
       {
@@ -205,6 +255,9 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
     this.pendingPayments = hasMethodGroup(this.store, 'pending_tasks')
       ? createStoredPendingPayments(this.store, context.clock)
       : createPendingPayments(context.clock);
+    this.tasks = hasMethodGroup(this.store, 'task_records')
+      ? createStoredTasks(this.store, this.maxRetained)
+      : createMemoryTasks(context.clock, this.maxRetained);
     this.cardBody = JSON.stringify(this.card);
     this.cardEtag = `"${createHash('sha256').update(this.cardBody).digest('base64url')}"`;
     this.started = true;
@@ -242,6 +295,8 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
 
   /** `POST <mountPath>`: the A2A JSON-RPC endpoint */
   async handleHttp(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    // Echo the parsed request id if later processing fails
+    let requestId: JsonRpcId = null;
     try {
       if (!this.started) {
         this.writeJson(
@@ -291,6 +346,7 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
         this.writeJson(res, 200, jsonRpcError(parsed.id, parsed.error.code, parsed.error.message));
         return;
       }
+      requestId = parsed.request.id;
 
       // Parse first to echo the request id on version errors. The query
       // parameter substitutes for an absent version header.
@@ -331,7 +387,7 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
       this.writeJson(
         res,
         200,
-        jsonRpcError(null, JSONRPC_INTERNAL_ERROR, 'Internal server error.'),
+        jsonRpcError(requestId, JSONRPC_INTERNAL_ERROR, 'Internal server error.'),
       );
     }
   }
@@ -349,22 +405,6 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
         `A2A method "${method}" is not supported: this agent does not support push notifications.`,
       );
     }
-    // Validate task parameters before returning task-not-found or unsupported-operation errors
-    const readTaskParams = TASK_PARAM_READERS.get(method);
-    if (readTaskParams !== undefined) {
-      try {
-        readTaskParams(isRecord(params) ? params : {});
-      } catch (err) {
-        return refusal(id, err);
-      }
-    }
-    if (A2A_TASK_LOOKUP_METHODS.includes(method)) {
-      return jsonRpcError(
-        id,
-        A2A_ERROR_TASK_NOT_FOUND,
-        'Task not found. Finished tasks are not retained; continue a pending payment with SendMessage.',
-      );
-    }
     if (A2A_UNSUPPORTED_METHODS.includes(method)) {
       return jsonRpcError(
         id,
@@ -372,19 +412,45 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
         `A2A method "${method}" is not supported by this deployment.`,
       );
     }
-    if (method !== A2A_METHOD_SEND_MESSAGE) {
-      return jsonRpcError(id, JSONRPC_METHOD_NOT_FOUND, `Unknown method "${method}".`);
+    const raw = isRecord(params) ? params : {};
+    const ops = this.operations();
+    switch (method) {
+      case A2A_METHOD_SEND_MESSAGE:
+        break;
+      case A2A_METHOD_GET_TASK:
+        return withParams(
+          id,
+          () => readGetTaskParams(raw),
+          (read) => getTask(ops, id, read),
+        );
+      case A2A_METHOD_LIST_TASKS:
+        return withParams(
+          id,
+          () => readListTasksParams(raw),
+          (read) => listTasks(ops, id, read),
+        );
+      case A2A_METHOD_CANCEL_TASK:
+        return withParams(
+          id,
+          () => readCancelTaskParams(raw),
+          (read) => cancelTask(ops, id, read),
+        );
+      default:
+        return jsonRpcError(id, JSONRPC_METHOD_NOT_FOUND, `Unknown method "${method}".`);
     }
 
     let request: SendMessageParams;
     try {
-      request = readSendMessageParams(isRecord(params) ? params : {});
+      request = readSendMessageParams(raw);
+      readMessage(request.params);
     } catch (err) {
       return refusal(id, err);
     }
 
-    const resumed = await resumePayment(this.context, this.pendingPayments, id, request.params);
+    const resumed = await resumePayment(this.resume(ops), id, request.params);
     if (resumed !== undefined) return resumed;
+    const known = await this.answerKnownTask(ops, id, request.params);
+    if (known !== undefined) return known;
 
     let invocation: ReturnType<typeof parseInvocation>;
     try {
@@ -393,11 +459,95 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
       return refusal(id, err);
     }
 
-    return this.execute(id, invocation, x402Extension);
+    return this.execute(ops, id, invocation, x402Extension);
   }
 
-  // One accepted invocation, one `pipeline.execute()`
+  // Collect task-operation state after startup; handleHttp returns 503 before startup
+  private operations(): TaskOperations {
+    const { context, tasks, pendingPayments } = this;
+    if (context === undefined || tasks === undefined || pendingPayments === undefined) {
+      throw new CommerceError('INTERNAL_ERROR', 'A2A adapter is not running.');
+    }
+    return {
+      tasks,
+      pendingPayments,
+      running: this.running,
+      clock: context.clock,
+      retainedUntil: () => this.retainedUntil(context),
+      nextMessageId: () => context.ids.next('a2a-msg'),
+    };
+  }
+
+  private resume(ops: TaskOperations): PaymentResume {
+    const context = this.context;
+    if (context === undefined) {
+      throw new CommerceError('INTERNAL_ERROR', 'A2A adapter is not running.');
+    }
+    return {
+      context,
+      pendingPayments: ops.pendingPayments,
+      keep: (task) => this.keep(ops, task),
+      running: this.running,
+    };
+  }
+
+  private retainedUntil(context: ProtocolAdapterContext): string {
+    return new Date(context.clock.now().getTime() + this.retentionMs).toISOString();
+  }
+
+  // Retain a response without failing the call. Log capacity refusals at warn
+  // and write exceptions at error; return false in either case.
+  private async keep(ops: TaskOperations, task: A2aTask): Promise<boolean> {
+    const logger = this.context?.logger;
+    try {
+      if (await ops.tasks.put(task, ops.retainedUntil())) return true;
+      logger?.warn(
+        { state: task.status.state },
+        'a2a adapter: task not retained: the task store is full',
+      );
+    } catch (err) {
+      logger?.error(
+        { state: task.status.state, err: toLogInfo(err) },
+        'a2a adapter: task not retained',
+      );
+    }
+    return false;
+  }
+
+  /**
+   * Reject further messages on a retained task after the pending-payment path
+   * declines it, including tasks taken by another call. Terminal tasks accept
+   * no further messages (A2A 1.0.1 section 3.1.1). Missing records fall through
+   * to `parseInvocation`, which returns `TaskNotFoundError`.
+   */
+  private async answerKnownTask(
+    ops: TaskOperations,
+    id: JsonRpcId,
+    params: Record<string, unknown>,
+  ): Promise<Record<string, unknown> | undefined> {
+    const message = params['message'];
+    const taskId = isRecord(message) ? message['taskId'] : undefined;
+    if (typeof taskId !== 'string') return undefined;
+    const task = await ops.tasks.get(taskId);
+    if (task === undefined) return undefined;
+    const contextId = isRecord(message) ? message['contextId'] : undefined;
+    if (contextId !== undefined && contextId !== task.contextId) {
+      return jsonRpcError(
+        id,
+        JSONRPC_INVALID_PARAMS,
+        'Message "contextId" does not match the task.',
+      );
+    }
+    return jsonRpcError(
+      id,
+      A2A_ERROR_UNSUPPORTED_OPERATION,
+      'This task accepts no further messages: send a new message without a taskId.',
+    );
+  }
+
+  // Execute a new purchase and retain its response when storage permits
   private async execute(
+    ops: TaskOperations,
     id: JsonRpcId,
     invocation: A2aInvocation,
     x402Extension: boolean,
@@ -406,27 +556,27 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
     if (context === undefined) {
       return jsonRpcError(id, JSONRPC_INTERNAL_ERROR, 'A2A adapter is not running.');
     }
+    const ids = this.taskIds(context);
+    const now = (): TaskIdentity => ({ ...ids, timestamp: context.clock.nowIso() });
 
     const resource = this.skillsById.get(invocation.resourceId);
     if (resource === undefined) {
       // A commerce outcome, so a failed task rather than a JSON-RPC error. It
       // reads the same whether the resource is missing or scoped to another
       // protocol, so a caller cannot probe what A2A does not expose.
-      return taskResult(
-        id,
-        failedTask(
-          new CommerceError(
-            'RESOURCE_NOT_FOUND',
-            `Unknown canonical resource "${invocation.resourceId}".`,
-          ),
-          this.taskIdentity(context, context.ids.next('a2a')),
+      const unknown = failedTask(
+        new CommerceError(
+          'RESOURCE_NOT_FOUND',
+          `Unknown canonical resource "${invocation.resourceId}".`,
         ),
+        now(),
       );
+      await this.keep(ops, unknown);
+      return taskResult(id, unknown);
     }
 
     const requestId = context.ids.next('a2a');
-    const identity = this.taskIdentity(context, requestId);
-
+    let task: A2aTask;
     // Reserved-field extraction sits inside the try: a malformed
     // `_authorization` envelope becomes a failed task like any other outcome
     try {
@@ -445,43 +595,33 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
         ...(authorization !== undefined ? { authorization } : {}),
       };
       const outcome: ExecutionOutcome = await context.pipeline.execute(request);
+      const identity = now();
       if (outcome.kind !== 'payment-required') {
-        return taskResult(id, completedTask(outcome, identity));
-      }
-      const task = paymentRequiredTask(outcome, identity);
-      const envelope = outcome.requirement.challenge.envelope;
-      // The extension carries x402 only; any other rail keeps the terminal task
-      if (!x402Extension || outcome.requirement.provider !== 'x402' || !isRecord(envelope)) {
-        return taskResult(id, task);
-      }
-      const network = outcome.requirement.network;
-      const held = await this.pendingPayments?.put(
-        identity.taskId,
-        {
-          contextId: identity.contextId,
-          resourceId: invocation.resourceId,
-          input,
-          ...(authorization !== undefined ? { authorization } : {}),
-          ...(network !== undefined ? { network } : {}),
-        },
-        outcome.requirement.expiresAt,
-      );
-      if (held === false) {
-        return taskResult(
-          id,
-          failedTask(
-            new CommerceError(
-              'GATEWAY_BUSY',
-              'Too many unpaid purchases are waiting for payment; retry shortly.',
+        task = completedTask(outcome, identity);
+      } else {
+        task = paymentRequiredTask(outcome, identity);
+        const envelope = outcome.requirement.challenge.envelope;
+        // The extension carries x402 only; any other rail keeps the terminal task
+        if (x402Extension && outcome.requirement.provider === 'x402' && isRecord(envelope)) {
+          const network = outcome.requirement.network;
+          return taskResult(
+            id,
+            await this.awaitPayment(
+              ops,
+              identity,
+              inputRequired(task, paymentRequiredMetadata(envelope), identity.statusMessageId),
+              {
+                contextId: identity.contextId,
+                resourceId: invocation.resourceId,
+                input,
+                ...(authorization !== undefined ? { authorization } : {}),
+                ...(network !== undefined ? { network } : {}),
+              },
+              pendingExpiresAt(context.clock.now().getTime(), outcome.requirement.expiresAt),
             ),
-            identity,
-          ),
-        );
+          );
+        }
       }
-      return taskResult(
-        id,
-        inputRequired(task, paymentRequiredMetadata(envelope), identity.statusMessageId),
-      );
     } catch (err) {
       // A downstream failure is the caller's answer, not a broken frame.
       // `toCommerceError` replaces a non-commerce error's message, so nothing
@@ -491,17 +631,53 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
         { resourceId: invocation.resourceId, requestId, err: toLogInfo(error) },
         'a2a adapter: execution failed',
       );
-      return taskResult(id, failedTask(error, identity));
+      task = failedTask(error, now());
     }
+    await this.keep(ops, task);
+    return taskResult(id, task);
   }
 
-  private taskIdentity(context: ProtocolAdapterContext, requestId: string): TaskIdentity {
+  /**
+   * Record the input-required response before holding its pending purchase,
+   * using the same expiry. Refuse the purchase if the record does not fit.
+   * If pending storage throws, `execute` returns a failed task and attempts
+   * to replace the waiting response with it.
+   */
+  private async awaitPayment(
+    ops: TaskOperations,
+    identity: TaskIdentity,
+    waiting: A2aTask,
+    purchase: Parameters<PendingPayments['put']>[1],
+    expiresAt: string,
+  ): Promise<A2aTask> {
+    if (!(await ops.tasks.put(waiting, expiresAt))) {
+      // Capacity also prevents retaining this failure response
+      return failedTask(
+        new CommerceError('GATEWAY_BUSY', 'Too many answered tasks are retained; retry shortly.'),
+        identity,
+      );
+    }
+    if (!(await ops.pendingPayments.put(waiting.id, purchase, expiresAt))) {
+      const busy = failedTask(
+        new CommerceError(
+          'GATEWAY_BUSY',
+          'Too many unpaid purchases are waiting for payment; retry shortly.',
+        ),
+        identity,
+      );
+      await this.keep(ops, busy);
+      return busy;
+    }
+    return waiting;
+  }
+
+  // Generate access keys independently of IdGenerator; keep them out of log fields
+  private taskIds(context: ProtocolAdapterContext): Omit<TaskIdentity, 'timestamp'> {
     return {
-      taskId: requestId,
-      contextId: context.ids.next('a2a-ctx'),
+      taskId: randomUUID(),
+      contextId: randomUUID(),
       artifactId: context.ids.next('a2a-artifact'),
       statusMessageId: context.ids.next('a2a-msg'),
-      timestamp: context.clock.nowIso(),
     };
   }
 
@@ -520,6 +696,8 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
     this.cardEtag = '';
     this.pendingPayments?.clear();
     this.pendingPayments = undefined;
+    this.tasks = undefined;
+    this.running.clear();
     this.skillsById = new Map();
     this.context = undefined;
   }
@@ -536,10 +714,14 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
   }
 }
 
-// True when the response is a task whose status message lists the extension
+// True when the response is a task whose status message lists the extension:
+// `{ task }` from SendMessage, or the task itself from GetTask
 function usesX402Extension(response: Record<string, unknown>): boolean {
-  const result = response['result'] as { readonly task?: A2aTask } | undefined;
-  return result?.task?.status.message?.extensions?.includes(A2A_X402_EXTENSION_URI) === true;
+  const result = response['result'];
+  const task = (isRecord(result) && isRecord(result['task']) ? result['task'] : result) as
+    | Partial<A2aTask>
+    | undefined;
+  return task?.status?.message?.extensions?.includes(A2A_X402_EXTENSION_URI) === true;
 }
 
 // Compare entity tags weakly; `*` matches any current card

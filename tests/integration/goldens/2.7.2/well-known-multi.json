@@ -69,14 +69,14 @@
         "agent-card",
         "jsonrpc",
         "SendMessage",
+        "GetTask",
+        "ListTasks",
+        "CancelTask",
         "x402-extension"
       ],
       "status": "experimental",
       "unsupported": [
         "SendStreamingMessage",
-        "GetTask",
-        "ListTasks",
-        "CancelTask",
         "SubscribeToTask",
         "CreateTaskPushNotificationConfig",
         "GetTaskPushNotificationConfig",
@@ -97,7 +97,7 @@
         "authenticated extended agent cards",
         "A2A authentication schemes",
         "artifact types beyond Agent Commerce outcome data",
-        "x402 extension payments across gateway instances"
+        "tasks across gateway instances"
       ],
       "health": {
         "status": "pass",

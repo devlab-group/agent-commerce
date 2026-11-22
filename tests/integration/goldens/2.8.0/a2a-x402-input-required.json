@@ -6,16 +6,16 @@
     "id": "golden",
     "result": {
       "task": {
-        "id": "a2a_<uuid>",
-        "contextId": "a2a-ctx_<uuid>",
+        "id": "<uuid>",
+        "contextId": "<uuid>",
         "status": {
           "state": "TASK_STATE_INPUT_REQUIRED",
           "timestamp": "<timestamp>",
           "message": {
             "role": "ROLE_AGENT",
             "messageId": "a2a-msg_<uuid>",
-            "contextId": "a2a-ctx_<uuid>",
-            "taskId": "a2a_<uuid>",
+            "contextId": "<uuid>",
+            "taskId": "<uuid>",
             "parts": [
               {
                 "text": "Payment is required. Send the x402 payment payload on this task."

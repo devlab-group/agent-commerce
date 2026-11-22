@@ -20,7 +20,7 @@ export const JSONRPC_METHOD_NOT_FOUND = -32601;
 export const JSONRPC_INVALID_PARAMS = -32602;
 export const JSONRPC_INTERNAL_ERROR = -32603;
 
-/** A2A `TaskNotFoundError` for a task id this stateless adapter cannot find */
+/** A2A `TaskNotFoundError` for a task id with no unexpired task */
 export const A2A_ERROR_TASK_NOT_FOUND = -32001;
 
 /** A2A `PushNotificationNotSupportedError` for push configuration methods */
@@ -32,6 +32,9 @@ export const A2A_ERROR_PUSH_NOTIFICATION_NOT_SUPPORTED = -32003;
  */
 export const A2A_ERROR_UNSUPPORTED_OPERATION = -32004;
 
+/** A2A `TaskNotCancelableError` for a task that is running or finished */
+export const A2A_ERROR_TASK_NOT_CANCELABLE = -32002;
+
 /** A2A `ContentTypeNotSupportedError` for a non-JSON structured data part */
 export const A2A_ERROR_CONTENT_TYPE_NOT_SUPPORTED = -32005;
 
@@ -42,6 +45,7 @@ export const A2A_ERROR_VERSION_NOT_SUPPORTED = -32009;
 // Standard JSON-RPC codes carry no A2A error detail.
 const A2A_ERROR_REASONS: ReadonlyMap<number, string> = new Map([
   [A2A_ERROR_TASK_NOT_FOUND, 'TASK_NOT_FOUND'],
+  [A2A_ERROR_TASK_NOT_CANCELABLE, 'TASK_NOT_CANCELABLE'],
   [A2A_ERROR_PUSH_NOTIFICATION_NOT_SUPPORTED, 'PUSH_NOTIFICATION_NOT_SUPPORTED'],
   [A2A_ERROR_UNSUPPORTED_OPERATION, 'UNSUPPORTED_OPERATION'],
   [A2A_ERROR_CONTENT_TYPE_NOT_SUPPORTED, 'CONTENT_TYPE_NOT_SUPPORTED'],

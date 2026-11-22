@@ -101,16 +101,11 @@
     "body": {
       "jsonrpc": "2.0",
       "id": 1,
-      "error": {
-        "code": -32004,
-        "message": "A2A method \"ListTasks\" is not supported by this deployment.",
-        "data": [
-          {
-            "@type": "type.googleapis.com/google.rpc.ErrorInfo",
-            "reason": "UNSUPPORTED_OPERATION",
-            "domain": "a2a-protocol.org"
-          }
-        ]
+      "result": {
+        "tasks": [],
+        "nextPageToken": "",
+        "pageSize": 50,
+        "totalSize": 0
       }
     }
   },
@@ -179,7 +174,7 @@
       "id": 1,
       "error": {
         "code": -32001,
-        "message": "Task not found. Finished tasks are not retained; continue a pending payment with SendMessage.",
+        "message": "Task not found.",
         "data": [
           {
             "@type": "type.googleapis.com/google.rpc.ErrorInfo",
@@ -198,7 +193,7 @@
       "id": 1,
       "error": {
         "code": -32001,
-        "message": "Task not found. Finished tasks are not retained; continue a pending payment with SendMessage.",
+        "message": "Task not found.",
         "data": [
           {
             "@type": "type.googleapis.com/google.rpc.ErrorInfo",
@@ -431,7 +426,7 @@
       "id": "golden",
       "error": {
         "code": -32001,
-        "message": "Task not found: only a task waiting for payment can be continued, so send a request with no taskId.",
+        "message": "Task not found: send the message without a taskId to start a new task.",
         "data": [
           {
             "@type": "type.googleapis.com/google.rpc.ErrorInfo",
@@ -488,16 +483,16 @@
       "id": "golden",
       "result": {
         "task": {
-          "id": "a2a_<uuid>",
-          "contextId": "a2a-ctx_<uuid>",
+          "id": "<uuid>",
+          "contextId": "<uuid>",
           "status": {
             "state": "TASK_STATE_FAILED",
             "timestamp": "<timestamp>",
             "message": {
               "role": "ROLE_AGENT",
               "messageId": "a2a-msg_<uuid>",
-              "contextId": "a2a-ctx_<uuid>",
-              "taskId": "a2a_<uuid>",
+              "contextId": "<uuid>",
+              "taskId": "<uuid>",
               "parts": [
                 {
                   "text": "Unknown canonical resource \"no_such_resource\"."

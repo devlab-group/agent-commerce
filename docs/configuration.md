@@ -251,6 +251,26 @@ keys:
 
 Lengths count Unicode code points.
 
+## `protocols.a2a`
+
+Experimental and off by default. The optional `tasks` block limits retention
+for `GetTask`, `ListTasks` and `CancelTask`; see [Tasks](protocols/a2a.md#tasks).
+
+```yaml
+protocols:
+  a2a:
+    enabled: true
+    mountPath: /a2a            # default
+    tasks:                     # optional
+      retentionHours: 24       # default; 1 to 8760
+      maxRetained: 1000        # default; 1 to 1,000,000
+```
+
+- `retentionHours`: how long a task stays readable after it is stored or updated.
+- `maxRetained`: the limit on unexpired task records when admitting a new
+  record. At capacity, the store refuses new records and permits replacements.
+  Lowering the limit does not evict existing records.
+
 ## `protocols.acp`
 
 Experimental, off by default, and absent from a config that predates it. The

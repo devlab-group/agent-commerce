@@ -123,6 +123,7 @@ export async function runGateway(options: RunGatewayOptions = {}): Promise<void>
         // picking between agents is choosing whose resources to buy
         agentName: config.merchant.name,
         store,
+        ...(config.protocols.a2a.tasks !== undefined ? { tasks: config.protocols.a2a.tasks } : {}),
       }),
     );
   }

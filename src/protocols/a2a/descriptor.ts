@@ -14,6 +14,9 @@ const A2A_CAPABILITIES: readonly string[] = [
   'agent-card',
   'jsonrpc',
   'SendMessage',
+  'GetTask',
+  'ListTasks',
+  'CancelTask',
   // The x402 A2A transport, opt-in per request
   'x402-extension',
 ];

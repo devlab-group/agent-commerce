@@ -78,7 +78,7 @@ describe('method routing', () => {
     expect(body.error?.code).toBe(-32601);
   });
 
-  it.each(['ListTasks', 'SendStreamingMessage', 'SubscribeToTask', 'GetExtendedAgentCard'])(
+  it.each(['SendStreamingMessage', 'SubscribeToTask', 'GetExtendedAgentCard'])(
     'returns UnsupportedOperationError for known method %s',
     async (method) => {
       const { body } = await post({ jsonrpc: '2.0', id: 1, method, params: {} });
@@ -88,13 +88,14 @@ describe('method routing', () => {
     },
   );
 
-  // A2A has no capability flag for declining these two
-  it.each(['GetTask', 'CancelTask'])('returns TaskNotFoundError for %s', async (method) => {
-    const { body } = await post({ jsonrpc: '2.0', id: 1, method, params: { id: 'task-1' } });
-    expect(body.error?.code).toBe(-32001);
-    expect(body.error?.message).toContain('not retained');
-    expect(body.error?.data).toEqual(errorInfo('TASK_NOT_FOUND'));
-  });
+  it.each(['GetTask', 'CancelTask'])(
+    'returns TaskNotFoundError for %s on an unknown id',
+    async (method) => {
+      const { body } = await post({ jsonrpc: '2.0', id: 1, method, params: { id: 'task-1' } });
+      expect(body.error?.code).toBe(-32001);
+      expect(body.error?.data).toEqual(errorInfo('TASK_NOT_FOUND'));
+    },
+  );
 
   // Push configuration methods return -32003 when the card disables them
   it.each([

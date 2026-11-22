@@ -6,8 +6,8 @@
     "id": "golden",
     "result": {
       "task": {
-        "id": "a2a_<uuid>",
-        "contextId": "a2a-ctx_<uuid>",
+        "id": "<uuid>",
+        "contextId": "<uuid>",
         "status": {
           "state": "TASK_STATE_COMPLETED",
           "timestamp": "<timestamp>"

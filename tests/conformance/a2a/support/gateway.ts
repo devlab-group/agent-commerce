@@ -182,6 +182,8 @@ export interface RunningGateway {
   settleCalls(): number;
   /** Pending-task and task-record reads from the store so far */
   taskReads(): number;
+  /** The receipt store, for records a test writes or inspects directly */
+  readonly store: ReceiptStore;
   close(): Promise<void>;
 }
 
@@ -257,6 +259,7 @@ export async function startConformanceGateway(): Promise<RunningGateway> {
     backendCalls: backend.calls,
     settleCalls: provider.settleCalls,
     taskReads: reads,
+    store: sqlite,
     async close() {
       await gateway.close();
       await store.close();
