@@ -556,6 +556,7 @@ interface ResourceRegistry {
 
 interface TaskRecord {
     readonly document: Readonly<Record<string, unknown>>;
+    readonly evictable?: boolean;
     readonly expiresAt: string;
     readonly groupId: string;
     readonly id: string;

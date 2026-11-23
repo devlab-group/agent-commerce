@@ -322,9 +322,10 @@ export interface ReceiptStore {
    * Store task responses for later reads by protocol adapters. Implement all
    * three methods or none. Experimental: may change in a minor release.
    *
-   * Delete expired records, then store `record`. Replace a record with the same
-   * ID even at capacity. For a new ID, return false without storing when
-   * `maxRecords` unexpired records exist.
+   * Delete expired records, then store `record`. Replace an existing ID even
+   * at capacity. For a new ID, evict eligible records by `updatedAt` and then
+   * `id`, both ascending, until the count is below `maxRecords`. Return false
+   * without storing the new record if too few can be evicted.
    */
   putTaskRecord?(record: TaskRecord, options: { readonly maxRecords: number }): Promise<boolean>;
   /** Return undefined for a missing or expired record. Experimental: may change in a minor release */

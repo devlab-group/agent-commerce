@@ -316,8 +316,13 @@ persistence must not fail the commerce flow.
     adapter for later reads. It does not make the task payable; payment
     continuation uses separate pending-task state.
   - `putTaskRecord` deletes expired records before storing a record. It
-    replaces a record with the same ID even at capacity. For a new ID, it
-    returns `false` without storing when `maxRecords` unexpired records exist.
+    replaces an existing ID even at capacity. For a new ID, it evicts eligible
+    records by `updatedAt` and then `id`, both ascending, until the count is
+    below `maxRecords`. If too few can be evicted, it returns `false` without
+    storing the new record.
+  - `evictable: true` allows capacity eviction of an uncharged response.
+    Records with the flag omitted or set to `false` are protected from capacity
+    eviction. A replacement uses the new record's flag.
   - `listTaskRecords` returns all unexpired records matching `protocol` and
     `groupId`, without pagination. Records are ordered by `updatedAt` and then
     `id`, both descending.

@@ -813,6 +813,71 @@ const TASK_RECORD_CASES: readonly CaseSpec[] = [
     },
   },
   {
+    name: 'at maxRecords, a new task record evicts the oldest evictable one',
+    uses: RECORDS,
+    async run({ store }) {
+      const s = records(store);
+      const put = (r: TaskRecord) => s.putTaskRecord(r, { maxRecords: 3 });
+      const paid = record('paid', { updatedAt: isoAt(0) });
+      const older = record('older', { updatedAt: isoAt(1), evictable: true });
+      const newer = record('newer', { updatedAt: isoAt(2), evictable: true });
+      assert.equal(await put(paid), true);
+      assert.equal(await put(newer), true);
+      assert.equal(await put(older), true);
+      assert.deepEqual(await s.getTaskRecord('older'), older);
+
+      assert.equal(await put(record('next', { updatedAt: isoAt(3) })), true);
+      assert.equal(await s.getTaskRecord('older'), undefined);
+      assert.equal(await put(record('last', { updatedAt: isoAt(4) })), true);
+      assert.equal(await s.getTaskRecord('newer'), undefined);
+      // No evictable record is left
+      assert.equal(await put(record('refused', { evictable: true })), false);
+      assert.deepEqual(ids(await s.listTaskRecords({ protocol: 'a2a', groupId: 'group-1' })), [
+        'last',
+        'next',
+        'paid',
+      ]);
+    },
+  },
+  {
+    name: 'a lower maxRecords evicts enough evictable task records for a new one to fit',
+    uses: RECORDS,
+    async run({ store }) {
+      const s = records(store);
+      for (const [i, id] of ['e1', 'e2', 'e3'].entries()) {
+        await s.putTaskRecord(record(id, { updatedAt: isoAt(i), evictable: true }), {
+          maxRecords: 10,
+        });
+      }
+      await s.putTaskRecord(record('paid', { updatedAt: isoAt(0) }), { maxRecords: 10 });
+
+      assert.equal(
+        await s.putTaskRecord(record('new', { updatedAt: isoAt(5) }), { maxRecords: 2 }),
+        true,
+      );
+      assert.deepEqual(ids(await s.listTaskRecords({ protocol: 'a2a', groupId: 'group-1' })), [
+        'new',
+        'paid',
+      ]);
+    },
+  },
+  {
+    name: 'replacing a task record sets whether it is evictable',
+    uses: RECORDS,
+    async run({ store }) {
+      const s = records(store);
+      const put = (r: TaskRecord) => s.putTaskRecord(r, { maxRecords: 2 });
+      await put(record('kept', { state: 'TASK_STATE_WORKING' }));
+      await put(record('working', { state: 'TASK_STATE_WORKING', evictable: true }));
+      await put(record('kept', { evictable: true }));
+      await put(record('working'));
+
+      assert.equal(await put(record('new')), true);
+      assert.equal(await s.getTaskRecord('kept'), undefined);
+      assert.notEqual(await s.getTaskRecord('working'), undefined);
+    },
+  },
+  {
     name: 'task records list one protocol and group, by updatedAt then id, both descending',
     uses: RECORDS,
     async run({ store }) {

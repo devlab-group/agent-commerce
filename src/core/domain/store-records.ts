@@ -117,4 +117,9 @@ export interface TaskRecord {
   readonly document: Readonly<Record<string, unknown>>;
   /** Set and bounded by the caller */
   readonly expiresAt: IsoTimestamp;
+  /**
+   * Mark an uncharged response for eviction at capacity. Omit this flag or
+   * set it to false to protect the record from capacity eviction.
+   */
+  readonly evictable?: boolean;
 }

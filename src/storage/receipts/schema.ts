@@ -226,10 +226,12 @@ const MIGRATIONS: readonly Migration[] = [
           state          TEXT NOT NULL,
           updated_at     TEXT NOT NULL,
           document_json  TEXT NOT NULL,
-          expires_at     TEXT NOT NULL
+          expires_at     TEXT NOT NULL,
+          evictable      INTEGER NOT NULL DEFAULT 0
         );
         CREATE INDEX IF NOT EXISTS idx_task_records_group ON task_records(protocol, group_id, updated_at);
         CREATE INDEX IF NOT EXISTS idx_task_records_expires_at ON task_records(expires_at);
+        CREATE INDEX IF NOT EXISTS idx_task_records_evictable ON task_records(updated_at, id) WHERE evictable = 1;
       `);
     },
   },
