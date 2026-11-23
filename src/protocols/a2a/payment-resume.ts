@@ -112,14 +112,16 @@ export async function resumePayment(
       retryInfo(BACKGROUND_RETRY_SECONDS),
     ]);
   }
-  // Take after validation and before execution; the earlier read did not claim
-  // the purchase. If another payment or cancellation took it, let the adapter
-  // respond from the retained task record.
-  const taken = await pendingPayments.take(taskId);
-  if (taken === undefined) {
-    if (immediate) resume.background.release();
-    return undefined;
+  // The earlier read did not claim the purchase. Take it after validation,
+  // before execution; if another call won, use the retained task response.
+  let taken: PendingPayment | undefined;
+  try {
+    taken = await pendingPayments.take(taskId);
+  } finally {
+    // An empty or failed take must release the reserved background slot
+    if (immediate && taken === undefined) resume.background.release();
   }
+  if (taken === undefined) return undefined;
   const authorization = taken.authorization ?? followUp;
 
   if (submission.kind === 'rejected') {

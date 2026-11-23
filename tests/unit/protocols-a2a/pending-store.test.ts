@@ -910,6 +910,32 @@ describe('tasks finished in the background with returnImmediately', () => {
     expect(backendCalls).toBe(0);
   });
 
+  it('keeps no slot when taking the pending purchase throws', async () => {
+    let failTakes = true;
+    const node = await boot((store) =>
+      Object.assign(Object.create(store) as ReceiptStore, {
+        async takePendingTask(id: string) {
+          if (failTakes) throw new Error('database is locked');
+          return store.takePendingTask?.(id);
+        },
+      }),
+    );
+    const waiting = await challenged(node, 'report');
+
+    // More failures than there are slots
+    for (let i = 0; i < 21; i += 1) {
+      const { error } = await rpc(node, pay(waiting), IMMEDIATELY);
+      expect(error?.code).toBe(-32603);
+    }
+    failTakes = false;
+
+    expect((await buyNow(node, 'proof-1')).result?.task?.status.state).toBe('TASK_STATE_WORKING');
+    expect((await rpc(node, pay(waiting), IMMEDIATELY)).result?.task.status.state).toBe(
+      'TASK_STATE_WORKING',
+    );
+    await vi.waitFor(() => expect(calls.settle).toBe(2));
+  });
+
   it('waits on stop for a background run, which records its result', async () => {
     const node = await boot();
     const release = holdBackend();
