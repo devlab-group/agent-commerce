@@ -1630,7 +1630,7 @@ describe('runDoctor: A2A', () => {
     expect(a2a?.detail).toContain('binding JSONRPC');
     expect(a2a?.detail).toContain('mount /agents/a2a');
     expect(a2a?.detail).toContain('card /.well-known/agent-card.json');
-    expect(a2a?.detail).toContain('experimental');
+    expect(a2a?.detail).toMatch(/^supported · /);
 
     const protocols = report.checks.find((c) => c.name === 'Protocols');
     expect(protocols?.detail).toContain('a2a=on (/agents/a2a)');

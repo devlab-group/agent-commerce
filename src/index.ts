@@ -24,7 +24,7 @@ export * from './core/public-types';
 export type { GatewayInstance, GatewayOptions } from './gateway';
 // --- run a gateway ---------------------------------------------------------
 export { createGateway } from './gateway';
-// --- the A2A adapter (experimental; no peer dependency) --------------------
+// --- the A2A adapter (no peer dependency) ---------------------------------
 export type { A2aAdapterOptions } from './protocols/a2a';
 export {
   A2A_AGENT_CARD_PATH,

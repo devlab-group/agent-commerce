@@ -5,9 +5,10 @@ support, payment behavior and area boundaries consistent.
 
 ## Ground rules
 
-1. **Scope discipline is a release requirement.** Supported: MCP, HTTP and
-   x402. Experimental and off by default: MPP, A2A, ACP and AP2; OpenAPI import
-   is an experimental CLI command. New protocols and rails land after the
+1. **Scope discipline is a release requirement.** Supported: MCP, HTTP, x402
+   and A2A. A2A is off by default; its x402 extension is experimental.
+   MPP, ACP and AP2 are experimental and off by default. OpenAPI import is an
+   experimental CLI command. New protocols and rails land after the
    adapter model survives real use. Classify every proposal as `BLOCKER` /
    `QUALITY` / `NICE-TO-HAVE` / `POST-1.0` - the default answer to a new
    capability is `POST-1.0`.

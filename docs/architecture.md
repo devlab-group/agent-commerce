@@ -178,7 +178,7 @@ public RPC or real funds.
 | config schema, loader, env substitution                                 | `src/config`                   |
 | Fastify server, routes, adapter mounting                                | `src/gateway`                  |
 | MCP adapter                                                             | `src/protocols/mcp`            |
-| A2A adapter (experimental)                                              | `src/protocols/a2a`            |
+| A2A adapter                                                             | `src/protocols/a2a`            |
 | ACP checkout adapter (experimental)                                     | `src/protocols/acp`            |
 | shared bearer check, body reader, URL join                              | `src/protocols/http.ts`        |
 | x402 provider + local/remote facilitator                                | `src/payments/x402`            |

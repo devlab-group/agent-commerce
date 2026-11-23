@@ -1,9 +1,9 @@
 /**
  * src/protocols/a2a
  *
- * A2A (Agent2Agent) v1 adapter, experimental: publishes canonical resources as
- * A2A skills on the specification-fixed Agent Card path and serves the
- * JSON-RPC endpoint at its mount. `descriptor.ts` lists what it does not do.
+ * A2A (Agent2Agent) v1 adapter. Publishes canonical resources as A2A skills at
+ * `/.well-known/agent-card.json` and serves JSON-RPC at its configured mount.
+ * See `descriptor.ts` for unsupported features.
  */
 
 export type { A2aAdapterOptions } from './adapter';

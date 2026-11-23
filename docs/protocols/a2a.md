@@ -1,6 +1,7 @@
 # A2A
 
-**Experimental.** Enable with `protocols.a2a.enabled: true`.
+Enable with `protocols.a2a.enabled: true`. The [x402 extension](#x402-extension)
+is experimental and may change in a minor release.
 
 | Property      | Value                                                                                                                             |
 | ------------- | --------------------------------------------------------------------------------------------------------------------------------- |
@@ -346,6 +347,17 @@ such as `VERSION_NOT_SUPPORTED` and the domain `a2a-protocol.org`.
 
 <!-- support-record:end -->
 
+## Deviations
+
+Each entry cites the section of the pinned revision the gateway departs from
+and the tests that verify the behavior.
+
+<!-- support-record:begin deviations -->
+
+- **A2A 1.0.1 §5.7; `ListTasksResponse.tasks`**: A `ListTasks` page with no matching task has an empty `tasks` array. The proto marks `tasks` REQUIRED, and §5.7 requires a REQUIRED array to hold an element, but an empty result has none to return. Tests: `tests/conformance/a2a/tasks.test.ts`.
+
+<!-- support-record:end -->
+
 ## A2A exclusions
 
 The A2A descriptor in `GET /.well-known/agent-commerce` lists these names in
@@ -367,6 +379,10 @@ The A2A descriptor in `GET /.well-known/agent-commerce` lists these names in
 - `task resumption other than an x402 extension payment`
 - `push notifications`
 - `multi-turn conversational continuation`
+- `client-chosen contextId`: A `contextId` without a task gets `UnsupportedOperationError`; each new task opens a context the gateway generates.
+- `listing tasks across contexts`: `ListTasks` reads only the given `contextId`; without one, the page is empty.
+- `task history`: Tasks omit `history`; `historyLength` is validated but has nothing to cap.
+- `non-empty tenant`
 - `text parts`
 - `file and URL parts (including inline bytes)`
 - `multi-part messages`

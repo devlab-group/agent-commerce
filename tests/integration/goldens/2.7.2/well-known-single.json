@@ -75,7 +75,7 @@
         "returnImmediately",
         "x402-extension"
       ],
-      "status": "experimental",
+      "status": "stable",
       "unsupported": [
         "SendStreamingMessage",
         "SubscribeToTask",
@@ -91,6 +91,10 @@
         "task resumption other than an x402 extension payment",
         "push notifications",
         "multi-turn conversational continuation",
+        "client-chosen contextId",
+        "listing tasks across contexts",
+        "task history",
+        "non-empty tenant",
         "text parts",
         "file and URL parts (including inline bytes)",
         "multi-part messages",

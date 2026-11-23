@@ -51,7 +51,7 @@ protocols:
     #   name: io.github.acme/weather
     #   version: 1.0.0
     #   description: Weather forecasts, paid per call
-  # A2A (Agent2Agent) v1.0.1 - experimental, off by default.
+  # A2A (Agent2Agent) v1.0.1 is off by default; its x402 extension is experimental
   # Serves JSON-RPC `SendMessage`, `GetTask`, `ListTasks` and `CancelTask` at
   # mountPath and the Agent Card at /.well-known/agent-card.json. Enable at
   # least one resource with `expose: [a2a]`. Clients send `A2A-Version: 1.0`.

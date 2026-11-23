@@ -2,9 +2,9 @@
   "name": "a2a",
   "kind": "protocol",
   "title": "A2A",
-  "status": "experimental",
+  "status": "supported",
   "role": "Transport that carries x402 and MPP payments in `SendMessage`, including through the x402 extension.",
-  "subset": "Agent Card, `SendMessage` with `returnImmediately`, `GetTask`, `ListTasks`, `CancelTask`, paid flow and the x402 extension",
+  "subset": "Agent Card, `SendMessage` with `returnImmediately`, `GetTask`, `ListTasks`, `CancelTask` and the paid flow; the x402 extension is experimental",
   "spec": {
     "revisions": ["1.0.1"],
     "display": "v1.0.1; negotiation `1.0`; `JSONRPC` binding",
@@ -19,13 +19,13 @@
   "packages": [{ "name": "@a2a-js/sdk", "use": "test" }],
   "artifacts": [],
   "features": [
-    { "name": "agent-card", "status": "experimental" },
-    { "name": "jsonrpc", "status": "experimental" },
-    { "name": "SendMessage", "status": "experimental" },
-    { "name": "GetTask", "status": "experimental" },
-    { "name": "ListTasks", "status": "experimental" },
-    { "name": "CancelTask", "status": "experimental" },
-    { "name": "returnImmediately", "status": "experimental" },
+    { "name": "agent-card", "status": "supported" },
+    { "name": "jsonrpc", "status": "supported" },
+    { "name": "SendMessage", "status": "supported" },
+    { "name": "GetTask", "status": "supported" },
+    { "name": "ListTasks", "status": "supported" },
+    { "name": "CancelTask", "status": "supported" },
+    { "name": "returnImmediately", "status": "supported" },
     { "name": "x402-extension", "status": "experimental" }
   ],
   "exclusions": [
@@ -46,6 +46,19 @@
     { "name": "task resumption other than an x402 extension payment" },
     { "name": "push notifications" },
     { "name": "multi-turn conversational continuation" },
+    {
+      "name": "client-chosen contextId",
+      "note": "A `contextId` without a task gets `UnsupportedOperationError`; each new task opens a context the gateway generates."
+    },
+    {
+      "name": "listing tasks across contexts",
+      "note": "`ListTasks` reads only the given `contextId`; without one, the page is empty."
+    },
+    {
+      "name": "task history",
+      "note": "Tasks omit `history`; `historyLength` is validated but has nothing to cap."
+    },
+    { "name": "non-empty tenant" },
     { "name": "text parts" },
     { "name": "file and URL parts (including inline bytes)" },
     { "name": "multi-part messages" },
@@ -58,7 +71,13 @@
       "note": "Instances with separate receipt stores cannot read, cancel or pay each other's tasks."
     }
   ],
-  "deviations": [],
+  "deviations": [
+    {
+      "summary": "A `ListTasks` page with no matching task has an empty `tasks` array. The proto marks `tasks` REQUIRED, and §5.7 requires a REQUIRED array to hold an element, but an empty result has none to return.",
+      "spec": "A2A 1.0.1 §5.7; `ListTasksResponse.tasks`",
+      "tests": ["tests/conformance/a2a/tasks.test.ts"]
+    }
+  ],
   "conformance": {
     "suite": "Our tests against the A2A 1.0.1 specification, and the A2A TCK at MUST level in CI.",
     "tests": [

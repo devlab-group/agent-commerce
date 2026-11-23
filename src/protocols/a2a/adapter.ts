@@ -1,5 +1,5 @@
 /**
- * A2A (Agent2Agent) protocol adapter, experimental.
+ * A2A (Agent2Agent) protocol adapter.
  *
  * Serves two paths: the configured mount (`/a2a`), where the JSON-RPC endpoint
  * lives, and the specification-fixed `/.well-known/agent-card.json`, declared

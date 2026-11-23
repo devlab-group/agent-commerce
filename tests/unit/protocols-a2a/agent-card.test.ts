@@ -278,11 +278,11 @@ describe('A2A agent card', () => {
 });
 
 describe('A2A adapter lifecycle', () => {
-  it('reports the pinned spec revision, experimental status and a complete unsupported list', () => {
+  it('reports the pinned spec revision, stable status and a complete unsupported list', () => {
     const { descriptor } = createA2aAdapter();
     expect(descriptor.name).toBe('a2a');
     expect(descriptor.supportedSpec).toBe('1.0.1');
-    expect(descriptor.status).toBe('experimental');
+    expect(descriptor.status).toBe('stable');
     expect(descriptor.capabilities).toEqual([
       'agent-card',
       'jsonrpc',
@@ -307,6 +307,10 @@ describe('A2A adapter lifecycle', () => {
         'HTTP+JSON/REST binding',
         'gRPC binding',
         'A2A authentication schemes',
+        'client-chosen contextId',
+        'listing tasks across contexts',
+        'task history',
+        'non-empty tenant',
       ]),
     );
   });

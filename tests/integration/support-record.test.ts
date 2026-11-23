@@ -309,17 +309,93 @@ describe('drift between the records, package.json and the docs', () => {
       'an experimental profile recorded as supported',
       {
         records: (records) => {
-          record(records, 'a2a').status = 'supported';
+          record(records, 'acp').status = 'supported';
         },
       },
       [
+        // ACP's upstream snapshot is not declared stable
+        'src/support/acp.json: supported, but criterion 1: upstream does not declare the pinned revision stable (spec.stable)',
         stale('README.md', 'badges', 'src/support/*.json'),
         stale('README.md', 'matrix', ALL),
         stale('docs/protocols.md', 'matrix', ALL),
-        'README.md: the Versioning sentence names A2A, which src/support/a2a.json records as supported',
-        'plugins/agent-commerce-gateway/skills/agent-commerce/SKILL.md: the "exist but are experimental" sentence names A2A, which src/support/a2a.json records as supported',
-        'docs/protocols/a2a.md: says **Experimental.**, but src/support/a2a.json records supported',
+        'README.md: the Versioning sentence names ACP, which src/support/acp.json records as supported',
+        'plugins/agent-commerce-gateway/skills/agent-commerce/SKILL.md: the "exist but are experimental" sentence names ACP, which src/support/acp.json records as supported',
+        'docs/protocols/acp.md: says **Experimental.**, but src/support/acp.json records supported',
       ],
+    ],
+    [
+      'a supported profile whose upstream revision is not stable',
+      {
+        records: (records) => {
+          const a2a = record(records, 'a2a');
+          if (a2a.spec !== undefined) a2a.spec.stable = false;
+        },
+      },
+      [
+        'src/support/a2a.json: supported, but criterion 1: upstream does not declare the pinned revision stable (spec.stable)',
+        stale('docs/protocols/a2a.md', 'pins', 'src/support/a2a.json and package.json'),
+      ],
+    ],
+    [
+      'a supported profile with no pinned revision',
+      {
+        records: (records) => {
+          delete record(records, 'a2a').spec;
+        },
+      },
+      [
+        'src/support/a2a.json: supported, but criterion 1: upstream does not declare the pinned revision stable (spec.stable)',
+        // Badges show only the profiles that pin a specification
+        stale('README.md', 'badges', 'src/support/*.json'),
+        stale('README.md', 'matrix', ALL),
+        stale('docs/protocols.md', 'matrix', ALL),
+        stale('docs/protocols/a2a.md', 'pins', 'src/support/a2a.json and package.json'),
+      ],
+    ],
+    [
+      'a supported profile whose only remaining gap is excluded',
+      {
+        records: (records) => {
+          record(records, 'a2a').gaps.push({ requirement: '§9.9: something', state: 'excluded' });
+        },
+      },
+      [],
+    ],
+    [
+      'a supported profile with an open gap',
+      {
+        records: (records) => {
+          record(records, 'a2a').gaps.push({ requirement: '§9.9: something', state: 'open' });
+        },
+      },
+      ['src/support/a2a.json: supported, but criterion 2: the gap "§9.9: something" is open'],
+    ],
+    [
+      'a supported profile without conformance evidence',
+      {
+        records: (records) => {
+          delete record(records, 'a2a').conformance;
+        },
+      },
+      ['src/support/a2a.json: supported, but criterion 3: no conformance evidence'],
+    ],
+    [
+      'a supported profile without docs',
+      {
+        records: (records) => {
+          record(records, 'a2a').docs = [];
+        },
+      },
+      ['src/support/a2a.json: supported, but criterion 4: no operational docs'],
+    ],
+    [
+      'an open gap on a profile supported before the criteria',
+      {
+        records: (records) => {
+          record(records, 'mcp').gaps.push({ requirement: '§9.9: something', state: 'open' });
+        },
+      },
+      [],
     ],
     ['a hand edit inside a generated region', HAND_EDIT, [stale('README.md', 'matrix', ALL)]],
     [
@@ -333,7 +409,7 @@ describe('drift between the records, package.json and the docs', () => {
       'an experimental profile missing from the Versioning sentence',
       {
         edit: {
-          'README.md': (content) => content.replace('MPP, A2A, ACP, AP2,', 'A2A, ACP, AP2,'),
+          'README.md': (content) => content.replace('MPP, ACP, AP2,', 'ACP, AP2,'),
         },
       },
       [

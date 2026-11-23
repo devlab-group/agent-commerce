@@ -253,8 +253,8 @@ Lengths count Unicode code points.
 
 ## `protocols.a2a`
 
-Experimental and off by default. The optional `tasks` block limits retention
-for `GetTask`, `ListTasks` and `CancelTask`; see [Tasks](protocols/a2a.md#tasks).
+Off by default. The optional `tasks` block limits retention for `GetTask`,
+`ListTasks` and `CancelTask`; see [Tasks](protocols/a2a.md#tasks).
 
 ```yaml
 protocols:
