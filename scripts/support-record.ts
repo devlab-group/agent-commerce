@@ -328,8 +328,11 @@ function matrixRows(records: readonly SupportRecord[], manifest: PackageManifest
 }
 
 function badges(records: readonly SupportRecord[]): string {
+  const experimental = (record: SupportRecord) => Number(record.status === 'experimental');
+  // Supported badges first, each group in record order
   return records
     .filter((record) => record.spec !== undefined)
+    .sort((a, b) => experimental(a) - experimental(b))
     .map((record) => {
       const color =
         record.status === 'experimental'
