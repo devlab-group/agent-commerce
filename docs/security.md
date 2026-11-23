@@ -188,6 +188,11 @@ The operator routes carry the merchant's commerce ledger. With no
 `server.adminToken` configured they return **404**, not open data - a missing
 control must not read as an absent restriction.
 
+An A2A task ID acts as an access key: anyone holding it can call `GetTask`
+or `CancelTask` without an ownership check. `ListTasks` returns tasks only
+for the supplied context ID. The gateway generates both IDs randomly; see
+[Access](protocols/a2a.md#access).
+
 An allowed browser origin receives CORS headers. Requests without `Origin` do
 not. The shared `onRequest` hook covers raw mounts such as MCP and uses Host
 validation to limit DNS-rebinding attacks.
@@ -731,6 +736,13 @@ receipt database and its backups. `retentionHours` (1 to 8760, default 24) limit
 reuse, not how long every copy exists: a later claim sweep deletes expired rows,
 and backups persist until separately removed. Enable `redelivery` per resource
 with this in mind, and set the window only as long as buyers need to retry.
+
+A2A task documents can hold merchant content and x402 receipts with payer
+addresses and transaction hashes. With SQLite storage, these documents and
+their backups are unencrypted. `protocols.a2a.tasks.retentionHours` controls
+readability after storage or updates (default 24 hours); unpaid tasks expire
+with their payment requirement, capped at one hour (10 minutes without an
+expiry).
 
 ## Threats we are not addressing
 
