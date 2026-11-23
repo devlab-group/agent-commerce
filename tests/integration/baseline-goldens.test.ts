@@ -6,6 +6,11 @@
  * disabled. If a change alters a golden, update its file in the same commit and
  * explain why.
  *
+ * The 2.8.0 baseline captures A2A responses: the Agent Card, free calls,
+ * paid calls without proof, x402 extension tasks and selected refusal cases
+ * from the A2A conformance suite. Snapshots replace server-generated UUIDs
+ * with `<uuid>` and preserve ID prefixes.
+ *
  * The gateway uses the provider and adapter setup from `runGateway`. One loopback
  * server fakes the JSON-RPC nodes, remote facilitator and merchant backend.
  */
@@ -157,7 +162,10 @@ function acpResource(method: string, path: string, withPath: boolean, withBody: 
 }
 
 // Configure HTTP, MCP, A2A and ACP with x402, MPP and AP2 using the 2.7.2 config format
-async function goldenConfig(x402: Record<string, unknown>): Promise<GatewayConfig> {
+async function goldenConfig(
+  x402: Record<string, unknown>,
+  extraResources: Record<string, unknown> = {},
+): Promise<GatewayConfig> {
   const parties = await createParties();
   const session = '/checkout_sessions/{checkout_session_id}';
   return parseConfig(
@@ -228,6 +236,7 @@ async function goldenConfig(x402: Record<string, unknown>): Promise<GatewayConfi
         acp_get: acpResource('GET', session, true, false),
         acp_complete: acpResource('POST', `${session}/complete`, true, true),
         acp_cancel: acpResource('POST', `${session}/cancel`, true, true),
+        ...extraResources,
       },
       payments: {
         x402: {
@@ -508,4 +517,188 @@ describe('2.7.2 goldens: two x402 offers', () => {
 
   it('the well-known document and a healthy doctor --json report', () =>
     expectDiscoveryGoldens(running, 'multi'));
+});
+
+const A2A_GOLDEN = './goldens/2.8.0';
+const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g;
+
+interface A2aAnswer {
+  readonly status: number;
+  readonly extensions: string | null;
+  readonly body: unknown;
+}
+
+// Send an A2A request and return a normalized `answer` alongside the parsed `raw` body
+async function a2aCall(
+  url: string,
+  body: unknown,
+  headers: Record<string, string> = {},
+): Promise<{ answer: A2aAnswer; raw: Record<string, unknown> }> {
+  const res = await fetch(`${url}/a2a`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'a2a-version': '1.0', ...headers },
+    body: typeof body === 'string' ? body : JSON.stringify(body),
+  });
+  const text = await res.text();
+  return {
+    answer: {
+      status: res.status,
+      extensions: res.headers.get('a2a-extensions'),
+      body: JSON.parse(golden(text, url)),
+    },
+    raw: JSON.parse(text) as Record<string, unknown>,
+  };
+}
+
+function a2aGolden(value: unknown): string {
+  return `${JSON.stringify(value, null, 2)}\n`.replaceAll(UUID, '<uuid>');
+}
+
+function a2aSend(params: unknown, id: string | number = 'golden'): unknown {
+  return { jsonrpc: '2.0', id, method: 'SendMessage', params };
+}
+
+function a2aMessage(parts: unknown[], overrides: Record<string, unknown> = {}): unknown {
+  return { message: { role: 'ROLE_USER', messageId: 'msg-golden', parts, ...overrides } };
+}
+
+const EXTENSION = { 'a2a-extensions': A2A_X402_EXTENSION_URI };
+const FREE_PART = { data: { resource: 'weather_free', input: { city: 'Berlin' } } };
+const BUY_REPORT = a2aMessage([
+  { data: { resource: 'market_report', input: { symbol: 'ETH' } }, mediaType: 'application/json' },
+]);
+
+describe('2.8.0 goldens: A2A answers', () => {
+  let running: Running;
+
+  beforeAll(async () => {
+    running = await startGateway(
+      await goldenConfig(singleOffer(), {
+        weather_free: {
+          name: 'Free Weather',
+          input: {
+            type: 'object',
+            properties: { city: { type: 'string' } },
+            required: ['city'],
+            additionalProperties: false,
+          },
+          backend: { type: 'http', method: 'GET', url: `${upstreamUrl}/backend/weather` },
+          pricing: { type: 'free' },
+          expose: ['a2a'],
+        },
+      }),
+    );
+  });
+  afterAll(() => running?.close());
+
+  it('the Agent Card', async () => {
+    const res = await fetch(`${running.url}/.well-known/agent-card.json`);
+    expect(res.status).toBe(200);
+    await expect(golden(await res.text(), running.url)).toMatchFileSnapshot(
+      `${A2A_GOLDEN}/a2a-agent-card.json`,
+    );
+  });
+
+  it('a free call, and a paid call without a proof or the extension', async () => {
+    const free = await a2aCall(running.url, a2aSend(a2aMessage([FREE_PART])));
+    await expect(a2aGolden(free.answer)).toMatchFileSnapshot(`${A2A_GOLDEN}/a2a-free.json`);
+    const unpaid = await a2aCall(running.url, a2aSend(BUY_REPORT));
+    await expect(a2aGolden(unpaid.answer)).toMatchFileSnapshot(
+      `${A2A_GOLDEN}/a2a-paid-no-proof.json`,
+    );
+  });
+
+  it('an x402 extension task, from input-required to completed', async () => {
+    const required = await a2aCall(running.url, a2aSend(BUY_REPORT), EXTENSION);
+    await expect(a2aGolden(required.answer)).toMatchFileSnapshot(
+      `${A2A_GOLDEN}/a2a-x402-input-required.json`,
+    );
+
+    const { task } = required.raw['result'] as {
+      task: {
+        id: string;
+        contextId: string;
+        status: { message: { metadata: Record<string, { accepts: Record<string, unknown>[] }> } };
+      };
+    };
+    const offer = task.status.message.metadata['x402.payment.required']?.accepts[0];
+    if (offer === undefined) throw new Error('no offer');
+    const signed = await createPaymentProof({
+      buyerPrivateKey: BUYER_KEY,
+      accepts: offer,
+      overrides: { nonce: NONCE, validBefore: VALID_BEFORE },
+    });
+    const paid = await a2aCall(
+      running.url,
+      a2aSend({
+        message: {
+          role: 'ROLE_USER',
+          messageId: 'msg-pay',
+          taskId: task.id,
+          contextId: task.contextId,
+          parts: [{ text: 'Here is the payment authorization.' }],
+          metadata: {
+            'x402.payment.status': 'payment-submitted',
+            'x402.payment.payload': JSON.parse(Buffer.from(signed, 'base64').toString('utf8')),
+          },
+        },
+      }),
+      EXTENSION,
+    );
+    expect(paid.raw['result']).toMatchObject({
+      task: { status: { state: 'TASK_STATE_COMPLETED' } },
+    });
+    await expect(a2aGolden(paid.answer)).toMatchFileSnapshot(
+      `${A2A_GOLDEN}/a2a-x402-completed.json`,
+    );
+  });
+
+  it('each refusal of the A2A conformance suite, and an unknown resource', async () => {
+    const rpc = (method: string, params: unknown) => ({ jsonrpc: '2.0', id: 1, method, params });
+    const cases: Record<string, unknown> = {
+      'malformed JSON': '{"jsonrpc": "2.0", "id"',
+      'jsonrpc 1.0': { jsonrpc: '1.0', id: 1, method: 'SendMessage' },
+      'no method': { jsonrpc: '2.0', id: 1 },
+      'non-object request': '"SendMessage"',
+      'params not an object': rpc('SendMessage', 'nope'),
+      'no id': { jsonrpc: '2.0', method: 'SendMessage', params: a2aMessage([FREE_PART]) },
+      'legacy message/send': rpc('message/send', a2aMessage([FREE_PART])),
+      'unknown method': rpc('Frobnicate', {}),
+      ListTasks: rpc('ListTasks', {}),
+      SendStreamingMessage: rpc('SendStreamingMessage', {}),
+      SubscribeToTask: rpc('SubscribeToTask', {}),
+      GetExtendedAgentCard: rpc('GetExtendedAgentCard', {}),
+      GetTask: rpc('GetTask', { id: 'task-1' }),
+      CancelTask: rpc('CancelTask', { id: 'task-1' }),
+      CreateTaskPushNotificationConfig: rpc('CreateTaskPushNotificationConfig', {}),
+      GetTaskPushNotificationConfig: rpc('GetTaskPushNotificationConfig', {}),
+      ListTaskPushNotificationConfigs: rpc('ListTaskPushNotificationConfigs', {}),
+      DeleteTaskPushNotificationConfig: rpc('DeleteTaskPushNotificationConfig', {}),
+      ROLE_AGENT: a2aSend(a2aMessage([FREE_PART], { role: 'ROLE_AGENT' })),
+      'text part': a2aSend(a2aMessage([{ text: 'what is the weather' }])),
+      'raw part': a2aSend(a2aMessage([{ raw: 'QUFBQQ==', filename: 'a.bin' }])),
+      'url part': a2aSend(a2aMessage([{ url: 'https://example.com/a.pdf' }])),
+      'v0.3 file part': a2aSend(a2aMessage([{ file: { uri: 'https://example.com/a.pdf' } }])),
+      'two parts': a2aSend(a2aMessage([FREE_PART, FREE_PART])),
+      'non-JSON data part': a2aSend(a2aMessage([{ ...FREE_PART, mediaType: 'text/csv' }])),
+      'no messageId': a2aSend(a2aMessage([FREE_PART], { messageId: undefined })),
+      'unknown taskId': a2aSend(a2aMessage([FREE_PART], { taskId: 'task-1' })),
+      'contextId without a task': a2aSend(a2aMessage([FREE_PART], { contextId: 'ctx-1' })),
+      referenceTaskIds: a2aSend(a2aMessage([FREE_PART], { referenceTaskIds: ['task-1'] })),
+      'unknown resource': a2aSend(
+        a2aMessage([{ data: { resource: 'no_such_resource', input: {} } }]),
+      ),
+    };
+    const answers: Record<string, A2aAnswer> = {};
+    for (const [name, body] of Object.entries(cases)) {
+      answers[name] = (await a2aCall(running.url, body)).answer;
+    }
+    for (const version of ['0.3', '']) {
+      const { answer } = await a2aCall(running.url, a2aSend(a2aMessage([FREE_PART])), {
+        'a2a-version': version,
+      });
+      answers[`A2A-Version "${version}"`] = answer;
+    }
+    await expect(a2aGolden(answers)).toMatchFileSnapshot(`${A2A_GOLDEN}/a2a-refusals.json`);
+  });
 });

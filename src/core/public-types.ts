@@ -76,6 +76,7 @@ export type {
   IdempotencyScope,
   IdempotencyUpdate,
   PendingTask,
+  TaskRecord,
 } from './domain/store-records';
 export type {
   AuthorizationHoldState,

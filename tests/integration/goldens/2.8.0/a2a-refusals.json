@@ -1,0 +1,561 @@
+{
+  "malformed JSON": {
+    "status": 200,
+    "extensions": null,
+    "body": {
+      "jsonrpc": "2.0",
+      "id": null,
+      "error": {
+        "code": -32700,
+        "message": "Invalid JSON."
+      }
+    }
+  },
+  "jsonrpc 1.0": {
+    "status": 200,
+    "extensions": null,
+    "body": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "error": {
+        "code": -32600,
+        "message": "Request must set \"jsonrpc\" to \"2.0\"."
+      }
+    }
+  },
+  "no method": {
+    "status": 200,
+    "extensions": null,
+    "body": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "error": {
+        "code": -32600,
+        "message": "Request must carry a \"method\" string."
+      }
+    }
+  },
+  "non-object request": {
+    "status": 200,
+    "extensions": null,
+    "body": {
+      "jsonrpc": "2.0",
+      "id": null,
+      "error": {
+        "code": -32600,
+        "message": "Request must be a JSON-RPC 2.0 object."
+      }
+    }
+  },
+  "params not an object": {
+    "status": 200,
+    "extensions": null,
+    "body": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "error": {
+        "code": -32602,
+        "message": "Request \"params\" must be an object."
+      }
+    }
+  },
+  "no id": {
+    "status": 200,
+    "extensions": null,
+    "body": {
+      "jsonrpc": "2.0",
+      "id": null,
+      "error": {
+        "code": -32600,
+        "message": "Request must include an \"id\"; notifications are unsupported."
+      }
+    }
+  },
+  "legacy message/send": {
+    "status": 200,
+    "extensions": null,
+    "body": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "error": {
+        "code": -32601,
+        "message": "Unknown method \"message/send\"."
+      }
+    }
+  },
+  "unknown method": {
+    "status": 200,
+    "extensions": null,
+    "body": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "error": {
+        "code": -32601,
+        "message": "Unknown method \"Frobnicate\"."
+      }
+    }
+  },
+  "ListTasks": {
+    "status": 200,
+    "extensions": null,
+    "body": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": {
+        "tasks": [],
+        "nextPageToken": "",
+        "pageSize": 50,
+        "totalSize": 0
+      }
+    }
+  },
+  "SendStreamingMessage": {
+    "status": 200,
+    "extensions": null,
+    "body": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "error": {
+        "code": -32004,
+        "message": "A2A method \"SendStreamingMessage\" is not supported by this deployment.",
+        "data": [
+          {
+            "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+            "reason": "UNSUPPORTED_OPERATION",
+            "domain": "a2a-protocol.org"
+          }
+        ]
+      }
+    }
+  },
+  "SubscribeToTask": {
+    "status": 200,
+    "extensions": null,
+    "body": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "error": {
+        "code": -32004,
+        "message": "A2A method \"SubscribeToTask\" is not supported by this deployment.",
+        "data": [
+          {
+            "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+            "reason": "UNSUPPORTED_OPERATION",
+            "domain": "a2a-protocol.org"
+          }
+        ]
+      }
+    }
+  },
+  "GetExtendedAgentCard": {
+    "status": 200,
+    "extensions": null,
+    "body": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "error": {
+        "code": -32004,
+        "message": "A2A method \"GetExtendedAgentCard\" is not supported by this deployment.",
+        "data": [
+          {
+            "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+            "reason": "UNSUPPORTED_OPERATION",
+            "domain": "a2a-protocol.org"
+          }
+        ]
+      }
+    }
+  },
+  "GetTask": {
+    "status": 200,
+    "extensions": null,
+    "body": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "error": {
+        "code": -32001,
+        "message": "Task not found.",
+        "data": [
+          {
+            "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+            "reason": "TASK_NOT_FOUND",
+            "domain": "a2a-protocol.org"
+          }
+        ]
+      }
+    }
+  },
+  "CancelTask": {
+    "status": 200,
+    "extensions": null,
+    "body": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "error": {
+        "code": -32001,
+        "message": "Task not found.",
+        "data": [
+          {
+            "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+            "reason": "TASK_NOT_FOUND",
+            "domain": "a2a-protocol.org"
+          }
+        ]
+      }
+    }
+  },
+  "CreateTaskPushNotificationConfig": {
+    "status": 200,
+    "extensions": null,
+    "body": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "error": {
+        "code": -32003,
+        "message": "A2A method \"CreateTaskPushNotificationConfig\" is not supported: this agent does not support push notifications.",
+        "data": [
+          {
+            "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+            "reason": "PUSH_NOTIFICATION_NOT_SUPPORTED",
+            "domain": "a2a-protocol.org"
+          }
+        ]
+      }
+    }
+  },
+  "GetTaskPushNotificationConfig": {
+    "status": 200,
+    "extensions": null,
+    "body": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "error": {
+        "code": -32003,
+        "message": "A2A method \"GetTaskPushNotificationConfig\" is not supported: this agent does not support push notifications.",
+        "data": [
+          {
+            "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+            "reason": "PUSH_NOTIFICATION_NOT_SUPPORTED",
+            "domain": "a2a-protocol.org"
+          }
+        ]
+      }
+    }
+  },
+  "ListTaskPushNotificationConfigs": {
+    "status": 200,
+    "extensions": null,
+    "body": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "error": {
+        "code": -32003,
+        "message": "A2A method \"ListTaskPushNotificationConfigs\" is not supported: this agent does not support push notifications.",
+        "data": [
+          {
+            "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+            "reason": "PUSH_NOTIFICATION_NOT_SUPPORTED",
+            "domain": "a2a-protocol.org"
+          }
+        ]
+      }
+    }
+  },
+  "DeleteTaskPushNotificationConfig": {
+    "status": 200,
+    "extensions": null,
+    "body": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "error": {
+        "code": -32003,
+        "message": "A2A method \"DeleteTaskPushNotificationConfig\" is not supported: this agent does not support push notifications.",
+        "data": [
+          {
+            "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+            "reason": "PUSH_NOTIFICATION_NOT_SUPPORTED",
+            "domain": "a2a-protocol.org"
+          }
+        ]
+      }
+    }
+  },
+  "ROLE_AGENT": {
+    "status": 200,
+    "extensions": null,
+    "body": {
+      "jsonrpc": "2.0",
+      "id": "golden",
+      "error": {
+        "code": -32602,
+        "message": "Unsupported message role \"ROLE_AGENT\": only ROLE_USER is accepted."
+      }
+    }
+  },
+  "text part": {
+    "status": 200,
+    "extensions": null,
+    "body": {
+      "jsonrpc": "2.0",
+      "id": "golden",
+      "error": {
+        "code": -32005,
+        "message": "Text parts are not supported: send one data part {\"resource\": \"<skill id>\", \"input\": {...}}.",
+        "data": [
+          {
+            "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+            "reason": "CONTENT_TYPE_NOT_SUPPORTED",
+            "domain": "a2a-protocol.org"
+          }
+        ]
+      }
+    }
+  },
+  "raw part": {
+    "status": 200,
+    "extensions": null,
+    "body": {
+      "jsonrpc": "2.0",
+      "id": "golden",
+      "error": {
+        "code": -32005,
+        "message": "File and URL parts are not supported: send one data part {\"resource\": \"<skill id>\", \"input\": {...}}.",
+        "data": [
+          {
+            "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+            "reason": "CONTENT_TYPE_NOT_SUPPORTED",
+            "domain": "a2a-protocol.org"
+          }
+        ]
+      }
+    }
+  },
+  "url part": {
+    "status": 200,
+    "extensions": null,
+    "body": {
+      "jsonrpc": "2.0",
+      "id": "golden",
+      "error": {
+        "code": -32005,
+        "message": "File and URL parts are not supported: send one data part {\"resource\": \"<skill id>\", \"input\": {...}}.",
+        "data": [
+          {
+            "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+            "reason": "CONTENT_TYPE_NOT_SUPPORTED",
+            "domain": "a2a-protocol.org"
+          }
+        ]
+      }
+    }
+  },
+  "v0.3 file part": {
+    "status": 200,
+    "extensions": null,
+    "body": {
+      "jsonrpc": "2.0",
+      "id": "golden",
+      "error": {
+        "code": -32005,
+        "message": "File and URL parts are not supported: send one data part {\"resource\": \"<skill id>\", \"input\": {...}}.",
+        "data": [
+          {
+            "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+            "reason": "CONTENT_TYPE_NOT_SUPPORTED",
+            "domain": "a2a-protocol.org"
+          }
+        ]
+      }
+    }
+  },
+  "two parts": {
+    "status": 200,
+    "extensions": null,
+    "body": {
+      "jsonrpc": "2.0",
+      "id": "golden",
+      "error": {
+        "code": -32004,
+        "message": "Multi-part messages are not supported: send exactly one structured data part (received 2).",
+        "data": [
+          {
+            "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+            "reason": "UNSUPPORTED_OPERATION",
+            "domain": "a2a-protocol.org"
+          }
+        ]
+      }
+    }
+  },
+  "non-JSON data part": {
+    "status": 200,
+    "extensions": null,
+    "body": {
+      "jsonrpc": "2.0",
+      "id": "golden",
+      "error": {
+        "code": -32005,
+        "message": "Media type \"text/csv\" is not supported: parts must be application/json.",
+        "data": [
+          {
+            "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+            "reason": "CONTENT_TYPE_NOT_SUPPORTED",
+            "domain": "a2a-protocol.org"
+          }
+        ]
+      }
+    }
+  },
+  "no messageId": {
+    "status": 200,
+    "extensions": null,
+    "body": {
+      "jsonrpc": "2.0",
+      "id": "golden",
+      "error": {
+        "code": -32602,
+        "message": "Message must carry a non-empty \"messageId\"."
+      }
+    }
+  },
+  "unknown taskId": {
+    "status": 200,
+    "extensions": null,
+    "body": {
+      "jsonrpc": "2.0",
+      "id": "golden",
+      "error": {
+        "code": -32001,
+        "message": "Task not found: send the message without a taskId to start a new task.",
+        "data": [
+          {
+            "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+            "reason": "TASK_NOT_FOUND",
+            "domain": "a2a-protocol.org"
+          }
+        ]
+      }
+    }
+  },
+  "contextId without a task": {
+    "status": 200,
+    "extensions": null,
+    "body": {
+      "jsonrpc": "2.0",
+      "id": "golden",
+      "error": {
+        "code": -32004,
+        "message": "Multi-turn conversational continuation is not supported: send a request with no contextId.",
+        "data": [
+          {
+            "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+            "reason": "UNSUPPORTED_OPERATION",
+            "domain": "a2a-protocol.org"
+          }
+        ]
+      }
+    }
+  },
+  "referenceTaskIds": {
+    "status": 200,
+    "extensions": null,
+    "body": {
+      "jsonrpc": "2.0",
+      "id": "golden",
+      "error": {
+        "code": -32004,
+        "message": "Referencing previous tasks is not supported.",
+        "data": [
+          {
+            "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+            "reason": "UNSUPPORTED_OPERATION",
+            "domain": "a2a-protocol.org"
+          }
+        ]
+      }
+    }
+  },
+  "unknown resource": {
+    "status": 200,
+    "extensions": null,
+    "body": {
+      "jsonrpc": "2.0",
+      "id": "golden",
+      "result": {
+        "task": {
+          "id": "<uuid>",
+          "contextId": "<uuid>",
+          "status": {
+            "state": "TASK_STATE_FAILED",
+            "timestamp": "<timestamp>",
+            "message": {
+              "role": "ROLE_AGENT",
+              "messageId": "a2a-msg_<uuid>",
+              "contextId": "<uuid>",
+              "taskId": "<uuid>",
+              "parts": [
+                {
+                  "text": "Unknown canonical resource \"no_such_resource\"."
+                }
+              ]
+            }
+          },
+          "artifacts": [
+            {
+              "artifactId": "a2a-artifact_<uuid>",
+              "parts": [
+                {
+                  "data": {
+                    "status": "error",
+                    "code": "RESOURCE_NOT_FOUND",
+                    "message": "Unknown canonical resource \"no_such_resource\".",
+                    "retryable": false
+                  },
+                  "mediaType": "application/json"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  },
+  "A2A-Version \"0.3\"": {
+    "status": 200,
+    "extensions": null,
+    "body": {
+      "jsonrpc": "2.0",
+      "id": "golden",
+      "error": {
+        "code": -32009,
+        "message": "Unsupported A2A protocol version. Send the A2A-Version header with \"1.0\".",
+        "data": [
+          {
+            "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+            "reason": "VERSION_NOT_SUPPORTED",
+            "domain": "a2a-protocol.org"
+          }
+        ]
+      }
+    }
+  },
+  "A2A-Version \"\"": {
+    "status": 200,
+    "extensions": null,
+    "body": {
+      "jsonrpc": "2.0",
+      "id": "golden",
+      "error": {
+        "code": -32009,
+        "message": "Unsupported A2A protocol version. Send the A2A-Version header with \"1.0\".",
+        "data": [
+          {
+            "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+            "reason": "VERSION_NOT_SUPPORTED",
+            "domain": "a2a-protocol.org"
+          }
+        ]
+      }
+    }
+  }
+}

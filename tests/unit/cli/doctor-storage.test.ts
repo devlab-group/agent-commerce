@@ -15,6 +15,7 @@ import {
   type SqliteLegacyImport,
   type SqliteReceiptStoreSummary,
 } from '../../../src/storage/receipts';
+import { SCHEMA_VERSION } from '../../../src/storage/receipts/schema';
 import { createFakeFetch, jsonResponse, makeFakeReceiptStore, makeGatewayConfig } from './fixtures';
 
 const GATEWAY = 'http://127.0.0.1:8080';
@@ -364,7 +365,7 @@ describe('runDoctor: the receipt database is read, never changed', () => {
     db.close();
   }
 
-  async function seedV5(legacy?: { readonly acpIdempotency: string }): Promise<void> {
+  async function seedCurrent(legacy?: { readonly acpIdempotency: string }): Promise<void> {
     const store = createSqliteReceiptStore({
       path: receipts,
       ...(legacy !== undefined ? { legacyStores: { ...legacy, enabled: { acp: true } } } : {}),
@@ -385,8 +386,7 @@ describe('runDoctor: the receipt database is read, never changed', () => {
     expect(check(report, 'Storage')).toEqual({
       name: 'Storage',
       status: 'WARN',
-      detail:
-        'sqlite schema v4; the next start migrates it to v5, which earlier versions cannot open. Run agent-commerce backup first to keep a copy they can',
+      detail: `sqlite schema v4; the next start migrates it to v${SCHEMA_VERSION}, which earlier versions cannot open. Run agent-commerce backup first to keep a copy they can`,
     });
     // The v4 fixture has no import record for the legacy file
     expect(check(report, 'ACP idempotency')?.detail).toContain('are not moved yet');
@@ -420,8 +420,38 @@ describe('runDoctor: the receipt database is read, never changed', () => {
     }
   });
 
-  it('reads a v5 database without importing a deprecated file it has not imported', async () => {
-    await seedV5();
+  it('reads the imports a v5 (2.8) database recorded, and leaves it at v5', async () => {
+    await seedCurrent({ acpIdempotency: acp });
+    // Remove the task-record table to recreate schema v5 (2.8.0)
+    const db = new Database(receipts);
+    db.exec('DROP TABLE task_records');
+    db.pragma('user_version = 5');
+    db.close();
+    const [marker] = imports() as { imported_at: string }[];
+    const before = sha(receipts);
+
+    const report = await doctorWith(acpConfig(receipts, acp));
+
+    expect(check(report, 'Storage')?.detail).toContain(
+      `sqlite schema v5; the next start migrates it to v${SCHEMA_VERSION}`,
+    );
+    expect(check(report, 'ACP idempotency')).toEqual({
+      name: 'ACP idempotency',
+      status: 'WARN',
+      detail: `deprecated key: 0 row(s) moved into the receipt database at ${marker?.imported_at}; remove the key (retention 24h)`,
+    });
+    const moved = join(dir, 'acp-moved.sqlite');
+    writeFileSync(moved, '');
+    expect(check(await doctorWith(acpConfig(receipts, moved)), 'ACP idempotency')).toMatchObject({
+      status: 'FAIL',
+      detail: expect.stringContaining('was imported already, so start refuses it'),
+    });
+    expect(sha(receipts)).toBe(before);
+    expect(version()).toBe(5);
+  });
+
+  it('reads a current database without importing a deprecated file it has not imported', async () => {
+    await seedCurrent();
     const before = sha(receipts);
 
     const report = await doctorWith(acpConfig(receipts, acp));
@@ -429,7 +459,7 @@ describe('runDoctor: the receipt database is read, never changed', () => {
     expect(check(report, 'Storage')).toEqual({
       name: 'Storage',
       status: 'PASS',
-      detail: 'sqlite schema v5 writable; receipts=0',
+      detail: `sqlite schema v${SCHEMA_VERSION} writable; receipts=0`,
     });
     expect(check(report, 'Transactions')?.status).toBe('PASS');
     expect(check(report, 'ACP idempotency')?.detail).toBe(
@@ -440,7 +470,7 @@ describe('runDoctor: the receipt database is read, never changed', () => {
   });
 
   it('reports the import that start recorded', async () => {
-    await seedV5({ acpIdempotency: acp });
+    await seedCurrent({ acpIdempotency: acp });
     const [marker] = imports() as { imported_at: string }[];
 
     const report = await doctorWith(acpConfig(receipts, acp));
@@ -453,9 +483,9 @@ describe('runDoctor: the receipt database is read, never changed', () => {
   });
 
   it('fails a database a newer version wrote, and leaves its version alone', async () => {
-    await seedV5();
+    await seedCurrent();
     const db = new Database(receipts);
-    db.pragma('user_version = 6');
+    db.pragma(`user_version = ${SCHEMA_VERSION + 1}`);
     db.close();
 
     const report = await doctorWith(acpConfig(receipts));
@@ -463,10 +493,9 @@ describe('runDoctor: the receipt database is read, never changed', () => {
     expect(check(report, 'Storage')).toEqual({
       name: 'Storage',
       status: 'FAIL',
-      detail:
-        'sqlite schema v6 is newer than this version reads (v5); run the version that wrote it',
+      detail: `sqlite schema v${SCHEMA_VERSION + 1} is newer than this version reads (v${SCHEMA_VERSION}); run the version that wrote it`,
     });
-    expect(version()).toBe(6);
+    expect(version()).toBe(SCHEMA_VERSION + 1);
     expect(report.exitCode).toBe(1);
   });
 

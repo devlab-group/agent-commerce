@@ -1077,14 +1077,15 @@ describe('x402 redelivery over MCP and A2A', () => {
     expect(backendCalls).toHaveLength(1);
   });
 
-  it('answers a resend to the consumed extension task with TaskNotFoundError', async () => {
+  it('answers a resend to the consumed extension task with UnsupportedOperationError', async () => {
     const task = await a2aChallenge('x402_report');
     const proof = await signX402(challengeOf(task), ID);
     await a2aPay(task, proof);
 
     const resend = await a2aPay(task, proof);
 
-    expect(resend.error?.code).toBe(-32001);
+    // The paid task's record remains, and it takes no further messages
+    expect(resend.error?.code).toBe(-32004);
     expect(resend.result).toBeUndefined();
     expect(facilitator.settle).toHaveBeenCalledTimes(1);
     expect(backendCalls).toHaveLength(1);

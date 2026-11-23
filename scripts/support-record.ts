@@ -22,12 +22,14 @@ export const REPO_ROOT = join(import.meta.dirname, '..');
 
 const text = z.string().min(1);
 
+const COMMIT = z.string().regex(/^[0-9a-f]{40}$/);
+
 const SpecSchema = z.strictObject({
   // Revision identifiers for comparison with code
   revisions: z.array(text).min(1),
   // Display text for the pinned revision
   display: text,
-  source: z.strictObject({ repo: text, commit: z.string().regex(/^[0-9a-f]{40}$/) }),
+  source: z.strictObject({ repo: text, commit: COMMIT }),
   // Whether upstream calls the pinned revision stable; null when unspecified
   stable: z.boolean().nullable(),
   // Upstream's own words on the revision's status
@@ -99,6 +101,32 @@ const SupportRecordSchema = z
             upstream: text.optional(),
           }),
         ),
+        // CI suite revision, expected failures and skips, and shared skip messages
+        upstream: z
+          .strictObject({
+            repo: text,
+            commit: COMMIT,
+            command: text,
+            workflow: text,
+            job: text,
+            // Identify tests by the JUnit report's `classname::name`. Match
+            // `message` as a substring of the failure or skip message.
+            results: z.array(
+              z.strictObject({
+                test: text,
+                id: text.optional(),
+                outcome: z.enum(['failed', 'skipped']),
+                message: text,
+                reason: text,
+                spec: text.optional(),
+                upstream: text.optional(),
+              }),
+            ),
+            // Group accepted skips by exact message, such as those for unsupported
+            // capabilities or transports
+            skipClasses: z.array(z.strictObject({ reason: text, messages: z.array(text).min(1) })),
+          })
+          .optional(),
       })
       .optional(),
     // Known MUST-level gaps against the pinned revision
@@ -177,6 +205,7 @@ export function citedPaths(record: SupportRecord): string[] {
       ...(record.combinations ?? []).map((combination) => combination.evidence),
       ...(record.conformance?.tests ?? []),
       ...(record.conformance?.skipped ?? []).map((skipped) => skipped.test),
+      ...(record.conformance?.upstream !== undefined ? [record.conformance.upstream.workflow] : []),
       ...record.deviations.flatMap((deviation) => deviation.tests),
       ...record.docs,
     ]),
@@ -299,8 +328,11 @@ function matrixRows(records: readonly SupportRecord[], manifest: PackageManifest
 }
 
 function badges(records: readonly SupportRecord[]): string {
+  const experimental = (record: SupportRecord) => Number(record.status === 'experimental');
+  // Supported badges first, each group in record order
   return records
     .filter((record) => record.spec !== undefined)
+    .sort((a, b) => experimental(a) - experimental(b))
     .map((record) => {
       const color =
         record.status === 'experimental'
@@ -572,6 +604,24 @@ function handWrittenProblems(tree: SupportTree): string[] {
   return problems;
 }
 
+// Profiles supported before 2.8.0 are exempt from promotion checks
+const SUPPORTED_BEFORE_CRITERIA: ReadonlySet<string> = new Set(['http', 'mcp', 'x402']);
+
+// Report unmet promotion checks from docs/protocols.md
+function promotionProblems(record: SupportRecord): string[] {
+  if (record.status !== 'supported' || SUPPORTED_BEFORE_CRITERIA.has(record.name)) return [];
+  const open = record.gaps.filter((gap) => gap.state === 'open');
+  const unmet = [
+    ...(record.spec?.stable !== true
+      ? ['criterion 1: upstream does not declare the pinned revision stable (spec.stable)']
+      : []),
+    ...open.map((gap) => `criterion 2: the gap "${gap.requirement}" is open`),
+    ...(record.conformance === undefined ? ['criterion 3: no conformance evidence'] : []),
+    ...(record.docs.length === 0 ? ['criterion 4: no operational docs'] : []),
+  ];
+  return unmet.map((problem) => `src/support/${record.name}.json: supported, but ${problem}`);
+}
+
 /** Every disagreement between the records, package.json and the docs, each naming its place */
 export function supportProblems(tree: SupportTree): string[] {
   const problems: string[] = [];
@@ -593,6 +643,7 @@ export function supportProblems(tree: SupportTree): string[] {
     for (const path of citedPaths(record)) {
       if (!tree.exists(path)) problems.push(`${source}: cites ${path}, which does not exist`);
     }
+    problems.push(...promotionProblems(record));
   }
   for (const [path, regions] of renderRegions(tree.records, manifest)) {
     const content = tree.read(path);

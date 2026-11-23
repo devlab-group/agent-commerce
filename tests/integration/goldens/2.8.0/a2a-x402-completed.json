@@ -1,0 +1,77 @@
+{
+  "status": 200,
+  "extensions": "https://github.com/google-a2a/a2a-x402/v0.1",
+  "body": {
+    "jsonrpc": "2.0",
+    "id": "golden",
+    "result": {
+      "task": {
+        "id": "<uuid>",
+        "contextId": "<uuid>",
+        "status": {
+          "state": "TASK_STATE_COMPLETED",
+          "timestamp": "<timestamp>",
+          "message": {
+            "role": "ROLE_AGENT",
+            "messageId": "a2a-msg_<uuid>",
+            "contextId": "<uuid>",
+            "taskId": "<uuid>",
+            "parts": [
+              {
+                "text": "Payment settled."
+              }
+            ],
+            "metadata": {
+              "x402.payment.status": "payment-completed",
+              "x402.payment.receipts": [
+                {
+                  "success": true,
+                  "transaction": "0xabababababababababababababababababababababababababababababababab",
+                  "network": "eip155:84532",
+                  "payer": "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC",
+                  "amount": "10000",
+                  "status": "settled",
+                  "provider": "x402",
+                  "currency": "USDC",
+                  "externalReference": "0xabababababababababababababababababababababababababababababababab"
+                }
+              ]
+            },
+            "extensions": [
+              "https://github.com/google-a2a/a2a-x402/v0.1"
+            ]
+          }
+        },
+        "artifacts": [
+          {
+            "artifactId": "a2a-artifact_<uuid>",
+            "name": "market_report",
+            "parts": [
+              {
+                "data": {
+                  "ok": true
+                },
+                "mediaType": "application/json"
+              }
+            ],
+            "metadata": {
+              "agent-commerce/delivery": {
+                "requestId": "a2a_<uuid>",
+                "resourceId": "market_report",
+                "receiptId": "receipt_<uuid>",
+                "deliveredAt": "<timestamp>",
+                "payment": {
+                  "status": "settled",
+                  "amount": "0.01",
+                  "currency": "USDC",
+                  "externalReference": "0xabababababababababababababababababababababababababababababababab",
+                  "network": "eip155:84532"
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+}

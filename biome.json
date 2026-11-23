@@ -19,6 +19,7 @@
       "!package-lock.json",
       "!src/protocols/acp/spec",
       "!tests/fixtures/acp",
+      "!tests/fixtures/a2a",
       "!tests/fixtures/mcp-registry",
       "!tests/integration/goldens"
     ]

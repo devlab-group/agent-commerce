@@ -1,5 +1,5 @@
 /**
- * Execution outcomes as terminal A2A Tasks.
+ * Execution outcomes as A2A Tasks.
  *
  * A2A models an execution's output as a Task carrying Artifacts, so a
  * completed purchase comes back as one, not as a plain Message, which models
@@ -15,7 +15,7 @@
  * no A2A-specific delivery, payment-required or error schema.
  */
 import {
-  type CommerceError,
+  CommerceError,
   DELIVERY_SUMMARY_META_KEY,
   type DeliveredOutcome,
   type PaymentRequiredOutcome,
@@ -26,17 +26,23 @@ import {
 import { isRecord } from '../../core/is-record';
 import {
   A2A_JSON_MEDIA_TYPE,
+  A2A_TASK_STATE_CANCELED,
   A2A_TASK_STATE_COMPLETED,
   A2A_TASK_STATE_FAILED,
   A2A_TASK_STATE_INPUT_REQUIRED,
+  A2A_TASK_STATE_WORKING,
 } from './constants';
 import type { A2aArtifact, A2aTask } from './types';
 import { A2A_X402_EXTENSION_URI } from './x402-extension';
 
 export interface TaskIdentity {
-  /** Gateway request id, reused so a task correlates with receipts and events */
+  /**
+   * Adapter-generated UUID used as the access key for reads and cancellation.
+   * Receipt and event correlation uses the gateway request id in delivery
+   * summaries and error envelopes.
+   */
   readonly taskId: string;
-  /** Fresh for each purchase; a pending x402 payment keeps this context */
+  /** A random UUID, fresh for each purchase; a pending x402 payment keeps it */
   readonly contextId: string;
   readonly artifactId: string;
   /** Id of the agent message on the task status */
@@ -143,4 +149,74 @@ export function failedTask(error: CommerceError, identity: TaskIdentity): A2aTas
     envelope.message,
     identity.statusMessageId,
   );
+}
+
+// Refusals raised before settlement. Mandate checks also precede the
+// payment attempt reservation.
+const UNCHARGED_CODES: ReadonlySet<string> = new Set([
+  'RESOURCE_NOT_FOUND',
+  'INPUT_INVALID',
+  'PAYMENT_INVALID',
+  'PAYMENT_REPLAYED',
+  'AUTHORIZATION_REQUIRED',
+  'AUTHORIZATION_INVALID',
+  'AUTHORIZATION_REPLAYED',
+  'AUTHORIZATION_PROVIDER_UNAVAILABLE',
+]);
+
+/**
+ * Whether a failed task can be evicted without discarding a paid result.
+ * A request without a payment proof or with a listed refusal is uncharged.
+ * Backend failures are evictable only without `details.payment`, which the
+ * pipeline attaches after upfront settlement; the `authorization` flow
+ * abandons settlement when the backend fails.
+ */
+export function chargedNothing(error: CommerceError, proofSent: boolean): boolean {
+  if (!proofSent || UNCHARGED_CODES.has(error.code)) return true;
+  const backend = error.code === 'BACKEND_ERROR' || error.code === 'BACKEND_TIMEOUT';
+  return backend && error.details?.['payment'] === undefined;
+}
+
+/** A task whose execution is still in progress */
+export function workingTask(taskId: string, contextId: string, timestamp: string): A2aTask {
+  return {
+    id: taskId,
+    contextId,
+    status: { state: A2A_TASK_STATE_WORKING, timestamp },
+    artifacts: [],
+  };
+}
+
+/** A canceled pending task, without x402 extension status metadata */
+export function canceledTask(
+  taskId: string,
+  contextId: string,
+  timestamp: string,
+  messageId: string,
+): A2aTask {
+  return withStatusMessage(
+    { id: taskId, contextId, status: { state: A2A_TASK_STATE_CANCELED, timestamp }, artifacts: [] },
+    'Task canceled.',
+    messageId,
+  );
+}
+
+/**
+ * Present an interrupted working record as failed at its original timestamp.
+ * Payment may have settled before the gateway stopped or the final write
+ * failed, so tell the buyer to check with the merchant before paying again.
+ * Derived artifact and message ids keep repeated reads of the same record stable.
+ */
+export function interruptedTask(task: A2aTask): A2aTask {
+  const error = new CommerceError(
+    'INTERNAL_ERROR',
+    'This task stopped before its result was recorded. Any payment is in the gateway records: check with the merchant before paying again.',
+  );
+  return failedTask(error, {
+    taskId: task.id,
+    contextId: task.contextId,
+    artifactId: `${task.id}-interrupted`,
+    statusMessageId: `${task.id}-interrupted`,
+    timestamp: task.status.timestamp,
+  });
 }

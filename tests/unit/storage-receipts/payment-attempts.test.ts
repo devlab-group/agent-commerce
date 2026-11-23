@@ -63,7 +63,7 @@ describe('reservePaymentAttempt', () => {
       currency: 'USDC',
       payer: '0xbuyer',
       payee: '0xmerchant',
-      // init() read the clock once, to sweep expired pending tasks
+      // init() read the clock once, to sweep expired pending tasks and task records
       createdAt: '2026-01-01T00:00:00.001Z',
       updatedAt: '2026-01-01T00:00:00.001Z',
     };

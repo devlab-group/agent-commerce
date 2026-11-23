@@ -34,6 +34,7 @@ const CORS_HEADERS = [
   'mcp-name',
   'a2a-version',
   'a2a-extensions',
+  'x-a2a-extensions',
   'api-version',
   'idempotency-key',
   'request-id',
@@ -41,9 +42,8 @@ const CORS_HEADERS = [
   'timestamp',
   'access-control-expose-headers',
 ].join(',');
-// Cross-origin JS sees only CORS-safelisted response headers unless they are
-// named here, so a browser client could read neither the challenge, the
-// settlement result, nor ACP's echoed correlation and replay headers
+// Let cross-origin browser code read payment challenges and settlement results,
+// A2A extension echoes, and ACP correlation and replay headers
 const CORS_EXPOSED_HEADERS = [
   'payment-required',
   'payment-response',
@@ -53,6 +53,8 @@ const CORS_EXPOSED_HEADERS = [
   'request-id',
   'idempotent-replayed',
   'retry-after',
+  'a2a-extensions',
+  'x-a2a-extensions',
 ].join(',');
 
 export interface AccessControlOptions {

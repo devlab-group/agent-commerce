@@ -11,6 +11,12 @@ across restarts:
   [`idempotency.redelivery`](configuration.md#resources), responses delivered
   with a client retry key, unencrypted. `retentionHours` limits reuse; a later
   claim sweep deletes expired rows (see [security.md](security.md#buyer-protection));
+- from 2.9.0, retained A2A task responses, subject to
+  [`protocols.a2a.tasks.retentionHours`](configuration.md#protocolsa2a) and
+  pending-payment expiry. Records include merchant content and x402 receipts,
+  which can name the payer address and transaction hash. The adapter does not
+  separately attach request input, payment proofs or AP2 mandates; merchant
+  content is stored without redaction (see [A2A tasks](protocols/a2a.md#tasks));
 - a record of each deprecated store file it imported.
 
 The gateway creates the file at 0600, and any missing directory at 0700, and
@@ -43,9 +49,9 @@ database, except `:memory:`. The 3.0.0 plan removes both keys.
   failures still stop startup.
 - With AP2 enabled, `reconcile` and `resolve` refuse an existing AP2 file with
   no recorded import. Run `start` first; these commands do not import it.
-- `reconcile` and `resolve` refuse receipt databases below schema v5 without
-  migrating them. This preserves access for a 2.5 gateway still using the
-  file. Back up the database and run `start` once to migrate it.
+- `reconcile` and `resolve` reject receipt databases with an older schema
+  without migrating them, so an earlier gateway can still use the file.
+  Back up the database and run `start` once to migrate it.
 - Remove the key after `doctor` confirms the file was imported and no 2.5
   gateway still uses it. Changing a recorded source path is refused.
 
@@ -62,9 +68,9 @@ available and the check passes, `start` records that result so later starts
 can omit the key. A file supplied later can still be imported.
 
 `agent-commerce doctor` opens the receipt file read-only, without migrating
-its schema or importing legacy records. If the schema is older than v5,
-such as a 2.5 database, it warns that the next start will migrate it. For each
-enabled AP2 or ACP feature, it checks legacy settings against recorded
+its schema or importing legacy records. For schemas older than v6, including
+2.5 and 2.8 databases, it warns that the next `start` will migrate the file. For
+each enabled AP2 or ACP feature, it checks legacy settings against recorded
 imports and past-use evidence. It reports recorded imports and warns when
 it cannot check whether an existing file was imported. It reports `FAIL` for
 a changed source path or an unset key or missing file that fails the
@@ -84,8 +90,9 @@ does not migrate or import records, or take a write lock on the sources.
   must exist; the command creates it at 0700. An existing directory keeps its
   permissions.
 - It writes `receipts.sqlite`, a consistent snapshot taken with
-  `VACUUM INTO`. It refuses a receipt database at a schema other than v4 (2.5)
-  or v5 (2.6). The snapshot includes the database's unencrypted stored responses.
+  `VACUUM INTO`. Supported receipt schemas are v4 (2.5), v5 (2.6 to 2.8)
+  and v6 (2.9); other versions are refused. The snapshot includes
+  unencrypted stored responses and A2A tasks.
 - For enabled AP2 or ACP, it also copies any configured legacy file that
   exists, is not `:memory:` and has no recorded import. The copies are named
   `ap2-replay.sqlite` or `acp-idempotency.sqlite`. Before the first 2.6.0
@@ -113,8 +120,10 @@ Exit 0 means the backup is complete; 1 means it is not.
 
 Restoring a backup discards local records written after its snapshot:
 
-- Later receipts, events, payment attempts, holds, idempotency claims and
-  pending tasks are lost. Transfers remain on chain.
+- Later receipts, events, payment attempts, holds, idempotency claims,
+  pending tasks and A2A tasks are lost. Transfers remain on chain. Unexpired
+  restored A2A records retain their snapshot contents and expiry; a restored
+  `TASK_STATE_WORKING` record is reported as failed.
 - A proof spent after the backup reaches the facilitator again. On EVM,
   verification rejects the spent authorization. Solana and NEAR rely on the
   chain rejecting a transaction or nonce it has already processed. If a replay
@@ -132,15 +141,17 @@ Restoring a backup discards local records written after its snapshot:
 A transaction recorded as unresolved in the backup still needs `reconcile`
 or `resolve` to establish its outcome.
 
-A 2.5 gateway refuses a receipt database migrated by 2.6.0. To roll back to
-2.5, restore a backup made before the upgrade.
+Gateways reject receipt schemas newer than they support. A 2.5 gateway
+rejects a database migrated by 2.6.0; gateways from 2.6 to 2.8 reject one
+migrated by 2.9.0. To roll back, restore a backup made before migration.
 
 ## Shutdown
 
 On the first SIGTERM or SIGINT, the gateway stops accepting connections and
 waits for in-flight requests without a time limit. It then stops protocol
-adapters, closes authorization providers and the database, and exits 0 on
-success. A shutdown error exits 1.
+adapters, waiting for A2A background work to settle, before closing
+authorization providers and the database. Successful shutdown exits 0; a
+shutdown error exits 1.
 
 A second SIGTERM or SIGINT exits immediately with status 1. An orchestrator
 can also send SIGKILL when its grace period expires, terminating the process

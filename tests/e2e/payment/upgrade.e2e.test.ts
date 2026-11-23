@@ -3,7 +3,7 @@
  *
  * Current AP2 and ACP implementations write history to their legacy replay
  * and idempotency files. Store factories seed records representing interrupted
- * requests. Dropping the tables added in schema v5
+ * requests. Dropping the tables added after schema v4
  * recreates schema v4, which is checked against the 2.5.0 fixture.
  * Upgraded gateways run `agent-commerce start` in child processes on these
  * files.
@@ -45,6 +45,7 @@ import { createAcpAdapter } from '../../../src/protocols/acp';
 import { requestFingerprint } from '../../../src/protocols/acp/idempotency/fingerprint';
 import { createAcpIdempotencyStore } from '../../../src/protocols/acp/idempotency/store';
 import { createSqliteReceiptStore } from '../../../src/storage/receipts';
+import { SCHEMA_VERSION } from '../../../src/storage/receipts/schema';
 import { dumpTables } from '../../fixtures/sqlite-dump';
 import {
   type LoopbackFacilitator,
@@ -77,7 +78,13 @@ const HOUR_MS = 3_600_000;
 const FINALITY_BLOCKS = 65;
 const IMPORTED =
   'imported deprecated store file; it stays locked against writes while this gateway runs';
-const V5_TABLES = ['authorization_holds', 'idempotency_keys', 'legacy_imports', 'pending_tasks'];
+const TABLES_AFTER_V4 = [
+  'authorization_holds',
+  'idempotency_keys',
+  'legacy_imports',
+  'pending_tasks',
+  'task_records',
+];
 const FIXTURE_V4 = readFileSync(
   new URL('../../unit/storage-receipts/fixtures/receipts-v4.sql', import.meta.url),
   'utf8',
@@ -679,7 +686,7 @@ async function record25(dir: string): Promise<History> {
   past.close();
 
   const db = new Database(receipts);
-  for (const table of V5_TABLES) db.exec(`DROP TABLE ${table}`);
+  for (const table of TABLES_AFTER_V4) db.exec(`DROP TABLE ${table}`);
   db.pragma('user_version = 4');
   db.close();
 
@@ -792,7 +799,7 @@ describe('upgrading a 2.5.0 deployment', () => {
     for (const file of added) {
       expect(file).toMatch(/^(receipts|ap2-replay|acp-idempotency)\.sqlite-(wal|shm)$/);
     }
-    expect(schemaOf(receiptsOf(live)).version).toBe(5);
+    expect(schemaOf(receiptsOf(live)).version).toBe(SCHEMA_VERSION);
   });
 
   it.each(FLOWS)(

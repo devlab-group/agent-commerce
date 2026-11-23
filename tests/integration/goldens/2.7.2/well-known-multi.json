@@ -69,14 +69,15 @@
         "agent-card",
         "jsonrpc",
         "SendMessage",
-        "x402-extension"
-      ],
-      "status": "experimental",
-      "unsupported": [
-        "SendStreamingMessage",
         "GetTask",
         "ListTasks",
         "CancelTask",
+        "returnImmediately",
+        "x402-extension"
+      ],
+      "status": "stable",
+      "unsupported": [
+        "SendStreamingMessage",
         "SubscribeToTask",
         "CreateTaskPushNotificationConfig",
         "GetTaskPushNotificationConfig",
@@ -86,10 +87,14 @@
         "HTTP+JSON/REST binding",
         "gRPC binding",
         "SSE",
-        "long-running task persistence",
+        "resuming a background task after a restart",
         "task resumption other than an x402 extension payment",
         "push notifications",
         "multi-turn conversational continuation",
+        "client-chosen contextId",
+        "listing tasks across contexts",
+        "task history",
+        "non-empty tenant",
         "text parts",
         "file and URL parts (including inline bytes)",
         "multi-part messages",
@@ -97,7 +102,7 @@
         "authenticated extended agent cards",
         "A2A authentication schemes",
         "artifact types beyond Agent Commerce outcome data",
-        "x402 extension payments across gateway instances"
+        "tasks across gateway instances"
       ],
       "health": {
         "status": "pass",
@@ -259,7 +264,7 @@
     "name": "sqlite-receipt-store",
     "kind": "storage",
     "implementationVersion": "<package-version>",
-    "supportedSpec": "sqlite-schema-v5",
+    "supportedSpec": "sqlite-schema-v6",
     "capabilities": [
       "receipts",
       "events",
@@ -267,7 +272,8 @@
       "transactions",
       "idempotency-keys",
       "authorization-holds",
-      "pending-tasks"
+      "pending-tasks",
+      "task-records"
     ],
     "status": "stable"
   },

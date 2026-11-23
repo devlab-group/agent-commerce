@@ -1630,7 +1630,7 @@ describe('runDoctor: A2A', () => {
     expect(a2a?.detail).toContain('binding JSONRPC');
     expect(a2a?.detail).toContain('mount /agents/a2a');
     expect(a2a?.detail).toContain('card /.well-known/agent-card.json');
-    expect(a2a?.detail).toContain('experimental');
+    expect(a2a?.detail).toMatch(/^supported · /);
 
     const protocols = report.checks.find((c) => c.name === 'Protocols');
     expect(protocols?.detail).toContain('a2a=on (/agents/a2a)');
@@ -1653,9 +1653,66 @@ describe('runDoctor: A2A', () => {
     const unsupported = report.checks.find((c) => c.name === 'A2A unsupported');
     expect(unsupported?.status).toBe('INFO');
     expect(unsupported?.detail).toBe(A2A_UNSUPPORTED.join(', '));
-    for (const operation of ['SendStreamingMessage', 'GetTask', 'CancelTask', 'gRPC binding']) {
+    for (const operation of ['SendStreamingMessage', 'SubscribeToTask', 'gRPC binding']) {
       expect(unsupported?.detail).toContain(operation);
     }
+    // Served from stored tasks, which leaves them off the list
+    const names = unsupported?.detail?.split(', ') ?? [];
+    for (const served of ['GetTask', 'ListTasks', 'CancelTask']) {
+      expect(names).not.toContain(served);
+    }
+  });
+});
+
+describe('runDoctor: A2A transport', () => {
+  async function transport(publicBaseUrl: string, a2aEnabled = true) {
+    const base = makeGatewayConfig();
+    const report = await runDoctor(
+      { gatewayUrl: GATEWAY },
+      {
+        fetchImpl: healthyFetch(),
+        loadConfig: async () => ({
+          ...base,
+          merchant: { ...base.merchant, publicBaseUrl },
+          protocols: { ...base.protocols, a2a: { enabled: a2aEnabled, mountPath: '/a2a' } },
+        }),
+        createStore: () => makeFakeReceiptStore(),
+      },
+    );
+    return { report, check: report.checks.find((c) => c.name === 'A2A transport') };
+  }
+
+  it.each([
+    ['a public hostname', 'http://api.example.com', 'api.example.com'],
+    ['a private address', 'http://10.0.0.5:8080', '10.0.0.5'],
+    ['a public IPv6 address', 'http://[2001:db8::1]:8080', '2001:db8::1'],
+  ])('warns when the base URL is http:// on %s', async (_label, url, host) => {
+    const { report, check } = await transport(url);
+
+    expect(check).toEqual({
+      name: 'A2A transport',
+      status: 'WARN',
+      detail: `merchant.publicBaseUrl uses http:// on ${host}, which is not a loopback host: the Agent Card publishes an unencrypted endpoint, and A2A requires encryption in production (spec section 7.1). Serve the gateway at an https:// URL.`,
+    });
+    // A transport warning alone does not fail the command
+    expect(report.exitCode).toBe(0);
+  });
+
+  it.each([
+    'http://localhost:8080',
+    'http://app.localhost:8080',
+    'http://127.0.0.1:8080',
+    'http://127.8.9.10',
+    'http://[::1]:8080',
+    'https://api.example.com',
+    // Config loading already warns about malformed URLs
+    'not a url',
+  ])('does not warn for %s', async (url) => {
+    expect((await transport(url)).check).toBeUndefined();
+  });
+
+  it('does not warn when A2A is disabled', async () => {
+    expect((await transport('http://api.example.com', false)).check).toBeUndefined();
   });
 });
 

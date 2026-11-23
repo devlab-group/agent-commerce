@@ -1,0 +1,71 @@
+{
+  "name": "Golden Store",
+  "description": "Agent Commerce Gateway: canonical commerce resources exposed as A2A skills. Call a skill by sending one data part {\"resource\": \"<skill id>\", \"input\": {...}} with media type application/json. Each skill has an example; input schemas are at https://gateway.example/api/resources. For paid skills, retry with a payment proof in \"input._payment\".",
+  "version": "<package-version>",
+  "supportedInterfaces": [
+    {
+      "url": "https://gateway.example/a2a",
+      "protocolBinding": "JSONRPC",
+      "protocolVersion": "1.0"
+    }
+  ],
+  "capabilities": {
+    "streaming": false,
+    "pushNotifications": false,
+    "extendedAgentCard": false,
+    "extensions": [
+      {
+        "uri": "https://github.com/google-a2a/a2a-x402/v0.1",
+        "description": "x402 payments: input-required tasks carrying x402 v2 documents.",
+        "required": false,
+        "params": {
+          "x402Version": 2
+        }
+      }
+    ]
+  },
+  "defaultInputModes": [
+    "application/json"
+  ],
+  "defaultOutputModes": [
+    "application/json"
+  ],
+  "skills": [
+    {
+      "id": "market_report",
+      "name": "Market Report",
+      "description": "Latest market analysis for a symbol. Costs 0.01 USDC per call.",
+      "tags": [
+        "agent-commerce",
+        "paid"
+      ],
+      "examples": [
+        "{\"resource\":\"market_report\",\"input\":{\"symbol\":\"<symbol>\"}}"
+      ],
+      "inputModes": [
+        "application/json"
+      ],
+      "outputModes": [
+        "application/json"
+      ]
+    },
+    {
+      "id": "weather_free",
+      "name": "Free Weather",
+      "description": "Free Weather",
+      "tags": [
+        "agent-commerce",
+        "free"
+      ],
+      "examples": [
+        "{\"resource\":\"weather_free\",\"input\":{\"city\":\"<city>\"}}"
+      ],
+      "inputModes": [
+        "application/json"
+      ],
+      "outputModes": [
+        "application/json"
+      ]
+    }
+  ]
+}

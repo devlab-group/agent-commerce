@@ -5,7 +5,7 @@ import { isCommerceError } from '../../../core';
 import { DEFAULT_RECONCILE_MIN_AGE_MS } from '../../../core/execution/reconcile';
 import {
   type LegacySource,
-  readMissingLegacyImports,
+  readLegacyImportState,
   type SqliteLegacyImport,
   type SqliteReceiptStoreSummary,
 } from '../../../storage/receipts';
@@ -220,8 +220,8 @@ export async function storageChecks(
   } catch (err) {
     const refused = refusedSchema(err);
     if (refused !== undefined && refused.schemaVersion < refused.expected) {
-      // Imports begin at schema v5, so an older schema has none recorded
-      const missing = readMissingLegacyImports(path);
+      // Read v5 import records without migrating the database; v4 has no import table
+      const legacy = readLegacyImportState(path);
       return {
         checks: [
           {
@@ -230,7 +230,7 @@ export async function storageChecks(
             detail: `sqlite schema v${refused.schemaVersion}; the next start migrates it to v${refused.expected}, which earlier versions cannot open. Run agent-commerce backup first to keep a copy they can`,
           },
         ],
-        legacy: missing !== undefined ? { imports: [], missing } : undefined,
+        legacy,
       };
     }
     checks.push({

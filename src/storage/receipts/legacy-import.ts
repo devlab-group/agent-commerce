@@ -12,6 +12,7 @@ import { resolve } from 'node:path';
 import Database from 'better-sqlite3';
 import { type Clock, CommerceError, type Logger, toCommerceError } from '../../core';
 import { hasTable } from './schema';
+import type { SqliteLegacyImport } from './store';
 
 /** Deprecated store files to import. Experimental: through 2.x only */
 export interface LegacyStoreOptions {
@@ -173,15 +174,34 @@ export function missingLegacyImports(db: Database.Database): LegacySource[] {
   ).map((source) => source.name);
 }
 
+/** Return recorded file imports in source order, or an empty list if their table is absent */
+export function recordedLegacyImports(db: Database.Database): SqliteLegacyImport[] {
+  if (!hasTable(db, 'legacy_imports')) return [];
+  return db
+    .prepare<[], { source: string; path: string; rows: number; imported_at: string }>(
+      'SELECT source, path, rows, imported_at FROM legacy_imports WHERE path IS NOT NULL ORDER BY source',
+    )
+    .all()
+    .map((row) => ({
+      source: row.source,
+      path: row.path,
+      rows: row.rows,
+      importedAt: row.imported_at,
+    }));
+}
+
 /**
- * Reads {@link missingLegacyImports} from an existing file opened read-only.
- * Returns undefined if opening the file or querying its tables fails.
+ * Read {@link recordedLegacyImports} and {@link missingLegacyImports} from an
+ * existing file without checking its schema version. Open the file read-only
+ * and return undefined if opening or querying it fails.
  */
-export function readMissingLegacyImports(path: string): LegacySource[] | undefined {
+export function readLegacyImportState(
+  path: string,
+): { imports: SqliteLegacyImport[]; missing: LegacySource[] } | undefined {
   let db: Database.Database | undefined;
   try {
     db = new Database(path, { readonly: true, fileMustExist: true });
-    return missingLegacyImports(db);
+    return { imports: recordedLegacyImports(db), missing: missingLegacyImports(db) };
   } catch {
     return undefined;
   } finally {

@@ -16,7 +16,9 @@ import type {
   IdGenerator,
   Logger,
   ProtocolAdapterContext,
+  ReceiptStore,
   ResourceRegistry,
+  TaskRecord,
 } from '../../../src/core';
 import { CommerceError, DELIVERY_SUMMARY_META_KEY, PAYMENT_INPUT_FIELD } from '../../../src/core';
 import { createResourceRegistry } from '../../../src/core/execution';
@@ -97,6 +99,8 @@ const delivered: ExecutionOutcome = {
   receipt,
   durationMs: 3,
 };
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 // An Error is thrown by the pipeline; anything else is returned as its outcome
 function setup(outcome: ExecutionOutcome | Error = delivered) {
@@ -214,8 +218,6 @@ describe('A2A SendMessage onto the execution pipeline', () => {
     expect(request.resourceId).toBe('market_report');
     expect(request.input).toEqual({ symbol: 'ETH' });
     expect(request.requestId).toMatch(/^a2a-/);
-    // The task id is the request id, so a task correlates with its receipt
-    expect(task(response).id).toBe(request.requestId);
     expect(task(response).status.state).toBe('TASK_STATE_COMPLETED');
   });
 
@@ -326,6 +328,17 @@ describe('A2A SendMessage onto the execution pipeline', () => {
       expect(response.error).toBeUndefined();
       expect(task(response).status.state).toBe('TASK_STATE_FAILED');
       expect(artifactData(response)['code']).toBe(error.code);
+      // The failed task is kept like any other answer
+      const read = await post(
+        adapter,
+        JSON.stringify({
+          jsonrpc: '2.0',
+          id: 'req-2',
+          method: 'GetTask',
+          params: { id: task(response).id },
+        }),
+      );
+      expect(read.body.result).toEqual(task(response));
     },
   );
 
@@ -371,6 +384,133 @@ describe('A2A adapter is not a client of anything', () => {
   });
 });
 
+describe('the task record of a blocking answer', () => {
+  const PROOF = { [PAYMENT_INPUT_FIELD]: 'base64-proof' };
+  const charged = { payment: { status: 'settled', provider: 'x402' } };
+  const paidDelivery = {
+    ...delivered,
+    payment: { status: 'settled', provider: 'x402', amount: '0.01', currency: 'USDC' },
+  } as ExecutionOutcome;
+  const fail = (code: CommerceError['code'], details?: Record<string, unknown>) =>
+    new CommerceError(code, 'refused', details ? { details } : {});
+
+  // Evictable only when nothing was charged for the answer
+  it.each([
+    ['a free delivery', true, delivered, {}],
+    ['a paid delivery', false, paidDelivery, PROOF],
+    ['a payment-required answer', true, paymentRequired, {}],
+    ['a failure without a proof', true, fail('BACKEND_ERROR'), {}],
+    ['a proof the provider rejected', true, fail('PAYMENT_INVALID'), PROOF],
+    ['a replayed proof', true, fail('PAYMENT_REPLAYED'), PROOF],
+    ['input refused before pricing', true, fail('INPUT_INVALID'), PROOF],
+    ['a refused mandate', true, fail('AUTHORIZATION_INVALID'), PROOF],
+    ['a missing mandate', true, fail('AUTHORIZATION_REQUIRED'), PROOF],
+    ['a backend failure that abandoned settlement', true, fail('BACKEND_TIMEOUT'), PROOF],
+    ['a backend failure after an upfront settlement', false, fail('BACKEND_ERROR', charged), PROOF],
+    ['a failed settlement', false, fail('PAYMENT_SETTLEMENT_FAILED'), PROOF],
+    ['a provider outage after a proof', false, fail('PAYMENT_PROVIDER_UNAVAILABLE'), PROOF],
+  ] as const)('marks %s evictable: %s', async (_label, evictable, outcome, input) => {
+    const written: TaskRecord[] = [];
+    const store = {
+      putTaskRecord: async (record: TaskRecord) => written.push(record) > 0,
+      getTaskRecord: async () => undefined,
+      listTaskRecords: async () => [],
+    } as unknown as ReceiptStore;
+    const adapter = createA2aAdapter({ store });
+    await adapter.start(setup(outcome).context);
+
+    await send(adapter, { resource: 'market_report', input });
+
+    expect(written.map((record) => record.evictable === true)).toEqual([evictable]);
+  });
+
+  it('marks an unknown resource evictable', async () => {
+    const written: TaskRecord[] = [];
+    const store = {
+      putTaskRecord: async (record: TaskRecord) => written.push(record) > 0,
+      getTaskRecord: async () => undefined,
+      listTaskRecords: async () => [],
+    } as unknown as ReceiptStore;
+    const adapter = createA2aAdapter({ store });
+    await adapter.start(setup().context);
+
+    await send(adapter, { resource: 'no_such_resource', input: PROOF });
+
+    expect(written.map((record) => record.evictable)).toEqual([true]);
+  });
+});
+
+describe('an answered task the store does not keep', () => {
+  function getTask(id: string): string {
+    return JSON.stringify({ jsonrpc: '2.0', id: 'req-2', method: 'GetTask', params: { id } });
+  }
+
+  function loggingSetup(outcome: ExecutionOutcome = delivered) {
+    const { context } = setup(outcome);
+    const warn = vi.fn();
+    const error = vi.fn();
+    const logger: Logger = { ...NOOP_LOGGER, warn, error };
+    return { context: { ...context, logger }, warn, error };
+  }
+
+  const paidDelivery: ExecutionOutcome = {
+    ...delivered,
+    payment: { status: 'settled', provider: 'x402', amount: '0.01', currency: 'USDC' },
+  } as ExecutionOutcome;
+
+  it('replaces the oldest free answer with a new one when the store is full', async () => {
+    const adapter = createA2aAdapter({ tasks: { maxRetained: 1 } });
+    await adapter.start(setup().context);
+    const first = task(await send(adapter, { resource: 'market_report', input: {} }));
+
+    const second = task(await send(adapter, { resource: 'market_report', input: {} }));
+
+    expect((await post(adapter, getTask(first.id))).body.error?.code).toBe(-32001);
+    expect((await post(adapter, getTask(second.id))).body.result).toEqual(second);
+  });
+
+  it('is returned but not kept when paid answers fill the store, and the gateway logs a warning', async () => {
+    const { context, warn } = loggingSetup(paidDelivery);
+    const adapter = createA2aAdapter({ tasks: { maxRetained: 1 } });
+    await adapter.start(context);
+    const kept = task(await send(adapter, { resource: 'market_report', input: {} }));
+
+    const refused = task(await send(adapter, { resource: 'market_report', input: {} }));
+
+    expect(refused.status.state).toBe('TASK_STATE_COMPLETED');
+    expect((await post(adapter, getTask(refused.id))).body.error?.code).toBe(-32001);
+    expect((await post(adapter, getTask(kept.id))).body.result).toEqual(kept);
+    expect(warn).toHaveBeenCalledWith(
+      { state: 'TASK_STATE_COMPLETED' },
+      'a2a adapter: task not retained: the task store is full',
+    );
+  });
+
+  it('is returned but not kept when the store write fails, and the gateway logs an error', async () => {
+    const { context, error } = loggingSetup();
+    const store = {
+      putTaskRecord: async () => {
+        throw new CommerceError('STORAGE_ERROR', 'disk full');
+      },
+      getTaskRecord: async () => undefined,
+      listTaskRecords: async () => [],
+    } as unknown as ReceiptStore;
+    const adapter = createA2aAdapter({ store });
+    await adapter.start(context);
+
+    const answered = task(await send(adapter, { resource: 'market_report', input: {} }));
+
+    expect(answered.status.state).toBe('TASK_STATE_COMPLETED');
+    expect(error).toHaveBeenCalledWith(
+      expect.objectContaining({ state: 'TASK_STATE_COMPLETED' }),
+      'a2a adapter: task not retained',
+    );
+    // No task or context id reaches the log
+    expect(JSON.stringify(error.mock.calls)).not.toContain(answered.id);
+    expect(JSON.stringify(error.mock.calls)).not.toContain(answered.contextId);
+  });
+});
+
 describe('A2A terminal task representation', () => {
   it('returns a completed task whose artifact carries the canonical body', async () => {
     const { context } = setup();
@@ -380,8 +520,11 @@ describe('A2A terminal task representation', () => {
     const response = await send(adapter, { resource: 'market_report', input: { symbol: 'ETH' } });
     const result = task(response);
 
-    expect(result.id).toMatch(/^a2a-/);
-    expect(result.contextId).toMatch(/^a2a-ctx-/);
+    // The task and context ids are access keys: random UUIDs, never the
+    // predictable `IdGenerator` sequence this context uses
+    expect(result.id).toMatch(UUID);
+    expect(result.contextId).toMatch(UUID);
+    expect(result.contextId).not.toBe(result.id);
     expect(result.status).toEqual({
       state: 'TASK_STATE_COMPLETED',
       timestamp: '2026-01-01T00:00:00.000Z',

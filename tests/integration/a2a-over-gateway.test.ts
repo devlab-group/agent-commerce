@@ -217,12 +217,13 @@ describe('A2A JSON-RPC transport over the real gateway', () => {
 
   it.each([
     ['a known but unsupported operation', 'SendStreamingMessage', -32004],
-    ['a task lookup, which finds no retained task', 'GetTask', -32001],
-    ['a task cancellation', 'CancelTask', -32001],
+    ['a lookup of an unknown task', 'GetTask', -32001],
+    ['a cancellation of an unknown task', 'CancelTask', -32001],
     ['a completely unknown method', 'DoSomething', -32601],
   ])('distinguishes %s', async (_label, method, code) => {
     const gw = await startGateway();
-    const { body } = await rpc(gw, { jsonrpc: '2.0', id: 1, method, params: {} });
+    // GetTask and CancelTask require an id
+    const { body } = await rpc(gw, { jsonrpc: '2.0', id: 1, method, params: { id: 'task-1' } });
     expect(body.error?.code).toBe(code);
   });
 
@@ -329,7 +330,7 @@ describe('A2A in gateway discovery', () => {
     }>();
 
     const a2a = doc.adapters.find((adapter) => adapter.name === 'a2a');
-    expect(a2a?.status).toBe('experimental');
+    expect(a2a?.status).toBe('stable');
     expect(a2a?.supportedSpec).toBe('1.0.1');
     expect(a2a?.unsupported).toContain('SendStreamingMessage');
     expect(a2a?.health.status).toBe('pass');

@@ -174,6 +174,13 @@ const ProtocolsSchema = z
       .object({
         enabled: BooleanOrString,
         mountPath: MountPathSchema.optional(),
+        tasks: z
+          .object({
+            retentionHours: NumberOrString.optional(),
+            maxRetained: NumberOrString.optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),

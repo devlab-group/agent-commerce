@@ -213,6 +213,28 @@ const MIGRATIONS: readonly Migration[] = [
       `);
     },
   },
+  {
+    version: 6,
+    up(db) {
+      // Add task records without altering existing tables. A 2.8.x gateway
+      // rejects v6 at init(), which requires v5.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS task_records (
+          id             TEXT PRIMARY KEY,
+          protocol       TEXT NOT NULL,
+          group_id       TEXT NOT NULL,
+          state          TEXT NOT NULL,
+          updated_at     TEXT NOT NULL,
+          document_json  TEXT NOT NULL,
+          expires_at     TEXT NOT NULL,
+          evictable      INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_task_records_group ON task_records(protocol, group_id, updated_at);
+        CREATE INDEX IF NOT EXISTS idx_task_records_expires_at ON task_records(expires_at);
+        CREATE INDEX IF NOT EXISTS idx_task_records_evictable ON task_records(updated_at, id) WHERE evictable = 1;
+      `);
+    },
+  },
 ];
 
 /** Target schema version: the version of the last migration */

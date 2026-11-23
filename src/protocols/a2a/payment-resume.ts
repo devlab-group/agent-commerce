@@ -3,10 +3,24 @@ import type { AuthorizationSubmission, CanonicalRequest, ProtocolAdapterContext 
 import { CommerceError, toCommerceError } from '../../core';
 import { toLogInfo } from '../../core/errors';
 import { isRecord } from '../../core/is-record';
+import type { BackgroundRuns } from './background';
 import { A2A_TASK_STATE_FAILED } from './constants';
-import { JSONRPC_INVALID_PARAMS, type JsonRpcId, jsonRpcError, jsonRpcResult } from './jsonrpc';
-import { userRoleProblem } from './message-mapping';
-import { completedTask, failedTask, type TaskIdentity, withStatusMessage } from './task-mapping';
+import {
+  JSONRPC_INTERNAL_ERROR,
+  JSONRPC_INVALID_PARAMS,
+  type JsonRpcId,
+  jsonRpcError,
+  jsonRpcResult,
+  retryInfo,
+} from './jsonrpc';
+import {
+  chargedNothing,
+  completedTask,
+  failedTask,
+  type TaskIdentity,
+  withStatusMessage,
+  workingTask,
+} from './task-mapping';
 import type { A2aTask } from './types';
 import {
   type PendingPayment,
@@ -16,6 +30,7 @@ import {
   paymentRejectedMetadata,
   readFollowUpAuthorization,
   readPaymentSubmission,
+  X402_PAYMENT_ERROR_KEY,
   X402_PAYMENT_PAYLOAD_KEY,
   X402_PAYMENT_STATUS_KEY,
 } from './x402-extension';
@@ -25,31 +40,49 @@ export function taskResult(id: JsonRpcId, task: A2aTask): Record<string, unknown
   return jsonRpcResult(id, { task });
 }
 
+/** Adapter state used to process a payment follow-up */
+export interface PaymentResume {
+  readonly context: ProtocolAdapterContext;
+  readonly pendingPayments: PendingPayments;
+  /**
+   * Retain the response with its eviction flag. Log write failures and
+   * return false instead of throwing.
+   */
+  readonly keep: (task: A2aTask, evictable: boolean) => Promise<boolean>;
+  /** Active task ids, including blocking payments and background runs */
+  readonly running: Set<string>;
+  readonly background: BackgroundRuns;
+  /** Store a working response; return an error if the write fails */
+  readonly recordWorking: (task: A2aTask) => Promise<CommerceError | undefined>;
+}
+
+/** Refusal message when no background slot is free */
+export const BACKGROUND_FULL = 'Too many tasks are running in the background; retry shortly.';
+
+// Seconds a payment refused for want of a background slot waits before a resend
+const BACKGROUND_RETRY_SECONDS = 1;
+
 /**
- * A message on a task waiting for an x402 extension payment, recognized by
- * its `taskId` whether or not the header activated the extension again. Any
- * other task id falls through to `parseInvocation`, which answers TaskNotFoundError.
+ * Resume an unpaid x402 task identified by `taskId`, even without the extension
+ * header. Return undefined if the message names no pending task or loses the
+ * atomic take to another call. Call after `readMessage` validates the message.
+ * For a payment submission with `returnImmediately`, return a working task
+ * without waiting for the payment result.
  */
 export async function resumePayment(
-  context: ProtocolAdapterContext | undefined,
-  pendingPayments: PendingPayments | undefined,
+  resume: PaymentResume,
   id: JsonRpcId,
   params: unknown,
+  returnImmediately: boolean,
 ): Promise<Record<string, unknown> | undefined> {
+  const { context, pendingPayments } = resume;
   const message = isRecord(params) ? params['message'] : undefined;
   const taskId = isRecord(message) ? message['taskId'] : undefined;
-  if (context === undefined || typeof taskId !== 'string') return undefined;
-  const pending = await pendingPayments?.get(taskId);
+  if (typeof taskId !== 'string') return undefined;
+  const pending = await pendingPayments.get(taskId);
   if (pending === undefined) return undefined;
 
-  const messageId = isRecord(message) ? message['messageId'] : undefined;
-  if (typeof messageId !== 'string' || messageId.length === 0) {
-    return jsonRpcError(id, JSONRPC_INVALID_PARAMS, 'Message must carry a non-empty "messageId".');
-  }
-  // Apply the same role check as a new purchase
-  const roleProblem = userRoleProblem(isRecord(message) ? message['role'] : undefined);
-  if (roleProblem !== undefined) return jsonRpcError(id, JSONRPC_INVALID_PARAMS, roleProblem);
-  // Reject a mismatched context without consuming the pending task.
+  // Reject a mismatched context without consuming the pending task
   const contextId = isRecord(message) ? message['contextId'] : undefined;
   if (contextId !== undefined && contextId !== pending.contextId) {
     return jsonRpcError(id, JSONRPC_INVALID_PARAMS, 'Message "contextId" does not match the task.');
@@ -73,51 +106,98 @@ export async function resumePayment(
       return jsonRpcError(id, JSONRPC_INVALID_PARAMS, toCommerceError(err).message);
     }
   }
-  // Take only after message validation and before execution. The earlier
-  // read did not claim the task; a competing message that loses this take
-  // follows the unknown-task path.
-  const taken = await pendingPayments?.take(taskId);
+  // Reserve capacity before taking the purchase so a full runner leaves it
+  // payable. Refuse with a system error, not a failed task: a terminal state
+  // would tell the client the task takes no more messages (A2A 1.0.1
+  // sections 3.1.1 and 3.3.2).
+  const immediate = returnImmediately && submission.kind === 'submitted';
+  if (immediate && !resume.background.reserve()) {
+    return jsonRpcError(id, JSONRPC_INTERNAL_ERROR, BACKGROUND_FULL, [
+      retryInfo(BACKGROUND_RETRY_SECONDS),
+    ]);
+  }
+  // The earlier read did not claim the purchase. Take it after validation,
+  // before execution; if another call won, use the retained task response.
+  let taken: PendingPayment | undefined;
+  try {
+    taken = await pendingPayments.take(taskId);
+  } finally {
+    // An empty or failed take must release the reserved background slot
+    if (immediate && taken === undefined) resume.background.release();
+  }
   if (taken === undefined) return undefined;
   const authorization = taken.authorization ?? followUp;
-  const statusMessageId = context.ids.next('a2a-msg');
-  const identity: TaskIdentity = {
+
+  if (submission.kind === 'rejected') {
+    const timestamp = context.clock.nowIso();
+    const declined = withStatusMessage(
+      {
+        id: taskId,
+        contextId: taken.contextId,
+        status: { state: A2A_TASK_STATE_FAILED, timestamp },
+        artifacts: [],
+      },
+      'Payment was declined.',
+      context.ids.next('a2a-msg'),
+      paymentRejectedMetadata(),
+    );
+    await resume.keep(declined, true);
+    return taskResult(id, declined);
+  }
+
+  const ids = {
     taskId,
     contextId: taken.contextId,
     artifactId: context.ids.next('a2a-artifact'),
-    statusMessageId,
-    timestamp: context.clock.nowIso(),
+    statusMessageId: context.ids.next('a2a-msg'),
   };
-
-  if (submission.kind === 'rejected') {
-    const declined: A2aTask = {
-      id: taskId,
-      contextId: taken.contextId,
-      status: { state: A2A_TASK_STATE_FAILED, timestamp: identity.timestamp },
-      artifacts: [],
-    };
-    return taskResult(
-      id,
-      withStatusMessage(
-        declined,
-        'Payment was declined.',
-        statusMessageId,
-        paymentRejectedMetadata(),
-      ),
-    );
-  }
-  return taskResult(
-    id,
-    await payPending(
-      context,
-      { ...taken, ...(authorization !== undefined ? { authorization } : {}) },
-      submission.payload,
-      identity,
-    ),
+  // Mark the payload received and tag the status message for the extension
+  // response headers (a2a-x402 v0.1 sections 6 and 7)
+  const working = withStatusMessage(
+    workingTask(taskId, taken.contextId, context.clock.nowIso()),
+    'Payment received; processing it.',
+    context.ids.next('a2a-msg'),
+    { [X402_PAYMENT_STATUS_KEY]: 'payment-submitted' },
   );
+  // Add the running entry before publishing the working record
+  resume.running.add(taskId);
+  if (!immediate) {
+    await resume.keep(working, false);
+  } else {
+    // Require a working record before background payment processing. The
+    // purchase has been taken, but payment verification has not started.
+    const refused = await resume.recordWorking(working);
+    if (refused !== undefined) {
+      resume.running.delete(taskId);
+      resume.background.release();
+      // Verification has not started, so this failure is uncharged and evictable
+      const failed = failedTask(refused, { ...ids, timestamp: context.clock.nowIso() });
+      await resume.keep(failed, true);
+      return taskResult(id, failed);
+    }
+  }
+  const pay = async (): Promise<A2aTask> => {
+    try {
+      const { task: paid, evictable } = await payPending(
+        context,
+        { ...taken, ...(authorization !== undefined ? { authorization } : {}) },
+        submission.payload,
+        ids,
+      );
+      await resume.keep(paid, evictable);
+      return paid;
+    } finally {
+      resume.running.delete(taskId);
+    }
+  };
+  if (!immediate) return taskResult(id, await pay());
+  resume.background.start(pay);
+  return taskResult(id, working);
 }
 
-// The follow-up consumes the task before the pipeline runs; resends get TaskNotFoundError.
-// Suppress its retry delay so the client starts a new task with the same payment id.
+// The pending purchase is consumed before execution; resends to a retained
+// task get UnsupportedOperationError. Omit the retry delay so the client can
+// start a new task with the same payment id.
 function withoutRetryDelay(error: CommerceError): CommerceError {
   if (error.details?.['reason'] !== 'payment_identifier_in_flight') return error;
   const { retryAfterSeconds: _delay, ...details } = error.details;
@@ -130,13 +210,14 @@ function withoutRetryDelay(error: CommerceError): CommerceError {
   });
 }
 
-// The pending purchase, now with the x402 `PaymentPayload` as its proof
+// Execute the submitted x402 PaymentPayload and timestamp the task when
+// processing ends. Mark it evictable only when this request charged nothing.
 async function payPending(
   context: ProtocolAdapterContext,
   pending: PendingPayment,
   payload: Record<string, unknown>,
-  identity: TaskIdentity,
-): Promise<A2aTask> {
+  ids: Omit<TaskIdentity, 'timestamp'>,
+): Promise<{ readonly task: A2aTask; readonly evictable: boolean }> {
   const requestId = context.ids.next('a2a');
   const request: CanonicalRequest = {
     requestId,
@@ -155,12 +236,14 @@ async function payPending(
   try {
     const outcome = await context.pipeline.execute(request);
     if (outcome.kind === 'delivered' && outcome.payment !== undefined) {
-      return withStatusMessage(
+      const identity = { ...ids, timestamp: context.clock.nowIso() };
+      const task = withStatusMessage(
         completedTask(outcome, identity),
         'Payment settled.',
         identity.statusMessageId,
         paymentCompletedMetadata(outcome.payment),
       );
+      return { task, evictable: false };
     }
     // A proof was sent, so neither a free delivery nor a new challenge is a
     // payment this task can report
@@ -172,16 +255,24 @@ async function payPending(
       'a2a adapter: x402 extension payment failed',
     );
   }
+  const identity = { ...ids, timestamp: context.clock.nowIso() };
   const metadata = paymentFailureMetadata(error, pending.network);
   const reason = error.details?.['reason'];
-  let text = 'Payment failed.';
+  let text: string;
   if (metadata[X402_PAYMENT_STATUS_KEY] === 'payment-completed') {
     text = 'Payment settled, but the resource could not be delivered.';
   } else if (typeof reason === 'string' && reason.startsWith('payment_identifier_')) {
     // Retry-key refusals make no new charge; show the specific error message
     text = error.message;
-  } else if (!error.code.startsWith('PAYMENT_')) {
-    text = 'The resource could not be delivered.';
+  } else {
+    // Show the metadata's failure reason in the status text (a2a-x402 v0.1 §8)
+    const outcome = error.code.startsWith('PAYMENT_')
+      ? 'Payment failed'
+      : 'The resource could not be delivered';
+    text = `${outcome}: ${String(metadata[X402_PAYMENT_ERROR_KEY])}.`;
   }
-  return withStatusMessage(failedTask(error, identity), text, identity.statusMessageId, metadata);
+  return {
+    task: withStatusMessage(failedTask(error, identity), text, identity.statusMessageId, metadata),
+    evictable: chargedNothing(error, true),
+  };
 }

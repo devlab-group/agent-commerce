@@ -307,6 +307,30 @@ persistence must not fail the commerce flow.
   - `AdapterHealthComponent.undetermined` uses `'unreachable'` for a probe
     that received no response. When set, `status` does not describe the
     target's health. Without the field, `status` retains its 2.7 meaning.
+- 2.9.0 adds the optional `ReceiptStore` method group `task_records` to
+  `STORE_METHOD_GROUPS`. Existing 2.8 stores need no changes. A store must
+  implement the whole group or omit it. The SQLite store implements it in
+  schema v6.
+  - `putTaskRecord`, `getTaskRecord` and `listTaskRecords` store and read
+    `TaskRecord` values. A record holds the task response last returned by its
+    adapter for later reads. It does not make the task payable; payment
+    continuation uses separate pending-task state.
+  - `putTaskRecord` deletes expired records before storing a record. It
+    replaces an existing ID even at capacity. For a new ID, it evicts eligible
+    records by `updatedAt` and then `id`, both ascending, until the count is
+    below `maxRecords`. If too few can be evicted, it returns `false` without
+    storing the new record.
+  - `evictable: true` allows capacity eviction of an uncharged response.
+    Records with the flag omitted or set to `false` are protected from capacity
+    eviction. A replacement uses the new record's flag.
+  - `listTaskRecords` returns all unexpired records matching `protocol` and
+    `groupId`, without pagination. Records are ordered by `updatedAt` and then
+    `id`, both descending.
+  - `groupId` is a protocol-neutral grouping key. `document` holds the task as
+    the adapter returns it and must not contain payment proofs or
+    authorization presentations.
+  - These methods and the type are experimental and may change in a minor
+    release.
 
 ### Protocols and gateway
 
@@ -502,6 +526,17 @@ persistence must not fail the commerce flow.
   `agent-commerce export mcp-registry` and `doctor --registry` use the metadata.
   `runGateway` passes `name` and `version` to the MCP adapter as `serverName`
   and `serverVersion`; an adapter built without them keeps its defaults.
+- 2.9.0: `GatewayConfig.protocols.a2a.tasks` contains only limits set in
+  `protocols.a2a.tasks`. The block and individual keys stay absent when
+  omitted. Config loading requires integers from 1 to 8760 for `retentionHours`
+  and from 1 to 1,000,000 for `maxRetained`.
+  - `A2aAdapterOptions.tasks` accepts the same limits; `runGateway` passes the
+    config block. Omitted `retentionHours` defaults to 24; omitted `maxRetained`
+    defaults to 1000. The adapter constructor throws `CONFIG_INVALID` for
+    non-integer or out-of-range values, naming `tasks.retentionHours` or
+    `tasks.maxRetained`.
+  - The adapter retains task responses in a supplied store with the complete
+    `task_records` group, or in process memory otherwise.
 
 ### Authorization and AP2
 
@@ -619,9 +654,9 @@ export function createSqliteReceiptStore(
 ): SqliteReceiptStore;
 ```
 
-Creating the store upgrades older files to schema v5. `init()` rejects any
-version other than v5, just as a 2.5.x store rejects a v5 file because it
-requires v4. To downgrade below 2.6.0, restore a copy made before the upgrade.
+Creating the store migrates older files to schema v6. `init()` requires v6.
+A 2.8.x store requires v5 and rejects v6 files. To downgrade below 2.9.0,
+restore a copy made before migration.
 
 The store removes the top-level `_payment` and `_authorization` fields from
 pending task input before writing it. Hold `metadata` values under
@@ -1064,7 +1099,11 @@ export interface GatewayConfig {
         readonly description: string;
       };
     };
-    readonly a2a: { readonly enabled: boolean; readonly mountPath: string };
+    readonly a2a: {
+      readonly enabled: boolean;
+      readonly mountPath: string;
+      readonly tasks?: { readonly retentionHours?: number; readonly maxRetained?: number };
+    };
     readonly acp: AcpProtocolConfig;
   };
   readonly resources: readonly CommerceResource[];

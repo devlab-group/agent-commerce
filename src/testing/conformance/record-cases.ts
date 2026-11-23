@@ -1,11 +1,12 @@
-// Conformance cases for the 2.6.0 records: idempotency claims, authorization
-// holds and pending tasks
+// Conformance cases for optional store records: idempotency claims,
+// authorization holds, pending tasks and task records
 import assert from 'node:assert/strict';
 import type {
   AuthorizationHoldReservation,
   IdempotencyScope,
   PendingTask,
   ReceiptStore,
+  TaskRecord,
 } from '../../core';
 import { PAYMENT_KEY_ENDPOINT_PREFIX } from '../../core/domain/store-records';
 import { STORE_METHOD_GROUPS, type StoreGroupMethods } from '../../core/store-method-groups';
@@ -15,6 +16,7 @@ const CLAIMS = STORE_METHOD_GROUPS.idempotency_claims;
 const CLAIM_READS = [...CLAIMS, ...STORE_METHOD_GROUPS.response_redelivery];
 const HOLDS = STORE_METHOD_GROUPS.authorization_holds;
 const TASKS = STORE_METHOD_GROUPS.pending_tasks;
+const RECORDS = STORE_METHOD_GROUPS.task_records;
 
 const MINUTE = 60_000;
 const DAY = 24 * 60 * MINUTE;
@@ -24,10 +26,12 @@ type Claims = StoreGroupMethods<'idempotency_claims'>;
 type ClaimReads = Claims & StoreGroupMethods<'response_redelivery'>;
 type Holds = StoreGroupMethods<'authorization_holds'>;
 type Tasks = StoreGroupMethods<'pending_tasks'>;
+type Records = StoreGroupMethods<'task_records'>;
 const claims = (store: ReceiptStore) => store as ReceiptStore & Claims;
 const claimReads = (store: ReceiptStore) => store as ReceiptStore & ClaimReads;
 const holds = (store: ReceiptStore) => store as ReceiptStore & Holds;
 const tasks = (store: ReceiptStore) => store as ReceiptStore & Tasks;
+const records = (store: ReceiptStore) => store as ReceiptStore & Records;
 
 const scope = (key: string, endpoint = '/acp/checkout_sessions'): IdempotencyScope => ({
   deployment: 'https://gateway.example',
@@ -52,6 +56,17 @@ const task = (id: string, fields: Partial<PendingTask> = {}): PendingTask => ({
   protocol: 'a2a',
   resourceId: 'resource.report',
   input: { symbol: 'ETH' },
+  expiresAt: isoAt(10 * MINUTE),
+  ...fields,
+});
+
+const record = (id: string, fields: Partial<TaskRecord> = {}): TaskRecord => ({
+  id,
+  protocol: 'a2a',
+  groupId: 'group-1',
+  state: 'TASK_STATE_COMPLETED',
+  updatedAt: isoAt(0),
+  document: { id, status: { state: 'TASK_STATE_COMPLETED' }, artifacts: [{ data: { ok: true } }] },
   expiresAt: isoAt(10 * MINUTE),
   ...fields,
 });
@@ -732,4 +747,195 @@ const TASK_CASES: readonly CaseSpec[] = [
   },
 ];
 
-export const RECORD_CASES: readonly CaseSpec[] = [...CLAIM_CASES, ...HOLD_CASES, ...TASK_CASES];
+const ids = (list: readonly TaskRecord[]): string[] => list.map((r) => r.id);
+
+const TASK_RECORD_CASES: readonly CaseSpec[] = [
+  {
+    name: 'a task record reads back by id and lists in its group',
+    uses: RECORDS,
+    async run({ store }) {
+      const s = records(store);
+      const stored = record('rec1');
+      assert.equal(await s.putTaskRecord(stored, { maxRecords: 10 }), true);
+      assert.deepEqual(await s.getTaskRecord('rec1'), stored);
+      assert.deepEqual(await s.listTaskRecords({ protocol: 'a2a', groupId: 'group-1' }), [stored]);
+      assert.equal(await s.getTaskRecord('rec2'), undefined);
+    },
+  },
+  {
+    name: 'a task record with the same id replaces the earlier one, even at maxRecords',
+    uses: RECORDS,
+    async run({ store }) {
+      const s = records(store);
+      assert.equal(
+        await s.putTaskRecord(record('rec1', { state: 'TASK_STATE_WORKING' }), { maxRecords: 1 }),
+        true,
+      );
+      const finished = record('rec1', { updatedAt: isoAt(MINUTE) });
+      assert.equal(await s.putTaskRecord(finished, { maxRecords: 1 }), true);
+      assert.deepEqual(await s.getTaskRecord('rec1'), finished);
+      assert.equal(await s.putTaskRecord(record('rec2'), { maxRecords: 1 }), false);
+      assert.deepEqual(ids(await s.listTaskRecords({ protocol: 'a2a', groupId: 'group-1' })), [
+        'rec1',
+      ]);
+    },
+  },
+  {
+    name: 'an expired task record cannot be read or listed',
+    uses: RECORDS,
+    async run({ store, clock }) {
+      const s = records(store);
+      const stored = record('rec1', { expiresAt: isoAt(MINUTE) });
+      await s.putTaskRecord(stored, { maxRecords: 10 });
+      clock.advance(MINUTE - 1);
+      assert.deepEqual(await s.getTaskRecord('rec1'), stored);
+      clock.advance(2);
+      assert.equal(await s.getTaskRecord('rec1'), undefined);
+      assert.deepEqual(await s.listTaskRecords({ protocol: 'a2a', groupId: 'group-1' }), []);
+    },
+  },
+  {
+    name: 'maxRecords refuses a new task record while that many are unexpired',
+    uses: RECORDS,
+    async run({ store, clock }) {
+      const s = records(store);
+      const soon = { expiresAt: isoAt(MINUTE) };
+      assert.equal(await s.putTaskRecord(record('a', soon), { maxRecords: 2 }), true);
+      assert.equal(await s.putTaskRecord(record('b', soon), { maxRecords: 2 }), true);
+      assert.equal(await s.putTaskRecord(record('c'), { maxRecords: 2 }), false);
+      assert.equal(await s.getTaskRecord('c'), undefined);
+
+      // Expired records free capacity for new records
+      clock.advance(MINUTE + 1);
+      assert.equal(await s.putTaskRecord(record('c'), { maxRecords: 2 }), true);
+      assert.equal(await s.putTaskRecord(record('d'), { maxRecords: 2 }), true);
+      assert.equal(await s.putTaskRecord(record('e'), { maxRecords: 2 }), false);
+    },
+  },
+  {
+    name: 'at maxRecords, a new task record evicts the oldest evictable one',
+    uses: RECORDS,
+    async run({ store }) {
+      const s = records(store);
+      const put = (r: TaskRecord) => s.putTaskRecord(r, { maxRecords: 3 });
+      const paid = record('paid', { updatedAt: isoAt(0) });
+      const older = record('older', { updatedAt: isoAt(1), evictable: true });
+      const newer = record('newer', { updatedAt: isoAt(2), evictable: true });
+      assert.equal(await put(paid), true);
+      assert.equal(await put(newer), true);
+      assert.equal(await put(older), true);
+      assert.deepEqual(await s.getTaskRecord('older'), older);
+
+      assert.equal(await put(record('next', { updatedAt: isoAt(3) })), true);
+      assert.equal(await s.getTaskRecord('older'), undefined);
+      assert.equal(await put(record('last', { updatedAt: isoAt(4) })), true);
+      assert.equal(await s.getTaskRecord('newer'), undefined);
+      // No evictable record is left
+      assert.equal(await put(record('refused', { evictable: true })), false);
+      assert.deepEqual(ids(await s.listTaskRecords({ protocol: 'a2a', groupId: 'group-1' })), [
+        'last',
+        'next',
+        'paid',
+      ]);
+    },
+  },
+  {
+    name: 'a lower maxRecords evicts enough evictable task records for a new one to fit',
+    uses: RECORDS,
+    async run({ store }) {
+      const s = records(store);
+      for (const [i, id] of ['e1', 'e2', 'e3'].entries()) {
+        await s.putTaskRecord(record(id, { updatedAt: isoAt(i), evictable: true }), {
+          maxRecords: 10,
+        });
+      }
+      await s.putTaskRecord(record('paid', { updatedAt: isoAt(0) }), { maxRecords: 10 });
+
+      assert.equal(
+        await s.putTaskRecord(record('new', { updatedAt: isoAt(5) }), { maxRecords: 2 }),
+        true,
+      );
+      assert.deepEqual(ids(await s.listTaskRecords({ protocol: 'a2a', groupId: 'group-1' })), [
+        'new',
+        'paid',
+      ]);
+    },
+  },
+  {
+    name: 'replacing a task record sets whether it is evictable',
+    uses: RECORDS,
+    async run({ store }) {
+      const s = records(store);
+      const put = (r: TaskRecord) => s.putTaskRecord(r, { maxRecords: 2 });
+      await put(record('kept', { state: 'TASK_STATE_WORKING' }));
+      await put(record('working', { state: 'TASK_STATE_WORKING', evictable: true }));
+      await put(record('kept', { evictable: true }));
+      await put(record('working'));
+
+      assert.equal(await put(record('new')), true);
+      assert.equal(await s.getTaskRecord('kept'), undefined);
+      assert.notEqual(await s.getTaskRecord('working'), undefined);
+    },
+  },
+  {
+    name: 'task records list one protocol and group, by updatedAt then id, both descending',
+    uses: RECORDS,
+    async run({ store }) {
+      const s = records(store);
+      const put = (r: TaskRecord) => s.putTaskRecord(r, { maxRecords: 10 });
+      await put(record('r1', { updatedAt: isoAt(1) }));
+      await put(record('r2', { updatedAt: isoAt(3) }));
+      await put(record('r3', { updatedAt: isoAt(3) }));
+      await put(record('r4', { updatedAt: isoAt(2), groupId: 'group-2' }));
+      await put(record('r5', { updatedAt: isoAt(2), protocol: 'mcp' }));
+      assert.deepEqual(ids(await s.listTaskRecords({ protocol: 'a2a', groupId: 'group-1' })), [
+        'r3',
+        'r2',
+        'r1',
+      ]);
+      assert.deepEqual(ids(await s.listTaskRecords({ protocol: 'a2a', groupId: 'group-2' })), [
+        'r4',
+      ]);
+      assert.deepEqual(ids(await s.listTaskRecords({ protocol: 'mcp', groupId: 'group-1' })), [
+        'r5',
+      ]);
+      assert.deepEqual(await s.listTaskRecords({ protocol: 'a2a', groupId: 'group-3' }), []);
+    },
+  },
+  {
+    name: 'concurrent task record puts at maxRecords store only as many as fit',
+    uses: RECORDS,
+    async run({ store }) {
+      const s = records(store);
+      await s.putTaskRecord(record('first'), { maxRecords: 3 });
+      const results = await Promise.all(
+        Array.from({ length: 8 }, (_, i) => s.putTaskRecord(record(`rec${i}`), { maxRecords: 3 })),
+      );
+      assert.equal(
+        count(results, (r) => r),
+        2,
+      );
+      const listed = await s.listTaskRecords({ protocol: 'a2a', groupId: 'group-1' });
+      assert.equal(listed.length, 3);
+    },
+  },
+  {
+    name: 'task records survive a reopen',
+    uses: RECORDS,
+    needsReopen: true,
+    async run({ store, reopen }) {
+      const s = records(store);
+      const stored = record('rec1');
+      await s.putTaskRecord(stored, { maxRecords: 10 });
+      const reopened = records(await reopen());
+      assert.deepEqual(await reopened.getTaskRecord('rec1'), stored);
+    },
+  },
+];
+
+export const RECORD_CASES: readonly CaseSpec[] = [
+  ...CLAIM_CASES,
+  ...HOLD_CASES,
+  ...TASK_CASES,
+  ...TASK_RECORD_CASES,
+];

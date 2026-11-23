@@ -1,20 +1,16 @@
 /**
  * A real, listening gateway for the SDK to talk to.
  *
- * The official client uses global `fetch` against a URL, so unlike the
- * `inject()`-based integration tests this suite needs a socket. The gateway,
- * pipeline and A2A adapter are real; the merchant backend, payment provider
- * and receipt store are faked, since the endpoint's conformance does not
- * depend on them.
+ * The official client sends requests through global `fetch`, so the suite
+ * needs a listening socket instead of `inject()`. It runs the gateway,
+ * pipeline and A2A adapter with an in-memory SQLite receipt store. The merchant
+ * backend and payment provider are faked to isolate protocol behavior.
  */
 import { createServer } from 'node:net';
 import type { GatewayConfig } from '../../../../src/config';
 import type {
   AdapterDescriptor,
   BackendExecutor,
-  CommerceEvent,
-  CommerceReceipt,
-  PaymentAttempt,
   PaymentContext,
   PaymentProvider,
   PaymentRequirement,
@@ -26,75 +22,7 @@ import type {
 import { CommerceError } from '../../../../src/core';
 import { createGateway, type GatewayInstance } from '../../../../src/gateway';
 import { createA2aAdapter } from '../../../../src/protocols/a2a';
-
-const descriptor: AdapterDescriptor = {
-  name: 'fake-store',
-  kind: 'storage',
-  implementationVersion: '0.0.0-test',
-  supportedSpec: 'n/a',
-  capabilities: [],
-  status: 'experimental',
-};
-
-function createFakeStore(): ReceiptStore {
-  const events: CommerceEvent[] = [];
-  const receipts: CommerceReceipt[] = [];
-  const attempts = new Map<string, PaymentAttempt>();
-  return {
-    async init() {},
-    async appendEvent(event) {
-      events.push(event);
-    },
-    async reservePaymentAttempt(reservation) {
-      const attempt: PaymentAttempt = {
-        id: `attempt-${attempts.size + 1}`,
-        requestId: reservation.requestId,
-        resourceId: reservation.resourceId,
-        provider: reservation.provider,
-        replayKey: reservation.replayKey,
-        status: 'reserved',
-        amount: reservation.amount,
-        currency: reservation.currency,
-        createdAt: '2026-01-01T00:00:00.000Z',
-        updatedAt: '2026-01-01T00:00:00.000Z',
-      };
-      attempts.set(reservation.replayKey, attempt);
-      return attempt;
-    },
-    async updatePaymentAttempt() {},
-    async saveReceipt(receipt) {
-      receipts.push(receipt);
-    },
-    async getReceipt(id) {
-      return receipts.find((r) => r.id === id);
-    },
-    async listReceipts() {
-      return receipts;
-    },
-    async countReceipts() {
-      return receipts.length;
-    },
-    async countUndeliveredReceipts() {
-      return 0;
-    },
-    async countUncertainPaymentAttempts() {
-      return [...attempts.values()].filter(
-        (a) => a.status === 'settlement-uncertain' || a.status === 'failed',
-      ).length;
-    },
-    async listEvents() {
-      return events;
-    },
-    async listPaymentAttempts() {
-      return [...attempts.values()];
-    },
-    async health() {
-      return { status: 'pass', checkedAt: '2026-01-01T00:00:00.000Z' };
-    },
-    async close() {},
-    descriptor,
-  };
-}
+import { createSqliteReceiptStore } from '../../../../src/storage/receipts';
 
 /** Fixed merchant response, so an assertion about the artifact is about the artifact */
 export const MERCHANT_BODY = { city: 'Berlin', forecast: 'sunny', celsius: 21 };
@@ -252,7 +180,34 @@ export interface RunningGateway {
   backendCalls(): number;
   /** Successful settlements so far */
   settleCalls(): number;
+  /** Pending-task and task-record reads from the store so far */
+  taskReads(): number;
+  /** The receipt store, for records a test writes or inspects directly */
+  readonly store: ReceiptStore;
   close(): Promise<void>;
+}
+
+const TASK_READS = new Set([
+  'getPendingTask',
+  'takePendingTask',
+  'getTaskRecord',
+  'listTaskRecords',
+]);
+
+// Count task-store reads to check that parameter refusals happen before lookup
+function countingTaskReads(store: ReceiptStore): { store: ReceiptStore; reads: () => number } {
+  let reads = 0;
+  const counted = new Proxy(store, {
+    get(target, key, receiver) {
+      const value: unknown = Reflect.get(target, key, receiver);
+      if (typeof value !== 'function') return value;
+      return (...args: unknown[]) => {
+        if (typeof key === 'string' && TASK_READS.has(key)) reads += 1;
+        return value.apply(target, args);
+      };
+    },
+  });
+  return { store: counted, reads: () => reads };
 }
 
 /**
@@ -279,16 +234,19 @@ export async function startConformanceGateway(): Promise<RunningGateway> {
   };
   const backend = countingBackend();
   const provider = fakeProvider();
+  const sqlite = createSqliteReceiptStore({ path: ':memory:' });
+  await sqlite.init();
+  const { store, reads } = countingTaskReads(sqlite);
   const gateway = await createGateway({
     config: gatewayConfig,
-    store: createFakeStore(),
+    store,
     paymentProviders: [provider],
-    // Built as src/gateway/run.ts builds it, so the suite certifies the
-    // adapter production runs
+    // Match the adapter setup in src/gateway/run.ts, including its store
     protocolAdapters: [
       createA2aAdapter({
         mountPath: gatewayConfig.protocols.a2a.mountPath,
         agentName: gatewayConfig.merchant.name,
+        store,
       }),
     ],
     backend,
@@ -300,8 +258,11 @@ export async function startConformanceGateway(): Promise<RunningGateway> {
     url,
     backendCalls: backend.calls,
     settleCalls: provider.settleCalls,
+    taskReads: reads,
+    store: sqlite,
     async close() {
       await gateway.close();
+      await store.close();
     },
   };
 }

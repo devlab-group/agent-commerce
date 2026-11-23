@@ -134,8 +134,8 @@ export async function withJournal(
   ]);
   const path = config.storage.receipts.path;
   if (path !== ':memory:' && existsSync(path)) {
-    // Check the schema before opening for writes so these commands cannot
-    // migrate a database still used by a 2.5 gateway
+    // Check the schema before opening for writes to preserve access for
+    // gateways that require the older schema
     try {
       await openSqliteReceiptStoreReadOnly(path).close();
     } catch (error) {

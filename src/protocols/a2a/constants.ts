@@ -38,8 +38,13 @@ export const A2A_DEFAULT_AGENT_NAME = 'agent-commerce';
  */
 export const A2A_VERSION_HEADER = 'a2a-version';
 
-/** The one JSON-RPC method this adapter serves, not the legacy `message/send` */
+/** JSON-RPC method for sending a message */
 export const A2A_METHOD_SEND_MESSAGE = 'SendMessage';
+
+/** Methods for reading, listing and canceling retained tasks */
+export const A2A_METHOD_GET_TASK = 'GetTask';
+export const A2A_METHOD_LIST_TASKS = 'ListTasks';
+export const A2A_METHOD_CANCEL_TASK = 'CancelTask';
 
 /**
  * Push notification configuration methods. The card declares no push
@@ -56,34 +61,42 @@ export const A2A_PUSH_CONFIG_METHODS: readonly string[] = [
  * A2A methods that exist and are not served here, kept apart from unknown
  * methods so a caller learns whether it hit a refused method or a typo. The
  * descriptor and the transport both read this one list.
- * `A2A_TASK_LOOKUP_METHODS` get a different error code on the wire.
  */
 export const A2A_UNSUPPORTED_METHODS: readonly string[] = [
   'SendStreamingMessage',
-  'GetTask',
-  'ListTasks',
-  'CancelTask',
   'SubscribeToTask',
   ...A2A_PUSH_CONFIG_METHODS,
   'GetExtendedAgentCard',
 ];
 
-/**
- * Methods A2A gives an agent no capability flag to decline. No task can be
- * read back or canceled, so they answer `TaskNotFoundError`.
- */
-export const A2A_TASK_LOOKUP_METHODS: readonly string[] = ['GetTask', 'CancelTask'];
-
-/**
- * Terminal states for completed and failed calls. An unpaid x402 extension
- * task instead waits in `TASK_STATE_INPUT_REQUIRED`. `GetTask` finds no task
- * in any state.
- */
+/** Terminal states for completed, failed and canceled tasks */
 export const A2A_TASK_STATE_COMPLETED = 'TASK_STATE_COMPLETED';
 export const A2A_TASK_STATE_FAILED = 'TASK_STATE_FAILED';
+export const A2A_TASK_STATE_CANCELED = 'TASK_STATE_CANCELED';
+
+/** An active payment or a purchase running with returnImmediately */
+export const A2A_TASK_STATE_WORKING = 'TASK_STATE_WORKING';
 
 /** An unpaid x402 extension task waiting for a payment message */
 export const A2A_TASK_STATE_INPUT_REQUIRED = 'TASK_STATE_INPUT_REQUIRED';
 
 /** Extension activation header, a comma-separated list of extension URIs */
 export const A2A_EXTENSIONS_HEADER = 'a2a-extensions';
+
+/**
+ * Activation header named by a2a-x402 v0.1 and the x402 A2A transport.
+ * The adapter accepts either header name and echoes activation under both.
+ */
+export const A2A_X_EXTENSIONS_HEADER = 'x-a2a-extensions';
+
+/** Hour bounds and default for task retention in `protocols.a2a.tasks.retentionHours` */
+export const A2A_TASK_RETENTION_HOURS = { min: 1, max: 8760, default: 24 } as const;
+
+/** Bounds and default for the record admission limit, `protocols.a2a.tasks.maxRetained` */
+export const A2A_MAX_RETAINED_TASKS = { min: 1, max: 1_000_000, default: 1000 } as const;
+
+/**
+ * Per-adapter limit for background runs, which can outlive HTTP requests and
+ * need a separate cap from the gateway mount's in-flight request limit
+ */
+export const A2A_MAX_BACKGROUND_RUNS = 20;

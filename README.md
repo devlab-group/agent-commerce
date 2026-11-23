@@ -11,8 +11,8 @@
   <!-- support-record:begin badges -->
   <img alt="MCP" src="https://img.shields.io/badge/MCP-supported-6b4fbb">
   <img alt="x402" src="https://img.shields.io/badge/x402-supported-0052ff">
+  <img alt="A2A" src="https://img.shields.io/badge/A2A-supported-2ea44f">
   <img alt="MPP" src="https://img.shields.io/badge/MPP-experimental-f0a30a">
-  <img alt="A2A" src="https://img.shields.io/badge/A2A-experimental-f0a30a">
   <img alt="ACP" src="https://img.shields.io/badge/ACP-experimental-f0a30a">
   <img alt="AP2" src="https://img.shields.io/badge/AP2-experimental-f0a30a">
   <!-- support-record:end -->
@@ -25,7 +25,7 @@ call and pay for it without adding those protocols to your backend.
 
 Run the gateway in your infrastructure and describe each endpoint in YAML, or
 generate draft resource definitions from OpenAPI. Resources can be exposed over
-HTTP, MCP or experimental A2A; dedicated resources can implement experimental
+HTTP, MCP or A2A; dedicated resources can implement experimental
 ACP checkout operations. Paid resources use x402 or experimental MPP and can
 also require an AP2 mandate proving that the buyer approved the purchase. Funds
 go directly to the merchant wallet, and the gateway needs neither the buyer's
@@ -308,16 +308,16 @@ See [docs/configuration.md](docs/configuration.md).
 
 <!-- support-record:begin matrix -->
 
-| Protocol     | Status       | Pinned revision                                                                                                   | Implemented subset                                                                                                                   |
-| ------------ | ------------ | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| **HTTP**     | Supported    | native                                                                                                            | resource routes and rail-specific payment headers                                                                                    |
-| **MCP**      | Supported    | MCP `2026-07-28` and `2025-11-25`; `@modelcontextprotocol/server@2.3.0`                                           | tool discovery, invocation, payment-required and error mapping                                                                       |
-| **x402**     | Supported    | x402 v2; `@x402/core@2.30.0`, `@x402/evm@2.30.0`, `@x402/svm@2.30.0`, `@x402/near@2.30.0`                         | `exact` on EVM through EIP-3009 or Permit2, on Solana, and on NEAR (partial): challenge, verification, settlement and replay binding |
-| **MPP**      | Experimental | drafts at `tempoxyz/mpp-specs@806fdb8`; `mppx@0.13.1`                                                             | `charge`/`evm`/EIP-3009 with USDC on Base Sepolia and Base, over HTTP, MCP and A2A                                                   |
-| **A2A**      | Experimental | v1.0.1; negotiation `1.0`; `JSONRPC` binding                                                                      | Agent Card, `SendMessage`, paid flow and the x402 extension                                                                          |
-| **ACP**      | Experimental | stable snapshot `2026-04-17`; REST binding                                                                        | discovery and the five checkout operations                                                                                           |
-| **AP2**      | Experimental | v0.2.0, tag 2026-04-28, commit `b4587ac`; Direct mode; `jose@6.2.12`, `@sd-jwt/core@0.20.1`, `canonicalize@5.0.0` | closed Checkout Mandate verification before settlement                                                                               |
-| **ERC-8409** | Experimental | draft `SergeevDmitry/ERCs@0ee33230`                                                                               | signed quotes on x402 EVM offers; issuer published in `/.well-known/agent-commerce`                                                  |
+| Protocol     | Status       | Pinned revision                                                                                                   | Implemented subset                                                                                                                             |
+| ------------ | ------------ | ----------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| **HTTP**     | Supported    | native                                                                                                            | resource routes and rail-specific payment headers                                                                                              |
+| **MCP**      | Supported    | MCP `2026-07-28` and `2025-11-25`; `@modelcontextprotocol/server@2.3.0`                                           | tool discovery, invocation, payment-required and error mapping                                                                                 |
+| **x402**     | Supported    | x402 v2; `@x402/core@2.30.0`, `@x402/evm@2.30.0`, `@x402/svm@2.30.0`, `@x402/near@2.30.0`                         | `exact` on EVM through EIP-3009 or Permit2, on Solana, and on NEAR (partial): challenge, verification, settlement and replay binding           |
+| **MPP**      | Experimental | drafts at `tempoxyz/mpp-specs@806fdb8`; `mppx@0.13.1`                                                             | `charge`/`evm`/EIP-3009 with USDC on Base Sepolia and Base, over HTTP, MCP and A2A                                                             |
+| **A2A**      | Supported    | v1.0.1; negotiation `1.0`; `JSONRPC` binding                                                                      | Agent Card, `SendMessage` with `returnImmediately`, `GetTask`, `ListTasks`, `CancelTask` and the paid flow; the x402 extension is experimental |
+| **ACP**      | Experimental | stable snapshot `2026-04-17`; REST binding                                                                        | discovery and the five checkout operations                                                                                                     |
+| **AP2**      | Experimental | v0.2.0, tag 2026-04-28, commit `b4587ac`; Direct mode; `jose@6.2.12`, `@sd-jwt/core@0.20.1`, `canonicalize@5.0.0` | closed Checkout Mandate verification before settlement                                                                                         |
+| **ERC-8409** | Experimental | draft `SergeevDmitry/ERCs@0ee33230`                                                                               | signed quotes on x402 EVM offers; issuer published in `/.well-known/agent-commerce`                                                            |
 
 <!-- support-record:end -->
 
@@ -342,7 +342,8 @@ prints the `unsupported` lists for A2A, ACP and AP2 when they are enabled.
 ### Versioning
 
 Minor releases may break experimental configurations, integrations or types.
-This includes MPP, A2A, ACP, AP2, ERC-8409 quotes, the
+This includes MPP, ACP, AP2, the
+[a2a-x402 extension](docs/protocols/a2a.md#x402-extension), ERC-8409 quotes, the
 [public resource URL](docs/configuration.md#public-resource-url) and
 [Bazaar metadata](docs/configuration.md#bazaar-metadata) in payment
 challenges, and these interfaces:
@@ -356,6 +357,7 @@ challenges, and these interfaces:
   in 2.7.0.
 - `PaymentContext.protocol` and `AdapterHealthComponent.undetermined` (added
   in 2.8.0), and the `./testing` entry.
+- `TaskRecord` and the task storage methods on `ReceiptStore`, added in 2.9.0.
 
 A profile moves from experimental to supported only when it meets the
 [promotion criteria](docs/protocols.md#promotion-criteria).
@@ -525,7 +527,7 @@ INFO  AP2                  disabled
 PASS  Payments             x402 v2 (scheme=exact) enabled - LOCAL dev chain (eip155:31337), destination=0x7099…79C8, facilitator=local (in-process), paymentFlow=authorization
 PASS  Payments (offers)    1 offer(s) pass their health checks
 INFO  Payments (MPP)       MPP not configured
-PASS  Storage              sqlite schema v5 writable; receipts=2
+PASS  Storage              sqlite schema v6 writable; receipts=2
 PASS  Transactions         none unresolved
 PASS  Protocol versions    reported by gateway /.well-known/agent-commerce
 
@@ -595,8 +597,8 @@ follows.
 It exits 0 after a completed run, even if attempts remain unresolved, and 1 if
 the run fails to complete. If a store error stops a hold scan, the command
 prints the report, preserving any saved resolutions, and exits 1.
-`reconcile` and `resolve` refuse receipt databases below schema v5 without
-migrating them. Back up the database, then start the gateway once before
+`reconcile` and `resolve` reject receipt databases with an older schema
+without migrating them. Back up the database, then start the gateway once before
 retrying either command.
 
 Each family needs its own evidence:
@@ -719,7 +721,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 **Now** - MCP, x402 v2, settlement on the local chain, Base Sepolia, Base
 mainnet, Solana devnet and Solana mainnet, receipts, doctor, deterministic
-demo, experimental A2A v1.0.1 and ACP `2026-04-17` checkout adapters,
+demo, the A2A v1.0.1 adapter, the experimental ACP `2026-04-17` checkout adapter,
 experimental AP2 v0.2.0 mandate verification, experimental MPP `charge`
 payments, experimental OpenAPI import, experimental retries after a lost
 response, and experimental discovery metadata for x402 Bazaar and MCP Registry

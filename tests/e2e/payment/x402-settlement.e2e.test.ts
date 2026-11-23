@@ -13,7 +13,7 @@ import { x402Client, x402HTTPClient } from '@x402/core/client';
 import type { PaymentRequired } from '@x402/core/types';
 import { registerExactEvmScheme } from '@x402/evm/exact/client';
 import { privateKeyToAccount } from 'viem/accounts';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { parseConfig } from '../../../src/config';
 import {
   type BackendExecutor,
@@ -157,6 +157,34 @@ async function invoke(
     payload: {},
   });
   return { statusCode: res.statusCode, headers: res.headers, body: res.json() };
+}
+
+// Send an A2A JSON-RPC call with the x402 extension header and return its result
+async function a2a<T>(method: string, params: Record<string, unknown>): Promise<T> {
+  const res = await gateway.server.inject({
+    method: 'POST',
+    url: '/a2a',
+    headers: {
+      'content-type': 'application/json',
+      'a2a-version': '1.0',
+      'a2a-extensions': A2A_X402_EXTENSION_URI,
+    },
+    payload: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+  });
+  return res.json<{ result: T }>().result;
+}
+
+// Sign an A2A x402 extension challenge with the funded buyer's key
+async function a2aPayment(waiting: A2aTask) {
+  const client = new x402Client();
+  registerExactEvmScheme(client, {
+    signer: privateKeyToAccount(deployment.buyer.privateKey),
+    networks: ['eip155:31337'],
+  });
+  client.setSpendControls(false); // MockUSDC is not in the SDK's asset list
+  return client.createPaymentPayload(
+    waiting.status.message?.metadata?.['x402.payment.required'] as PaymentRequired,
+  );
 }
 
 // Asks the gateway for the resource unpaid and signs the challenge it returns
@@ -693,24 +721,8 @@ describe('x402 settlement - real local chain', () => {
   });
 
   it('14. settles an A2A x402 payment on the local chain', async () => {
-    async function sendMessage(message: Record<string, unknown>): Promise<A2aTask> {
-      const res = await gateway.server.inject({
-        method: 'POST',
-        url: '/a2a',
-        headers: {
-          'content-type': 'application/json',
-          'a2a-version': '1.0',
-          'a2a-extensions': A2A_X402_EXTENSION_URI,
-        },
-        payload: JSON.stringify({
-          jsonrpc: '2.0',
-          id: 1,
-          method: 'SendMessage',
-          params: { message },
-        }),
-      });
-      return res.json<{ result: { task: A2aTask } }>().result.task;
-    }
+    const sendMessage = async (message: Record<string, unknown>) =>
+      (await a2a<{ task: A2aTask }>('SendMessage', { message })).task;
     const callsBefore = backendCalls;
 
     const waiting = await sendMessage({
@@ -721,15 +733,7 @@ describe('x402 settlement - real local chain', () => {
     expect(waiting.status.state).toBe('TASK_STATE_INPUT_REQUIRED');
     expect(backendCalls).toBe(callsBefore);
 
-    const client = new x402Client();
-    registerExactEvmScheme(client, {
-      signer: privateKeyToAccount(deployment.buyer.privateKey),
-      networks: ['eip155:31337'],
-    });
-    client.setSpendControls(false); // MockUSDC is not in the SDK's asset list
-    const payload = await client.createPaymentPayload(
-      waiting.status.message?.metadata?.['x402.payment.required'] as PaymentRequired,
-    );
+    const payload = await a2aPayment(waiting);
 
     const before = await balances();
     const paid = await sendMessage({
@@ -744,6 +748,67 @@ describe('x402 settlement - real local chain', () => {
 
     expect(paid.status.state).toBe('TASK_STATE_COMPLETED');
     const [receipt] = (paid.status.message?.metadata?.['x402.payment.receipts'] ?? []) as {
+      success: boolean;
+      transaction: string;
+    }[];
+    expect(receipt?.success).toBe(true);
+    expect(backendCalls).toBe(callsBefore + 1);
+    await expectRealSettlement({
+      rpcUrl: anvil.rpcUrl,
+      asset: deployment.asset,
+      buyer: deployment.buyer.address,
+      merchant: deployment.merchant.address,
+      before,
+      after,
+      amountBaseUnits: 1_000_000n,
+      txHash: receipt?.transaction as string,
+    });
+  });
+
+  it('14b. settles an A2A x402 payment sent with returnImmediately, read back with GetTask', async () => {
+    const immediately = { returnImmediately: true };
+    const read = (id: string) => a2a<A2aTask>('GetTask', { id });
+    const callsBefore = backendCalls;
+
+    const started = await a2a<{ task: A2aTask }>('SendMessage', {
+      message: {
+        role: 'ROLE_USER',
+        messageId: 'msg-buy-later',
+        parts: [{ data: { resource: RESOURCE_ID }, mediaType: 'application/json' }],
+      },
+      configuration: immediately,
+    });
+    expect(started.task.status.state).toBe('TASK_STATE_WORKING');
+    let waiting: A2aTask | undefined;
+    await vi.waitFor(async () => {
+      waiting = await read(started.task.id);
+      expect(waiting.status.state).toBe('TASK_STATE_INPUT_REQUIRED');
+    });
+    const payload = await a2aPayment(waiting as A2aTask);
+
+    const before = await balances();
+    const paying = await a2a<{ task: A2aTask }>('SendMessage', {
+      message: {
+        role: 'ROLE_USER',
+        messageId: 'msg-pay-later',
+        taskId: started.task.id,
+        parts: [{ text: 'Here is the payment authorization.' }],
+        metadata: { 'x402.payment.status': 'payment-submitted', 'x402.payment.payload': payload },
+      },
+      configuration: immediately,
+    });
+    expect(paying.task.status.state).toBe('TASK_STATE_WORKING');
+    let paid: A2aTask | undefined;
+    await vi.waitFor(
+      async () => {
+        paid = await read(started.task.id);
+        expect(paid.status.state).toBe('TASK_STATE_COMPLETED');
+      },
+      { timeout: 30_000 },
+    );
+    const after = await balances();
+
+    const [receipt] = (paid?.status.message?.metadata?.['x402.payment.receipts'] ?? []) as {
       success: boolean;
       transaction: string;
     }[];

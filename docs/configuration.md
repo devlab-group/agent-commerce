@@ -251,6 +251,28 @@ keys:
 
 Lengths count Unicode code points.
 
+## `protocols.a2a`
+
+Off by default. The optional `tasks` block limits retention for `GetTask`,
+`ListTasks` and `CancelTask`; see [Tasks](protocols/a2a.md#tasks).
+
+```yaml
+protocols:
+  a2a:
+    enabled: true
+    mountPath: /a2a            # default
+    tasks:                     # optional
+      retentionHours: 24       # default; 1 to 8760
+      maxRetained: 1000        # default; 1 to 1,000,000
+```
+
+- `retentionHours`: how long a task stays readable after it is stored or updated.
+- `maxRetained`: the limit on unexpired task records when admitting a new
+  record. At capacity, the store evicts eligible uncharged responses to make
+  room, or refuses the new record if too few can be evicted. Existing IDs can
+  still be replaced. [A2A tasks](protocols/a2a.md#tasks) describes eligibility
+  and eviction order.
+
 ## `protocols.acp`
 
 Experimental, off by default, and absent from a config that predates it. The
@@ -932,7 +954,9 @@ serves, including the A2A Agent Card and ACP discovery paths · a
 `protocols.mcp.registry` value that breaks the field rules above · an ACP checkout
 mapping that is incomplete, names a missing or non-`acp` resource, reuses one
 resource for two operations, or maps a paid one · an ACP idempotency retention
-below 24 hours · an invalid or zero `payTo`/`asset`/`recipient` · an
+below 24 hours · a `protocols.a2a.tasks.retentionHours` that is not an integer
+from 1 to 8760, or a `protocols.a2a.tasks.maxRetained` that is not an integer
+from 1 to 1,000,000 · an invalid or zero `payTo`/`asset`/`recipient` · an
 `x402.accepts` list that is empty or on a resource that cannot use it · a
 `mimeType` that is not a media type, or on a resource that is not fixed-price
 with `x402` in `payments` · an `idempotency` block on a resource that is not

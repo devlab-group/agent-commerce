@@ -278,29 +278,39 @@ describe('A2A agent card', () => {
 });
 
 describe('A2A adapter lifecycle', () => {
-  it('reports the pinned spec revision, experimental status and a complete unsupported list', () => {
+  it('reports the pinned spec revision, stable status and a complete unsupported list', () => {
     const { descriptor } = createA2aAdapter();
     expect(descriptor.name).toBe('a2a');
     expect(descriptor.supportedSpec).toBe('1.0.1');
-    expect(descriptor.status).toBe('experimental');
+    expect(descriptor.status).toBe('stable');
     expect(descriptor.capabilities).toEqual([
       'agent-card',
       'jsonrpc',
       'SendMessage',
+      'GetTask',
+      'ListTasks',
+      'CancelTask',
+      'returnImmediately',
       'x402-extension',
     ]);
+    for (const served of ['GetTask', 'ListTasks', 'CancelTask']) {
+      expect(descriptor.unsupported).not.toContain(served);
+    }
     // Every A2A feature the project scope leaves out is named, so no client
     // reads the descriptor as full protocol support
     expect(descriptor.unsupported).toEqual(
       expect.arrayContaining([
         'SendStreamingMessage',
-        'GetTask',
-        'long-running task persistence',
+        'resuming a background task after a restart',
         'push notifications',
         'multi-turn conversational continuation',
         'HTTP+JSON/REST binding',
         'gRPC binding',
         'A2A authentication schemes',
+        'client-chosen contextId',
+        'listing tasks across contexts',
+        'task history',
+        'non-empty tenant',
       ]),
     );
   });

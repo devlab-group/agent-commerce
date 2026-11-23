@@ -1,0 +1,95 @@
+{
+  "status": 200,
+  "extensions": null,
+  "body": {
+    "jsonrpc": "2.0",
+    "id": "golden",
+    "result": {
+      "task": {
+        "id": "<uuid>",
+        "contextId": "<uuid>",
+        "status": {
+          "state": "TASK_STATE_FAILED",
+          "timestamp": "<timestamp>",
+          "message": {
+            "role": "ROLE_AGENT",
+            "messageId": "a2a-msg_<uuid>",
+            "contextId": "<uuid>",
+            "taskId": "<uuid>",
+            "parts": [
+              {
+                "text": "Payment of 0.01 USDC is required for resource \"market_report\". Retry with a x402 payment proof."
+              }
+            ]
+          }
+        },
+        "artifacts": [
+          {
+            "artifactId": "a2a-artifact_<uuid>",
+            "name": "market_report",
+            "parts": [
+              {
+                "data": {
+                  "status": "payment-required",
+                  "code": "PAYMENT_REQUIRED",
+                  "requestId": "a2a_<uuid>",
+                  "resourceId": "market_report",
+                  "message": "Payment of 0.01 USDC is required for resource \"market_report\". Retry with a x402 payment proof.",
+                  "payment": {
+                    "provider": "x402",
+                    "version": "2",
+                    "amount": "0.01",
+                    "currency": "USDC",
+                    "destination": "0x1111111111111111111111111111111111111111",
+                    "network": "eip155:84532",
+                    "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+                    "expiresAt": "<timestamp>",
+                    "accepts": [
+                      {
+                        "scheme": "exact",
+                        "network": "eip155:84532",
+                        "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+                        "amount": "10000",
+                        "payTo": "0x1111111111111111111111111111111111111111",
+                        "maxTimeoutSeconds": 120,
+                        "extra": {
+                          "name": "USDC",
+                          "version": "2",
+                          "assetTransferMethod": "eip3009"
+                        }
+                      }
+                    ],
+                    "envelope": {
+                      "x402Version": 2,
+                      "resource": {
+                        "url": "resource://agent-commerce/eip155%3A84532/0x1111111111111111111111111111111111111111/resources/market_report",
+                        "description": "Latest market analysis for a symbol.",
+                        "mimeType": "application/json"
+                      },
+                      "accepts": [
+                        {
+                          "scheme": "exact",
+                          "network": "eip155:84532",
+                          "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+                          "amount": "10000",
+                          "payTo": "0x1111111111111111111111111111111111111111",
+                          "maxTimeoutSeconds": 120,
+                          "extra": {
+                            "name": "USDC",
+                            "version": "2",
+                            "assetTransferMethod": "eip3009"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                },
+                "mediaType": "application/json"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

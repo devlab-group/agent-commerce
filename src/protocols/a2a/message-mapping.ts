@@ -25,10 +25,10 @@
  * to make.
  */
 import { z } from 'zod';
-import { CommerceError } from '../../core';
 import { isRecord } from '../../core/is-record';
 import { A2A_JSON_MEDIA_TYPE } from './constants';
 import { A2A_ERROR_CONTENT_TYPE_NOT_SUPPORTED, A2A_ERROR_TASK_NOT_FOUND } from './jsonrpc';
+import { invalid, unsupported } from './params';
 
 // The only role a request message may carry. A2A v1 spells roles this way
 const A2A_USER_ROLE = 'ROLE_USER';
@@ -75,30 +75,43 @@ const ParamsSchema = z.object({
   contextId: z.string().optional(),
 });
 
-function invalid(message: string): CommerceError {
-  return new CommerceError('INPUT_INVALID', message);
-}
+/** SendMessage parameters with a validated message shape, id and role */
+export type A2aMessageParams = z.infer<typeof ParamsSchema> & {
+  readonly message: { readonly messageId: string };
+};
 
-function unsupported(message: string, a2aErrorCode?: number): CommerceError {
-  return new CommerceError(
-    'PROTOCOL_UNSUPPORTED',
-    message,
-    a2aErrorCode !== undefined ? { details: { a2aErrorCode } } : {},
-  );
+/**
+ * Validate message shape, a non-empty `messageId` and the user role before
+ * looking up any named task
+ */
+export function readMessage(rawParams: unknown): A2aMessageParams {
+  const parsed = ParamsSchema.safeParse(rawParams);
+  if (!parsed.success) {
+    throw invalid(
+      'Request must carry a "message" with a "role" and a "parts" array of structured data parts.',
+    );
+  }
+  const message = parsed.data.message;
+  // A2A requires a message id. This adapter also rejects an empty one.
+  if (message.messageId === undefined || message.messageId.length === 0) {
+    throw invalid('Message must carry a non-empty "messageId".');
+  }
+  const roleProblem = userRoleProblem(message.role);
+  if (roleProblem !== undefined) throw invalid(roleProblem);
+  return parsed.data as A2aMessageParams;
 }
 
 /**
  * Continuation is refused rather than ignored: a caller resuming a task would
  * otherwise get a fresh, independently billed execution back and no signal
- * that their task id meant nothing here. Pending payments are handled before
- * this check. Unknown or expired task IDs, and competing messages that lost
- * the task, receive `TaskNotFoundError`.
+ * that their task id meant nothing here. The adapter handles pending and
+ * retained task ids first; any task id reaching this check is unknown or expired.
  */
-function assertNoContinuation(params: z.infer<typeof ParamsSchema>): void {
+function assertNoContinuation(params: A2aMessageParams): void {
   const message = params.message;
   if (params.taskId !== undefined || message.taskId !== undefined) {
     throw unsupported(
-      'Task not found: only a task waiting for payment can be continued, so send a request with no taskId.',
+      'Task not found: send the message without a taskId to start a new task.',
       A2A_ERROR_TASK_NOT_FOUND,
     );
   }
@@ -150,24 +163,12 @@ function assertSupportedPart(part: Record<string, unknown>): void {
  * a `CommerceError`. Pure: it resolves no resource and touches no payment.
  */
 export function parseInvocation(rawParams: unknown): A2aInvocation {
-  const parsed = ParamsSchema.safeParse(rawParams);
-  if (!parsed.success) {
-    throw invalid(
-      'Request must carry a "message" with a "role" and a "parts" array of structured data parts.',
-    );
-  }
-  const params = parsed.data;
+  const params = readMessage(rawParams);
   const message = params.message;
-  // A2A requires a message id. This adapter also rejects an empty one.
-  if (message.messageId === undefined || message.messageId.length === 0) {
-    throw invalid('Message must carry a non-empty "messageId".');
-  }
   const messageId = message.messageId;
 
   assertNoContinuation(params);
 
-  const roleProblem = userRoleProblem(message.role);
-  if (roleProblem !== undefined) throw invalid(roleProblem);
   if (message.parts.length === 0) {
     throw invalid('Message carries no parts: send exactly one structured data part.');
   }

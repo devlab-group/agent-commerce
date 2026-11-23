@@ -2,18 +2,48 @@
 import type { CommerceResource } from '../../core';
 import { CommerceError } from '../../core';
 import { bazaarMetadata } from '../../payments/x402/provider/bazaar';
+import { A2A_MAX_RETAINED_TASKS, A2A_TASK_RETENTION_HOURS } from '../../protocols/a2a/constants';
 import { publicEndpointUrl } from '../../protocols/http';
 import { normalizeAcp, validateAcpCheckoutMapping } from './acp';
 import { normalizeAp2, validateLegacyStoresIsolated } from './ap2';
 import { normalizeMpp } from './mpp';
 import { isHttpUrl, type RawConfig, SUPPORTED_CONFIG_VERSION } from './raw';
 import { normalizeResource, servingRailOf } from './resources';
-import type { GatewayConfig, NormalizedProtocols } from './types';
+import type { A2aProtocolConfig, GatewayConfig, NormalizedProtocols } from './types';
 import { toBoolean, toNumber } from './values';
 import { normalizeX402 } from './x402';
 
 // Applied when `protocols.a2a` is absent or names no mount
 const DEFAULT_A2A_MOUNT_PATH = '/a2a';
+
+// Preserve configured limits and leave unset keys absent
+function normalizeA2aTasks(
+  tasks: NonNullable<RawConfig['protocols']['a2a']>['tasks'],
+): Pick<A2aProtocolConfig, 'tasks'> {
+  if (tasks === undefined) return {};
+  return {
+    tasks: {
+      ...(tasks.retentionHours !== undefined
+        ? {
+            retentionHours: toNumber(
+              tasks.retentionHours,
+              'protocols.a2a.tasks.retentionHours',
+              A2A_TASK_RETENTION_HOURS,
+            ),
+          }
+        : {}),
+      ...(tasks.maxRetained !== undefined
+        ? {
+            maxRetained: toNumber(
+              tasks.maxRetained,
+              'protocols.a2a.tasks.maxRetained',
+              A2A_MAX_RETAINED_TASKS,
+            ),
+          }
+        : {}),
+    },
+  };
+}
 
 export function normalize(raw: RawConfig): GatewayConfig {
   const protocols = {
@@ -26,6 +56,7 @@ export function normalize(raw: RawConfig): GatewayConfig {
     a2a: {
       enabled: toBoolean(raw.protocols.a2a?.enabled ?? false, 'protocols.a2a.enabled'),
       mountPath: raw.protocols.a2a?.mountPath ?? DEFAULT_A2A_MOUNT_PATH,
+      ...normalizeA2aTasks(raw.protocols.a2a?.tasks),
     },
     acp: normalizeAcp(raw.protocols.acp),
   };

@@ -15,12 +15,11 @@ import {
   type IdGenerator,
   isCommerceError,
   type PaymentProvider,
-  type ReceiptStore,
   toDeliverySummary,
 } from '../../src/core';
 import { createExecutionPipeline } from '../../src/core/execution/pipeline';
 import { createResourceRegistry } from '../../src/core/execution/registry';
-import { createSqliteReceiptStore } from '../../src/storage/receipts';
+import { createSqliteReceiptStore, type SqliteReceiptStore } from '../../src/storage/receipts';
 import {
   createCapturingLogger,
   createFakeAuthorizationProvider,
@@ -37,7 +36,7 @@ const T0 = '2026-01-01T00:00:00.000Z';
 const DEADLINE = '2026-01-01T00:00:15.000Z';
 const EXPIRES = '2026-01-01T00:05:00.000Z';
 
-type JournalStore = Required<ReceiptStore>;
+type JournalStore = SqliteReceiptStore;
 
 const PAID: CommerceResource = makeResource({
   id: 'market_report',
