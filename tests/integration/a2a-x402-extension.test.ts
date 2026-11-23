@@ -318,6 +318,32 @@ describe('x402 A2A extension', () => {
     expect(facilitator.settle).toHaveBeenCalledTimes(1);
   });
 
+  it('refuses a proof that already paid another task, settling once', async () => {
+    const first = await challenged();
+    const payload = await paymentPayload(first);
+    await rpc(
+      pay(first, { 'x402.payment.status': 'payment-submitted', 'x402.payment.payload': payload }),
+    );
+    const second = await challenged();
+
+    const { body } = await rpc(
+      pay(second, { 'x402.payment.status': 'payment-submitted', 'x402.payment.payload': payload }),
+    );
+
+    const failed = body.result?.task;
+    expect(failed?.id).toBe(second.id);
+    expect(failed?.status.state).toBe('TASK_STATE_FAILED');
+    expect(failed?.status.message?.parts).toEqual([
+      { text: 'Payment failed: invalid_exact_evm_nonce_already_used.' },
+    ]);
+    expect(failed?.status.message?.metadata).toMatchObject({
+      'x402.payment.status': 'payment-failed',
+      'x402.payment.error': 'invalid_exact_evm_nonce_already_used',
+    });
+    expect(backendCalls).toBe(1);
+    expect(facilitator.settle).toHaveBeenCalledTimes(1);
+  });
+
   it('fails the task with the reason when the payment is refused', async () => {
     facilitator.verify.mockResolvedValueOnce({
       isValid: false,
@@ -334,7 +360,9 @@ describe('x402 A2A extension', () => {
 
     const failed = body.result?.task;
     expect(failed?.status.state).toBe('TASK_STATE_FAILED');
-    expect(failed?.status.message?.parts).toEqual([{ text: 'Payment failed.' }]);
+    expect(failed?.status.message?.parts).toEqual([
+      { text: 'Payment failed: insufficient_funds.' },
+    ]);
     expect(failed?.status.message?.metadata).toMatchObject({
       'x402.payment.status': 'payment-failed',
       'x402.payment.error': 'insufficient_funds',

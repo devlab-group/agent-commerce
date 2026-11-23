@@ -196,7 +196,9 @@ These outcomes return a terminal task with one artifact:
 
 Every `TASK_STATE_FAILED` task has a `ROLE_AGENT` status message. Ordinary
 failures and `payment_identifier_*` refusals use the envelope's `message` as
-their text. Other extension payment failures summarize the payment outcome.
+their text. Other extension payment failures summarize the outcome. Their
+`payment-failed` messages end with the `x402.payment.error` code, for example
+`Payment failed: insufficient_funds.`
 Only extension status messages carry `metadata` and `extensions`.
 
 With the x402 extension, an unpaid task is `TASK_STATE_INPUT_REQUIRED`; its

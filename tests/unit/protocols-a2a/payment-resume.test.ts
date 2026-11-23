@@ -108,6 +108,48 @@ describe('resumePayment pipeline refusals', () => {
   });
 });
 
+describe('resumePayment failure text', () => {
+  const settled = {
+    payment: { status: 'settled', provider: 'x402', currency: 'USDC', externalReference: '0xabc' },
+  };
+
+  it.each([
+    [
+      'a refused payment, with its x402 error code',
+      new CommerceError('PAYMENT_INVALID', 'Refused', {
+        details: { reason: 'insufficient_funds' },
+      }),
+      'Payment failed: insufficient_funds.',
+    ],
+    [
+      'a replayed EVM proof, with the nonce code',
+      new CommerceError('PAYMENT_REPLAYED', 'Used', { details: { network: 'eip155:8453' } }),
+      'Payment failed: invalid_exact_evm_nonce_already_used.',
+    ],
+    [
+      'a failure before settlement, with its commerce code',
+      new CommerceError('BACKEND_TIMEOUT', 'Timed out'),
+      'The resource could not be delivered: backend_timeout.',
+    ],
+    [
+      'a retry-key refusal, with its own message',
+      new CommerceError('PAYMENT_REPLAYED', 'A request is in progress', {
+        details: { reason: 'payment_identifier_in_flight' },
+      }),
+      'A request is in progress',
+    ],
+    [
+      'a backend failure after settlement, as a settled payment',
+      new CommerceError('BACKEND_ERROR', 'Backend failed', { details: settled }),
+      'Payment settled, but the resource could not be delivered.',
+    ],
+  ])('states %s', async (_label, refusal, text) => {
+    const { task } = await resumeWith(refusal);
+
+    expect(task.status.message?.parts).toEqual([{ text }]);
+  });
+});
+
 describe('resumePayment with returnImmediately', () => {
   // Use one slot to check that refused calls release their reservations
   async function answer(

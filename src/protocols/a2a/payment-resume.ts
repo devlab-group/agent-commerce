@@ -29,6 +29,7 @@ import {
   paymentRejectedMetadata,
   readFollowUpAuthorization,
   readPaymentSubmission,
+  X402_PAYMENT_ERROR_KEY,
   X402_PAYMENT_PAYLOAD_KEY,
   X402_PAYMENT_STATUS_KEY,
 } from './x402-extension';
@@ -242,14 +243,18 @@ async function payPending(
   const identity = { ...ids, timestamp: context.clock.nowIso() };
   const metadata = paymentFailureMetadata(error, pending.network);
   const reason = error.details?.['reason'];
-  let text = 'Payment failed.';
+  let text: string;
   if (metadata[X402_PAYMENT_STATUS_KEY] === 'payment-completed') {
     text = 'Payment settled, but the resource could not be delivered.';
   } else if (typeof reason === 'string' && reason.startsWith('payment_identifier_')) {
     // Retry-key refusals make no new charge; show the specific error message
     text = error.message;
-  } else if (!error.code.startsWith('PAYMENT_')) {
-    text = 'The resource could not be delivered.';
+  } else {
+    // Show the metadata's failure reason in the status text (a2a-x402 v0.1 §8)
+    const outcome = error.code.startsWith('PAYMENT_')
+      ? 'Payment failed'
+      : 'The resource could not be delivered';
+    text = `${outcome}: ${String(metadata[X402_PAYMENT_ERROR_KEY])}.`;
   }
   return withStatusMessage(failedTask(error, identity), text, identity.statusMessageId, metadata);
 }
