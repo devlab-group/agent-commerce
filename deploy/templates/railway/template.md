@@ -16,7 +16,7 @@ Create one service named `agent-commerce`.
 
 | Setting           | Value                                                                                                 |
 | ----------------- | ----------------------------------------------------------------------------------------------------- |
-| Source            | Docker image `ghcr.io/devlab-group/agent-commerce:2.8.0` (public package)                             |
+| Source            | Docker image `ghcr.io/devlab-group/agent-commerce:2.9.0` (public package)                             |
 | Public networking | HTTP, generate a Railway domain                                                                       |
 | Volume            | mount path `/app/data`                                                                                |
 | Healthcheck path  | `/health` or leave empty; `/ready` rejects Railway's healthcheck `Host` (see `deploy/docs/deploy.md`) |
