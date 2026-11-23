@@ -151,7 +151,7 @@ export function failedTask(error: CommerceError, identity: TaskIdentity): A2aTas
   );
 }
 
-/** A task processing an x402 payment submission */
+/** A task whose execution is still in progress */
 export function workingTask(taskId: string, contextId: string, timestamp: string): A2aTask {
   return {
     id: taskId,

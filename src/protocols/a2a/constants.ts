@@ -74,7 +74,7 @@ export const A2A_TASK_STATE_COMPLETED = 'TASK_STATE_COMPLETED';
 export const A2A_TASK_STATE_FAILED = 'TASK_STATE_FAILED';
 export const A2A_TASK_STATE_CANCELED = 'TASK_STATE_CANCELED';
 
-/** A task processing an x402 payment submission */
+/** An active payment or a purchase running with returnImmediately */
 export const A2A_TASK_STATE_WORKING = 'TASK_STATE_WORKING';
 
 /** An unpaid x402 extension task waiting for a payment message */
@@ -88,3 +88,9 @@ export const A2A_TASK_RETENTION_HOURS = { min: 1, max: 8760, default: 24 } as co
 
 /** Bounds and default for the record admission limit, `protocols.a2a.tasks.maxRetained` */
 export const A2A_MAX_RETAINED_TASKS = { min: 1, max: 1_000_000, default: 1000 } as const;
+
+/**
+ * Per-adapter limit for background runs, which can outlive HTTP requests and
+ * need a separate cap from the gateway mount's in-flight request limit
+ */
+export const A2A_MAX_BACKGROUND_RUNS = 20;

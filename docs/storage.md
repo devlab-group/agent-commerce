@@ -149,8 +149,9 @@ migrated by 2.9.0. To roll back, restore a backup made before migration.
 
 On the first SIGTERM or SIGINT, the gateway stops accepting connections and
 waits for in-flight requests without a time limit. It then stops protocol
-adapters, closes authorization providers and the database, and exits 0 on
-success. A shutdown error exits 1.
+adapters, waiting for A2A background work to settle, before closing
+authorization providers and the database. Successful shutdown exits 0; a
+shutdown error exits 1.
 
 A second SIGTERM or SIGINT exits immediately with status 1. An orchestrator
 can also send SIGKILL when its grace period expires, terminating the process

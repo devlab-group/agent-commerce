@@ -179,7 +179,7 @@ interface Node {
 
 interface JsonRpc {
   readonly result?: { task: A2aTask };
-  readonly error?: { code: number; message: string };
+  readonly error?: { code: number; message: string; data?: Record<string, unknown>[] };
 }
 
 let dir: string;
@@ -190,6 +190,8 @@ let time: ReturnType<typeof createClock>;
 let ids: IdGenerator;
 // Set to hold every backend call until it resolves
 let backendGate: Promise<void> | undefined;
+// Release the backend gate so teardown can finish waiting for background work
+let releaseBackend: () => void;
 let open: Node[];
 
 beforeEach(() => {
@@ -198,6 +200,7 @@ beforeEach(() => {
   calls = { verify: 0, settle: 0, mandates: [] };
   backendCalls = 0;
   backendGate = undefined;
+  releaseBackend = () => {};
   time = createClock();
   // Keep test IDs distinct across gateway restarts
   let n = 0;
@@ -206,6 +209,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  releaseBackend();
   for (const node of open) await shutdown(node);
   rmSync(dir, { recursive: true, force: true });
 });
@@ -264,7 +268,11 @@ async function call(node: Node, method: string, params: Record<string, unknown>)
   return res.json();
 }
 
-async function rpc(node: Node, message: Record<string, unknown>): Promise<JsonRpc> {
+async function rpc(
+  node: Node,
+  message: Record<string, unknown>,
+  configuration?: Record<string, unknown>,
+): Promise<JsonRpc> {
   const res = await node.gateway.server.inject({
     method: 'POST',
     url: '/a2a',
@@ -277,7 +285,7 @@ async function rpc(node: Node, message: Record<string, unknown>): Promise<JsonRp
       jsonrpc: '2.0',
       id: 'req-1',
       method: 'SendMessage',
-      params: { message },
+      params: { message, ...(configuration ? { configuration } : {}) },
     }),
   });
   return res.json();
@@ -699,6 +707,257 @@ describe('answered tasks, kept in the receipt store', () => {
       );
     },
   );
+});
+
+// Block backend calls until the returned release function is called
+function holdBackend(): () => void {
+  backendGate = new Promise((resolve) => {
+    releaseBackend = resolve;
+  });
+  return releaseBackend;
+}
+
+const IMMEDIATELY = { returnImmediately: true };
+
+// Submit a purchase with its proof and returnImmediately, without the x402 extension
+function buyNow(node: Node, proof: string, resource = 'report'): Promise<Answer> {
+  return call(node, 'SendMessage', {
+    message: buy(resource, { _payment: proof }),
+    configuration: IMMEDIATELY,
+  });
+}
+
+async function stateOf(node: Node, id: string): Promise<string | undefined> {
+  return (await call(node, 'GetTask', { id })).result?.status?.state;
+}
+
+function code(task: A2aTask | undefined): unknown {
+  return (task?.artifacts[0]?.parts[0]?.data as Record<string, unknown> | undefined)?.['code'];
+}
+
+describe('tasks finished in the background with returnImmediately', () => {
+  it('answers a working task before the backend returns, then records the result', async () => {
+    const node = await boot();
+    const release = holdBackend();
+
+    const working = (await buyNow(node, 'proof-1')).result?.task as A2aTask;
+
+    expect(working).toEqual({
+      id: working.id,
+      contextId: working.contextId,
+      status: { state: 'TASK_STATE_WORKING', timestamp: time.clock.nowIso() },
+      artifacts: [],
+    });
+    await vi.waitFor(() => expect(backendCalls).toBe(1));
+    expect(await stateOf(node, working.id)).toBe('TASK_STATE_WORKING');
+    release();
+    await vi.waitFor(async () =>
+      expect(await stateOf(node, working.id)).toBe('TASK_STATE_COMPLETED'),
+    );
+    const done = (await call(node, 'GetTask', { id: working.id })).result as A2aTask;
+    expect(done.contextId).toBe(working.contextId);
+    expect(done.artifacts[0]?.parts[0]?.data).toEqual({ report: 'paid' });
+    expect(calls.settle).toBe(1);
+  });
+
+  it('records the failed task a blocking call would answer when the purchase fails', async () => {
+    const node = await boot();
+    const blocking = (
+      await call(node, 'SendMessage', { message: buy('mandated', { _payment: 'proof-a' }) })
+    ).result?.task;
+
+    const working = (await buyNow(node, 'proof-b', 'mandated')).result?.task as A2aTask;
+
+    expect(working.status.state).toBe('TASK_STATE_WORKING');
+    await vi.waitFor(async () => expect(await stateOf(node, working.id)).toBe('TASK_STATE_FAILED'));
+    const failed = (await call(node, 'GetTask', { id: working.id })).result as A2aTask;
+    expect(blocking?.status.state).toBe('TASK_STATE_FAILED');
+    expect(code(failed)).toBe(code(blocking));
+    expect(backendCalls).toBe(0);
+  });
+
+  it('reaches input-required in the background, then is paid in the background', async () => {
+    const node = await boot();
+    const working = (await rpc(node, buy('report'), IMMEDIATELY)).result?.task as A2aTask;
+    expect(working.status.state).toBe('TASK_STATE_WORKING');
+    await vi.waitFor(async () =>
+      expect(await stateOf(node, working.id)).toBe('TASK_STATE_INPUT_REQUIRED'),
+    );
+    const release = holdBackend();
+
+    const paying = (await rpc(node, pay(working), IMMEDIATELY)).result?.task as A2aTask;
+
+    expect(paying).toMatchObject({ id: working.id, status: { state: 'TASK_STATE_WORKING' } });
+    await vi.waitFor(() => expect(backendCalls).toBe(1));
+    expect(await stateOf(node, working.id)).toBe('TASK_STATE_WORKING');
+    release();
+    await vi.waitFor(async () =>
+      expect(await stateOf(node, working.id)).toBe('TASK_STATE_COMPLETED'),
+    );
+    const paid = (await call(node, 'GetTask', { id: working.id })).result as A2aTask;
+    expect(paid.status.message?.metadata).toMatchObject({
+      'x402.payment.status': 'payment-completed',
+    });
+    expect(calls).toMatchObject({ verify: 1, settle: 1 });
+  });
+
+  it('refuses a 21st purchase or payment while 20 run in the background, and runs nothing for it', async () => {
+    const node = await boot();
+    const waiting = await challenged(node, 'report');
+    const release = holdBackend();
+    const running: string[] = [];
+    for (let i = 0; i < 20; i += 1) {
+      const answer = await buyNow(node, `proof-${i}`);
+      running.push(answer.result?.task?.id as string);
+    }
+    await vi.waitFor(() => expect(backendCalls).toBe(20));
+
+    const purchase = (await buyNow(node, 'proof-20')).result?.task;
+    const payment = await rpc(node, pay(waiting), IMMEDIATELY);
+
+    expect(purchase?.status.state).toBe('TASK_STATE_FAILED');
+    expect(code(purchase)).toBe('GATEWAY_BUSY');
+    expect((await call(node, 'GetTask', { id: purchase?.id })).error?.code).toBe(TASK_NOT_FOUND);
+    // A system error, not a failed task: the task is not terminal
+    expect(payment).toEqual({
+      jsonrpc: '2.0',
+      id: 'req-1',
+      error: {
+        code: -32603,
+        message: 'Too many tasks are running in the background; retry shortly.',
+        data: [{ '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay: '1s' }],
+      },
+    });
+    // Capacity refusal leaves the pending purchase and its retained response unchanged
+    expect(await stateOf(node, waiting.id)).toBe('TASK_STATE_INPUT_REQUIRED');
+    expect(calls.verify).toBe(20);
+    expect(backendCalls).toBe(20);
+
+    release();
+    for (const id of running) {
+      await vi.waitFor(async () => expect(await stateOf(node, id)).toBe('TASK_STATE_COMPLETED'));
+    }
+    // Completed runs release their slots
+    const retried = (await rpc(node, pay(waiting), IMMEDIATELY)).result?.task;
+    expect(retried?.status.state).toBe('TASK_STATE_WORKING');
+    await vi.waitFor(async () =>
+      expect(await stateOf(node, waiting.id)).toBe('TASK_STATE_COMPLETED'),
+    );
+    expect(calls.settle).toBe(21);
+  });
+
+  it('refuses a purchase whose working task does not fit, runs nothing and keeps no slot', async () => {
+    const node = await boot(undefined, { maxRetained: 1 });
+    await buyNow(node, 'proof-1');
+    await vi.waitFor(() => expect(calls.settle).toBe(1));
+
+    // Repeated refusals must release their slot reservations
+    for (let i = 0; i < 21; i += 1) {
+      const refused = (await buyNow(node, `proof-${i + 2}`)).result?.task;
+      expect(refused?.status.state).toBe('TASK_STATE_FAILED');
+      expect(refused?.artifacts[0]?.parts[0]?.data).toMatchObject({
+        code: 'GATEWAY_BUSY',
+        message: 'Too many answered tasks are retained; retry shortly.',
+      });
+      expect((await call(node, 'GetTask', { id: refused?.id })).error?.code).toBe(TASK_NOT_FOUND);
+    }
+    expect(calls.verify).toBe(1);
+  });
+
+  it('reads as failed when a background run cannot record its result', async () => {
+    const node = await boot((store) =>
+      Object.assign(Object.create(store) as ReceiptStore, {
+        async putTaskRecord(...args: Parameters<NonNullable<ReceiptStore['putTaskRecord']>>) {
+          if (args[0].state === 'TASK_STATE_COMPLETED') throw new Error('disk full');
+          return store.putTaskRecord?.(...args) ?? false;
+        },
+      }),
+    );
+
+    const working = (await buyNow(node, 'proof-1')).result?.task as A2aTask;
+
+    await vi.waitFor(async () => expect(await stateOf(node, working.id)).toBe('TASK_STATE_FAILED'));
+    const read = (await call(node, 'GetTask', { id: working.id })).result as A2aTask;
+    expect(code(read)).toBe('INTERNAL_ERROR');
+    expect(calls.settle).toBe(1);
+  });
+
+  it('answers a failed task and runs nothing when the working task cannot be written', async () => {
+    let failPuts = false;
+    const node = await boot((store) =>
+      Object.assign(Object.create(store) as ReceiptStore, {
+        async putTaskRecord(...args: Parameters<NonNullable<ReceiptStore['putTaskRecord']>>) {
+          if (failPuts) throw new Error('disk full at /var/lib/receipts.db');
+          return store.putTaskRecord?.(...args) ?? false;
+        },
+      }),
+    );
+    const waiting = await challenged(node, 'report');
+    failPuts = true;
+
+    const purchase = (await buyNow(node, 'proof-1')).result?.task;
+    const payment = (await rpc(node, pay(waiting), IMMEDIATELY)).result?.task;
+
+    for (const task of [purchase, payment]) {
+      expect(task?.status.state).toBe('TASK_STATE_FAILED');
+      expect(code(task)).toBe('INTERNAL_ERROR');
+      expect(JSON.stringify(task)).not.toContain('disk full');
+    }
+    expect(payment?.id).toBe(waiting.id);
+    // The failed write follows the take, so the purchase is no longer pending
+    expect(await node.store.getPendingTask?.(waiting.id)).toBeUndefined();
+    expect(calls.verify).toBe(0);
+    expect(backendCalls).toBe(0);
+  });
+
+  it('waits on stop for a background run, which records its result', async () => {
+    const node = await boot();
+    const release = holdBackend();
+    const working = (await buyNow(node, 'proof-1')).result?.task as A2aTask;
+    await vi.waitFor(() => expect(backendCalls).toBe(1));
+    open = open.filter((candidate) => candidate !== node);
+
+    let closed = false;
+    const closing = node.gateway.close().then(() => {
+      closed = true;
+    });
+    for (let i = 0; i < 5; i += 1) await new Promise((resolve) => setImmediate(resolve));
+    expect(closed).toBe(false);
+    release();
+    await closing;
+
+    const record = await node.store.getTaskRecord?.(working.id);
+    await node.store.close();
+    expect(record?.state).toBe('TASK_STATE_COMPLETED');
+    expect(calls.settle).toBe(1);
+  });
+
+  it('reads a run another gateway stopped in as failed, and the same proof does not settle again', async () => {
+    const first = await boot();
+    const release = holdBackend();
+    const working = (await buyNow(first, 'proof-1')).result?.task as A2aTask;
+    await vi.waitFor(() => expect(backendCalls).toBe(1));
+
+    // A second adapter has no local running entry, simulating a restart
+    const second = await boot();
+    const read = (await call(second, 'GetTask', { id: working.id })).result as A2aTask;
+    const replay = (
+      await call(second, 'SendMessage', { message: buy('report', { _payment: 'proof-1' }) })
+    ).result?.task;
+
+    expect(read.status.state).toBe('TASK_STATE_FAILED');
+    expect(code(read)).toBe('INTERNAL_ERROR');
+    expect(read.status.message?.parts[0]?.text).toContain(
+      'check with the merchant before paying again',
+    );
+    expect(code(replay)).toBe('PAYMENT_REPLAYED');
+    expect(backendCalls).toBe(1);
+    release();
+    await vi.waitFor(async () =>
+      expect(await stateOf(first, working.id)).toBe('TASK_STATE_COMPLETED'),
+    );
+    expect(calls.settle).toBe(1);
+  });
 });
 
 describe('a store without the pending-task methods', () => {

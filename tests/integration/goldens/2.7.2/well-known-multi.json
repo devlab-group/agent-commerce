@@ -72,6 +72,7 @@
         "GetTask",
         "ListTasks",
         "CancelTask",
+        "returnImmediately",
         "x402-extension"
       ],
       "status": "experimental",
@@ -86,7 +87,7 @@
         "HTTP+JSON/REST binding",
         "gRPC binding",
         "SSE",
-        "long-running task persistence",
+        "resuming a background task after a restart",
         "task resumption other than an x402 extension payment",
         "push notifications",
         "multi-turn conversational continuation",

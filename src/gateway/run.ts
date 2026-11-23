@@ -199,7 +199,8 @@ export async function runGateway(options: RunGatewayOptions = {}): Promise<void>
     console.log('');
   }
 
-  // The first signal waits for in-flight requests without a time limit.
+  // The first signal waits for in-flight requests and A2A background tasks
+  // without a time limit.
   // A second exits immediately with status 1, skipping cleanup as a crash would.
   let shuttingDown = false;
   const shutdown = (signal: string): void => {

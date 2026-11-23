@@ -28,7 +28,7 @@
     {
       "name": "A2A unsupported",
       "status": "INFO",
-      "detail": "SendStreamingMessage, SubscribeToTask, CreateTaskPushNotificationConfig, GetTaskPushNotificationConfig, ListTaskPushNotificationConfigs, DeleteTaskPushNotificationConfig, GetExtendedAgentCard, HTTP+JSON/REST binding, gRPC binding, SSE, long-running task persistence, task resumption other than an x402 extension payment, push notifications, multi-turn conversational continuation, text parts, file and URL parts (including inline bytes), multi-part messages, message roles other than ROLE_USER, authenticated extended agent cards, A2A authentication schemes, artifact types beyond Agent Commerce outcome data, tasks across gateway instances"
+      "detail": "SendStreamingMessage, SubscribeToTask, CreateTaskPushNotificationConfig, GetTaskPushNotificationConfig, ListTaskPushNotificationConfigs, DeleteTaskPushNotificationConfig, GetExtendedAgentCard, HTTP+JSON/REST binding, gRPC binding, SSE, resuming a background task after a restart, task resumption other than an x402 extension payment, push notifications, multi-turn conversational continuation, text parts, file and URL parts (including inline bytes), multi-part messages, message roles other than ROLE_USER, authenticated extended agent cards, A2A authentication schemes, artifact types beyond Agent Commerce outcome data, tasks across gateway instances"
     },
     {
       "name": "ACP",

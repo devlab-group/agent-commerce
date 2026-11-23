@@ -4,7 +4,7 @@
   "title": "A2A",
   "status": "experimental",
   "role": "Transport that carries x402 and MPP payments in `SendMessage`, including through the x402 extension.",
-  "subset": "Agent Card, `SendMessage`, `GetTask`, `ListTasks`, `CancelTask`, paid flow and the x402 extension",
+  "subset": "Agent Card, `SendMessage` with `returnImmediately`, `GetTask`, `ListTasks`, `CancelTask`, paid flow and the x402 extension",
   "spec": {
     "revisions": ["1.0.1"],
     "display": "v1.0.1; negotiation `1.0`; `JSONRPC` binding",
@@ -25,6 +25,7 @@
     { "name": "GetTask", "status": "experimental" },
     { "name": "ListTasks", "status": "experimental" },
     { "name": "CancelTask", "status": "experimental" },
+    { "name": "returnImmediately", "status": "experimental" },
     { "name": "x402-extension", "status": "experimental" }
   ],
   "exclusions": [
@@ -38,7 +39,10 @@
     { "name": "HTTP+JSON/REST binding" },
     { "name": "gRPC binding" },
     { "name": "SSE" },
-    { "name": "long-running task persistence" },
+    {
+      "name": "resuming a background task after a restart",
+      "note": "A task the gateway stopped in reads as failed; any payment is in the gateway records."
+    },
     { "name": "task resumption other than an x402 extension payment" },
     { "name": "push notifications" },
     { "name": "multi-turn conversational continuation" },
@@ -75,7 +79,7 @@
     },
     {
       "requirement": "§3.2.2: returnImmediately as well as the blocking default",
-      "state": "open"
+      "state": "closed"
     },
     {
       "requirement": "§3.3.2: validate all input parameters, including tenant and configuration",

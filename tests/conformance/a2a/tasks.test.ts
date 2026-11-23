@@ -8,7 +8,7 @@
 import { randomUUID } from 'node:crypto';
 import { TaskState } from '@a2a-js/sdk';
 import { ClientFactory } from '@a2a-js/sdk/client';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { TaskRecord } from '../../../src/core';
 import type { A2aTask } from '../../../src/protocols/a2a/types';
 import { MERCHANT_BODY, type RunningGateway, startConformanceGateway } from './support/gateway';
@@ -338,6 +338,40 @@ describe('SendMessage naming a recorded task', () => {
     );
 
     expect(error?.code).toBe(-32602);
+  });
+});
+
+describe('SendMessage with returnImmediately', () => {
+  it('answers a working task at once, and GetTask then reads the result', async () => {
+    const body = await post('SendMessage', {
+      ...invocation({ resource: 'weather_basic', input: { city: 'Berlin' } }),
+      configuration: { returnImmediately: true },
+    });
+    const working = (body.result as { task: A2aTask }).task;
+
+    expect(working).toEqual({
+      id: working.id,
+      contextId: working.contextId,
+      status: { state: 'TASK_STATE_WORKING', timestamp: expect.any(String) },
+      artifacts: [],
+    });
+    await vi.waitFor(async () => {
+      const read = (await post('GetTask', { id: working.id })).result as A2aTask;
+      expect(read.status.state).toBe('TASK_STATE_COMPLETED');
+      expect(read.contextId).toBe(working.contextId);
+      expect(read.artifacts[0]?.parts[0]?.data).toEqual(MERCHANT_BODY);
+    });
+  });
+
+  it('answers an unknown resource with its failed task, without a background run', async () => {
+    const body = await post('SendMessage', {
+      ...invocation({ resource: 'no_such_resource', input: {} }),
+      configuration: { returnImmediately: true },
+    });
+
+    const task = (body.result as { task: A2aTask }).task;
+    expect(task.status.state).toBe('TASK_STATE_FAILED');
+    expect(task.artifacts[0]?.parts[0]?.data).toMatchObject({ code: 'RESOURCE_NOT_FOUND' });
   });
 });
 

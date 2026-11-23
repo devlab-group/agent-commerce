@@ -30,7 +30,7 @@ import type { PendingPayments } from './x402-extension';
 export interface TaskOperations {
   readonly tasks: A2aTaskStore;
   readonly pendingPayments: PendingPayments;
-  /** Task ids whose payments are running in this process */
+  /** Active task ids, including blocking payments and background runs */
   readonly running: ReadonlySet<string>;
   readonly clock: Clock;
   /** Expiry to assign when recording a task now */

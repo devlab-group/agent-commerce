@@ -6,7 +6,7 @@
  */
 import { Role, type SendMessageRequest, TaskState } from '@a2a-js/sdk';
 import { ClientFactory } from '@a2a-js/sdk/client';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { MERCHANT_BODY, type RunningGateway, startConformanceGateway } from './support/gateway';
 
 let running: RunningGateway;
@@ -82,6 +82,27 @@ describe('free resource, invoked by the official SDK client', () => {
 
     const metadata = result.artifacts[0]?.metadata as Record<string, unknown> | undefined;
     expect(metadata?.['agent-commerce/delivery']).toMatchObject({ resourceId: 'weather_basic' });
+  });
+
+  it('answers a working task with returnImmediately, and reads the result with getTask', async () => {
+    const sdk = await client();
+    const result = await sdk.sendMessage({
+      ...invocation('weather_basic', { city: 'Berlin' }),
+      configuration: {
+        acceptedOutputModes: [],
+        taskPushNotificationConfig: undefined,
+        historyLength: undefined,
+        returnImmediately: true,
+      },
+    });
+    if (!('status' in result)) throw new Error('expected a task');
+
+    expect(result.status?.state).toBe(TaskState.TASK_STATE_WORKING);
+    await vi.waitFor(async () => {
+      const read = await sdk.getTask({ tenant: '', id: result.id, historyLength: undefined });
+      expect(read.status?.state).toBe(TaskState.TASK_STATE_COMPLETED);
+      expect(read.artifacts[0]?.parts[0]?.content?.value).toEqual(MERCHANT_BODY);
+    });
   });
 
   it('answers a resource that is not exposed over a2a with a failed task, not a transport error', async () => {

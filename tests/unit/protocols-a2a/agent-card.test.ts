@@ -290,6 +290,7 @@ describe('A2A adapter lifecycle', () => {
       'GetTask',
       'ListTasks',
       'CancelTask',
+      'returnImmediately',
       'x402-extension',
     ]);
     for (const served of ['GetTask', 'ListTasks', 'CancelTask']) {
@@ -300,7 +301,7 @@ describe('A2A adapter lifecycle', () => {
     expect(descriptor.unsupported).toEqual(
       expect.arrayContaining([
         'SendStreamingMessage',
-        'long-running task persistence',
+        'resuming a background task after a restart',
         'push notifications',
         'multi-turn conversational continuation',
         'HTTP+JSON/REST binding',

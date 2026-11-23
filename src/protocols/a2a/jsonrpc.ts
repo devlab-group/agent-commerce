@@ -82,30 +82,35 @@ export function jsonRpcResult(id: JsonRpcId, result: unknown): Record<string, un
 }
 
 /**
- * Add `google.rpc.ErrorInfo` to the detail array for A2A-specific errors.
+ * Add `google.rpc.ErrorInfo` to the detail array for A2A-specific errors,
+ * followed by any `details` given
  */
 export function jsonRpcError(
   id: JsonRpcId,
   code: number,
   message: string,
+  details: readonly Record<string, unknown>[] = [],
 ): Record<string, unknown> {
   const reason = A2A_ERROR_REASONS.get(code);
-  const error: JsonRpcErrorBody = {
-    code,
-    message,
+  const data = [
     ...(reason !== undefined
-      ? {
-          data: [
-            {
-              '@type': 'type.googleapis.com/google.rpc.ErrorInfo',
-              reason,
-              domain: 'a2a-protocol.org',
-            },
-          ],
-        }
-      : {}),
-  };
+      ? [
+          {
+            '@type': 'type.googleapis.com/google.rpc.ErrorInfo',
+            reason,
+            domain: 'a2a-protocol.org',
+          },
+        ]
+      : []),
+    ...details,
+  ];
+  const error: JsonRpcErrorBody = { code, message, ...(data.length > 0 ? { data } : {}) };
   return { jsonrpc: '2.0', id, error };
+}
+
+/** `google.rpc.RetryInfo`: when a client may retry a temporarily refused call */
+export function retryInfo(seconds: number): Record<string, unknown> {
+  return { '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay: `${seconds}s` };
 }
 
 export function parseJsonRpcRequest(rawBody: string): JsonRpcParseResult {

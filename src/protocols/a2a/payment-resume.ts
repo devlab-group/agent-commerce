@@ -3,8 +3,16 @@ import type { AuthorizationSubmission, CanonicalRequest, ProtocolAdapterContext 
 import { CommerceError, toCommerceError } from '../../core';
 import { toLogInfo } from '../../core/errors';
 import { isRecord } from '../../core/is-record';
+import type { BackgroundRuns } from './background';
 import { A2A_TASK_STATE_FAILED } from './constants';
-import { JSONRPC_INVALID_PARAMS, type JsonRpcId, jsonRpcError, jsonRpcResult } from './jsonrpc';
+import {
+  JSONRPC_INTERNAL_ERROR,
+  JSONRPC_INVALID_PARAMS,
+  type JsonRpcId,
+  jsonRpcError,
+  jsonRpcResult,
+  retryInfo,
+} from './jsonrpc';
 import {
   completedTask,
   failedTask,
@@ -36,19 +44,31 @@ export interface PaymentResume {
   readonly pendingPayments: PendingPayments;
   /** Retain a response; log write failures and return false instead of throwing */
   readonly keep: (task: A2aTask) => Promise<boolean>;
-  /** Task ids whose payments are running in this process */
+  /** Active task ids, including blocking payments and background runs */
   readonly running: Set<string>;
+  readonly background: BackgroundRuns;
+  /** Store a working response; return an error if the write fails */
+  readonly recordWorking: (task: A2aTask) => Promise<CommerceError | undefined>;
 }
+
+/** Refusal message when no background slot is free */
+export const BACKGROUND_FULL = 'Too many tasks are running in the background; retry shortly.';
+
+// Seconds a payment refused for want of a background slot waits before a resend
+const BACKGROUND_RETRY_SECONDS = 1;
 
 /**
  * Resume an unpaid x402 task identified by `taskId`, even without the extension
  * header. Return undefined if the message names no pending task or loses the
  * atomic take to another call. Call after `readMessage` validates the message.
+ * For a payment submission with `returnImmediately`, return a working task
+ * without waiting for the payment result.
  */
 export async function resumePayment(
   resume: PaymentResume,
   id: JsonRpcId,
   params: unknown,
+  returnImmediately: boolean,
 ): Promise<Record<string, unknown> | undefined> {
   const { context, pendingPayments } = resume;
   const message = isRecord(params) ? params['message'] : undefined;
@@ -81,11 +101,24 @@ export async function resumePayment(
       return jsonRpcError(id, JSONRPC_INVALID_PARAMS, toCommerceError(err).message);
     }
   }
+  // Reserve capacity before taking the purchase so a full runner leaves it
+  // payable. Refuse with a system error, not a failed task: a terminal state
+  // would tell the client the task takes no more messages (A2A 1.0.1
+  // sections 3.1.1 and 3.3.2).
+  const immediate = returnImmediately && submission.kind === 'submitted';
+  if (immediate && !resume.background.reserve()) {
+    return jsonRpcError(id, JSONRPC_INTERNAL_ERROR, BACKGROUND_FULL, [
+      retryInfo(BACKGROUND_RETRY_SECONDS),
+    ]);
+  }
   // Take after validation and before execution; the earlier read did not claim
   // the purchase. If another payment or cancellation took it, let the adapter
   // respond from the retained task record.
   const taken = await pendingPayments.take(taskId);
-  if (taken === undefined) return undefined;
+  if (taken === undefined) {
+    if (immediate) resume.background.release();
+    return undefined;
+  }
   const authorization = taken.authorization ?? followUp;
 
   if (submission.kind === 'rejected') {
@@ -105,25 +138,46 @@ export async function resumePayment(
     return taskResult(id, declined);
   }
 
+  const ids = {
+    taskId,
+    contextId: taken.contextId,
+    artifactId: context.ids.next('a2a-artifact'),
+    statusMessageId: context.ids.next('a2a-msg'),
+  };
+  const working = workingTask(taskId, taken.contextId, context.clock.nowIso());
+  // Add the running entry before publishing the working record
   resume.running.add(taskId);
-  try {
-    await resume.keep(workingTask(taskId, taken.contextId, context.clock.nowIso()));
-    const paid = await payPending(
-      context,
-      { ...taken, ...(authorization !== undefined ? { authorization } : {}) },
-      submission.payload,
-      {
-        taskId,
-        contextId: taken.contextId,
-        artifactId: context.ids.next('a2a-artifact'),
-        statusMessageId: context.ids.next('a2a-msg'),
-      },
-    );
-    await resume.keep(paid);
-    return taskResult(id, paid);
-  } finally {
-    resume.running.delete(taskId);
+  if (!immediate) {
+    await resume.keep(working);
+  } else {
+    // Require a working record before background payment processing. The
+    // purchase has been taken, but payment verification has not started.
+    const refused = await resume.recordWorking(working);
+    if (refused !== undefined) {
+      resume.running.delete(taskId);
+      resume.background.release();
+      const failed = failedTask(refused, { ...ids, timestamp: context.clock.nowIso() });
+      await resume.keep(failed);
+      return taskResult(id, failed);
+    }
   }
+  const pay = async (): Promise<A2aTask> => {
+    try {
+      const paid = await payPending(
+        context,
+        { ...taken, ...(authorization !== undefined ? { authorization } : {}) },
+        submission.payload,
+        ids,
+      );
+      await resume.keep(paid);
+      return paid;
+    } finally {
+      resume.running.delete(taskId);
+    }
+  };
+  if (!immediate) return taskResult(id, await pay());
+  resume.background.start(pay);
+  return taskResult(id, working);
 }
 
 // The pending purchase is consumed before execution; resends to a retained

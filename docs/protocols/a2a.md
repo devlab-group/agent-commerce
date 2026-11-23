@@ -9,7 +9,7 @@
 | Version       | `A2A-Version: 1.0` header, or an `A2A-Version` query parameter when the header is absent; patch suffixes are accepted but ignored |
 | Agent Card    | `GET /.well-known/agent-card.json`                                                                                                |
 | Default mount | `/a2a`                                                                                                                            |
-| Task model    | synchronous calls; task responses retained for later reads (see [Tasks](#tasks))                                                  |
+| Task model    | blocking by default; `returnImmediately: true` enables background execution; responses retained for reads (see [Tasks](#tasks))   |
 
 Each A2A resource becomes an Agent Card skill. Paid skills have a `paid` tag
 and a price in their description. A2A v1.0 has no input-schema field for
@@ -80,7 +80,7 @@ merchant input and extension metadata. Sending both names for a field returns
 | `configuration.acceptedOutputModes`            | absent, empty, or a list that includes `application/json`, `application/*` or `*/*`   | `-32005`  |
 | `configuration.taskPushNotificationConfig`     | absent                                                                                | `-32003`  |
 | `configuration.historyLength`, `historyLength` | absent or an integer from 0 to 2,147,483,647; ignored because no task history is kept | `-32602`  |
-| `configuration.returnImmediately`              | absent or a boolean; ignored, so responses remain synchronous                         | `-32602`  |
+| `configuration.returnImmediately`              | absent or a boolean; see [Background tasks](#background-tasks)                        | `-32602`  |
 | `metadata` on `SendMessage` and `CancelTask`   | absent or an object; ignored                                                          | `-32602`  |
 | `id` on `GetTask` and `CancelTask`             | a non-empty string                                                                    | `-32602`  |
 | `contextId` on `ListTasks`                     | absent or a string; absent, `null` and `""` list nothing                              | `-32602`  |
@@ -110,7 +110,7 @@ An extension status message
 carries `contextId`, `taskId`, `extensions: [<extension URI>]` and the
 `x402.payment.*` metadata.
 
-1. An x402 paid call without a proof returns `TASK_STATE_INPUT_REQUIRED`. The status
+1. A blocking x402 paid call without a proof returns `TASK_STATE_INPUT_REQUIRED`. The status
    message carries `x402.payment.status: payment-required` and the v2
    `PaymentRequired` in `x402.payment.required`.
 2. The client sends a message with that `taskId` and sets
@@ -225,9 +225,10 @@ Once the store has `protocols.a2a.tasks.maxRetained` unexpired records (default
 1000), it refuses new records and permits replacements. It does not evict
 records, even if the limit is lowered. Free calls cannot evict an unexpired
 paid result. A new extension purchase at capacity fails with `GATEWAY_BUSY`
-without holding a pending purchase. Other responses are returned without being
-retained, and the adapter logs at `warn`. Write exceptions are logged at `error`.
-Retention changes affect subsequent writes.
+without holding a pending purchase. Other blocking responses are returned
+without being retained, and the adapter logs at `warn`. Write exceptions are
+logged at `error`. Background startup refusals are described below. Retention
+changes affect subsequent writes.
 
 ### Access
 
@@ -268,18 +269,45 @@ A `SendMessage` that names a task gets these answers:
 | any other kept task                                  | `UnsupportedOperationError`: the task takes no more messages |
 | no kept task                                         | `TaskNotFoundError`                                          |
 
+### Background tasks
+
+With `configuration.returnImmediately: true`, `SendMessage` stores and returns
+a `TASK_STATE_WORKING` task without waiting for the purchase result.
+`GetTask` and `ListTasks` expose the result once recorded: a finished task or
+one waiting for an x402 extension payment. The option also lets a payment
+submission run in the background. Declined payments and unknown resources
+still return failed tasks immediately.
+
+Background work can outlive its HTTP request, so each adapter has a separate
+limit of 20 background slots. Startup refusals happen before payment
+verification, settlement or backend calls:
+
+- A new purchase returns an unretained failed `GATEWAY_BUSY` task if no slot
+  is free or its working record does not fit in the task store.
+- A payment submission refused because no slot is free returns JSON-RPC
+  `-32603` with a `google.rpc.RetryInfo` delay instead of a task. A failed
+  task would be terminal, while this one stays unchanged and payable; resend
+  the payment after the delay.
+- If storing the working task fails for another reason, the call returns a
+  failed task. A payment submission has already taken its pending purchase,
+  which is no longer payable.
+
+Graceful shutdown waits for started background work to settle, including its
+result-write attempts. `agent-commerce start` then closes the receipt store.
+
 A stored `TASK_STATE_WORKING` task that is absent from this process's running
 set is reported by `GetTask` and `ListTasks` as `TASK_STATE_FAILED`. This can
-follow a restart or a failed final-result write. Its `INTERNAL_ERROR` envelope
-tells the buyer to check with the merchant before paying again. Reads do not
-rewrite the record. This assumes one gateway per receipt store. `reconcile`
-and manual resolution update the payment attempt, not the task.
+follow a forced shutdown during background work or a failed final-result
+write. Its `INTERNAL_ERROR` envelope tells the buyer to check with the
+merchant before paying again. Reads do not rewrite the record. This assumes
+one gateway per receipt store. `reconcile` and manual resolution update the
+payment attempt, not the task.
 
 ## Errors
 
-The adapter returns JSON-RPC errors for invalid requests and A2A features it
-cannot serve. Alongside `-32700`, `-32600`, `-32601`, `-32602` and `-32603`, it
-uses these A2A codes:
+The adapter returns JSON-RPC errors for invalid requests, A2A features it
+cannot serve and calls it is too busy to start. Alongside `-32700`, `-32600`,
+`-32601`, `-32602` and `-32603`, it uses these A2A codes:
 
 | Code     | A2A error                           | Returned for                                                                                                                         |
 | -------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
@@ -327,7 +355,7 @@ The A2A descriptor in `GET /.well-known/agent-commerce` lists these names in
 - `HTTP+JSON/REST binding`
 - `gRPC binding`
 - `SSE`
-- `long-running task persistence`
+- `resuming a background task after a restart`: A task the gateway stopped in reads as failed; any payment is in the gateway records.
 - `task resumption other than an x402 extension payment`
 - `push notifications`
 - `multi-turn conversational continuation`

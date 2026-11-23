@@ -17,6 +17,7 @@ const A2A_CAPABILITIES: readonly string[] = [
   'GetTask',
   'ListTasks',
   'CancelTask',
+  'returnImmediately',
   // The x402 A2A transport, opt-in per request
   'x402-extension',
 ];
