@@ -1,0 +1,79 @@
+version: 1
+
+# Gateway fixture for the `tck` CI job. It exposes one free resource and
+# one x402 resource, which adds the payment extension to the Agent Card.
+# Both backends use the demo merchant on loopback port 3000. RPC and
+# facilitator URLs point to loopback port 9.
+merchant:
+  id: tck-store
+  name: TCK Store
+  publicBaseUrl: http://127.0.0.1:8099
+
+server:
+  port: 8099
+  host: 127.0.0.1
+
+storage:
+  receipts:
+    driver: sqlite
+    path: ':memory:'
+
+protocols:
+  http:
+    enabled: false
+  mcp:
+    enabled: false
+    mountPath: /mcp
+  a2a:
+    enabled: true
+    mountPath: /a2a
+
+resources:
+  weather_basic:
+    name: Basic Weather
+    description: Current basic weather for a city. Free.
+    input:
+      type: object
+      properties:
+        city:
+          type: string
+      required: [city]
+      additionalProperties: false
+    backend:
+      type: http
+      method: GET
+      url: http://127.0.0.1:3000/api/weather/{city}
+      timeoutMs: 5000
+    pricing:
+      type: free
+    expose: [a2a]
+
+  market_report:
+    name: Premium Market Report
+    description: Latest premium market analysis. Paid resource.
+    input:
+      type: object
+      properties: {}
+      additionalProperties: false
+    backend:
+      type: http
+      method: GET
+      url: http://127.0.0.1:3000/api/report
+      timeoutMs: 5000
+    pricing:
+      type: fixed
+      amount: '0.01'
+      currency: USDC
+    expose: [a2a]
+    payments: [x402]
+
+payments:
+  x402:
+    enabled: true
+    network: eip155:84532
+    rpcUrl: http://127.0.0.1:9/rpc
+    payTo: '0x1111111111111111111111111111111111111111'
+    maxTimeoutSeconds: 120
+    facilitator:
+      mode: remote
+      url: http://127.0.0.1:9/facilitator

@@ -125,6 +125,68 @@ jobs:
       # with deployed or preloaded tokens and no public RPC or facilitator.
       - run: npm run test:e2e
 
+  tck:
+    name: A2A TCK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      # Use the same record for the TCK revision and expected outcomes
+      - name: Read the TCK pin
+        id: pin
+        run: |
+          node -p "'repo=' + require('./src/support/a2a.json').conformance.upstream.repo" >> "$GITHUB_OUTPUT"
+          node -p "'commit=' + require('./src/support/a2a.json').conformance.upstream.commit" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: ${{ steps.pin.outputs.repo }}
+          ref: ${{ steps.pin.outputs.commit }}
+          path: tck
+          persist-credentials: false
+      # Use the TCK lockfile to key the uv cache
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+        with:
+          version: '0.13.9'
+          python-version: '3.15.2'
+          enable-cache: true
+          cache-dependency-glob: tck/uv.lock
+      - run: uv sync --frozen
+        working-directory: tck
+      # The gateway's backend, RPC and facilitator URLs use loopback
+      # addresses in tests/tck/config.yaml
+      - name: Start the demo merchant and the gateway
+        run: |
+          npx tsx demo/merchant/src/main.ts > "$RUNNER_TEMP/merchant.log" 2>&1 &
+          AGENT_COMMERCE_CONFIG=tests/tck/config.yaml npx tsx src/gateway/main.ts > "$RUNNER_TEMP/gateway.log" 2>&1 &
+          for url in http://127.0.0.1:3000/api/report http://127.0.0.1:8099/health; do
+            for _ in $(seq 60); do
+              node -e "fetch('$url').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))" && break
+              sleep 1
+            done
+            node -e "fetch('$url').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"
+          done
+      # Run the comparison even if expected failures make the TCK exit
+      # non-zero. A missing report or one with no test cases fails the job.
+      - name: Run the TCK at MUST level
+        working-directory: tck
+        run: uv run --frozen ./run_tck.py --sut-host http://127.0.0.1:8099 --transport jsonrpc --level must || true
+      - name: Compare the run with the record
+        run: npx tsx scripts/tck-compare.ts tck/reports/junitreport.xml
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: tck-reports
+          path: |
+            tck/reports/
+            ${{ runner.temp }}/gateway.log
+          retention-days: 7
+
   package:
     name: npm package
     runs-on: ubuntu-latest

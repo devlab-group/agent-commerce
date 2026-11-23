@@ -53,6 +53,29 @@ A change is not mergeable if the contract surface changed unannounced,
 TypeScript fails, lint fails, required tests fail, or the deterministic E2E
 fails.
 
+### A2A TCK
+
+The `tck` CI job runs the [A2A TCK](https://github.com/a2aproject/a2a-tck) at
+MUST level against the gateway configured by `tests/tck/config.yaml`. It
+compares failures and skips with `conformance.upstream` in
+`src/support/a2a.json` and fails on a mismatch. The record lists individual
+outcomes and shared skip messages, with a reason for each. Update it in the
+same commit when these outcomes change.
+
+To run locally, check out the TCK at the recorded commit and install Python
+3.15 and [uv](https://docs.astral.sh/uv/). Run the comparison even if the TCK
+command exits non-zero:
+
+```bash
+npm run demo:merchant &
+AGENT_COMMERCE_CONFIG=tests/tck/config.yaml npx tsx src/gateway/main.ts &
+# in the TCK checkout
+uv sync --frozen
+uv run --frozen ./run_tck.py --sut-host http://127.0.0.1:8099 --transport jsonrpc --level must
+# back in this repository
+npx tsx scripts/tck-compare.ts <tck checkout>/reports/junitreport.xml
+```
+
 ## Architecture you need to know before writing code
 
 Read, in order:

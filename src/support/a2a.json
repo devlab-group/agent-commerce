@@ -60,7 +60,7 @@
   ],
   "deviations": [],
   "conformance": {
-    "suite": "Our tests against the A2A 1.0.1 specification; the A2A TCK has not been run.",
+    "suite": "Our tests against the A2A 1.0.1 specification, and the A2A TCK at MUST level in CI.",
     "tests": [
       "tests/conformance/a2a/agent-card.test.ts",
       "tests/conformance/a2a/errors.test.ts",
@@ -70,7 +70,233 @@
       "tests/conformance/a2a/protocol-version.test.ts",
       "tests/conformance/a2a/tasks.test.ts"
     ],
-    "skipped": []
+    "skipped": [],
+    "upstream": {
+      "repo": "a2aproject/a2a-tck",
+      "commit": "5e6f37c2d38eb3d7684686243c34d365c83df49b",
+      "command": "run_tck.py --sut-host http://127.0.0.1:8099 --transport jsonrpc --level must",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "tck",
+      "results": [
+        {
+          "test": "tests.compatibility.core_operations.test_requirements::test_must_requirement[CORE-SEND-001-jsonrpc]",
+          "id": "CORE-SEND-001",
+          "outcome": "failed",
+          "message": "Text parts are not supported",
+          "reason": "The test sends a text part, and the Agent Card declares only application/json input",
+          "upstream": "Report drafted, not filed"
+        },
+        {
+          "test": "tests.compatibility.core_operations.test_requirements::test_must_requirement[CORE-EXECUTION-MODE-001-jsonrpc]",
+          "id": "CORE-EXECUTION-MODE-001",
+          "outcome": "failed",
+          "message": "Text parts are not supported",
+          "reason": "The test sends a text part, and the Agent Card declares only application/json input",
+          "upstream": "Report drafted, not filed"
+        },
+        {
+          "test": "tests.compatibility.core_operations.test_requirements::test_must_requirement[CORE-EXECUTION-MODE-002-jsonrpc]",
+          "id": "CORE-EXECUTION-MODE-002",
+          "outcome": "failed",
+          "message": "Text parts are not supported",
+          "reason": "The test sends a text part, and the Agent Card declares only application/json input",
+          "upstream": "Report drafted, not filed"
+        },
+        {
+          "test": "tests.compatibility.core_operations.test_requirements::test_must_requirement[CORE-MULTI-001a-jsonrpc]",
+          "id": "CORE-MULTI-001a",
+          "outcome": "failed",
+          "message": "Text parts are not supported",
+          "reason": "The test sends a text part, and the Agent Card declares only application/json input",
+          "upstream": "Report drafted, not filed"
+        },
+        {
+          "test": "tests.compatibility.core_operations.test_requirements::test_must_requirement[CORE-MULTI-003-jsonrpc]",
+          "id": "CORE-MULTI-003",
+          "outcome": "failed",
+          "message": "Text parts are not supported",
+          "reason": "The test sends a text part, and the Agent Card declares only application/json input",
+          "upstream": "Report drafted, not filed"
+        },
+        {
+          "test": "tests.compatibility.core_operations.test_requirements::test_must_requirement[CORE-MULTI-002a-jsonrpc]",
+          "id": "CORE-MULTI-002a",
+          "outcome": "failed",
+          "message": "Multi-turn conversational continuation is not supported",
+          "reason": "The adapter refuses the client contextId with -32004, as the requirement asks, but the requirement sets no expected error and the runner fails on any error. Its sample input also sends a text part.",
+          "spec": "A2A 1.0.1 §3.4.1",
+          "upstream": "Report drafted, not filed"
+        },
+        {
+          "test": "tests.compatibility.core_operations.test_transport_behavior.TestJsonRpcFormat::test_response_validates_jsonrpc_envelope",
+          "id": "JSONRPC-FMT-001",
+          "outcome": "failed",
+          "message": "Text parts are not supported",
+          "reason": "The test sends a text part, and the Agent Card declares only application/json input",
+          "upstream": "Report drafted, not filed"
+        },
+        {
+          "test": "tests.compatibility.core_operations.test_artifacts.TestTextArtifact::test_task_has_text_artifact[jsonrpc]",
+          "id": "DM-ART-001",
+          "outcome": "skipped",
+          "message": "send_message failed: Text parts are not supported",
+          "reason": "The test creates its task with a text part, which the adapter refuses",
+          "upstream": "Report drafted, not filed"
+        },
+        {
+          "test": "tests.compatibility.core_operations.test_artifacts.TestFileArtifact::test_task_has_file_artifact[jsonrpc]",
+          "id": "DM-ART-001",
+          "outcome": "skipped",
+          "message": "send_message failed: Text parts are not supported",
+          "reason": "The test creates its task with a text part, which the adapter refuses",
+          "upstream": "Report drafted, not filed"
+        },
+        {
+          "test": "tests.compatibility.core_operations.test_artifacts.TestFileUrlArtifact::test_task_has_file_url_artifact[jsonrpc]",
+          "id": "DM-ART-001",
+          "outcome": "skipped",
+          "message": "send_message failed: Text parts are not supported",
+          "reason": "The test creates its task with a text part, which the adapter refuses",
+          "upstream": "Report drafted, not filed"
+        },
+        {
+          "test": "tests.compatibility.core_operations.test_artifacts.TestDataArtifact::test_task_has_data_artifact[jsonrpc]",
+          "id": "DM-ART-001",
+          "outcome": "skipped",
+          "message": "send_message failed: Text parts are not supported",
+          "reason": "The test creates its task with a text part, which the adapter refuses",
+          "upstream": "Report drafted, not filed"
+        },
+        {
+          "test": "tests.compatibility.core_operations.test_artifacts.TestMessageResponse::test_returns_message_with_text_part[jsonrpc]",
+          "id": "DM-MSG-001",
+          "outcome": "skipped",
+          "message": "send_message failed: Text parts are not supported",
+          "reason": "The test creates its task with a text part, which the adapter refuses",
+          "upstream": "Report drafted, not filed"
+        },
+        {
+          "test": "tests.compatibility.core_operations.test_task_history.TestHistoryLengthLimit::test_get_task_history_does_not_exceed_limit[jsonrpc]",
+          "id": "CORE-HIST-002",
+          "outcome": "skipped",
+          "message": "send_message failed: Text parts are not supported",
+          "reason": "The test creates its task with a text part, which the adapter refuses",
+          "upstream": "Report drafted, not filed"
+        },
+        {
+          "test": "tests.compatibility.core_operations.test_task_lifecycle.TestGetTask::test_get_task_returns_current_state[jsonrpc]",
+          "id": "CORE-GET-001",
+          "outcome": "skipped",
+          "message": "send_message failed: Text parts are not supported",
+          "reason": "The test creates its task with a text part, which the adapter refuses",
+          "upstream": "Report drafted, not filed"
+        },
+        {
+          "test": "tests.compatibility.core_operations.test_task_lifecycle.TestCancelTask::test_cancel_task_returns_updated_state[jsonrpc]",
+          "id": "CORE-CANCEL-001",
+          "outcome": "skipped",
+          "message": "send_message failed: Text parts are not supported",
+          "reason": "The test creates its task with a text part, which the adapter refuses",
+          "upstream": "Report drafted, not filed"
+        },
+        {
+          "test": "tests.compatibility.core_operations.test_task_lifecycle.TestCancelTask::test_cancel_terminal_task_returns_error[jsonrpc]",
+          "id": "CORE-CANCEL-002",
+          "outcome": "skipped",
+          "message": "send_message failed: Text parts are not supported",
+          "reason": "The test creates its task with a text part, which the adapter refuses",
+          "upstream": "Report drafted, not filed"
+        },
+        {
+          "test": "tests.compatibility.core_operations.test_task_lifecycle.TestMultiTurn::test_send_message_to_terminal_task[jsonrpc]",
+          "id": "CORE-SEND-002",
+          "outcome": "skipped",
+          "message": "send_message failed: Text parts are not supported",
+          "reason": "The test creates its task with a text part, which the adapter refuses",
+          "upstream": "Report drafted, not filed"
+        },
+        {
+          "test": "tests.compatibility.core_operations.test_task_lifecycle.TestMultiTurn::test_infer_context_from_task[jsonrpc]",
+          "id": "CORE-MULTI-005",
+          "outcome": "skipped",
+          "message": "send_message failed: Text parts are not supported",
+          "reason": "The test creates its task with a text part, which the adapter refuses",
+          "upstream": "Report drafted, not filed"
+        },
+        {
+          "test": "tests.compatibility.core_operations.test_task_lifecycle.TestMultiTurn::test_reject_mismatching_context[jsonrpc]",
+          "id": "CORE-MULTI-006",
+          "outcome": "skipped",
+          "message": "send_message failed: Text parts are not supported",
+          "reason": "The test creates its task with a text part, which the adapter refuses",
+          "upstream": "Report drafted, not filed"
+        },
+        {
+          "test": "tests.compatibility.core_operations.test_data_model.TestSendMessageResponseSchema::test_response_validates_against_schema",
+          "outcome": "skipped",
+          "message": "No successful send_message responses",
+          "reason": "Every message in the run sends a text part, which leaves no successful response to check",
+          "upstream": "Report drafted, not filed"
+        },
+        {
+          "test": "tests.compatibility.core_operations.test_data_model.TestCamelCaseFieldNames::test_no_snake_case_keys",
+          "id": "DM-SERIAL-001",
+          "outcome": "skipped",
+          "message": "No successful send_message responses",
+          "reason": "Every message in the run sends a text part, which leaves no successful response to check",
+          "upstream": "Report drafted, not filed"
+        },
+        {
+          "test": "tests.compatibility.core_operations.test_data_model.TestEnumSerialization::test_enum_values_are_strings",
+          "id": "DM-SERIAL-002",
+          "outcome": "skipped",
+          "message": "No successful send_message responses",
+          "reason": "Every message in the run sends a text part, which leaves no successful response to check",
+          "upstream": "Report drafted, not filed"
+        },
+        {
+          "test": "tests.compatibility.core_operations.test_data_model.TestTimestampFormat::test_timestamps_are_iso8601_utc",
+          "id": "DM-SERIAL-003",
+          "outcome": "skipped",
+          "message": "No successful send_message responses",
+          "reason": "Every message in the run sends a text part, which leaves no successful response to check",
+          "upstream": "Report drafted, not filed"
+        }
+      ],
+      "skipClasses": [
+        {
+          "reason": "The gateway serves only the JSON-RPC binding",
+          "messages": [
+            "Transport 'http_json' not configured",
+            "Transport 'grpc' not configured",
+            "Transport 'grpc' not configured (filtered by --transport)",
+            "Transport 'http_json' not configured (filtered by --transport)",
+            "HTTP+JSON transport not configured",
+            "gRPC transport not configured"
+          ]
+        },
+        {
+          "reason": "The Agent Card declares streaming false (excluded)",
+          "messages": [
+            "Agent does not support streaming",
+            "Agent card does not declare capabilities for: ['streaming']",
+            "Streaming not supported: A2A method \"SendStreamingMessage\" is not supported by this deployment."
+          ]
+        },
+        {
+          "reason": "The Agent Card declares push notifications false (excluded)",
+          "messages": ["Agent does not support push notifications"]
+        },
+        {
+          "reason": "The Agent Card declares no extended card (excluded)",
+          "messages": ["Agent does not declare extendedAgentCard capability"]
+        },
+        {
+          "reason": "The TCK's probe for an agent that requires its test extension; this card requires none",
+          "messages": ["Agent card does not declare urn:a2a:tck:required-extension as required"]
+        }
+      ]
+    }
   },
   "gaps": [
     {

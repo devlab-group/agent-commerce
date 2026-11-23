@@ -22,12 +22,14 @@ export const REPO_ROOT = join(import.meta.dirname, '..');
 
 const text = z.string().min(1);
 
+const COMMIT = z.string().regex(/^[0-9a-f]{40}$/);
+
 const SpecSchema = z.strictObject({
   // Revision identifiers for comparison with code
   revisions: z.array(text).min(1),
   // Display text for the pinned revision
   display: text,
-  source: z.strictObject({ repo: text, commit: z.string().regex(/^[0-9a-f]{40}$/) }),
+  source: z.strictObject({ repo: text, commit: COMMIT }),
   // Whether upstream calls the pinned revision stable; null when unspecified
   stable: z.boolean().nullable(),
   // Upstream's own words on the revision's status
@@ -99,6 +101,32 @@ const SupportRecordSchema = z
             upstream: text.optional(),
           }),
         ),
+        // CI suite revision, expected failures and skips, and shared skip messages
+        upstream: z
+          .strictObject({
+            repo: text,
+            commit: COMMIT,
+            command: text,
+            workflow: text,
+            job: text,
+            // Identify tests by the JUnit report's `classname::name`. Match
+            // `message` as a substring of the failure or skip message.
+            results: z.array(
+              z.strictObject({
+                test: text,
+                id: text.optional(),
+                outcome: z.enum(['failed', 'skipped']),
+                message: text,
+                reason: text,
+                spec: text.optional(),
+                upstream: text.optional(),
+              }),
+            ),
+            // Group accepted skips by exact message, such as those for unsupported
+            // capabilities or transports
+            skipClasses: z.array(z.strictObject({ reason: text, messages: z.array(text).min(1) })),
+          })
+          .optional(),
       })
       .optional(),
     // Known MUST-level gaps against the pinned revision
@@ -177,6 +205,7 @@ export function citedPaths(record: SupportRecord): string[] {
       ...(record.combinations ?? []).map((combination) => combination.evidence),
       ...(record.conformance?.tests ?? []),
       ...(record.conformance?.skipped ?? []).map((skipped) => skipped.test),
+      ...(record.conformance?.upstream !== undefined ? [record.conformance.upstream.workflow] : []),
       ...record.deviations.flatMap((deviation) => deviation.tests),
       ...record.docs,
     ]),
