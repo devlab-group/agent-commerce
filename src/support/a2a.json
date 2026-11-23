@@ -86,8 +86,8 @@
       "state": "closed"
     },
     {
-      "requirement": "§7.1: encrypted communication in production; merchant.publicBaseUrl accepts http",
-      "state": "open"
+      "requirement": "§7.1: encrypted communication in production; config accepts an http merchant.publicBaseUrl, and doctor warns when its host is not loopback",
+      "state": "closed"
     }
   ],
   "docs": ["docs/protocols/a2a.md"]

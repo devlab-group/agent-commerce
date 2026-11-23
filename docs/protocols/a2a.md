@@ -22,6 +22,12 @@ least one A2A resource.
 The card has a content-based `ETag` and `Cache-Control: public, max-age=300`.
 A matching `If-None-Match` request receives `304` without a body.
 
+The card builds its advertised endpoint from `merchant.publicBaseUrl` and
+`mountPath`. A2A 1.0.1 requires encrypted transport in production (section 7.1).
+Config still accepts HTTP URLs in 2.x. When A2A is enabled,
+`agent-commerce doctor` warns about an HTTP base URL unless its host is
+`localhost`, a subdomain of `localhost`, an address in `127.0.0.0/8`, or `::1`.
+
 ## Invocation and payment
 
 The adapter requires a non-empty `messageId` and exactly one structured data
@@ -92,23 +98,25 @@ merchant input and extension metadata. Sending both names for a field returns
 
 ## x402 extension
 
-A client activates the extension with
-`A2A-Extensions: https://github.com/google-a2a/a2a-x402/v0.1` and can then
-pay without `_payment`. The gateway uses x402 v2 documents from the
+A client activates the extension by including
+`https://github.com/google-a2a/a2a-x402/v0.1` in either `A2A-Extensions`
+(A2A 1.0) or `X-A2A-Extensions` (a2a-x402 v0.1). Both accept comma-separated
+URI lists and repeated headers. Activation lets the client pay without
+`_payment`. The gateway uses x402 v2 documents from the
 [x402 A2A transport](https://github.com/x402-foundation/x402/blob/main/specs/transports-v2/a2a.md).
-Its examples use lowercase task states and roles, `kind` on parts, and the
-`X-A2A-Extensions` header. This gateway uses the A2A 1.0 forms:
-`TASK_STATE_INPUT_REQUIRED`, `ROLE_AGENT`, parts without `kind`, and
-`A2A-Extensions`. The Agent Card advertises the extension as optional, with
-`params: { "x402Version": 2 }`, when x402 is a skill's selected payment rail.
+The transport's examples use lowercase task states and roles, with `kind` on
+parts. This gateway uses the A2A 1.0 forms: `TASK_STATE_INPUT_REQUIRED`,
+`ROLE_AGENT` and parts without `kind`. The Agent Card advertises the extension
+as optional, with `params: { "x402Version": 2 }`, when x402 is a skill's selected
+payment rail.
 
-A response carries the `A2A-Extensions` header when its task status message
-lists the extension. This includes input-required tasks, payment-message
-responses even when the request omits the header, and `GetTask` reads of those
-tasks. Other responses, such as MPP tasks and JSON-RPC errors, omit it.
-An extension status message
-carries `contextId`, `taskId`, `extensions: [<extension URI>]` and the
-`x402.payment.*` metadata.
+Responses echo the extension URI under both header names when the task's status
+message lists the extension. This includes input-required tasks, payment
+responses even when the request omits activation headers, and `GetTask` reads
+of those tasks. MPP tasks and JSON-RPC errors carry neither header. For origins
+in `server.allowedOrigins`, CORS permits both request headers and exposes both
+response headers to browser code. Extension status messages carry `contextId`,
+`taskId`, `extensions: [<extension URI>]` and `x402.payment.*` metadata.
 
 1. A blocking x402 paid call without a proof returns `TASK_STATE_INPUT_REQUIRED`. The status
    message carries `x402.payment.status: payment-required` and the v2

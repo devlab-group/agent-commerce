@@ -147,18 +147,23 @@ interface RpcResult {
   };
 }
 
+// Use A2A-Extensions for true, omit activation for false, or send explicit headers
+type Activation = boolean | Readonly<Record<string, string | string[]>>;
+
 async function call(
   method: string,
   params: Record<string, unknown>,
-  extension = true,
+  extension: Activation = true,
 ): Promise<RpcResult> {
+  const activation =
+    extension === true ? { 'a2a-extensions': A2A_X402_EXTENSION_URI } : extension || {};
   const res = await gateway.server.inject({
     method: 'POST',
     url: '/a2a',
     headers: {
       'content-type': 'application/json',
       'a2a-version': '1.0',
-      ...(extension ? { 'a2a-extensions': A2A_X402_EXTENSION_URI } : {}),
+      ...activation,
     },
     payload: JSON.stringify({ jsonrpc: '2.0', id: 'req-1', method, params }),
   });
@@ -171,9 +176,16 @@ async function call(
   return { headers: res.headers, body };
 }
 
-function rpc(message: Record<string, unknown>, extension = true): Promise<RpcResult> {
+function rpc(message: Record<string, unknown>, extension: Activation = true): Promise<RpcResult> {
   return call('SendMessage', { message }, extension);
 }
+
+// Read the response values for both extension header names
+function echoed(headers: Record<string, unknown>): unknown[] {
+  return [headers['a2a-extensions'], headers['x-a2a-extensions']];
+}
+
+const ECHO = [A2A_X402_EXTENSION_URI, A2A_X402_EXTENSION_URI];
 
 // The requests the adapter hands the pipeline
 function spyOnPipeline(): CanonicalRequest[] {
@@ -243,7 +255,7 @@ describe('x402 A2A extension', () => {
   it('asks for payment with an input-required task carrying the x402 v2 document', async () => {
     const { headers, body } = await rpc(buy('x402_report'));
 
-    expect(headers['a2a-extensions']).toBe(A2A_X402_EXTENSION_URI);
+    expect(echoed(headers)).toEqual(ECHO);
     const task = body.result?.task;
     expect(task?.status.state).toBe('TASK_STATE_INPUT_REQUIRED');
     expect(task?.status.message).toMatchObject({
@@ -479,7 +491,44 @@ describe('x402 A2A extension', () => {
     expect(task?.status.message?.parts[0]?.text).toContain('Payment of 0.01 USDC is required');
     expect(task?.status.message).not.toHaveProperty('metadata');
     expect(task?.status.message).not.toHaveProperty('extensions');
-    expect(headers['a2a-extensions']).toBeUndefined();
+    expect(echoed(headers)).toEqual([undefined, undefined]);
+  });
+
+  it.each([
+    ['A2A-Extensions', { 'A2A-Extensions': A2A_X402_EXTENSION_URI }],
+    ['X-A2A-Extensions', { 'X-A2A-Extensions': A2A_X402_EXTENSION_URI }],
+    [
+      'a comma-separated list',
+      { 'x-a2a-extensions': `https://example.com/other/v1, ${A2A_X402_EXTENSION_URI}` },
+    ],
+    [
+      'a repeated header',
+      { 'x-a2a-extensions': ['https://example.com/other/v1', A2A_X402_EXTENSION_URI] },
+    ],
+  ])('activates the extension with %s and echoes it under both names', async (_label, headers) => {
+    const answer = await rpc(buy('x402_report'), headers);
+
+    expect(answer.body.result?.task.status.state).toBe('TASK_STATE_INPUT_REQUIRED');
+    expect(echoed(answer.headers)).toEqual(ECHO);
+  });
+
+  it('does not activate the extension for another URI under either name', async () => {
+    const answer = await rpc(buy('x402_report'), {
+      'a2a-extensions': 'https://example.com/other/v1',
+      'x-a2a-extensions': `${A2A_X402_EXTENSION_URI}/extra`,
+    });
+
+    expect(answer.body.result?.task.status.state).toBe('TASK_STATE_FAILED');
+    expect(echoed(answer.headers)).toEqual([undefined, undefined]);
+  });
+
+  it('echoes neither header on a JSON-RPC error', async () => {
+    const task = await challenged();
+
+    const answer = await rpc(pay(task, { 'x402.payment.status': 'payment-submitted' }));
+
+    expect(answer.body.error?.code).toBe(-32602);
+    expect(echoed(answer.headers)).toEqual([undefined, undefined]);
   });
 
   it('echoes the extension header on a follow-up sent without it', async () => {
@@ -494,7 +543,7 @@ describe('x402 A2A extension', () => {
     );
 
     expect(body.result?.task.status.state).toBe('TASK_STATE_COMPLETED');
-    expect(headers['a2a-extensions']).toBe(A2A_X402_EXTENSION_URI);
+    expect(echoed(headers)).toEqual(ECHO);
   });
 
   it('names the version when the payload is x402 v1', async () => {
@@ -548,7 +597,7 @@ describe('x402 A2A extension', () => {
     const lookup = await call('GetTask', { id: task.id }, false);
     expect(lookup.body.result).toEqual(task);
     // The task's metadata keys belong to the extension, which the response names
-    expect(lookup.headers['a2a-extensions']).toBe(A2A_X402_EXTENSION_URI);
+    expect(echoed(lookup.headers)).toEqual(ECHO);
 
     const { body } = await rpc(
       pay(task, {

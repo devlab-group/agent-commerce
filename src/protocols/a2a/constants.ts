@@ -83,6 +83,12 @@ export const A2A_TASK_STATE_INPUT_REQUIRED = 'TASK_STATE_INPUT_REQUIRED';
 /** Extension activation header, a comma-separated list of extension URIs */
 export const A2A_EXTENSIONS_HEADER = 'a2a-extensions';
 
+/**
+ * Activation header named by a2a-x402 v0.1 and the x402 A2A transport.
+ * The adapter accepts either header name and echoes activation under both.
+ */
+export const A2A_X_EXTENSIONS_HEADER = 'x-a2a-extensions';
+
 /** Hour bounds and default for task retention in `protocols.a2a.tasks.retentionHours` */
 export const A2A_TASK_RETENTION_HOURS = { min: 1, max: 8760, default: 24 } as const;
 

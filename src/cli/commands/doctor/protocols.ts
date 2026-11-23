@@ -26,6 +26,25 @@ import {
   type WellKnownResult,
 } from './types';
 
+// Return the host of a non-loopback HTTP base URL; config accepts these URLs
+// for 2.x compatibility
+function unencryptedPublicHost(publicBaseUrl: string): string | undefined {
+  let url: URL;
+  try {
+    url = new URL(publicBaseUrl);
+  } catch {
+    return undefined;
+  }
+  if (url.protocol !== 'http:') return undefined;
+  const host = url.hostname.replace(/^\[|\]$/g, '');
+  const loopback =
+    host === 'localhost' ||
+    host.endsWith('.localhost') ||
+    host === '::1' ||
+    /^127\.\d+\.\d+\.\d+$/.test(host);
+  return loopback ? undefined : host;
+}
+
 /**
  * The resource mapped to each checkout operation, re-checked against the rules
  * config enforces: present, acp-exposed and free to invoke. Resource ids are
@@ -116,6 +135,16 @@ export function protocolChecks(
       status: 'INFO',
       detail: exclusionNames(a2aRecord).join(', '),
     });
+    // Check the base used for the Agent Card endpoint; A2A 1.0.1 section 7.1
+    // requires encrypted transport in production
+    const host = unencryptedPublicHost(config.merchant.publicBaseUrl);
+    if (host !== undefined) {
+      checks.push({
+        name: 'A2A transport',
+        status: 'WARN',
+        detail: `merchant.publicBaseUrl uses http:// on ${host}, which is not a loopback host: the Agent Card publishes an unencrypted endpoint, and A2A requires encryption in production (spec section 7.1). Serve the gateway at an https:// URL.`,
+      });
+    }
   }
 
   // 5c. ACP specifics, from config and the pins: the well-known document omits

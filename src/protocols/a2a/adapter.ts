@@ -52,6 +52,7 @@ import {
   A2A_TASK_RETENTION_HOURS,
   A2A_UNSUPPORTED_METHODS,
   A2A_VERSION_HEADER,
+  A2A_X_EXTENSIONS_HEADER,
 } from './constants';
 import { buildDescriptor } from './descriptor';
 import {
@@ -106,6 +107,12 @@ const VERSION_PATTERN = /^(\d+\.\d+)(?:\.\d+)?$/;
 
 // A2A version parameter; the header is matched case-insensitively
 const A2A_VERSION_PARAMETER = 'A2A-Version';
+
+// Echo activation under both accepted names so clients can read either header
+const X402_EXTENSION_ECHO = {
+  [A2A_EXTENSIONS_HEADER]: A2A_X402_EXTENSION_URI,
+  [A2A_X_EXTENSIONS_HEADER]: A2A_X402_EXTENSION_URI,
+};
 
 // Cache the card until the adapter starts again with new configuration
 const AGENT_CARD_CACHE_CONTROL = 'public, max-age=300';
@@ -383,16 +390,12 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
         parsed.request.id,
         parsed.request.method,
         parsed.request.params,
-        requestsX402Extension(req.headers[A2A_EXTENSIONS_HEADER]),
+        requestsX402Extension(req.headers[A2A_EXTENSIONS_HEADER]) ||
+          requestsX402Extension(req.headers[A2A_X_EXTENSIONS_HEADER]),
       );
       // Echo the extension when it shaped the task, even without the
       // request header on a payment follow-up
-      this.writeJson(
-        res,
-        200,
-        response,
-        usesX402Extension(response) ? { [A2A_EXTENSIONS_HEADER]: A2A_X402_EXTENSION_URI } : {},
-      );
+      this.writeJson(res, 200, response, usesX402Extension(response) ? X402_EXTENSION_ECHO : {});
     } catch (err) {
       // Nothing from `err` reaches the client
       this.context?.logger.error({ err: toLogInfo(err) }, 'a2a adapter: request handling failed');
