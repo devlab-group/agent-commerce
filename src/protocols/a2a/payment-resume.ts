@@ -151,7 +151,14 @@ export async function resumePayment(
     artifactId: context.ids.next('a2a-artifact'),
     statusMessageId: context.ids.next('a2a-msg'),
   };
-  const working = workingTask(taskId, taken.contextId, context.clock.nowIso());
+  // Mark the payload received and tag the status message for the extension
+  // response headers (a2a-x402 v0.1 sections 6 and 7)
+  const working = withStatusMessage(
+    workingTask(taskId, taken.contextId, context.clock.nowIso()),
+    'Payment received; processing it.',
+    context.ids.next('a2a-msg'),
+    { [X402_PAYMENT_STATUS_KEY]: 'payment-submitted' },
+  );
   // Add the running entry before publishing the working record
   resume.running.add(taskId);
   if (!immediate) {

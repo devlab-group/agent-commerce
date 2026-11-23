@@ -507,19 +507,40 @@ describe('x402 A2A extension', () => {
     expect(body.error?.code).toBe(-32001);
   });
 
+  // Echo the activated extension on JSON-RPC results regardless of payment rail
   it.each([
-    ['a client that does not activate the extension', 'x402_report', false],
-    ['a resource paid with MPP', 'mpp_report', true],
-  ])('keeps the terminal payment-required task for %s', async (_label, resourceId, extension) => {
-    const { headers, body } = await rpc(buy(resourceId), extension);
+    ['a client that does not activate the extension', 'x402_report', false, [undefined, undefined]],
+    ['a resource paid with MPP', 'mpp_report', true, ECHO],
+  ])(
+    'keeps the terminal payment-required task for %s',
+    async (_label, resourceId, extension, echo) => {
+      const { headers, body } = await rpc(buy(resourceId), extension);
 
-    const task = body.result?.task;
-    expect(task?.status.state).toBe('TASK_STATE_FAILED');
-    // A plain reason, with nothing from the extension and no echoed header
-    expect(task?.status.message?.parts[0]?.text).toContain('Payment of 0.01 USDC is required');
-    expect(task?.status.message).not.toHaveProperty('metadata');
-    expect(task?.status.message).not.toHaveProperty('extensions');
-    expect(echoed(headers)).toEqual([undefined, undefined]);
+      const task = body.result?.task;
+      expect(task?.status.state).toBe('TASK_STATE_FAILED');
+      // The task message has no extension metadata or marker
+      expect(task?.status.message?.parts[0]?.text).toContain('Payment of 0.01 USDC is required');
+      expect(task?.status.message).not.toHaveProperty('metadata');
+      expect(task?.status.message).not.toHaveProperty('extensions');
+      expect(echoed(headers)).toEqual(echo);
+    },
+  );
+
+  it('echoes the extension on a purchase returned immediately, before its rail is known', async () => {
+    const { headers, body } = await call('SendMessage', {
+      message: buy('x402_report'),
+      configuration: { returnImmediately: true },
+    });
+
+    const working = body.result?.task as A2aTask;
+    expect(working.status.state).toBe('TASK_STATE_WORKING');
+    expect(echoed(headers)).toEqual(ECHO);
+    await vi.waitFor(async () => {
+      const read = await call('GetTask', { id: working.id }, false);
+      expect((read.body.result as unknown as A2aTask).status.state).toBe(
+        'TASK_STATE_INPUT_REQUIRED',
+      );
+    });
   });
 
   it.each([
@@ -572,6 +593,30 @@ describe('x402 A2A extension', () => {
 
     expect(body.result?.task.status.state).toBe('TASK_STATE_COMPLETED');
     expect(echoed(headers)).toEqual(ECHO);
+  });
+
+  it('echoes the extension on a payment returned immediately, with payment-submitted', async () => {
+    const task = await challenged();
+
+    const { headers, body } = await call('SendMessage', {
+      message: pay(task, {
+        'x402.payment.status': 'payment-submitted',
+        'x402.payment.payload': await paymentPayload(task),
+      }),
+      configuration: { returnImmediately: true },
+    });
+
+    const working = body.result?.task;
+    expect(working?.status.state).toBe('TASK_STATE_WORKING');
+    expect(working?.status.message).toMatchObject({
+      extensions: [A2A_X402_EXTENSION_URI],
+      metadata: { 'x402.payment.status': 'payment-submitted' },
+    });
+    expect(echoed(headers)).toEqual(ECHO);
+    await vi.waitFor(async () => {
+      const read = await call('GetTask', { id: task.id });
+      expect((read.body.result as unknown as A2aTask).status.state).toBe('TASK_STATE_COMPLETED');
+    });
   });
 
   it('names the version when the payload is x402 v1', async () => {

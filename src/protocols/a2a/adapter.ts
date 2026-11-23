@@ -387,16 +387,20 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
         return;
       }
 
+      const activated =
+        requestsX402Extension(req.headers[A2A_EXTENSIONS_HEADER]) ||
+        requestsX402Extension(req.headers[A2A_X_EXTENSIONS_HEADER]);
       const response = await this.dispatch(
         parsed.request.id,
         parsed.request.method,
         parsed.request.params,
-        requestsX402Extension(req.headers[A2A_EXTENSIONS_HEADER]) ||
-          requestsX402Extension(req.headers[A2A_X_EXTENSIONS_HEADER]),
+        activated,
       );
-      // Echo the extension when it shaped the task, even without the
-      // request header on a payment follow-up
-      this.writeJson(res, 200, response, usesX402Extension(response) ? X402_EXTENSION_ECHO : {});
+      // Echo activation on JSON-RPC results for any rail (a2a-x402 v0.1 section 7).
+      // A task's extension marker also triggers the echo on payment follow-ups
+      // without activation headers. JSON-RPC errors do not echo activation.
+      const echo = usesX402Extension(response) || (activated && response['error'] === undefined);
+      this.writeJson(res, 200, response, echo ? X402_EXTENSION_ECHO : {});
     } catch (err) {
       // Nothing from `err` reaches the client
       this.context?.logger.error({ err: toLogInfo(err) }, 'a2a adapter: request handling failed');

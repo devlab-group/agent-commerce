@@ -111,10 +111,11 @@ parts. This gateway uses the A2A 1.0 forms: `TASK_STATE_INPUT_REQUIRED`,
 as optional, with `params: { "x402Version": 2 }`, when x402 is a skill's selected
 payment rail.
 
-Responses echo the extension URI under both header names when the task's status
-message lists the extension. This includes input-required tasks, payment
-responses even when the request omits activation headers, and `GetTask` reads
-of those tasks. MPP tasks and JSON-RPC errors carry neither header. For origins
+Every result to a request that activates the extension echoes its URI under
+both header names, whatever rail the task uses. A task whose status message
+lists the extension echoes it even without activation headers: a payment
+response, or a `GetTask` read of such a task. JSON-RPC errors carry neither
+header. For origins
 in `server.allowedOrigins`, CORS permits both request headers and exposes both
 response headers to browser code. Extension status messages carry `contextId`,
 `taskId`, `extensions: [<extension URI>]` and `x402.payment.*` metadata.
@@ -302,9 +303,11 @@ A `SendMessage` that names a task gets these answers:
 With `configuration.returnImmediately: true`, `SendMessage` stores and returns
 a `TASK_STATE_WORKING` task without waiting for the purchase result.
 `GetTask` and `ListTasks` expose the result once recorded: a finished task or
-one waiting for an x402 extension payment. The option also lets a payment
-submission run in the background. Declined payments and unknown resources
-still return failed tasks immediately.
+one waiting for an x402 extension payment. Payment submissions can also run
+in the background. Their working tasks carry
+`x402.payment.status: payment-submitted` in the status message metadata, and
+the HTTP response echoes the extension. Declined payments and unknown
+resources still return failed tasks immediately.
 
 Background work can outlive its HTTP request, so each adapter has a separate
 limit of 20 background slots. Startup refusals happen before payment
