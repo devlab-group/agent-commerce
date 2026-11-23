@@ -126,7 +126,8 @@ export async function cancelTask(
     );
     // The pending purchase is already removed. If this write fails, the caller
     // gets an internal error and the old response keeps its original expiry.
-    if (!(await ops.tasks.put(canceled, ops.retainedUntil()))) {
+    // Nothing was charged, so the record is evictable.
+    if (!(await ops.tasks.put(canceled, ops.retainedUntil(), true))) {
       throw new CommerceError('STORAGE_ERROR', 'The canceled task did not fit in the task store.');
     }
     return jsonRpcResult(id, canceled);

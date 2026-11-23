@@ -232,14 +232,31 @@ after it is stored or updated (default 24 hours). An unpaid x402 extension
 task uses the pending-payment expiry described above instead. See
 [`protocols.a2a`](../configuration.md#protocolsa2a).
 
-Once the store has `protocols.a2a.tasks.maxRetained` unexpired records (default
-1000), it refuses new records and permits replacements. It does not evict
-records, even if the limit is lowered. Free calls cannot evict an unexpired
-paid result. A new extension purchase at capacity fails with `GATEWAY_BUSY`
-without holding a pending purchase. Other blocking responses are returned
-without being retained, and the adapter logs at `warn`. Write exceptions are
-logged at `error`. Background startup refusals are described below. Retention
-changes affect subsequent writes.
+At `protocols.a2a.tasks.maxRetained` unexpired records (default 1000), new
+records can evict responses known to have charged nothing:
+
+- Free deliveries, terminal payment-required responses, declined payments and
+  canceled tasks.
+- Failed requests without a payment proof, or refused before settlement with
+  `RESOURCE_NOT_FOUND`, `INPUT_INVALID`, `PAYMENT_INVALID`, `PAYMENT_REPLAYED`
+  or an `AUTHORIZATION_*` code.
+- Backend failures in the `authorization` flow, which abandons settlement.
+
+Waiting and working tasks and responses that may have charged a payment are
+protected until expiry. Evictable responses make room for purchases, but a
+free response may disappear before its client reads it.
+
+SQLite evicts by `updatedAt` and then `id`, both ascending, and may remove
+multiple eligible records after a limit reduction. The memory fallback
+evicts the earliest written eligible response; replacing a record counts
+as a new write.
+
+Existing IDs can be replaced at capacity. If too few records are evictable,
+the store refuses a new record. A new extension purchase then fails with
+`GATEWAY_BUSY` without holding a pending purchase. Other blocking responses
+are returned without retention; the adapter logs capacity refusals at `warn`
+and write exceptions at `error`. Background startup refusals are described
+below. Retention changes affect subsequent writes.
 
 ### Access
 

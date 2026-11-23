@@ -268,8 +268,10 @@ protocols:
 
 - `retentionHours`: how long a task stays readable after it is stored or updated.
 - `maxRetained`: the limit on unexpired task records when admitting a new
-  record. At capacity, the store refuses new records and permits replacements.
-  Lowering the limit does not evict existing records.
+  record. At capacity, the store evicts eligible uncharged responses to make
+  room, or refuses the new record if too few can be evicted. Existing IDs can
+  still be replaced. [A2A tasks](protocols/a2a.md#tasks) describes eligibility
+  and eviction order.
 
 ## `protocols.acp`
 

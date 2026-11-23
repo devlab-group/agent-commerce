@@ -18,6 +18,7 @@ import type {
   ProtocolAdapterContext,
   ReceiptStore,
   ResourceRegistry,
+  TaskRecord,
 } from '../../../src/core';
 import { CommerceError, DELIVERY_SUMMARY_META_KEY, PAYMENT_INPUT_FIELD } from '../../../src/core';
 import { createResourceRegistry } from '../../../src/core/execution';
@@ -383,21 +384,93 @@ describe('A2A adapter is not a client of anything', () => {
   });
 });
 
+describe('the task record of a blocking answer', () => {
+  const PROOF = { [PAYMENT_INPUT_FIELD]: 'base64-proof' };
+  const charged = { payment: { status: 'settled', provider: 'x402' } };
+  const paidDelivery = {
+    ...delivered,
+    payment: { status: 'settled', provider: 'x402', amount: '0.01', currency: 'USDC' },
+  } as ExecutionOutcome;
+  const fail = (code: CommerceError['code'], details?: Record<string, unknown>) =>
+    new CommerceError(code, 'refused', details ? { details } : {});
+
+  // Evictable only when nothing was charged for the answer
+  it.each([
+    ['a free delivery', true, delivered, {}],
+    ['a paid delivery', false, paidDelivery, PROOF],
+    ['a payment-required answer', true, paymentRequired, {}],
+    ['a failure without a proof', true, fail('BACKEND_ERROR'), {}],
+    ['a proof the provider rejected', true, fail('PAYMENT_INVALID'), PROOF],
+    ['a replayed proof', true, fail('PAYMENT_REPLAYED'), PROOF],
+    ['input refused before pricing', true, fail('INPUT_INVALID'), PROOF],
+    ['a refused mandate', true, fail('AUTHORIZATION_INVALID'), PROOF],
+    ['a missing mandate', true, fail('AUTHORIZATION_REQUIRED'), PROOF],
+    ['a backend failure that abandoned settlement', true, fail('BACKEND_TIMEOUT'), PROOF],
+    ['a backend failure after an upfront settlement', false, fail('BACKEND_ERROR', charged), PROOF],
+    ['a failed settlement', false, fail('PAYMENT_SETTLEMENT_FAILED'), PROOF],
+    ['a provider outage after a proof', false, fail('PAYMENT_PROVIDER_UNAVAILABLE'), PROOF],
+  ] as const)('marks %s evictable: %s', async (_label, evictable, outcome, input) => {
+    const written: TaskRecord[] = [];
+    const store = {
+      putTaskRecord: async (record: TaskRecord) => written.push(record) > 0,
+      getTaskRecord: async () => undefined,
+      listTaskRecords: async () => [],
+    } as unknown as ReceiptStore;
+    const adapter = createA2aAdapter({ store });
+    await adapter.start(setup(outcome).context);
+
+    await send(adapter, { resource: 'market_report', input });
+
+    expect(written.map((record) => record.evictable === true)).toEqual([evictable]);
+  });
+
+  it('marks an unknown resource evictable', async () => {
+    const written: TaskRecord[] = [];
+    const store = {
+      putTaskRecord: async (record: TaskRecord) => written.push(record) > 0,
+      getTaskRecord: async () => undefined,
+      listTaskRecords: async () => [],
+    } as unknown as ReceiptStore;
+    const adapter = createA2aAdapter({ store });
+    await adapter.start(setup().context);
+
+    await send(adapter, { resource: 'no_such_resource', input: PROOF });
+
+    expect(written.map((record) => record.evictable)).toEqual([true]);
+  });
+});
+
 describe('an answered task the store does not keep', () => {
   function getTask(id: string): string {
     return JSON.stringify({ jsonrpc: '2.0', id: 'req-2', method: 'GetTask', params: { id } });
   }
 
-  function loggingSetup() {
-    const { context } = setup();
+  function loggingSetup(outcome: ExecutionOutcome = delivered) {
+    const { context } = setup(outcome);
     const warn = vi.fn();
     const error = vi.fn();
     const logger: Logger = { ...NOOP_LOGGER, warn, error };
     return { context: { ...context, logger }, warn, error };
   }
 
-  it('is returned but not kept when the store is full, and the gateway logs a warning', async () => {
-    const { context, warn } = loggingSetup();
+  const paidDelivery: ExecutionOutcome = {
+    ...delivered,
+    payment: { status: 'settled', provider: 'x402', amount: '0.01', currency: 'USDC' },
+  } as ExecutionOutcome;
+
+  it('replaces the oldest free answer with a new one when the store is full', async () => {
+    const adapter = createA2aAdapter({ tasks: { maxRetained: 1 } });
+    await adapter.start(setup().context);
+    const first = task(await send(adapter, { resource: 'market_report', input: {} }));
+
+    const second = task(await send(adapter, { resource: 'market_report', input: {} }));
+
+    expect((await post(adapter, getTask(first.id))).body.error?.code).toBe(-32001);
+    expect((await post(adapter, getTask(second.id))).body.result).toEqual(second);
+  });
+
+  it('is returned but not kept when paid answers fill the store, and the gateway logs a warning', async () => {
+    const { context, warn } = loggingSetup(paidDelivery);
     const adapter = createA2aAdapter({ tasks: { maxRetained: 1 } });
     await adapter.start(context);
     const kept = task(await send(adapter, { resource: 'market_report', input: {} }));

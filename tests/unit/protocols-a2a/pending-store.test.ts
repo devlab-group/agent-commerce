@@ -986,6 +986,83 @@ describe('tasks finished in the background with returnImmediately', () => {
   });
 });
 
+describe('a task store full of answers nothing was charged for', () => {
+  it('evicts them for a waiting purchase, a background run and a paid answer, but not those', async () => {
+    const node = await boot(undefined, { maxRetained: 3 });
+    const send = async (configuration?: Record<string, unknown>, resource = 'report') =>
+      (
+        await call(node, 'SendMessage', {
+          message: buy(resource),
+          ...(configuration ? { configuration } : {}),
+        })
+      ).result?.task as A2aTask;
+    const unpaid = [await send(undefined, 'missing'), await send(), await send(IMMEDIATELY)];
+    // The background run's working record becomes evictable when it ends unpaid
+    await vi.waitFor(async () =>
+      expect(await stateOf(node, unpaid[2]?.id as string)).toBe('TASK_STATE_FAILED'),
+    );
+
+    const waiting = await challenged(node, 'report');
+    const working = (await buyNow(node, 'proof-1')).result?.task as A2aTask;
+    expect(working.status.state).toBe('TASK_STATE_WORKING');
+    await vi.waitFor(async () =>
+      expect(await stateOf(node, working.id)).toBe('TASK_STATE_COMPLETED'),
+    );
+    const paid = (
+      await call(node, 'SendMessage', { message: buy('report', { _payment: 'proof-2' }) })
+    ).result?.task as A2aTask;
+
+    expect(paid.status.state).toBe('TASK_STATE_COMPLETED');
+    for (const task of unpaid) {
+      expect((await call(node, 'GetTask', { id: task.id })).error?.code).toBe(TASK_NOT_FOUND);
+    }
+    // A store full of waiting and paid records admits nothing new
+    const refused = await send(undefined, 'missing');
+    const busy = (await rpc(node, buy('report'))).result?.task;
+    expect((await call(node, 'GetTask', { id: refused.id })).error?.code).toBe(TASK_NOT_FOUND);
+    expect(code(busy)).toBe('GATEWAY_BUSY');
+    expect(await stateOf(node, waiting.id)).toBe('TASK_STATE_INPUT_REQUIRED');
+    expect(await stateOf(node, paid.id)).toBe('TASK_STATE_COMPLETED');
+    expect(await stateOf(node, working.id)).toBe('TASK_STATE_COMPLETED');
+  });
+
+  it('marks extension tasks evictable only when nothing was charged for them', async () => {
+    const node = await boot();
+    const evictable = async (id: string) => (await node.store.getTaskRecord?.(id))?.evictable;
+    const waiting = await challenged(node, 'report');
+    const declined = await challenged(node, 'report');
+    const canceled = await challenged(node, 'report');
+    const replayed = await challenged(node, 'report');
+    expect(await evictable(waiting.id)).toBeUndefined();
+
+    await rpc(node, pay(waiting, 'nonce-1'));
+    await rpc(node, decline(declined));
+    await call(node, 'CancelTask', { id: canceled.id });
+    const failed = (await rpc(node, pay(replayed, 'nonce-1'))).result?.task;
+
+    expect(await stateOf(node, waiting.id)).toBe('TASK_STATE_COMPLETED');
+    expect(code(failed)).toBe('PAYMENT_REPLAYED');
+    expect({
+      paid: await evictable(waiting.id),
+      declined: await evictable(declined.id),
+      canceled: await evictable(canceled.id),
+      replayed: await evictable(replayed.id),
+    }).toEqual({ paid: undefined, declined: true, canceled: true, replayed: true });
+    expect(calls.settle).toBe(1);
+  });
+
+  it('marks the busy answer that replaces a waiting task evictable when no payment can be held', async () => {
+    const node = await boot((store) =>
+      Object.assign(Object.create(store) as ReceiptStore, { putPendingTask: async () => false }),
+    );
+
+    const busy = (await rpc(node, buy('report'))).result?.task as A2aTask;
+
+    expect(code(busy)).toBe('GATEWAY_BUSY');
+    expect((await node.store.getTaskRecord?.(busy.id))?.evictable).toBe(true);
+  });
+});
+
 describe('a store without the pending-task methods', () => {
   const noTasks = (store: ReceiptStore): ReceiptStore =>
     Object.assign(Object.create(store) as ReceiptStore, {

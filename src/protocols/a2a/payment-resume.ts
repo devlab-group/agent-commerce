@@ -14,6 +14,7 @@ import {
   retryInfo,
 } from './jsonrpc';
 import {
+  chargedNothing,
   completedTask,
   failedTask,
   type TaskIdentity,
@@ -43,8 +44,11 @@ export function taskResult(id: JsonRpcId, task: A2aTask): Record<string, unknown
 export interface PaymentResume {
   readonly context: ProtocolAdapterContext;
   readonly pendingPayments: PendingPayments;
-  /** Retain a response; log write failures and return false instead of throwing */
-  readonly keep: (task: A2aTask) => Promise<boolean>;
+  /**
+   * Retain the response with its eviction flag. Log write failures and
+   * return false instead of throwing.
+   */
+  readonly keep: (task: A2aTask, evictable: boolean) => Promise<boolean>;
   /** Active task ids, including blocking payments and background runs */
   readonly running: Set<string>;
   readonly background: BackgroundRuns;
@@ -137,7 +141,7 @@ export async function resumePayment(
       context.ids.next('a2a-msg'),
       paymentRejectedMetadata(),
     );
-    await resume.keep(declined);
+    await resume.keep(declined, true);
     return taskResult(id, declined);
   }
 
@@ -151,7 +155,7 @@ export async function resumePayment(
   // Add the running entry before publishing the working record
   resume.running.add(taskId);
   if (!immediate) {
-    await resume.keep(working);
+    await resume.keep(working, false);
   } else {
     // Require a working record before background payment processing. The
     // purchase has been taken, but payment verification has not started.
@@ -159,20 +163,21 @@ export async function resumePayment(
     if (refused !== undefined) {
       resume.running.delete(taskId);
       resume.background.release();
+      // Verification has not started, so this failure is uncharged and evictable
       const failed = failedTask(refused, { ...ids, timestamp: context.clock.nowIso() });
-      await resume.keep(failed);
+      await resume.keep(failed, true);
       return taskResult(id, failed);
     }
   }
   const pay = async (): Promise<A2aTask> => {
     try {
-      const paid = await payPending(
+      const { task: paid, evictable } = await payPending(
         context,
         { ...taken, ...(authorization !== undefined ? { authorization } : {}) },
         submission.payload,
         ids,
       );
-      await resume.keep(paid);
+      await resume.keep(paid, evictable);
       return paid;
     } finally {
       resume.running.delete(taskId);
@@ -198,14 +203,14 @@ function withoutRetryDelay(error: CommerceError): CommerceError {
   });
 }
 
-// Execute the pending purchase with the submitted x402 PaymentPayload.
-// Timestamp the returned task when payment processing ends.
+// Execute the submitted x402 PaymentPayload and timestamp the task when
+// processing ends. Mark it evictable only when this request charged nothing.
 async function payPending(
   context: ProtocolAdapterContext,
   pending: PendingPayment,
   payload: Record<string, unknown>,
   ids: Omit<TaskIdentity, 'timestamp'>,
-): Promise<A2aTask> {
+): Promise<{ readonly task: A2aTask; readonly evictable: boolean }> {
   const requestId = context.ids.next('a2a');
   const request: CanonicalRequest = {
     requestId,
@@ -225,12 +230,13 @@ async function payPending(
     const outcome = await context.pipeline.execute(request);
     if (outcome.kind === 'delivered' && outcome.payment !== undefined) {
       const identity = { ...ids, timestamp: context.clock.nowIso() };
-      return withStatusMessage(
+      const task = withStatusMessage(
         completedTask(outcome, identity),
         'Payment settled.',
         identity.statusMessageId,
         paymentCompletedMetadata(outcome.payment),
       );
+      return { task, evictable: false };
     }
     // A proof was sent, so neither a free delivery nor a new challenge is a
     // payment this task can report
@@ -258,5 +264,8 @@ async function payPending(
       : 'The resource could not be delivered';
     text = `${outcome}: ${String(metadata[X402_PAYMENT_ERROR_KEY])}.`;
   }
-  return withStatusMessage(failedTask(error, identity), text, identity.statusMessageId, metadata);
+  return {
+    task: withStatusMessage(failedTask(error, identity), text, identity.statusMessageId, metadata),
+    evictable: chargedNothing(error, true),
+  };
 }

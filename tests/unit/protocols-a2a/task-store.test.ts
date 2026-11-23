@@ -80,6 +80,35 @@ describe('createMemoryTasks', () => {
     expect(await tasks.put(task('b'), at(5000))).toBe(true);
     expect(await tasks.get('b')).toEqual(task('b'));
   });
+
+  it('evicts the earliest written evictable task at the cap, then refuses', async () => {
+    const tasks = createMemoryTasks(createClock().clock, 3);
+    await tasks.put(task('free-1'), at(1000), true);
+    await tasks.put(task('paid'), at(1000));
+    await tasks.put(task('free-2'), at(1000), true);
+
+    expect(await tasks.put(task('next'), at(1000))).toBe(true);
+    expect(await tasks.get('free-1')).toBeUndefined();
+    expect(await tasks.put(task('last'), at(1000), true)).toBe(true);
+    expect(await tasks.get('free-2')).toBeUndefined();
+    // `last` is evictable, then nothing is
+    expect(await tasks.put(task('one-more'), at(1000))).toBe(true);
+    expect(await tasks.put(task('refused'), at(1000), true)).toBe(false);
+    expect(await tasks.get('paid')).toEqual(task('paid'));
+  });
+
+  it('counts a replacement as a new write, and takes its evictable flag', async () => {
+    const tasks = createMemoryTasks(createClock().clock, 2);
+    await tasks.put(task('a', 'context-1', 'TASK_STATE_WORKING'), at(1000), true);
+    await tasks.put(task('b'), at(1000), true);
+    await tasks.put(task('a'), at(1000), true);
+
+    // `b` is now the earliest written
+    expect(await tasks.put(task('c'), at(1000))).toBe(true);
+    expect(await tasks.get('b')).toBeUndefined();
+    await tasks.put(task('a'), at(1000));
+    expect(await tasks.put(task('d'), at(1000))).toBe(false);
+  });
 });
 
 describe('createStoredTasks', () => {

@@ -151,6 +151,32 @@ export function failedTask(error: CommerceError, identity: TaskIdentity): A2aTas
   );
 }
 
+// Refusals raised before settlement. Mandate checks also precede the
+// payment attempt reservation.
+const UNCHARGED_CODES: ReadonlySet<string> = new Set([
+  'RESOURCE_NOT_FOUND',
+  'INPUT_INVALID',
+  'PAYMENT_INVALID',
+  'PAYMENT_REPLAYED',
+  'AUTHORIZATION_REQUIRED',
+  'AUTHORIZATION_INVALID',
+  'AUTHORIZATION_REPLAYED',
+  'AUTHORIZATION_PROVIDER_UNAVAILABLE',
+]);
+
+/**
+ * Whether a failed task can be evicted without discarding a paid result.
+ * A request without a payment proof or with a listed refusal is uncharged.
+ * Backend failures are evictable only without `details.payment`, which the
+ * pipeline attaches after upfront settlement; the `authorization` flow
+ * abandons settlement when the backend fails.
+ */
+export function chargedNothing(error: CommerceError, proofSent: boolean): boolean {
+  if (!proofSent || UNCHARGED_CODES.has(error.code)) return true;
+  const backend = error.code === 'BACKEND_ERROR' || error.code === 'BACKEND_TIMEOUT';
+  return backend && error.details?.['payment'] === undefined;
+}
+
 /** A task whose execution is still in progress */
 export function workingTask(taskId: string, contextId: string, timestamp: string): A2aTask {
   return {

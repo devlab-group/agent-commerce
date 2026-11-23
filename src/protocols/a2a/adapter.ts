@@ -78,6 +78,7 @@ import {
 } from './params';
 import { BACKGROUND_FULL, type PaymentResume, resumePayment, taskResult } from './payment-resume';
 import {
+  chargedNothing,
   completedTask,
   failedTask,
   inputRequired,
@@ -134,8 +135,8 @@ export interface A2aAdapterOptions {
   /**
    * Task retention in hours (default 24, range 1 to 8760) and the limit on
    * unexpired records when admitting new tasks (default 1000, range 1 to
-   * 1,000,000). At capacity, new records are refused and replacements allowed;
-   * existing records are not evicted.
+   * 1,000,000). At capacity, a new record evicts eligible uncharged responses
+   * or is refused if too few are available. Existing IDs can still be replaced.
    */
   readonly tasks?: { readonly retentionHours?: number; readonly maxRetained?: number };
 }
@@ -506,7 +507,7 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
     return {
       context,
       pendingPayments: ops.pendingPayments,
-      keep: (task) => this.keep(ops, task),
+      keep: (task, evictable) => this.keep(ops, task, evictable),
       running: this.running,
       background,
       recordWorking: (task) => this.recordWorking(ops, task),
@@ -519,10 +520,10 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
 
   // Retain a response without failing the call. Log capacity refusals at warn
   // and write exceptions at error; return false in either case.
-  private async keep(ops: TaskOperations, task: A2aTask): Promise<boolean> {
+  private async keep(ops: TaskOperations, task: A2aTask, evictable: boolean): Promise<boolean> {
     const logger = this.context?.logger;
     try {
-      if (await ops.tasks.put(task, ops.retainedUntil())) return true;
+      if (await ops.tasks.put(task, ops.retainedUntil(), evictable)) return true;
       logger?.warn(
         { state: task.status.state },
         'a2a adapter: task not retained: the task store is full',
@@ -608,7 +609,7 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
         ),
         now(),
       );
-      await this.keep(ops, unknown);
+      await this.keep(ops, unknown, true);
       return taskResult(id, unknown);
     }
     const run = () => this.purchase(ops, context, ids, invocation, resource, x402Extension);
@@ -649,6 +650,8 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
     const now = (): TaskIdentity => ({ ...ids, timestamp: context.clock.nowIso() });
     const requestId = context.ids.next('a2a');
     let task: A2aTask;
+    let evictable = true;
+    let proofSent = false;
     // Reserved-field extraction sits inside the try: a malformed
     // `_authorization` envelope becomes a failed task like any other outcome
     try {
@@ -657,6 +660,7 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
         resource,
         requestId,
       );
+      proofSent = payment !== undefined;
       const request: CanonicalRequest = {
         requestId,
         resourceId: invocation.resourceId,
@@ -670,6 +674,7 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
       const identity = now();
       if (outcome.kind !== 'payment-required') {
         task = completedTask(outcome, identity);
+        evictable = outcome.payment === undefined;
       } else {
         task = paymentRequiredTask(outcome, identity);
         const envelope = outcome.requirement.challenge.envelope;
@@ -701,8 +706,9 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
         'a2a adapter: execution failed',
       );
       task = failedTask(error, now());
+      evictable = chargedNothing(error, proofSent);
     }
-    await this.keep(ops, task);
+    await this.keep(ops, task, evictable);
     return task;
   }
 
@@ -731,7 +737,7 @@ export class A2aProtocolAdapter implements HttpProtocolAdapter {
         ),
         identity,
       );
-      await this.keep(ops, busy);
+      await this.keep(ops, busy, true);
       return busy;
     }
     return waiting;
