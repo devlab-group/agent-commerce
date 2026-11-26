@@ -314,7 +314,7 @@ See [docs/configuration.md](docs/configuration.md).
 | **MCP**                | Supported    | MCP `2026-07-28` and `2025-11-25`; `@modelcontextprotocol/server@2.3.0`                                           | tool discovery, invocation, payment-required and error mapping                                                                                                 |
 | **x402**               | Supported    | x402 v2; `@x402/core@2.30.0`, `@x402/evm@2.30.0`, `@x402/svm@2.30.0`, `@x402/near@2.30.0`                         | `exact` on EVM through EIP-3009 or Permit2, on Solana, and on NEAR (partial): challenge, verification, settlement and replay binding                           |
 | **MPP**                | Experimental | drafts at `tempoxyz/mpp-specs@806fdb8`; `mppx@0.13.1`                                                             | `charge`/`evm`/EIP-3009 with USDC on Base Sepolia and Base, over HTTP, MCP and A2A                                                                             |
-| **A2A**                | Supported    | v1.0.1; negotiation `1.0`; `JSONRPC` binding                                                                      | Agent Card, `SendMessage` with `returnImmediately`, `GetTask`, `ListTasks`, `CancelTask` and the paid flow; the x402 extension is experimental                 |
+| **A2A**                | Supported    | v1.0.1; negotiation `1.0`; `JSONRPC` binding                                                                      | Agent Card, `SendMessage` with `returnImmediately`, `GetTask`, `ListTasks`, `CancelTask` and the paid flow                                                     |
 | **ACP**                | Experimental | stable snapshot `2026-04-17`; REST binding                                                                        | discovery and the five checkout operations                                                                                                                     |
 | **AP2**                | Experimental | v0.2.0, tag 2026-04-28, commit `b4587ac`; Direct mode; `jose@6.2.12`, `@sd-jwt/core@0.20.1`, `canonicalize@5.0.0` | closed Checkout Mandate verification before settlement                                                                                                         |
 | **ERC-8409**           | Experimental | draft `SergeevDmitry/ERCs@0ee33230`                                                                               | signed quotes on x402 EVM offers; issuer published in `/.well-known/agent-commerce`                                                                            |
@@ -328,9 +328,11 @@ UCP is planned and has no implementation.
 mandate before a paid resource settles; the gateway does not issue the mandate
 or its Checkout Receipt.
 
-The experimental entries above ship off by default with documented subsets:
-[A2A](docs/protocols/a2a.md), [ACP](docs/protocols/acp.md),
-[AP2](docs/protocols/ap2.md#not-implemented), [MPP](docs/protocols/mpp.md) and
+The experimental entries above are disabled by default and cover documented
+subsets:
+[ACP](docs/protocols/acp.md), [AP2](docs/protocols/ap2.md#not-implemented),
+[MPP](docs/protocols/mpp.md), the
+[a2a-x402 extension](docs/protocols/a2a.md#x402-extension) and
 [ERC-8409 quotes](docs/protocols/x402.md#erc-8409-signed-quotes). Supported
 [MCP](docs/protocols/mcp.md) and [x402](docs/protocols/x402.md) are also scoped.
 ACP exposes only its five checkout operations; merchant `payment_data` is never

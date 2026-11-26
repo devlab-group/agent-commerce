@@ -4,7 +4,7 @@
   "title": "A2A",
   "status": "supported",
   "role": "Transport that carries x402 and MPP payments in `SendMessage`, including through the x402 extension.",
-  "subset": "Agent Card, `SendMessage` with `returnImmediately`, `GetTask`, `ListTasks`, `CancelTask` and the paid flow; the x402 extension is experimental",
+  "subset": "Agent Card, `SendMessage` with `returnImmediately`, `GetTask`, `ListTasks`, `CancelTask` and the paid flow",
   "spec": {
     "revisions": ["1.0.1"],
     "display": "v1.0.1; negotiation `1.0`; `JSONRPC` binding",
@@ -41,6 +41,7 @@
         "checked": "2026-11-26"
       },
       "title": "A2A x402 extension",
+      "alias": "a2a-x402 extension",
       "role": "A2A feature: x402 payment inside a task, through status message metadata and a follow-up payment message.",
       "subset": "`TASK_STATE_INPUT_REQUIRED` with x402 v2 requirements, payment by a follow-up message on the task, receipts in the final status; A2A 1.0 wire forms, x402 only",
       "conformance": {

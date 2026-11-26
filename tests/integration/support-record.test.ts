@@ -90,6 +90,16 @@ describe('support records', () => {
     ).toEqual(['feature "GetTask" has conformance evidence but no spec to hold it against']);
   });
 
+  // CI runs only a record's upstream suite; one on a feature would pass criterion 3 unrun
+  it("refuses an upstream suite in a feature's conformance", () => {
+    expect(
+      schemaIssues((a2a) => {
+        const extension = a2a.features.find((entry) => entry.name === 'x402-extension');
+        Object.assign(extension?.conformance ?? {}, { upstream: a2a.conformance?.upstream });
+      }),
+    ).toEqual(['Unrecognized key: "upstream"']);
+  });
+
   it('lists tested combinations on the payment records only', () => {
     expect(SUPPORT_RECORD_NAMES.filter((name) => records[name].combinations !== undefined)).toEqual(
       ['x402', 'mpp'],
@@ -291,6 +301,15 @@ describe('drift between the records, package.json and the docs', () => {
     return found;
   };
 
+  // A feature promoted in its record alone, still experimental in hand-written prose
+  const stillCalledExperimental = (title: string, name: SupportRecordName) =>
+    [
+      'README.md: the Versioning sentence',
+      'README.md: the "experimental entries above" sentence',
+      'plugins/agent-commerce-gateway/skills/agent-commerce/SKILL.md: the "exist but are experimental" sentence',
+    ].map(
+      (place) => `${place} names ${title}, which src/support/${name}.json records as supported`,
+    );
   const stale = (path: string, region: string, source: string) =>
     `${path}: region "${region}" differs from ${source}; run npm run support:write`;
   const ALL = 'src/support/*.json and package.json';
@@ -364,6 +383,7 @@ describe('drift between the records, package.json and the docs', () => {
         stale('README.md', 'matrix', ALL),
         stale('docs/protocols.md', 'matrix', ALL),
         'README.md: the Versioning sentence names ACP, which src/support/acp.json records as supported',
+        'README.md: the "experimental entries above" sentence names ACP, which src/support/acp.json records as supported',
         'plugins/agent-commerce-gateway/skills/agent-commerce/SKILL.md: the "exist but are experimental" sentence names ACP, which src/support/acp.json records as supported',
         'docs/protocols/acp.md: says **Experimental.**, but src/support/acp.json records supported',
       ],
@@ -444,6 +464,7 @@ describe('drift between the records, package.json and the docs', () => {
         'src/support/a2a.json: feature "x402-extension" supported, but criterion 1: upstream does not declare the pinned revision stable (spec.stable)',
         stale('README.md', 'matrix', ALL),
         stale('docs/protocols.md', 'matrix', ALL),
+        ...stillCalledExperimental('A2A x402 extension', 'a2a'),
       ],
     ],
     [
@@ -467,6 +488,7 @@ describe('drift between the records, package.json and the docs', () => {
         stale('README.md', 'matrix', ALL),
         stale('docs/protocols.md', 'matrix', ALL),
         stale('docs/protocols/a2a.md', 'pins', 'src/support/a2a.json and package.json'),
+        ...stillCalledExperimental('A2A x402 extension', 'a2a'),
       ],
     ],
     [
@@ -494,6 +516,72 @@ describe('drift between the records, package.json and the docs', () => {
         'src/support/x402.json: feature "erc-8409-quotes" supported, but criterion 3: no conformance evidence',
         stale('README.md', 'matrix', ALL),
         stale('docs/protocols.md', 'matrix', ALL),
+        ...stillCalledExperimental('ERC-8409', 'x402'),
+      ],
+    ],
+    [
+      'a supported feature with its own spec inside an experimental record',
+      {
+        records: (records) => {
+          const copy = structuredClone(feature(records, 'a2a', 'x402-extension'));
+          delete copy.alias;
+          if (copy.spec !== undefined) copy.spec.stable = true;
+          record(records, 'mpp').features.push({
+            ...copy,
+            name: 'mpp-extension',
+            title: 'MPP extension',
+            status: 'supported',
+          });
+        },
+      },
+      [
+        'src/support/mpp.json: feature "mpp-extension" supported inside an experimental record',
+        stale('README.md', 'matrix', ALL),
+        stale('docs/protocols.md', 'matrix', ALL),
+        stale('docs/protocols/mpp.md', 'pins', 'src/support/mpp.json and package.json'),
+      ],
+    ],
+    [
+      'a feature with its own spec inside a record that pins nothing',
+      {
+        records: (records) => {
+          const copy = structuredClone(feature(records, 'a2a', 'x402-extension'));
+          delete copy.alias;
+          record(records, 'http').features.push({
+            ...copy,
+            name: 'http-extension',
+            title: 'HTTP extension',
+            status: 'partial',
+          });
+        },
+      },
+      [
+        stale('README.md', 'matrix', ALL),
+        stale('docs/protocols.md', 'matrix', ALL),
+        'docs/protocols/http.md: region "pins" appears 0 times, not once',
+      ],
+    ],
+    [
+      'an experimental feature missing from the "experimental entries above" sentence under its alias',
+      {
+        edit: {
+          'README.md': (content) =>
+            content.replace('[a2a-x402 extension](docs', '[payment extension](docs'),
+        },
+      },
+      [
+        'README.md: the "experimental entries above" sentence omits A2A x402 extension, which src/support/a2a.json records as experimental',
+      ],
+    ],
+    [
+      'an experimental feature missing from the Versioning sentence',
+      {
+        edit: {
+          'README.md': (content) => content.replace('ERC-8409 quotes, the', 'the'),
+        },
+      },
+      [
+        'README.md: the Versioning sentence omits ERC-8409, which src/support/x402.json records as experimental',
       ],
     ],
     [

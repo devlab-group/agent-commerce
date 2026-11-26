@@ -32,7 +32,7 @@ const SpecSchema = z.strictObject({
   source: z.strictObject({ repo: text, commit: COMMIT }),
   // Whether upstream calls the pinned revision stable; null when unspecified
   stable: z.boolean().nullable(),
-  // Upstream's own words on the revision's status
+  // Upstream's status statement, or its version label if no status is stated
   statement: text,
   // The date `statement` was read
   checked: z.iso.date(),
@@ -99,10 +99,13 @@ export const SupportRecordSchema = z
         // A feature with its own spec gets its own matrix row, under `title`
         spec: SpecSchema.optional(),
         title: text.optional(),
+        // Also recognize this name in status sentences for a feature with its own spec
+        alias: text.optional(),
         role: text.optional(),
         subset: text.optional(),
-        // Evidence against the feature's own spec
-        conformance: ConformanceSchema.optional(),
+        // Evidence for the feature's own spec. CI reads `upstream` from a record's
+        // conformance, so features cannot declare an upstream suite.
+        conformance: ConformanceSchema.omit({ upstream: true }).optional(),
       }),
     ),
     // `name` is the string the descriptor publishes in `unsupported`
@@ -510,7 +513,12 @@ export function renderRegions(
   for (const record of records) {
     const source = `src/support/${record.name}.json`;
     const page = new Map<string, RenderedRegion>();
-    if (record.spec !== undefined || record.packages.length > 0 || record.artifacts.length > 0) {
+    if (
+      record.spec !== undefined ||
+      record.features.some((feature) => feature.spec !== undefined) ||
+      record.packages.length > 0 ||
+      record.artifacts.length > 0
+    ) {
       page.set('pins', {
         body: block(pins(record, manifest)),
         source: `${source} and package.json`,
@@ -562,12 +570,18 @@ function replaceRegions(content: string, rendered: ReadonlyMap<string, RenderedR
 const titleNamed = (text: string, title: string) =>
   new RegExp(`(^|[^\\w-])${title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w-])`).test(text);
 
-// Hand-written sentences that name the experimental profiles
+// Hand-written sentences that name the experimental profiles and features.
+// They are searched with link targets removed.
 const STATUS_SENTENCES = [
   {
     path: 'README.md',
     place: 'Versioning sentence',
     find: (content: string) => /### Versioning\n\n([\s\S]*?)\n\n/.exec(content)?.[1],
+  },
+  {
+    path: 'README.md',
+    place: '"experimental entries above" sentence',
+    find: (content: string) => /The experimental entries above[^.]*\./.exec(content)?.[0],
   },
   {
     path: 'plugins/agent-commerce-gateway/skills/agent-commerce/SKILL.md',
@@ -586,18 +600,34 @@ const X402_ROUTES: readonly [string, string][] = [
 
 function handWrittenProblems(tree: SupportTree): string[] {
   const problems: string[] = [];
-  const experimental = tree.records.filter((record) => record.status === 'experimental');
+  // Each record, followed by its features with their own matrix rows
+  const claims = tree.records.flatMap((record) => [
+    { title: record.title, names: [record.title], status: record.status, record },
+    ...record.features.flatMap((feature) =>
+      feature.spec === undefined
+        ? []
+        : [
+            {
+              title: feature.title ?? feature.name,
+              names: [feature.title ?? feature.name, ...(feature.alias ? [feature.alias] : [])],
+              status: feature.status,
+              record,
+            },
+          ],
+    ),
+  ]);
   for (const sentence of STATUS_SENTENCES) {
-    const text = sentence.find(tree.read(sentence.path) ?? '');
+    const content = (tree.read(sentence.path) ?? '').replace(/\]\([^)]*\)/g, ']');
+    const text = sentence.find(content);
     if (text === undefined) {
       problems.push(`${sentence.path}: ${sentence.place} not found`);
       continue;
     }
-    for (const record of tree.records) {
-      const named = titleNamed(text, record.title);
-      if (named !== experimental.includes(record)) {
+    for (const claim of claims) {
+      const named = claim.names.some((name) => titleNamed(text, name));
+      if (named !== (claim.status === 'experimental')) {
         problems.push(
-          `${sentence.path}: the ${sentence.place} ${named ? 'names' : 'omits'} ${record.title}, which src/support/${record.name}.json records as ${record.status}`,
+          `${sentence.path}: the ${sentence.place} ${named ? 'names' : 'omits'} ${claim.title}, which src/support/${claim.record.name}.json records as ${claim.status}`,
         );
       }
     }
@@ -659,7 +689,7 @@ function unmetCriteria(
 
 // Supported records use untagged gaps unless exempt from promotion checks.
 // Supported features with their own specs use only their tagged gaps, even
-// inside exempt records.
+// inside exempt records. Their parent record must also be supported.
 function promotionProblems(record: SupportRecord): string[] {
   const source = `src/support/${record.name}.json`;
   const tagged = (feature: string | undefined) =>
@@ -672,6 +702,9 @@ function promotionProblems(record: SupportRecord): string[] {
         );
   for (const feature of record.features) {
     if (feature.spec === undefined || feature.status !== 'supported') continue;
+    if (record.status !== 'supported') {
+      problems.push(`${source}: feature "${feature.name}" supported inside an experimental record`);
+    }
     const unmet = unmetCriteria(
       feature.spec,
       tagged(feature.name),
