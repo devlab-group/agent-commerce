@@ -50,7 +50,9 @@
           "tests/integration/a2a-x402-extension.test.ts",
           "tests/unit/protocols-a2a/x402-extension.test.ts",
           "tests/unit/protocols-a2a/payment-resume.test.ts",
-          "tests/unit/protocols-a2a/agent-card.test.ts"
+          "tests/unit/protocols-a2a/agent-card.test.ts",
+          "tests/unit/core/execution/pipeline.test.ts",
+          "tests/unit/cli/doctor.test.ts"
         ],
         "skipped": []
       }
@@ -104,6 +106,11 @@
       "summary": "A `ListTasks` page with no matching task has an empty `tasks` array. The proto marks `tasks` REQUIRED, and §5.7 requires a REQUIRED array to hold an element, but an empty result has none to return.",
       "spec": "A2A 1.0.1 §5.7; `ListTasksResponse.tasks`",
       "tests": ["tests/conformance/a2a/tasks.test.ts"]
+    },
+    {
+      "summary": "The x402 extension uses A2A 1.0 wire forms, such as `TASK_STATE_INPUT_REQUIRED` and `ROLE_USER`, not the A2A 0.3 forms of the v0.1 examples. A payment message with `role: \"user\"` gets `-32602`, and the task still waits for payment.",
+      "spec": "a2a-x402 v0.1 examples",
+      "tests": ["tests/integration/a2a-x402-extension.test.ts"]
     }
   ],
   "conformance": {
@@ -398,7 +405,7 @@
       "feature": "x402-extension"
     },
     {
-      "requirement": "§7: echo the extension URI in the response headers of an activating request",
+      "requirement": "§7: echo the extension URI in the response headers of an activating request; the adapter echoes it on every JSON-RPC result, never on a JSON-RPC error",
       "state": "closed",
       "feature": "x402-extension"
     },

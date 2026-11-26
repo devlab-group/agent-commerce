@@ -381,6 +381,7 @@ and the tests that verify the behavior.
 <!-- support-record:begin deviations -->
 
 - **A2A 1.0.1 §5.7; `ListTasksResponse.tasks`**: A `ListTasks` page with no matching task has an empty `tasks` array. The proto marks `tasks` REQUIRED, and §5.7 requires a REQUIRED array to hold an element, but an empty result has none to return. Tests: `tests/conformance/a2a/tasks.test.ts`.
+- **a2a-x402 v0.1 examples**: The x402 extension uses A2A 1.0 wire forms, such as `TASK_STATE_INPUT_REQUIRED` and `ROLE_USER`, not the A2A 0.3 forms of the v0.1 examples. A payment message with `role: "user"` gets `-32602`, and the task still waits for payment. Tests: `tests/integration/a2a-x402-extension.test.ts`.
 
 <!-- support-record:end -->
 
