@@ -14,8 +14,8 @@ import {
   WaitForTransactionReceiptTimeoutError,
 } from 'viem';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { CommerceResource, PaymentContext } from '../../../src/core';
-import { isCommerceError } from '../../../src/core';
+import type { CommerceResource, Logger, PaymentContext } from '../../../src/core';
+import { isCommerceError, NOOP_LOGGER } from '../../../src/core';
 import { createPaymentProof } from '../../../src/payments/x402/client';
 import { createX402PaymentProvider } from '../../../src/payments/x402/provider';
 import { computeReplayKey } from '../../../src/payments/x402/replay-key';
@@ -110,7 +110,7 @@ describe('provider - SDK-boundary branches (mocked x402/facilitator)', () => {
     settleMock.mockReset();
   });
 
-  function makeProvider() {
+  function makeProvider(logger: Logger = NOOP_LOGGER) {
     return createX402PaymentProvider({
       network: 'eip155:31337',
       rpcUrl: RPC_URL,
@@ -120,6 +120,7 @@ describe('provider - SDK-boundary branches (mocked x402/facilitator)', () => {
       assetDecimals: 6,
       payTo: PAY_TO,
       facilitator: { mode: 'local', signerPrivateKey: BUYER_PRIVATE_KEY },
+      logger,
     });
   }
 
@@ -753,7 +754,8 @@ describe('provider - SDK-boundary branches (mocked x402/facilitator)', () => {
     // `settlement_pending` means the transfer was broadcast and may be on-chain,
     // so it becomes an unavailable provider carrying the hash, never a
     // rejection
-    const provider = makeProvider();
+    const warn = vi.fn();
+    const provider = makeProvider({ ...NOOP_LOGGER, warn });
     const requirement = await provider.createRequirement(paymentContext());
     const proof = await createPaymentProof({
       buyerPrivateKey: BUYER_PRIVATE_KEY,
@@ -782,6 +784,11 @@ describe('provider - SDK-boundary branches (mocked x402/facilitator)', () => {
         isCommerceError(err) &&
         err.code === 'PAYMENT_PROVIDER_UNAVAILABLE' &&
         err.details?.['transactionHash'] === BROADCAST_TX_HASH,
+    );
+    // Keep the reported reason at warn for settlement diagnostics
+    expect(warn).toHaveBeenCalledWith(
+      { reportedReason: 'settlement_pending' },
+      'x402 settle(): settlement was broadcast but could not be confirmed; outcome unknown',
     );
   });
 
