@@ -538,7 +538,9 @@ Score: 10/10 checks passed
 `doctor` compares live settlement terms with local config for each rail and
 resource: offer order, network, token, payee and transfer method, plus decimals
 and payment flows when published. Mismatches fail the check. It also names
-failing offers when health is published; reasons appear in gateway debug logs.
+failing and degraded offers when health is published. The gateway logs
+reported rail health details at warn when a rail starts failing, and at
+debug otherwise.
 
 `Secrets` lists each config placeholder (`${VAR}`) as missing, set or
 defaulted. Config loading stops at the first missing variable; this check
