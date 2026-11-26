@@ -359,13 +359,17 @@ such as `VERSION_NOT_SUPPORTED` and the domain `a2a-protocol.org`.
 
 <!-- support-record:begin pins -->
 
-| Pin                      | Value                                                                                                        |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------ |
-| Pinned revision          | v1.0.1; negotiation `1.0`; `JSONRPC` binding                                                                 |
-| Upstream source          | [`a2aproject/A2A@33035925`](https://github.com/a2aproject/A2A/tree/3303592588e388e62e0f69f701af531d2f4e3991) |
-| Declared stable upstream | yes                                                                                                          |
-| Upstream wording         | "the first stable, production-ready version" (read 2026-11-17)                                               |
-| `@a2a-js/sdk`            | `1.3.0`, tests only                                                                                          |
+| Pin                                         | Value                                                                                                                                            |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Pinned revision                             | v1.0.1; negotiation `1.0`; `JSONRPC` binding                                                                                                     |
+| Upstream source                             | [`a2aproject/A2A@33035925`](https://github.com/a2aproject/A2A/tree/3303592588e388e62e0f69f701af531d2f4e3991)                                     |
+| Declared stable upstream                    | yes                                                                                                                                              |
+| Upstream wording                            | "the first stable, production-ready version" (read 2026-11-17)                                                                                   |
+| A2A x402 extension pinned revision          | v0.1.0, commit `a5590226`                                                                                                                        |
+| A2A x402 extension upstream source          | [`google-agentic-commerce/a2a-x402@a5590226`](https://github.com/google-agentic-commerce/a2a-x402/tree/a5590226fc4190fe7a9d2c13ab70128714db3125) |
+| A2A x402 extension declared stable upstream | not stated                                                                                                                                       |
+| A2A x402 extension upstream wording         | "A2A Protocol: x402 Payments Extension v0.1" (read 2026-11-26)                                                                                   |
+| `@a2a-js/sdk`                               | `1.3.0`, tests only                                                                                                                              |
 
 <!-- support-record:end -->
 

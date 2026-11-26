@@ -38,7 +38,46 @@ const SpecSchema = z.strictObject({
   checked: z.iso.date(),
 });
 
-const SupportRecordSchema = z
+const ConformanceSchema = z.strictObject({
+  suite: text,
+  tests: z.array(text).min(1),
+  skipped: z.array(
+    z.strictObject({
+      test: text,
+      reason: text,
+      spec: text.optional(),
+      upstream: text.optional(),
+    }),
+  ),
+  // CI suite revision, expected failures and skips, and shared skip messages
+  upstream: z
+    .strictObject({
+      repo: text,
+      commit: COMMIT,
+      command: text,
+      workflow: text,
+      job: text,
+      // Identify tests by the JUnit report's `classname::name`. Match
+      // `message` as a substring of the failure or skip message.
+      results: z.array(
+        z.strictObject({
+          test: text,
+          id: text.optional(),
+          outcome: z.enum(['failed', 'skipped']),
+          message: text,
+          reason: text,
+          spec: text.optional(),
+          upstream: text.optional(),
+        }),
+      ),
+      // Group accepted skips by exact message, such as those for unsupported
+      // capabilities or transports
+      skipClasses: z.array(z.strictObject({ reason: text, messages: z.array(text).min(1) })),
+    })
+    .optional(),
+});
+
+export const SupportRecordSchema = z
   .strictObject({
     name: z.enum(SUPPORT_RECORD_NAMES),
     kind: z.enum(['protocol', 'payment', 'authorization']),
@@ -62,6 +101,8 @@ const SupportRecordSchema = z
         title: text.optional(),
         role: text.optional(),
         subset: text.optional(),
+        // Evidence against the feature's own spec
+        conformance: ConformanceSchema.optional(),
       }),
     ),
     // `name` is the string the descriptor publishes in `unsupported`
@@ -89,49 +130,15 @@ const SupportRecordSchema = z
         }),
       )
       .optional(),
-    conformance: z
-      .strictObject({
-        suite: text,
-        tests: z.array(text).min(1),
-        skipped: z.array(
-          z.strictObject({
-            test: text,
-            reason: text,
-            spec: text.optional(),
-            upstream: text.optional(),
-          }),
-        ),
-        // CI suite revision, expected failures and skips, and shared skip messages
-        upstream: z
-          .strictObject({
-            repo: text,
-            commit: COMMIT,
-            command: text,
-            workflow: text,
-            job: text,
-            // Identify tests by the JUnit report's `classname::name`. Match
-            // `message` as a substring of the failure or skip message.
-            results: z.array(
-              z.strictObject({
-                test: text,
-                id: text.optional(),
-                outcome: z.enum(['failed', 'skipped']),
-                message: text,
-                reason: text,
-                spec: text.optional(),
-                upstream: text.optional(),
-              }),
-            ),
-            // Group accepted skips by exact message, such as those for unsupported
-            // capabilities or transports
-            skipClasses: z.array(z.strictObject({ reason: text, messages: z.array(text).min(1) })),
-          })
-          .optional(),
-      })
-      .optional(),
-    // Known MUST-level gaps against the pinned revision
+    conformance: ConformanceSchema.optional(),
+    // Known MUST-level gaps against the pinned revision, or against the spec
+    // of the feature named in `feature`
     gaps: z.array(
-      z.strictObject({ requirement: text, state: z.enum(['open', 'closed', 'excluded']) }),
+      z.strictObject({
+        requirement: text,
+        state: z.enum(['open', 'closed', 'excluded']),
+        feature: text.optional(),
+      }),
     ),
     docs: z.array(text).min(1),
   })
@@ -167,6 +174,23 @@ const SupportRecordSchema = z
           message: `feature "${feature.name}" needs title, role and subset exactly when it has a spec`,
         });
       }
+      if (feature.conformance !== undefined && feature.spec === undefined) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['features'],
+          message: `feature "${feature.name}" has conformance evidence but no spec to hold it against`,
+        });
+      }
+    }
+    const specified = record.features.filter((feature) => feature.spec !== undefined);
+    for (const gap of record.gaps) {
+      if (gap.feature !== undefined && !specified.some((feature) => feature.name === gap.feature)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['gaps'],
+          message: `gap "${gap.requirement}" names "${gap.feature}", which is not a feature with its own spec`,
+        });
+      }
     }
     if (record.combinations !== undefined && record.kind !== 'payment') {
       ctx.addIssue({
@@ -197,15 +221,22 @@ export function readSupportRecord(name: SupportRecordName): SupportRecord {
   return parsed.data;
 }
 
+type Conformance = z.infer<typeof ConformanceSchema>;
+
+const conformancePaths = (conformance: Conformance | undefined) => [
+  ...(conformance?.tests ?? []),
+  ...(conformance?.skipped ?? []).map((skipped) => skipped.test),
+  ...(conformance?.upstream !== undefined ? [conformance.upstream.workflow] : []),
+];
+
 /** Evidence and documentation paths to check for existence, each once */
 export function citedPaths(record: SupportRecord): string[] {
   return [
     ...new Set([
       ...record.artifacts.map((artifact) => artifact.path),
       ...(record.combinations ?? []).map((combination) => combination.evidence),
-      ...(record.conformance?.tests ?? []),
-      ...(record.conformance?.skipped ?? []).map((skipped) => skipped.test),
-      ...(record.conformance?.upstream !== undefined ? [record.conformance.upstream.workflow] : []),
+      ...conformancePaths(record.conformance),
+      ...record.features.flatMap((feature) => conformancePaths(feature.conformance)),
       ...record.deviations.flatMap((deviation) => deviation.tests),
       ...record.docs,
     ]),
@@ -608,18 +639,50 @@ function handWrittenProblems(tree: SupportTree): string[] {
 const SUPPORTED_BEFORE_CRITERIA: ReadonlySet<string> = new Set(['http', 'mcp', 'x402']);
 
 // Report unmet promotion checks from docs/protocols.md
-function promotionProblems(record: SupportRecord): string[] {
-  if (record.status !== 'supported' || SUPPORTED_BEFORE_CRITERIA.has(record.name)) return [];
-  const open = record.gaps.filter((gap) => gap.state === 'open');
-  const unmet = [
-    ...(record.spec?.stable !== true
+function unmetCriteria(
+  spec: Spec | undefined,
+  gaps: SupportRecord['gaps'],
+  conformance: Conformance | undefined,
+  docs: readonly string[],
+): string[] {
+  return [
+    ...(spec?.stable !== true
       ? ['criterion 1: upstream does not declare the pinned revision stable (spec.stable)']
       : []),
-    ...open.map((gap) => `criterion 2: the gap "${gap.requirement}" is open`),
-    ...(record.conformance === undefined ? ['criterion 3: no conformance evidence'] : []),
-    ...(record.docs.length === 0 ? ['criterion 4: no operational docs'] : []),
+    ...gaps
+      .filter((gap) => gap.state === 'open')
+      .map((gap) => `criterion 2: the gap "${gap.requirement}" is open`),
+    ...(conformance === undefined ? ['criterion 3: no conformance evidence'] : []),
+    ...(docs.length === 0 ? ['criterion 4: no operational docs'] : []),
   ];
-  return unmet.map((problem) => `src/support/${record.name}.json: supported, but ${problem}`);
+}
+
+// Supported records use untagged gaps unless exempt from promotion checks.
+// Supported features with their own specs use only their tagged gaps, even
+// inside exempt records.
+function promotionProblems(record: SupportRecord): string[] {
+  const source = `src/support/${record.name}.json`;
+  const tagged = (feature: string | undefined) =>
+    record.gaps.filter((gap) => gap.feature === feature);
+  const problems =
+    record.status !== 'supported' || SUPPORTED_BEFORE_CRITERIA.has(record.name)
+      ? []
+      : unmetCriteria(record.spec, tagged(undefined), record.conformance, record.docs).map(
+          (problem) => `${source}: supported, but ${problem}`,
+        );
+  for (const feature of record.features) {
+    if (feature.spec === undefined || feature.status !== 'supported') continue;
+    const unmet = unmetCriteria(
+      feature.spec,
+      tagged(feature.name),
+      feature.conformance,
+      record.docs,
+    );
+    problems.push(
+      ...unmet.map((problem) => `${source}: feature "${feature.name}" supported, but ${problem}`),
+    );
+  }
+  return problems;
 }
 
 /** Every disagreement between the records, package.json and the docs, each naming its place */

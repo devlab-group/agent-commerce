@@ -92,7 +92,7 @@ export function readMessage(rawParams: unknown): A2aMessageParams {
     );
   }
   const message = parsed.data.message;
-  // A2A requires a message id. This adapter also rejects an empty one.
+  // A2A requires a message id. This adapter also rejects an empty one
   if (message.messageId === undefined || message.messageId.length === 0) {
     throw invalid('Message must carry a non-empty "messageId".');
   }

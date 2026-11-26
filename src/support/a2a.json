@@ -26,7 +26,34 @@
     { "name": "ListTasks", "status": "supported" },
     { "name": "CancelTask", "status": "supported" },
     { "name": "returnImmediately", "status": "supported" },
-    { "name": "x402-extension", "status": "experimental" }
+    {
+      "name": "x402-extension",
+      "status": "experimental",
+      "spec": {
+        "revisions": ["v0.1"],
+        "display": "v0.1.0, commit `a5590226`",
+        "source": {
+          "repo": "google-agentic-commerce/a2a-x402",
+          "commit": "a5590226fc4190fe7a9d2c13ab70128714db3125"
+        },
+        "stable": null,
+        "statement": "A2A Protocol: x402 Payments Extension v0.1",
+        "checked": "2026-11-26"
+      },
+      "title": "A2A x402 extension",
+      "role": "A2A feature: x402 payment inside a task, through status message metadata and a follow-up payment message.",
+      "subset": "`TASK_STATE_INPUT_REQUIRED` with x402 v2 requirements, payment by a follow-up message on the task, receipts in the final status; A2A 1.0 wire forms, x402 only",
+      "conformance": {
+        "suite": "Our tests against the MUST statements of a2a-x402 v0.1; upstream's tests cover only its Python library.",
+        "tests": [
+          "tests/integration/a2a-x402-extension.test.ts",
+          "tests/unit/protocols-a2a/x402-extension.test.ts",
+          "tests/unit/protocols-a2a/payment-resume.test.ts",
+          "tests/unit/protocols-a2a/agent-card.test.ts"
+        ],
+        "skipped": []
+      }
+    }
   ],
   "exclusions": [
     { "name": "SendStreamingMessage" },
@@ -333,6 +360,76 @@
     {
       "requirement": "§7.1: encrypted communication in production; config accepts an http merchant.publicBaseUrl, and doctor warns when its host is not loopback",
       "state": "closed"
+    },
+    {
+      "requirement": "§2: use the extension URI to declare and activate the extension",
+      "state": "closed",
+      "feature": "x402-extension"
+    },
+    {
+      "requirement": "§3: declare the extension in the Agent Card's capabilities.extensions, which the card does when a skill selects x402",
+      "state": "closed",
+      "feature": "x402-extension"
+    },
+    {
+      "requirement": "§3.1: clients understand x402 when the extension is required; the card declares it optional, and clients without it pay with _payment",
+      "state": "closed",
+      "feature": "x402-extension"
+    },
+    {
+      "requirement": "§4.5: the payment message carries taskId; the adapter finds the task by taskId alone, and an unknown id gets TaskNotFoundError",
+      "state": "closed",
+      "feature": "x402-extension"
+    },
+    {
+      "requirement": "§4.5: the final status message carries every receipt of the task; a task allows one settlement attempt",
+      "state": "closed",
+      "feature": "x402-extension"
+    },
+    {
+      "requirement": "§6: append each settlement attempt to x402.payment.receipts, never replace one",
+      "state": "closed",
+      "feature": "x402-extension"
+    },
+    {
+      "requirement": "§7: clients activate with X-A2A-Extensions; the adapter also accepts A2A-Extensions",
+      "state": "closed",
+      "feature": "x402-extension"
+    },
+    {
+      "requirement": "§7: echo the extension URI in the response headers of an activating request",
+      "state": "closed",
+      "feature": "x402-extension"
+    },
+    {
+      "requirement": "§8: on failure, payment-failed and a reason in the status message text and metadata",
+      "state": "closed",
+      "feature": "x402-extension"
+    },
+    {
+      "requirement": "§9: private keys stay with trusted entities, never an LLM; the gateway holds no buyer or merchant key and runs no model",
+      "state": "closed",
+      "feature": "x402-extension"
+    },
+    {
+      "requirement": "§9: verify every signature before settlement",
+      "state": "closed",
+      "feature": "x402-extension"
+    },
+    {
+      "requirement": "§9: validate all payment data structures",
+      "state": "closed",
+      "feature": "x402-extension"
+    },
+    {
+      "requirement": "§9: track used nonces against replay",
+      "state": "closed",
+      "feature": "x402-extension"
+    },
+    {
+      "requirement": "§9: all A2A traffic over HTTPS/TLS; TLS is the deployment's, and doctor warns on a public http base URL",
+      "state": "closed",
+      "feature": "x402-extension"
     }
   ],
   "docs": ["docs/protocols/a2a.md"]
