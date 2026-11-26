@@ -163,6 +163,10 @@ export function createSettle(
         NO_VERDICT_REASONS.has(sdkResult.errorReason ?? '') ||
         scope.transportFailed()
       ) {
+        logger.warn(
+          { reportedReason: redactedErrorText(sdkResult.errorReason ?? '') },
+          'x402 settle(): settlement was broadcast but could not be confirmed; outcome unknown',
+        );
         throw new CommerceError(
           'PAYMENT_PROVIDER_UNAVAILABLE',
           'x402 provider: settlement was broadcast but could not be confirmed',

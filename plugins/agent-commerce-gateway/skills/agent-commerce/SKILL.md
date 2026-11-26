@@ -21,9 +21,9 @@ metadata:
   The merchant's and buyer's wallet keys stay outside the gateway; some
   facilitators require separate API credentials.
 - **Fixed prices, x402 `exact`.** No dynamic pricing, refunds, orders or
-  custody. MPP, ACP, AP2 and the a2a-x402 extension exist but are experimental.
-  Use them only when the user asks, and read the upstream docs first. Say
-  plainly when a request is out of scope.
+  custody. MPP, ACP, AP2, the a2a-x402 extension and ERC-8409 quotes
+  exist but are experimental. Use them only when the user asks, and read the
+  upstream docs first. Say plainly when a request is out of scope.
 
 ## Rules
 

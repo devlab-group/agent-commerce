@@ -17,6 +17,7 @@ import {
   SUPPORT_RECORD_NAMES,
   type SupportRecord,
   type SupportRecordName,
+  SupportRecordSchema,
   type SupportTree,
   supportProblems,
 } from '../../scripts/support-record';
@@ -31,6 +32,7 @@ import { MPP_SPEC_COMMIT, MPP_SPEC_DRAFTS } from '../../src/payments/mpp/constan
 import { X402_VERSION } from '../../src/payments/x402/provider/constants';
 import { A2A_SPEC_VERSION, A2A_UNSUPPORTED_METHODS } from '../../src/protocols/a2a/constants';
 import { buildDescriptor as buildA2aDescriptor } from '../../src/protocols/a2a/descriptor';
+import { A2A_X402_EXTENSION_URI } from '../../src/protocols/a2a/x402-extension';
 import { ACP_SPEC_VERSION } from '../../src/protocols/acp/constants';
 import { buildDescriptor as buildAcpDescriptor } from '../../src/protocols/acp/descriptor';
 import { MCP_MODERN_PROTOCOL_REVISION } from '../../src/protocols/mcp/constants';
@@ -53,6 +55,49 @@ describe('support records', () => {
       .sort();
     expect(files).toEqual([...SUPPORT_RECORD_NAMES].sort());
     for (const name of SUPPORT_RECORD_NAMES) expect(records[name].name).toBe(name);
+  });
+
+  const schemaIssues = (change: (a2a: SupportRecord) => void) => {
+    const a2a = structuredClone(records.a2a);
+    change(a2a);
+    return SupportRecordSchema.safeParse(a2a).error?.issues.map((issue) => issue.message);
+  };
+
+  it('accepts the real a2a record', () => {
+    expect(schemaIssues(() => {})).toBeUndefined();
+  });
+
+  it.each([
+    ['a feature without a spec', 'GetTask'],
+    ['an unknown feature', 'x402-extensions'],
+  ])('refuses a gap tagged with %s', (_label, featureName) => {
+    expect(
+      schemaIssues((a2a) => {
+        a2a.gaps.push({ requirement: '§1: something', state: 'open', feature: featureName });
+      }),
+    ).toEqual([
+      `gap "§1: something" names "${featureName}", which is not a feature with its own spec`,
+    ]);
+  });
+
+  it('refuses conformance evidence on a feature without a spec', () => {
+    expect(
+      schemaIssues((a2a) => {
+        const getTask = a2a.features.find((entry) => entry.name === 'GetTask');
+        if (getTask === undefined) throw new Error('no GetTask feature');
+        getTask.conformance = { suite: 'ours', tests: ['tests/x.test.ts'], skipped: [] };
+      }),
+    ).toEqual(['feature "GetTask" has conformance evidence but no spec to hold it against']);
+  });
+
+  // CI runs only a record's upstream suite; one on a feature would pass criterion 3 unrun
+  it("refuses an upstream suite in a feature's conformance", () => {
+    expect(
+      schemaIssues((a2a) => {
+        const extension = a2a.features.find((entry) => entry.name === 'x402-extension');
+        Object.assign(extension?.conformance ?? {}, { upstream: a2a.conformance?.upstream });
+      }),
+    ).toEqual(['Unrecognized key: "upstream"']);
   });
 
   it('lists tested combinations on the payment records only', () => {
@@ -194,6 +239,11 @@ describe('revisions the records restate from code', () => {
     expect(records.x402.spec?.revisions).toEqual([`v${X402_VERSION}`]);
   });
 
+  it('the a2a x402 extension: the version in its URI', () => {
+    const extension = records.a2a.features.find((feature) => feature.name === 'x402-extension');
+    expect(extension?.spec?.revisions).toEqual([A2A_X402_EXTENSION_URI.split('/').pop()]);
+  });
+
   it('mpp: the three pinned drafts and their commit', () => {
     expect(records.mpp.spec?.revisions).toEqual(Object.values(MPP_SPEC_DRAFTS));
     expect(records.mpp.spec?.source.commit).toBe(MPP_SPEC_COMMIT);
@@ -245,7 +295,21 @@ describe('drift between the records, package.json and the docs', () => {
     if (found === undefined) throw new Error(`no ${name} record`);
     return found;
   };
+  const feature = (records: SupportRecord[], name: SupportRecordName, featureName: string) => {
+    const found = record(records, name).features.find((entry) => entry.name === featureName);
+    if (found === undefined) throw new Error(`no ${featureName} feature in ${name}`);
+    return found;
+  };
 
+  // A feature promoted in its record alone, still experimental in hand-written prose
+  const stillCalledExperimental = (title: string, name: SupportRecordName) =>
+    [
+      'README.md: the Versioning sentence',
+      'README.md: the "experimental entries above" sentence',
+      'plugins/agent-commerce-gateway/skills/agent-commerce/SKILL.md: the "exist but are experimental" sentence',
+    ].map(
+      (place) => `${place} names ${title}, which src/support/${name}.json records as supported`,
+    );
   const stale = (path: string, region: string, source: string) =>
     `${path}: region "${region}" differs from ${source}; run npm run support:write`;
   const ALL = 'src/support/*.json and package.json';
@@ -258,7 +322,7 @@ describe('drift between the records, package.json and the docs', () => {
   const HAND_EDIT: Change = {
     edit: {
       'README.md': (content) =>
-        content.replace('| **MPP**      | Experimental', '| **MPP**      | Supported   '),
+        content.replace(/(\| \*\*MPP\*\* +\| )Experimental/, '$1Supported   '),
     },
   };
   const MARKERS_REMOVED: Change = {
@@ -319,6 +383,7 @@ describe('drift between the records, package.json and the docs', () => {
         stale('README.md', 'matrix', ALL),
         stale('docs/protocols.md', 'matrix', ALL),
         'README.md: the Versioning sentence names ACP, which src/support/acp.json records as supported',
+        'README.md: the "experimental entries above" sentence names ACP, which src/support/acp.json records as supported',
         'plugins/agent-commerce-gateway/skills/agent-commerce/SKILL.md: the "exist but are experimental" sentence names ACP, which src/support/acp.json records as supported',
         'docs/protocols/acp.md: says **Experimental.**, but src/support/acp.json records supported',
       ],
@@ -387,6 +452,144 @@ describe('drift between the records, package.json and the docs', () => {
         },
       },
       ['src/support/a2a.json: supported, but criterion 4: no operational docs'],
+    ],
+    [
+      'a supported feature whose upstream revision is not stable',
+      {
+        records: (records) => {
+          feature(records, 'a2a', 'x402-extension').status = 'supported';
+        },
+      },
+      [
+        'src/support/a2a.json: feature "x402-extension" supported, but criterion 1: upstream does not declare the pinned revision stable (spec.stable)',
+        stale('README.md', 'matrix', ALL),
+        stale('docs/protocols.md', 'matrix', ALL),
+        ...stillCalledExperimental('A2A x402 extension', 'a2a'),
+      ],
+    ],
+    [
+      'a supported feature with an open gap of its own and no evidence',
+      {
+        records: (records) => {
+          const extension = feature(records, 'a2a', 'x402-extension');
+          extension.status = 'supported';
+          if (extension.spec !== undefined) extension.spec.stable = true;
+          delete extension.conformance;
+          record(records, 'a2a').gaps.push({
+            requirement: '§9.9: something',
+            state: 'open',
+            feature: 'x402-extension',
+          });
+        },
+      },
+      [
+        'src/support/a2a.json: feature "x402-extension" supported, but criterion 2: the gap "§9.9: something" is open',
+        'src/support/a2a.json: feature "x402-extension" supported, but criterion 3: no conformance evidence',
+        stale('README.md', 'matrix', ALL),
+        stale('docs/protocols.md', 'matrix', ALL),
+        stale('docs/protocols/a2a.md', 'pins', 'src/support/a2a.json and package.json'),
+        ...stillCalledExperimental('A2A x402 extension', 'a2a'),
+      ],
+    ],
+    [
+      'a supported profile with an open gap tagged with an experimental feature',
+      {
+        records: (records) => {
+          record(records, 'a2a').gaps.push({
+            requirement: '§9.9: something',
+            state: 'open',
+            feature: 'x402-extension',
+          });
+        },
+      },
+      [],
+    ],
+    [
+      'a supported feature with its own spec in a profile supported before the criteria',
+      {
+        records: (records) => {
+          feature(records, 'x402', 'erc-8409-quotes').status = 'supported';
+        },
+      },
+      [
+        'src/support/x402.json: feature "erc-8409-quotes" supported, but criterion 1: upstream does not declare the pinned revision stable (spec.stable)',
+        'src/support/x402.json: feature "erc-8409-quotes" supported, but criterion 3: no conformance evidence',
+        stale('README.md', 'matrix', ALL),
+        stale('docs/protocols.md', 'matrix', ALL),
+        ...stillCalledExperimental('ERC-8409', 'x402'),
+      ],
+    ],
+    [
+      'a supported feature with its own spec inside an experimental record',
+      {
+        records: (records) => {
+          const copy = structuredClone(feature(records, 'a2a', 'x402-extension'));
+          delete copy.alias;
+          if (copy.spec !== undefined) copy.spec.stable = true;
+          record(records, 'mpp').features.push({
+            ...copy,
+            name: 'mpp-extension',
+            title: 'MPP extension',
+            status: 'supported',
+          });
+        },
+      },
+      [
+        'src/support/mpp.json: feature "mpp-extension" supported inside an experimental record',
+        stale('README.md', 'matrix', ALL),
+        stale('docs/protocols.md', 'matrix', ALL),
+        stale('docs/protocols/mpp.md', 'pins', 'src/support/mpp.json and package.json'),
+      ],
+    ],
+    [
+      'a feature with its own spec inside a record that pins nothing',
+      {
+        records: (records) => {
+          const copy = structuredClone(feature(records, 'a2a', 'x402-extension'));
+          delete copy.alias;
+          record(records, 'http').features.push({
+            ...copy,
+            name: 'http-extension',
+            title: 'HTTP extension',
+            status: 'partial',
+          });
+        },
+      },
+      [
+        stale('README.md', 'matrix', ALL),
+        stale('docs/protocols.md', 'matrix', ALL),
+        'docs/protocols/http.md: region "pins" appears 0 times, not once',
+      ],
+    ],
+    [
+      'an experimental feature missing from the "experimental entries above" sentence under its alias',
+      {
+        edit: {
+          'README.md': (content) =>
+            content.replace('[a2a-x402 extension](docs', '[payment extension](docs'),
+        },
+      },
+      [
+        'README.md: the "experimental entries above" sentence omits A2A x402 extension, which src/support/a2a.json records as experimental',
+      ],
+    ],
+    [
+      'an experimental feature missing from the Versioning sentence',
+      {
+        edit: {
+          'README.md': (content) => content.replace('ERC-8409 quotes, the', 'the'),
+        },
+      },
+      [
+        'README.md: the Versioning sentence omits ERC-8409, which src/support/x402.json records as experimental',
+      ],
+    ],
+    [
+      "a deleted test cited as a feature's conformance evidence",
+      { deleted: 'tests/unit/protocols-a2a/payment-resume.test.ts' },
+      [
+        'src/support/a2a.json: cites tests/unit/protocols-a2a/payment-resume.test.ts, which does not exist',
+      ],
     ],
     [
       'an open gap on a profile supported before the criteria',

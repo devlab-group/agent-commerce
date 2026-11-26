@@ -32,13 +32,52 @@ const SpecSchema = z.strictObject({
   source: z.strictObject({ repo: text, commit: COMMIT }),
   // Whether upstream calls the pinned revision stable; null when unspecified
   stable: z.boolean().nullable(),
-  // Upstream's own words on the revision's status
+  // Upstream's status statement, or its version label if no status is stated
   statement: text,
   // The date `statement` was read
   checked: z.iso.date(),
 });
 
-const SupportRecordSchema = z
+const ConformanceSchema = z.strictObject({
+  suite: text,
+  tests: z.array(text).min(1),
+  skipped: z.array(
+    z.strictObject({
+      test: text,
+      reason: text,
+      spec: text.optional(),
+      upstream: text.optional(),
+    }),
+  ),
+  // CI suite revision, expected failures and skips, and shared skip messages
+  upstream: z
+    .strictObject({
+      repo: text,
+      commit: COMMIT,
+      command: text,
+      workflow: text,
+      job: text,
+      // Identify tests by the JUnit report's `classname::name`. Match
+      // `message` as a substring of the failure or skip message.
+      results: z.array(
+        z.strictObject({
+          test: text,
+          id: text.optional(),
+          outcome: z.enum(['failed', 'skipped']),
+          message: text,
+          reason: text,
+          spec: text.optional(),
+          upstream: text.optional(),
+        }),
+      ),
+      // Group accepted skips by exact message, such as those for unsupported
+      // capabilities or transports
+      skipClasses: z.array(z.strictObject({ reason: text, messages: z.array(text).min(1) })),
+    })
+    .optional(),
+});
+
+export const SupportRecordSchema = z
   .strictObject({
     name: z.enum(SUPPORT_RECORD_NAMES),
     kind: z.enum(['protocol', 'payment', 'authorization']),
@@ -60,8 +99,13 @@ const SupportRecordSchema = z
         // A feature with its own spec gets its own matrix row, under `title`
         spec: SpecSchema.optional(),
         title: text.optional(),
+        // Also recognize this name in status sentences for a feature with its own spec
+        alias: text.optional(),
         role: text.optional(),
         subset: text.optional(),
+        // Evidence for the feature's own spec. CI reads `upstream` from a record's
+        // conformance, so features cannot declare an upstream suite.
+        conformance: ConformanceSchema.omit({ upstream: true }).optional(),
       }),
     ),
     // `name` is the string the descriptor publishes in `unsupported`
@@ -89,49 +133,15 @@ const SupportRecordSchema = z
         }),
       )
       .optional(),
-    conformance: z
-      .strictObject({
-        suite: text,
-        tests: z.array(text).min(1),
-        skipped: z.array(
-          z.strictObject({
-            test: text,
-            reason: text,
-            spec: text.optional(),
-            upstream: text.optional(),
-          }),
-        ),
-        // CI suite revision, expected failures and skips, and shared skip messages
-        upstream: z
-          .strictObject({
-            repo: text,
-            commit: COMMIT,
-            command: text,
-            workflow: text,
-            job: text,
-            // Identify tests by the JUnit report's `classname::name`. Match
-            // `message` as a substring of the failure or skip message.
-            results: z.array(
-              z.strictObject({
-                test: text,
-                id: text.optional(),
-                outcome: z.enum(['failed', 'skipped']),
-                message: text,
-                reason: text,
-                spec: text.optional(),
-                upstream: text.optional(),
-              }),
-            ),
-            // Group accepted skips by exact message, such as those for unsupported
-            // capabilities or transports
-            skipClasses: z.array(z.strictObject({ reason: text, messages: z.array(text).min(1) })),
-          })
-          .optional(),
-      })
-      .optional(),
-    // Known MUST-level gaps against the pinned revision
+    conformance: ConformanceSchema.optional(),
+    // Known MUST-level gaps against the pinned revision, or against the spec
+    // of the feature named in `feature`
     gaps: z.array(
-      z.strictObject({ requirement: text, state: z.enum(['open', 'closed', 'excluded']) }),
+      z.strictObject({
+        requirement: text,
+        state: z.enum(['open', 'closed', 'excluded']),
+        feature: text.optional(),
+      }),
     ),
     docs: z.array(text).min(1),
   })
@@ -167,6 +177,23 @@ const SupportRecordSchema = z
           message: `feature "${feature.name}" needs title, role and subset exactly when it has a spec`,
         });
       }
+      if (feature.conformance !== undefined && feature.spec === undefined) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['features'],
+          message: `feature "${feature.name}" has conformance evidence but no spec to hold it against`,
+        });
+      }
+    }
+    const specified = record.features.filter((feature) => feature.spec !== undefined);
+    for (const gap of record.gaps) {
+      if (gap.feature !== undefined && !specified.some((feature) => feature.name === gap.feature)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['gaps'],
+          message: `gap "${gap.requirement}" names "${gap.feature}", which is not a feature with its own spec`,
+        });
+      }
     }
     if (record.combinations !== undefined && record.kind !== 'payment') {
       ctx.addIssue({
@@ -197,15 +224,22 @@ export function readSupportRecord(name: SupportRecordName): SupportRecord {
   return parsed.data;
 }
 
+type Conformance = z.infer<typeof ConformanceSchema>;
+
+const conformancePaths = (conformance: Conformance | undefined) => [
+  ...(conformance?.tests ?? []),
+  ...(conformance?.skipped ?? []).map((skipped) => skipped.test),
+  ...(conformance?.upstream !== undefined ? [conformance.upstream.workflow] : []),
+];
+
 /** Evidence and documentation paths to check for existence, each once */
 export function citedPaths(record: SupportRecord): string[] {
   return [
     ...new Set([
       ...record.artifacts.map((artifact) => artifact.path),
       ...(record.combinations ?? []).map((combination) => combination.evidence),
-      ...(record.conformance?.tests ?? []),
-      ...(record.conformance?.skipped ?? []).map((skipped) => skipped.test),
-      ...(record.conformance?.upstream !== undefined ? [record.conformance.upstream.workflow] : []),
+      ...conformancePaths(record.conformance),
+      ...record.features.flatMap((feature) => conformancePaths(feature.conformance)),
       ...record.deviations.flatMap((deviation) => deviation.tests),
       ...record.docs,
     ]),
@@ -479,7 +513,12 @@ export function renderRegions(
   for (const record of records) {
     const source = `src/support/${record.name}.json`;
     const page = new Map<string, RenderedRegion>();
-    if (record.spec !== undefined || record.packages.length > 0 || record.artifacts.length > 0) {
+    if (
+      record.spec !== undefined ||
+      record.features.some((feature) => feature.spec !== undefined) ||
+      record.packages.length > 0 ||
+      record.artifacts.length > 0
+    ) {
       page.set('pins', {
         body: block(pins(record, manifest)),
         source: `${source} and package.json`,
@@ -531,12 +570,18 @@ function replaceRegions(content: string, rendered: ReadonlyMap<string, RenderedR
 const titleNamed = (text: string, title: string) =>
   new RegExp(`(^|[^\\w-])${title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w-])`).test(text);
 
-// Hand-written sentences that name the experimental profiles
+// Hand-written sentences that name the experimental profiles and features.
+// They are searched with link targets removed.
 const STATUS_SENTENCES = [
   {
     path: 'README.md',
     place: 'Versioning sentence',
     find: (content: string) => /### Versioning\n\n([\s\S]*?)\n\n/.exec(content)?.[1],
+  },
+  {
+    path: 'README.md',
+    place: '"experimental entries above" sentence',
+    find: (content: string) => /The experimental entries above[^.]*\./.exec(content)?.[0],
   },
   {
     path: 'plugins/agent-commerce-gateway/skills/agent-commerce/SKILL.md',
@@ -555,18 +600,34 @@ const X402_ROUTES: readonly [string, string][] = [
 
 function handWrittenProblems(tree: SupportTree): string[] {
   const problems: string[] = [];
-  const experimental = tree.records.filter((record) => record.status === 'experimental');
+  // Each record, followed by its features with their own matrix rows
+  const claims = tree.records.flatMap((record) => [
+    { title: record.title, names: [record.title], status: record.status, record },
+    ...record.features.flatMap((feature) =>
+      feature.spec === undefined
+        ? []
+        : [
+            {
+              title: feature.title ?? feature.name,
+              names: [feature.title ?? feature.name, ...(feature.alias ? [feature.alias] : [])],
+              status: feature.status,
+              record,
+            },
+          ],
+    ),
+  ]);
   for (const sentence of STATUS_SENTENCES) {
-    const text = sentence.find(tree.read(sentence.path) ?? '');
+    const content = (tree.read(sentence.path) ?? '').replace(/\]\([^)]*\)/g, ']');
+    const text = sentence.find(content);
     if (text === undefined) {
       problems.push(`${sentence.path}: ${sentence.place} not found`);
       continue;
     }
-    for (const record of tree.records) {
-      const named = titleNamed(text, record.title);
-      if (named !== experimental.includes(record)) {
+    for (const claim of claims) {
+      const named = claim.names.some((name) => titleNamed(text, name));
+      if (named !== (claim.status === 'experimental')) {
         problems.push(
-          `${sentence.path}: the ${sentence.place} ${named ? 'names' : 'omits'} ${record.title}, which src/support/${record.name}.json records as ${record.status}`,
+          `${sentence.path}: the ${sentence.place} ${named ? 'names' : 'omits'} ${claim.title}, which src/support/${claim.record.name}.json records as ${claim.status}`,
         );
       }
     }
@@ -608,18 +669,53 @@ function handWrittenProblems(tree: SupportTree): string[] {
 const SUPPORTED_BEFORE_CRITERIA: ReadonlySet<string> = new Set(['http', 'mcp', 'x402']);
 
 // Report unmet promotion checks from docs/protocols.md
-function promotionProblems(record: SupportRecord): string[] {
-  if (record.status !== 'supported' || SUPPORTED_BEFORE_CRITERIA.has(record.name)) return [];
-  const open = record.gaps.filter((gap) => gap.state === 'open');
-  const unmet = [
-    ...(record.spec?.stable !== true
+function unmetCriteria(
+  spec: Spec | undefined,
+  gaps: SupportRecord['gaps'],
+  conformance: Conformance | undefined,
+  docs: readonly string[],
+): string[] {
+  return [
+    ...(spec?.stable !== true
       ? ['criterion 1: upstream does not declare the pinned revision stable (spec.stable)']
       : []),
-    ...open.map((gap) => `criterion 2: the gap "${gap.requirement}" is open`),
-    ...(record.conformance === undefined ? ['criterion 3: no conformance evidence'] : []),
-    ...(record.docs.length === 0 ? ['criterion 4: no operational docs'] : []),
+    ...gaps
+      .filter((gap) => gap.state === 'open')
+      .map((gap) => `criterion 2: the gap "${gap.requirement}" is open`),
+    ...(conformance === undefined ? ['criterion 3: no conformance evidence'] : []),
+    ...(docs.length === 0 ? ['criterion 4: no operational docs'] : []),
   ];
-  return unmet.map((problem) => `src/support/${record.name}.json: supported, but ${problem}`);
+}
+
+// Supported records use untagged gaps unless exempt from promotion checks.
+// Supported features with their own specs use only their tagged gaps, even
+// inside exempt records. Their parent record must also be supported.
+function promotionProblems(record: SupportRecord): string[] {
+  const source = `src/support/${record.name}.json`;
+  const tagged = (feature: string | undefined) =>
+    record.gaps.filter((gap) => gap.feature === feature);
+  const problems =
+    record.status !== 'supported' || SUPPORTED_BEFORE_CRITERIA.has(record.name)
+      ? []
+      : unmetCriteria(record.spec, tagged(undefined), record.conformance, record.docs).map(
+          (problem) => `${source}: supported, but ${problem}`,
+        );
+  for (const feature of record.features) {
+    if (feature.spec === undefined || feature.status !== 'supported') continue;
+    if (record.status !== 'supported') {
+      problems.push(`${source}: feature "${feature.name}" supported inside an experimental record`);
+    }
+    const unmet = unmetCriteria(
+      feature.spec,
+      tagged(feature.name),
+      feature.conformance,
+      record.docs,
+    );
+    problems.push(
+      ...unmet.map((problem) => `${source}: feature "${feature.name}" supported, but ${problem}`),
+    );
+  }
+  return problems;
 }
 
 /** Every disagreement between the records, package.json and the docs, each naming its place */

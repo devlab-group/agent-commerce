@@ -336,7 +336,7 @@ function offerHealthCheck(
   return {
     name,
     status: failing.length > 0 ? 'FAIL' : 'WARN',
-    detail: `${problems.join('; ')}. The gateway logs each reason at debug level`,
+    detail: `${problems.join('; ')}. The gateway logs the reasons at warn when the rail starts failing, and at debug otherwise`,
     ...undeterminedField(unanswered ? 'unreachable' : undefined),
   };
 }

@@ -103,8 +103,8 @@ export interface A2aTaskStatus {
 }
 
 /**
- * A task with no `history`. `GetTask` finds none; a pending x402 task can
- * only be resumed with a payment message that names its id.
+ * A task with no `history`. A pending x402 task resumes only through a
+ * payment message that names its id.
  */
 export interface A2aTask {
   readonly id: string;
